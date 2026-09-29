@@ -394,7 +394,17 @@ test('api: the list, a rollout state, events after N, a PR, and the errors', asy
     assert.deepEqual(JSON.parse(response.body), { error: 'unknown rollout' })
   }
 
-  for (const path of ['/api', '/api/other', '/api/rollouts/demo/other', '/api/rollouts/demo/prs', '/api/rollouts/demo/prs/A1/x']) {
+  const notFound = [
+    '/api',
+    '/api/other',
+    '/api/rollouts/demo/other',
+    '/api/rollouts/demo/prs',
+    '/api/rollouts/demo/prs/A1/x',
+    '/api/rollouts/demo/runs',
+    '/api/rollouts/demo/runs/A1-01-implement/x',
+  ]
+
+  for (const path of notFound) {
     assert.equal((await get(server, path)).status, 404, path)
   }
 
@@ -402,6 +412,45 @@ test('api: the list, a rollout state, events after N, a PR, and the errors', asy
   assert.equal(broken.status, 500)
   assert.match(broken.json().error, /invalid manifest/)
   assert.equal((await get(server, '/api/rollouts')).status, 200)
+})
+
+test('api: a page of a run transcript, and the errors', async (t) => {
+  const { server } = await serve(t)
+  const path = '/api/rollouts/demo/runs/A1-01-implement'
+  const last = await get(server, `${path}?from=end&limit=3`)
+  const page = last.json()
+
+  assert.equal(last.status, 200)
+  assert.equal(page.from, 5)
+  assert.equal(page.total, 8)
+  assert.equal(page.final.costUsd, 4.25)
+  assert.equal(page.estimateUsd, null)
+
+  const whole = (await get(server, path)).json()
+  assert.equal(whole.from, 0)
+  assert.equal(whole.items.length, 8)
+
+  for (const value of ['x', '-1', '1.5', '']) {
+    const response = await get(server, `${path}?from=${value}`)
+    assert.equal(response.status, 400, value)
+    assert.deepEqual(response.json(), { error: 'from must be a whole number or end' })
+  }
+
+  for (const value of ['0', '501', 'x', '']) {
+    const response = await get(server, `${path}?limit=${value}`)
+    assert.equal(response.status, 400, value)
+    assert.deepEqual(response.json(), { error: 'limit must be a whole number from 1 to 500' })
+  }
+
+  for (const run of ['Z9-01-implement', '.hidden', '..%2fledger']) {
+    const response = await raw(server.port, `/api/rollouts/demo/runs/${run}`, { headers: bearer(server) })
+    assert.equal(response.status, 404, run)
+    assert.deepEqual(JSON.parse(response.body), { error: 'unknown run' })
+  }
+
+  const refused = await get(server, path, {})
+  assert.equal(refused.status, 401)
+  assert.deepEqual(refused.json(), { error: 'unauthorized' })
 })
 
 test('stream: state and every event on connect, then appended events and a renamed ledger', async (t) => {

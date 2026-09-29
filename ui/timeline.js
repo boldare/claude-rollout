@@ -37,7 +37,13 @@ function barTitle(bar, run, now) {
 }
 
 function barNode(bar, lane, ctx, runsByName) {
-  const node = link(ctx.linkWith({ pr: lane.id, tab: 'runs' }), undefined, `bar role-${bar.role} status-${bar.status}`)
+  const target = { pr: lane.id, tab: 'runs', run: bar.run }
+
+  if (bar.status === 'running') {
+    target.from = 'end'
+  }
+
+  const node = link(ctx.linkWith(target), undefined, `bar role-${bar.role} status-${bar.status}`)
   const title = barTitle(bar, runsByName.get(bar.run), ctx.now)
 
   node.title = title
