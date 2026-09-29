@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startServer } from '../lib/server.mjs'
 import { makeRolloutRoot } from './fixtures.mjs'
@@ -564,6 +564,13 @@ test('page: every asset and module of ui/index.html is served, and every ui scri
   }
 
   assert.ok(seen.has('/app.js'))
+
+  const crawled = [...seen].filter((path) => path.endsWith('.js')).sort()
+  const onDisk = scriptsUnder(UI)
+    .map((file) => `/${file.slice(UI.length).split(sep).join('/')}`)
+    .sort()
+
+  assert.deepEqual(crawled, onDisk)
 
   for (const file of scriptsUnder(UI)) {
     const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' })
