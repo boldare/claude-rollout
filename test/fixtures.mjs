@@ -296,3 +296,26 @@ export function makeRolloutRoot() {
 
   return root
 }
+
+export function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Polls, so a check on a detached process or a file another process writes
+// fails the test after timeoutMs instead of hanging it.
+export async function waitFor(check, label, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+
+  while (!check()) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${label}`)
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}

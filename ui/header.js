@@ -1,3 +1,4 @@
+import { renderRolloutControls } from './controls.js'
 import { badge, element, link, secondsSince, withClass, wrap } from './dom.js'
 import { ago, money } from './format.js'
 import { driverStatus, errorCount } from './model.js'
@@ -77,6 +78,10 @@ function streamLine(ctx) {
     parts.push(element('p', ctx.problem, 'banner error'))
   }
 
+  if (ctx.notice) {
+    parts.push(element('p', ctx.notice.text, ctx.notice.error ? 'banner error' : 'banner'))
+  }
+
   return parts
 }
 
@@ -86,6 +91,11 @@ export function renderHeader(ctx) {
   const title = wrap('div', element('h1', name), link(ctx.linkTo({}), 'all rollouts'))
 
   document.title = name
+
+  if (ctx.state?.readOnly) {
+    title.append(badge('read-only', 'read-only'))
+  }
+
   header.append(withClass(title, 'title'))
 
   if (ctx.state && !ctx.view) {
@@ -94,6 +104,12 @@ export function renderHeader(ctx) {
 
   if (ctx.view) {
     header.append(withClass(facts(ctx), 'facts'))
+  }
+
+  const controls = ctx.state ? renderRolloutControls(ctx) : null
+
+  if (controls) {
+    header.append(controls)
   }
 
   header.append(...streamLine(ctx))

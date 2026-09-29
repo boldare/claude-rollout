@@ -1,5 +1,6 @@
-import { apiGet, followStream } from './api.js'
+import { apiGet, apiPost, followStream } from './api.js'
 import { renderBoard } from './board.js'
+import { commandNotice } from './commands.js'
 import { renderCosts } from './costs.js'
 import { renderDetail } from './detail.js'
 import { element, link, wrap } from './dom.js'
@@ -14,6 +15,7 @@ import { FOLLOW_MS, PAGE_SIZE, shouldFollow, transcriptRoute } from './transcrip
 // reaches the server, and a reload or a link opened in a new tab still works.
 const REFRESH_MS = 5000
 const TICK_MS = 30_000
+const NOTICE_MS = 15_000
 const STICK_PX = 40
 const OPEN_THE_URL = 'Open the URL that rollout ui printed in its terminal. It carries the access token.'
 const ROUTE_KEYS = ['r', 'view', 'pr', 'tab', 'state', 'id', 'kind', 'run', 'from']
@@ -38,10 +40,23 @@ let transcriptTicket = 0
 let transcriptBusy = false
 let followTimer = null
 let followed = false
+let noticeTimer = null
 let session = freshSession(null)
 
 function freshSession(name) {
-  return { name, stream: null, state: null, events: [], status: null, problem: null, failure: null, detail: null, transcript: null }
+  return {
+    name,
+    stream: null,
+    state: null,
+    events: [],
+    status: null,
+    problem: null,
+    failure: null,
+    detail: null,
+    transcript: null,
+    sending: false,
+    notice: null,
+  }
 }
 
 function oneOf(value, allowed) {
@@ -263,6 +278,43 @@ function follow(name) {
   })
 }
 
+function showNotice(current, notice) {
+  current.sending = false
+  current.notice = notice
+  noticeTimer = setTimeout(() => {
+    current.notice = null
+    scheduleRender()
+  }, NOTICE_MS)
+  scheduleRender()
+}
+
+// An answer for a rollout the page no longer shows is dropped, like a stream message.
+async function send(current, command) {
+  clearTimeout(noticeTimer)
+  current.notice = null
+  current.sending = true
+  scheduleRender()
+
+  try {
+    const answer = await apiPost(token, apiPath(current.name, 'commands'), command)
+
+    if (current !== session) {
+      return
+    }
+
+    if (answer.status === 401) {
+      stopAll()
+      return
+    }
+
+    showNotice(current, commandNotice(command, answer, current.state?.view?.driver))
+  } catch (error) {
+    if (current === session) {
+      showNotice(current, { text: `Cannot reach the server: ${error.message}`, error: true })
+    }
+  }
+}
+
 function detailKey() {
   return route.r && route.pr ? `${route.r}\n${route.pr}` : null
 }
@@ -430,7 +482,10 @@ function failure() {
   return [element('p', text, 'error'), wrap('p', link(linkTo({}), 'all rollouts'))]
 }
 
+// No control shows before the first state says the server accepts commands.
 function context() {
+  const current = session
+
   return {
     route,
     now: Date.now(),
@@ -441,6 +496,10 @@ function context() {
     problem: session.problem,
     detail: session.detail,
     transcript: session.transcript,
+    readOnly: session.state?.readOnly !== false,
+    sending: session.sending,
+    notice: session.notice,
+    send: (command) => send(current, command),
     openVerdicts,
     openTranscript,
     linkTo,
