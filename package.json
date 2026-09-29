@@ -1,0 +1,24 @@
+{
+  "name": "claude-rollout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Drives a multi-PR plan with headless Claude Code agents: briefs, implementation, independent verification, a merge gate and ordered merges.",
+  "bin": {
+    "rollout": "bin/rollout.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.0"
+  }
+}

@@ -1,0 +1,145 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["READY", "BLOCKED"]
+    },
+    "summary": {
+      "type": "string",
+      "description": "What was done, 2-5 sentences."
+    },
+    "pr": {
+      "type": "integer",
+      "description": "PR number (required for READY)."
+    },
+    "headSha": {
+      "type": "string",
+      "description": "Full SHA of the PR head the checks ran on (required for READY)."
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "conclusion": {
+            "type": "string"
+          }
+        },
+        "required": ["name", "conclusion"]
+      }
+    },
+    "localVerification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": ["command", "result"]
+      }
+    },
+    "checklist": {
+      "type": "array",
+      "description": "The brief's acceptance checklist, one entry per item.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail", "unverifiable"]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": ["item", "status", "evidence"]
+      }
+    },
+    "expected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim": {
+            "type": "string"
+          },
+          "observed": {
+            "type": "string"
+          }
+        },
+        "required": ["claim", "observed"]
+      }
+    },
+    "filesChanged": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "changeset": {
+      "type": "string",
+      "description": "Path and bump of the changeset."
+    },
+    "deviations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": ["file", "reason"]
+      }
+    },
+    "blocked": {
+      "type": "object",
+      "description": "Required for BLOCKED.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["needs-decision", "stuck", "ci", "environment", "brief-contradiction"]
+        },
+        "question": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        }
+      },
+      "required": ["kind", "question", "evidence"]
+    },
+    "addressed": {
+      "type": "array",
+      "description": "For a fix that answers maintainer review comments: one entry per comment id you were given, with what you did.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "action"]
+      }
+    }
+  },
+  "required": ["status", "summary"]
+}

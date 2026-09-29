@@ -1,0 +1,67 @@
+# Example rollout. Copy it to ~/.rollouts/<name>/manifest.yaml and adapt it.
+rollout: my-lib-1.2.0
+model: opus
+
+repo:
+  path: ~/code/my-lib
+  github: my-org/my-lib
+  base: main
+  # Put tool versions the repo needs first on PATH (node, pnpm, gh).
+  pathPrepend: []
+  install: pnpm install --frozen-lockfile
+  requiredChecks: ['test*', 'lint']
+  # Agents act as a separate non-admin account (see SKILL.md, "Identity and approvals").
+  agentToken: ~/.config/rollout/agent-gh-token
+  maintainers: [my-github-login]
+  merge: { method: squash, admin: auto }
+  neverMerge:
+    branches: ['changeset-release/*']
+    titles: ['chore: version packages', 'chore: version packages (next)']
+  forbid:
+    - '**/CHANGELOG.md'
+    - .changeset/config.json
+    - .github/workflows/release.yml
+  # Terms that must never appear in the public repo (client names, local paths).
+  denylist: [acme-client, /Users/]
+  verify:
+    common:
+      - pnpm install --frozen-lockfile
+      - pnpm build
+      - pnpm test
+      - pnpm lint:fix
+      - pnpm lint && pnpm format:check
+
+# Brief writers get these sources. The plan wins over design notes.
+briefing:
+  sources:
+    - title: Plan (authoritative)
+      path: ~/.rollouts/my-lib-1.2.0/plan.md
+      kind: markdown
+
+policy:
+  concurrency: 3
+  merge: manual # the driver says "ready", the maintainer merges on GitHub
+  approval: github
+  maxBump: minor
+  attempts: { implement: 2, fix: 4, verify: 3 }
+  timeouts: { implement: 240, fix: 120, verify: 90 }
+
+prs:
+  - id: P1
+    branch: feat/config-loader
+    title: 'feat: config loader'
+    brief: briefs/P1.md # written by the driver when it does not exist
+    deps: []
+    priority: 10
+    effort: { implement: xhigh, verify: xhigh }
+    changeset: minor
+
+  - id: P2
+    branch: feat/cli-flags
+    title: 'feat: cli flags'
+    brief: briefs/P2.md
+    deps: [P1]
+    priority: 5
+    effort: { implement: high, verify: high }
+    changeset: minor
+    allowWorkflows: true # this PR adds a CI step

@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "brief": { "type": "string", "description": "The complete brief in markdown, in the required format." },
+    "expectedFiles": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Repo-relative paths (globs allowed) the PR is expected to touch, changeset excluded."
+    },
+    "changesetBump": { "type": "string", "enum": ["patch", "minor"] },
+    "questions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Product decisions the plan does not make and the code cannot answer. Empty when the brief is complete."
+    },
+    "notes": { "type": "string", "description": "What you checked, changed or are unsure about (for the maintainer, not the implementer)." }
+  },
+  "required": ["brief", "expectedFiles", "changesetBump", "questions", "notes"]
+}

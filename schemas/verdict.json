@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": { "type": "string", "enum": ["PASS", "FAIL"] },
+    "sha": { "type": "string", "description": "Full SHA you verified (git rev-parse HEAD)." },
+    "summary": { "type": "string" },
+    "checklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item": { "type": "string" },
+          "status": { "type": "string", "enum": ["pass", "fail", "unverifiable"] },
+          "evidence": { "type": "string" }
+        },
+        "required": ["item", "status", "evidence"]
+      }
+    },
+    "blocking": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Real defects or unmet checklist items, each with file:line or command evidence."
+    },
+    "nonBlocking": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["verdict", "sha", "summary", "checklist", "blocking", "nonBlocking"]
+}

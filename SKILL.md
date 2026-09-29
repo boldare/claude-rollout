@@ -1,0 +1,74 @@
+---
+name: rollout
+description: Drive a multi-PR implementation plan end to end - Opus agents implement each PR in its own worktree, open it, wait for green CI and report READY; an independent verifier tries to refute it; a Node driver gates and merges PRs in dependency order after the maintainer approves. Use when the user wants to "roll out", "ship" or "orchestrate" a plan of several PRs, asks about the status of a rollout, wants to approve/answer/retry a rollout PR, or invokes /rollout.
+---
+
+# rollout
+
+A rollout is one plan shipped as several PRs. The orchestrator is a **process**, not a model: `bin/rollout.mjs run` ticks every minute, reads the truth from GitHub, starts headless agents (`claude -p`), checks the merge gate and merges. A model never drives the loop, so a stalled session cannot stall the rollout, and restarting the same command resumes from GitHub state plus the local ledger.
+
+Everything lives in two places:
+
+- this skill: `~/.claude/skills/rollout/` (driver, prompts, schemas, guard hook, commit-msg hook, tests);
+- one directory per rollout, outside any repo: `~/.rollouts/<name>/` with `manifest.yaml`, `briefs/<id>.md` (local only: they may name clients), `ledger.json`, `events.jsonl`, `heartbeat`, `logs/`, `wt/` (worktrees), `inbox/`.
+
+`R=~/.claude/skills/rollout/bin/rollout.mjs` below.
+
+## Commands (run them with Bash; pass `--dir <rollout dir>`)
+
+| command                                          | what it does                                                                                                                                                                        |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node $R preflight --dir D [--live]`             | checks tools, gh auth, repo settings, briefs; `--live` also proves the guard blocks merge/push/publish in a real headless agent                                                     |
+| `node $R run --dir D [--only A6,A1] [--dry-run]` | starts the driver in the foreground. The user runs it in its own terminal tab (cmux) under `caffeinate -is`; do not run it inside a Claude session's Bash, it runs for hours        |
+| `node $R status --dir D`                         | table of PR states, gate reasons, attempts, cost, driver heartbeat, recent events                                                                                                   |
+| `node $R card <id> --dir D`                      | the approval card: PR link, implementer summary, deviations, expected-vs-observed, verifier checklist and findings, gate verdict                                                    |
+| `node $R approve <id> --dir D`                   | approves the verified patch of a PR the maintainer authored (bound to its head and patch id). PRs opened by the agents' account are approved with a normal review on GitHub instead |
+| `node $R note <id> "<answer>" --dir D`           | answers a BLOCKED agent or escalation; the implementer session resumes with the answer                                                                                              |
+| `node $R retry <id> --dir D`                     | resets attempts after an escalation                                                                                                                                                 |
+| `node $R pause` / `resume` / `unhalt`            | stop merging and starting work / continue / clear a halt after a red base branch                                                                                                    |
+| `node $R stop --dir D`                           | stops the driver and its agents; the next `run` resumes their sessions                                                                                                              |
+
+When the user asks "how is the rollout going", run `status`, read the cards of anything verified or blocked, and summarise: what is waiting for them (approvals, questions), what is running, what failed.
+
+Before approving on the user's behalf: never. Approval is the user's decision; show the card and let them review on GitHub or run `approve`.
+
+## Identity and approvals
+
+- `repo.agentToken` points to a token file of a separate GitHub account (write role, no ruleset bypass). Agents get it as `GH_TOKEN` with an empty `GH_CONFIG_DIR`, so they open PRs and push as that account and cannot fall back to the maintainer's stored `gh` login. Worktrees push over HTTPS (`remote.origin.pushurl`, `gh auth git-credential`); the pre-push hook refuses any other URL, so the maintainer's SSH key is never used for pushes.
+- `policy.merge`: `manual` (the driver verifies, gates, rebases and notifies "ready to merge"; the maintainer merges on GitHub and the driver carries on from the merge), `human` (the driver merges after the maintainer's approval) or `auto`.
+- `policy.approval: github` with `repo.maintainers` (for `merge: human`): a PR from the agents' account counts as approved when a maintainer's latest review is APPROVED and was submitted after the current patch appeared, and nobody asks for changes. Time, not the review's commit: GitHub moves a non-dismissed review's `commit_id` to new heads. Such PRs merge without `--admin` (`merge.admin: auto`). PRs a maintainer authored cannot be self-approved on GitHub, so they use `rollout approve` and the PR bypass.
+- After an approval the driver waits `policy.mergeDelaySeconds` (120 s) before merging; `pause` in that window stops it.
+
+## Briefs written by the driver
+
+A PR whose `brief` file does not exist gets one when its dependencies are merged (`briefing.sources` in the manifest: the plan plus design notes, `tag`ged per track and picked by the PR's `briefTags`). A read-only writer drafts it on a worktree of the current base, a read-only reviewer checks every path, line and command against that code and returns the final text, and the driver writes `briefs/<id>.md` plus `<id>.review-notes.md`. Open product questions stop the PR as `blocked (brief-questions)`; `note <id> "<answers>"` re-runs the writer with the answers. The brief's expected files become the PR's scope when the manifest has none.
+
+## Lifecycle of one PR
+
+`pending` → (deps merged, free slot) `briefing` if there is no brief yet → `implementing` → agent opens PR, waits for CI, reports READY → `ready_claimed` → driver re-reads CI for that exact SHA and checks the rollout policy → `verifying` (fresh read-only Opus session tries to refute READY against the brief's acceptance checklist) → `verified` → user approves → gate → `merged`.
+
+Anything off sends the PR to `needs_fix`, and the implementer's own session is resumed with the reason: CI red, policy violation, verifier findings, gate verdict, rebase conflict. A run that dies without a report becomes `interrupted` and is resumed. Caps from the manifest turn endless loops into `escalated`. An agent that needs a human answer reports BLOCKED; the driver notifies and waits for `note`.
+
+## The merge gate (lib/judge.mjs, pure, tested)
+
+Merges only when all hold: PR open, not draft, base and branch as in the manifest, rollout label present, not the release PR; dependencies merged; verified **and** approved for the current patch id; no forbidden paths, no package version edits, a new changeset with at most `policy.maxBump`, no denylisted terms in the diff/PR/commits, one-line commits; branch contains the base (otherwise the driver rebases, and a conflict goes back to the implementer); mergeable; every check on the head SHA finished OK and every `requiredChecks` glob matched; the base branch itself is green. Then `gh pr merge --squash [--admin] --match-head-commit <sha>`, one PR per tick. A red base after our merge halts the rollout.
+
+The release PR ("chore: version packages") is never merged by the driver: merging it publishes. The driver reports it at the end; the user merges it.
+
+## Guard rails for agents
+
+- Settings passed per agent: deny `gh pr merge/review/close`, repo/release/secret/workflow admin, publish/release commands, pushes to the base branch; attribution off.
+- `hooks/guard-bash.mjs` (PreToolUse, Bash): pushes only to `$ROLLOUT_BRANCH` with an explicit refspec, no force except `--force-with-lease`, `gh api` GET only, no `--no-verify`, no hooksPath overrides; the verifier cannot commit, push, switch branches or write to GitHub.
+- `git-hooks/commit-msg` via per-worktree `core.hooksPath`: one subject line, at most 72 characters, no body, no trailers.
+- `--permission-prompts none`: anything that would prompt is denied instead of hanging.
+
+## Starting a new rollout
+
+1. Create `~/.rollouts/<name>/manifest.yaml`. Copy the structure of `examples/manifest.yaml` in this skill: `repo` (path, github, pathPrepend, install, requiredChecks, merge, forbid, denylist, verify recipe), `policy`, and `prs` with `id, branch, title, brief, deps, priority, effort {implement, verify}, changeset, smoke, viewer, scope, hot, extra, expect`.
+2. Write one brief per PR in `briefs/<id>.md`, in English, self-contained: goal, background with file:line on the base branch, concrete changes, out of scope, expected files, changeset text, verification commands with expected numbers, an objectively checkable acceptance checklist, PR description skeleton. The agent sees only the brief, the repo and the protocol. Best made by one agent per PR plus an adversarial reviewer that checks every path and claim against the base branch.
+3. Efforts: `max` for subtle runtime or concurrency work, `xhigh` for public-API or cross-package changes, `high` for mechanical multi-file work, `medium` for docs. The verifier gets `xhigh` when the implementer has `max`.
+4. `preflight --live`, then a first run with `--only` on one or two PRs and `--dry-run` (everything real except the merge), then real runs.
+
+## Tests
+
+`cd ~/.claude/skills/rollout && npm test` (gate, checks, globs, manifest validation, guard, commit-msg hook).

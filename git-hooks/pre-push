@@ -1,0 +1,36 @@
+#!/bin/sh
+# Rollout worktrees may push only the PR branch, whatever command started
+# the push (git push, aliases, scripts). The allowed branch comes from a file
+# the driver writes into this worktree's git dir, never from the environment.
+# stdin: <local ref> <local sha> <remote ref> <remote sha> per ref.
+zero=0000000000000000000000000000000000000000
+marker="$(git rev-parse --git-dir)/rollout-branch"
+
+if [ ! -f "$marker" ]; then
+  echo "rollout: this worktree has no rollout-branch marker; refusing to push." >&2
+  exit 1
+fi
+
+branch=$(cat "$marker")
+url_marker="$(git rev-parse --git-dir)/rollout-pushurl"
+
+# $2 is the URL git is pushing to. With a push URL marker, it must match, so
+# nothing reaches GitHub through the maintainer's SSH remote.
+if [ -f "$url_marker" ] && [ "$2" != "$(cat "$url_marker")" ]; then
+  echo "rollout: refusing to push to $2; this worktree pushes only to $(cat "$url_marker")." >&2
+  exit 1
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" != "refs/heads/$branch" ]; then
+    echo "rollout: refusing to push to $remote_ref; only refs/heads/$branch is allowed." >&2
+    exit 1
+  fi
+
+  if [ "$local_sha" = "$zero" ]; then
+    echo "rollout: refusing to delete $remote_ref." >&2
+    exit 1
+  fi
+done
+
+exit 0

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Rollout agents write one short subject line: no body, no trailers.
+message=$(grep -v '^#' "$1" | sed -e '/^[[:space:]]*$/d')
+lines=$(printf '%s\n' "$message" | grep -c .)
+
+if [ "$lines" -ne 1 ]; then
+  echo "rollout: the commit message must be a single subject line (no body, no trailers)." >&2
+  exit 1
+fi
+
+if [ "${#message}" -gt 72 ]; then
+  echo "rollout: keep the subject line at 72 characters or less." >&2
+  exit 1
+fi
+
+exit 0
