@@ -7,16 +7,18 @@
 //   rollout.mjs approve   <id> [--dir D]
 //   rollout.mjs note      <id> "<answer>" [--dir D]
 //   rollout.mjs retry     <id> [--dir D]
+//   rollout.mjs hold | release <id> [--dir D]
 //   rollout.mjs pause | resume | unhalt [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadManifest } from '../lib/manifest.mjs'
 import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
 import { runDriver } from '../lib/driver.mjs'
+import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { agentGitHubEnv } from '../lib/identity.mjs'
 import { agentSettings, guardCommand } from '../lib/settings.mjs'
@@ -63,106 +65,84 @@ function age(iso) {
 }
 
 function status(M) {
-  const data = readLedger(M)
+  const view = rolloutView(M)
 
-  if (!data) {
+  if (!view) {
     console.log(`no ledger yet in ${M.dir}; start the driver with: rollout.mjs run --dir ${M.dir}`)
     return
   }
 
-  const beat = join(M.dir, 'heartbeat')
-  const beatAge = existsSync(beat) ? Math.round((Date.now() - statSync(beat).mtimeMs) / 1000) : null
-  const beatNote = existsSync(beat) ? readFileSync(beat, 'utf8').split(' ').slice(1).join(' ') : ''
-  const holder = lockHolder(M)
-  const liveness = holder
-    ? `running (pid ${holder.pid}, last heartbeat ${beatAge}s ago${beatNote ? `: ${beatNote}` : ''})`
-    : `NOT RUNNING (last heartbeat ${beatAge === null ? 'never' : `${Math.round(beatAge / 60)} min ago`})`
+  const { driver } = view
+  const driverText = driver.running
+    ? `running (pid ${driver.pid}, last heartbeat ${driver.heartbeatAgeSeconds}s ago${driver.heartbeatNote ? `: ${driver.heartbeatNote}` : ''})`
+    : `NOT RUNNING (last heartbeat ${driver.heartbeatAgeSeconds === null ? 'never' : `${Math.round(driver.heartbeatAgeSeconds / 60)} min ago`})`
 
-  console.log(`rollout ${M.rollout}  driver: ${liveness}`)
+  console.log(`rollout ${M.rollout}  driver: ${driverText}`)
 
-  if (data.paused) {
+  if (driver.paused) {
     console.log('PAUSED (rollout.mjs resume)')
   }
 
-  if (data.halted) {
-    console.log(`HALTED: ${data.halted} (rollout.mjs unhalt)`)
+  if (driver.halted) {
+    console.log(`HALTED: ${driver.halted} (rollout.mjs unhalt)`)
   }
 
   console.log('')
   console.log('id    state          PR     head     CI/gate                                   attempts  cost')
 
-  for (const pr of M.all) {
-    const s = data.prs[pr.id]
-
-    if (!s) {
-      continue
-    }
-
-    const head = (s.verified?.sha ?? s.claimedSha ?? '').slice(0, 7) || '-'
-    let info = s.gate ? `${s.gate.action}: ${s.gate.reasons.join('; ')}` : ''
-
-    if (s.state === 'merged') {
-      info = s.mergeSha ? `merged as ${s.mergeSha.slice(0, 7)}` : 'merged'
-    } else if (s.state === 'blocked') {
-      info = `${s.blocked?.kind}: ${s.blocked?.question ?? ''}`
-    } else if (s.state === 'needs_fix' || s.state === 'fixing') {
-      info = s.fixReason ?? ''
-    } else if (s.state === 'escalated' || s.state === 'interrupted') {
-      info = s.lastError ?? ''
-    }
-
-    if (s.approved && s.verified && s.approved.patchId === s.verified.patchId) {
-      info = `approved; ${info}`
-    }
-
-    const attempts = `${s.attempts.implement}/${s.attempts.fix}/${s.attempts.verify}`
+  for (const row of view.rows) {
+    const attempts = `${row.attempts.implement}/${row.attempts.fix}/${row.attempts.verify}`
 
     console.log(
-      `${pr.id.padEnd(5)} ${s.state.padEnd(14)} ${(s.pr ? `#${s.pr}` : '-').padEnd(6)} ${head.padEnd(8)} ${info.slice(0, 41).padEnd(41)} ${attempts.padEnd(9)} $${s.costUsd.toFixed(2)}`,
+      `${row.id.padEnd(5)} ${row.state.padEnd(14)} ${(row.pr ? `#${row.pr}` : '-').padEnd(6)} ${row.head.padEnd(8)} ${row.info.slice(0, 41).padEnd(41)} ${attempts.padEnd(9)} $${row.costUsd.toFixed(2)}`,
     )
   }
 
-  const events = join(M.dir, 'events.jsonl')
+  const recent = view.events.slice(-8)
 
-  if (existsSync(events)) {
-    const last = readFileSync(events, 'utf8').trim().split('\n').slice(-8)
+  if (recent.length > 0) {
     console.log('\nrecent events:')
 
-    for (const line of last) {
-      const event = JSON.parse(line)
-      const { at, id, kind, ...detail } = event
-      console.log(`  ${age(at).padStart(4)} ago  ${id.padEnd(4)} ${kind} ${JSON.stringify(detail).slice(0, 110)}`)
+    for (const { at, id, kind, ...detail } of recent) {
+      console.log(`  ${age(at).padStart(4)} ago  ${String(id ?? '-').padEnd(4)} ${kind} ${JSON.stringify(detail).slice(0, 110)}`)
     }
   }
 }
 
 function card(M, id) {
-  const data = readLedger(M)
-  const s = data?.prs[id]
-  const pr = M.all.find((item) => item.id === id)
+  const ledger = readLedger(M)
 
-  if (!s) {
+  if (!ledger) {
     console.log('no state yet')
     return
   }
 
-  console.log(`# ${id} ${pr.title}  (${pr.branch})`)
-  console.log(`state: ${s.state}   PR: ${s.pr ? `https://github.com/${M.repo.github}/pull/${s.pr}` : '-'}   cost: $${s.costUsd.toFixed(2)}`)
+  const events = readEvents(M)
+  const runs = runsFromEvents(events, { driverRunning: liveness(M).running })
+  const s = prDetail(M, ledger, events, runs, id)
+
+  console.log(`# ${id} ${s.title}  (${s.branch})`)
+  console.log(`state: ${s.state}   PR: ${s.url ?? '-'}   cost: $${s.costUsd.toFixed(2)}`)
+
+  if (s.held) {
+    console.log(`held since ${s.held.at} (rollout.mjs release ${id})`)
+  }
+
   console.log(
     `verified: ${s.verified ? `${s.verified.sha} (patch ${s.verified.patchId?.slice(0, 10)})` : 'no'}   approved: ${s.approved ? s.approved.sha : 'no'}`,
   )
 
-  const onGitHub = M.policy.approval === 'github' && s.author && !M.repo.maintainers.includes(s.author)
+  const onGitHub = s.approval === 'github'
   console.log(
-    `author: ${s.author ?? '?'}   approval: ${onGitHub ? `a maintainer review on GitHub (${M.repo.maintainers.join(', ')})` : 'rollout approve'}`,
+    `author: ${s.author ?? '?'}   approval: ${onGitHub ? `a maintainer review on GitHub (${s.maintainers.join(', ')})` : 'rollout approve'}`,
   )
 
   if (s.gate) {
     console.log(`gate: ${s.gate.action}${s.gate.reasons.length ? ` — ${s.gate.reasons.join('; ')}` : ''}`)
   }
 
-  const notes = pr.brief.replace(/\.md$/, '.review-notes.md')
-  console.log(`brief: ${existsSync(pr.brief) ? pr.brief : 'not written yet'}${existsSync(notes) ? `   reviewer notes: ${notes}` : ''}`)
+  const { brief } = s
+  console.log(`brief: ${brief.exists ? brief.path : 'not written yet'}${brief.notesExist ? `   reviewer notes: ${brief.notesPath}` : ''}`)
 
   if (s.blocked && s.state === 'blocked') {
     console.log(`\nBLOCKED (${s.blocked.kind}): ${s.blocked.question}\n${s.blocked.evidence ?? ''}`)
@@ -417,14 +397,17 @@ async function liveGuardTest(M, problems) {
   }
 }
 
+// The comment block right after the shebang.
+function usage() {
+  const lines = readFileSync(new URL(import.meta.url), 'utf8').split('\n')
+  const end = lines.findIndex((line, index) => index > 0 && !line.startsWith('//'))
+
+  return lines.slice(1, end).join('\n')
+}
+
 async function main() {
   if (!command || command === 'help') {
-    console.log(
-      readFileSync(new URL(import.meta.url), 'utf8')
-        .split('\n')
-        .slice(1, 12)
-        .join('\n'),
-    )
+    console.log(usage())
     return
   }
 
@@ -479,7 +462,9 @@ async function main() {
     }
 
     case 'retry':
-      postCommand(M, { cmd: 'retry', id: requireId(M) })
+    case 'hold':
+    case 'release':
+      postCommand(M, { cmd: command, id: requireId(M) })
       console.log('queued')
       break
 

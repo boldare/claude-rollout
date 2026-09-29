@@ -25,8 +25,11 @@ Everything lives in two places:
 | `node $R approve <id> --dir D`                   | approves the verified patch of a PR the maintainer authored (bound to its head and patch id). PRs opened by the agents' account are approved with a normal review on GitHub instead |
 | `node $R note <id> "<answer>" --dir D`           | answers a BLOCKED agent or escalation; the implementer session resumes with the answer                                                                                              |
 | `node $R retry <id> --dir D`                     | resets attempts after an escalation                                                                                                                                                 |
+| `node $R hold <id>` / `release <id>`             | holds one PR: no new runs, rebases, ready notices or merges for it, and a running agent finishes its step / lifts the hold                                                          |
 | `node $R pause` / `resume` / `unhalt`            | stop merging and starting work / continue / clear a halt after a red base branch                                                                                                    |
 | `node $R stop --dir D`                           | stops the driver and its agents; the next `run` resumes their sessions                                                                                                              |
+
+A running driver watches `inbox/`, so commands apply within about a second instead of at the next tick.
 
 When the user asks "how is the rollout going", run `status`, read the cards of anything verified or blocked, and summarise: what is waiting for them (approvals, questions), what is running, what failed.
 
@@ -71,4 +74,4 @@ The release PR ("chore: version packages") is never merged by the driver: mergin
 
 ## Tests
 
-`cd ~/.claude/skills/rollout && npm test` (gate, checks, globs, manifest validation, guard, commit-msg hook).
+`cd ~/.claude/skills/rollout && npm test` (gate, checks, globs, manifest validation, guard, commit-msg hook, the view model, the inbox and the commands).
