@@ -245,6 +245,7 @@ export function makeRollout(overrides = {}) {
     lock: true,
     logs: { 'A1-01-implement': [...sampleTranscript(), '{"type":"assis'], 'A1-02-verify': sampleTranscript().slice(0, 1) },
     policy: {},
+    manifest: {},
     dir: null,
     ...overrides,
   }
@@ -254,7 +255,7 @@ export function makeRollout(overrides = {}) {
   mkdirSync(join(dir, 'repo'))
   mkdirSync(join(dir, 'logs'))
   writeFileSync(join(dir, 'plan.md'), '# Plan\n')
-  writeFileSync(join(dir, 'manifest.yaml'), stringify(manifest(dir, options.policy)))
+  writeFileSync(join(dir, 'manifest.yaml'), stringify({ ...manifest(dir, options.policy), ...options.manifest }))
 
   if (options.prs) {
     const prs = Object.fromEntries(Object.entries(options.prs).map(([id, state]) => [id, { ...freshPr(), ...state }]))

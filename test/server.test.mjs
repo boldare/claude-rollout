@@ -199,6 +199,7 @@ function cliEnv(role) {
   const env = { ...process.env }
 
   delete env.ROLLOUT_ROLE
+  delete env.ROLLOUT_ROOT
 
   if (role) {
     env.ROLLOUT_ROLE = role
@@ -711,6 +712,7 @@ test('cli: help lists ui', () => {
   assert.match(result.stdout, /rollout\.mjs ui +\[--root ROOT\] \[--port N\] \[--no-open\]/)
   assert.ok(result.stdout.includes('rollout.mjs ui        [--root ROOT] [--port N] [--no-open] [--read-only]'), result.stdout)
   assert.match(result.stdout, /--read-only disables the controls/)
+  assert.ok(result.stdout.includes('default $ROLLOUT_ROOT or ~/.rollouts'), result.stdout)
 })
 
 test('cli: ui prints a URL with the token, never writes it, and exits 0 on SIGTERM', async (t) => {
@@ -743,6 +745,44 @@ test('cli: ui prints a URL with the token, never writes it, and exits 0 on SIGTE
   const exited = once(child, 'exit')
   child.kill('SIGTERM')
   assert.deepEqual(await exited, [0, null])
+})
+
+async function servedRoot(t, args, env) {
+  const child = spawn(process.execPath, [BIN, 'ui', '--port', '0', '--no-open', ...args], {
+    env: { ...cliEnv(), ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  t.after(() => child.kill())
+
+  const line = await firstLine(child.stdout)
+  const match = /^rollout ui: (http:\/\/127\.0\.0\.1:\d+)\/#t=([^ ]+) /.exec(line)
+
+  assert.ok(match, line)
+
+  const [, origin, token] = match
+  const response = await fetch(`${origin}/api/rollouts`, { headers: { authorization: `Bearer ${token}` } })
+  const { root } = await response.json()
+  const exited = once(child, 'exit')
+
+  child.kill('SIGTERM')
+  assert.deepEqual(await exited, [0, null])
+
+  return root
+}
+
+// Every run sets --root or ROLLOUT_ROOT, so none reads the real ~/.rollouts.
+test('cli: ui serves ROLLOUT_ROOT without --root', async (t) => {
+  const root = makeRolloutRoot()
+
+  assert.equal(await servedRoot(t, [], { ROLLOUT_ROOT: root }), root)
+})
+
+test('cli: ui prefers --root over ROLLOUT_ROOT', async (t) => {
+  const flagRoot = makeRolloutRoot()
+  const envRoot = makeRolloutRoot()
+
+  assert.equal(await servedRoot(t, ['--root', flagRoot], { ROLLOUT_ROOT: envRoot }), flagRoot)
 })
 
 test('cli: ui is refused to agents and rejects a bad port', () => {

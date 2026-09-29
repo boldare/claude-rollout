@@ -12,20 +12,21 @@
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
 //   rollout.mjs ui        [--root ROOT] [--port N] [--no-open] [--read-only]
-//                         (serves a local web UI over the rollouts in ROOT, default ~/.rollouts)
+//                         (serves a local web UI over the rollouts in ROOT, default $ROLLOUT_ROOT or ~/.rollouts)
 //                         (--read-only disables the controls)
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadManifest } from '../lib/manifest.mjs'
 import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
-import { expandHome, makeEnv, sh } from '../lib/sh.mjs'
+import { makeEnv, sh } from '../lib/sh.mjs'
 import { agentGitHubEnv } from '../lib/identity.mjs'
 import { agentSettings, guardCommand } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
+import { rolloutRoot } from '../lib/rollouts.mjs'
 import { execFile, spawnSync } from 'node:child_process'
 
 const { values, positionals } = parseArgs({
@@ -207,13 +208,13 @@ async function preflight(M) {
   const problems = []
   const warnings = []
 
-  async function probe(label, cmd, args, options = {}) {
+  async function probe(label, cmd, args, { problem = label, ...options } = {}) {
     const result = await sh(cmd, args, { env, cwd: M.repo.path, ...options })
     const text = (result.stdout || result.stderr).trim().split('\n')[0]
     console.log(`${result.code === 0 ? 'ok  ' : 'FAIL'} ${label}: ${text}`)
 
     if (result.code !== 0) {
-      problems.push(label)
+      problems.push(problem)
     }
 
     return result
@@ -227,7 +228,9 @@ async function preflight(M) {
     console.log(`ok   briefs the driver will write when their dependencies merge: ${toWrite.join(', ')}`)
   }
 
-  await probe('claude', M.claudeBin, ['--version'])
+  await probe('claude', M.claudeBin, ['--version'], {
+    problem: `claude (${M.claudeBin}) did not run: put it on PATH or repo.pathPrepend, or set claudeBin in manifest.yaml`,
+  })
   await probe('node', 'node', ['--version'])
   await probe('pnpm', 'pnpm', ['--version'])
   await probe('gh auth', 'gh', ['auth', 'status'])
@@ -259,6 +262,14 @@ async function preflight(M) {
 
     if (M.repo.merge.admin && !info.permissions?.admin) {
       problems.push('merge.admin is set but the gh account is not a repository admin')
+    }
+
+    if (info.private === false && M.repo.public === false) {
+      problems.push('the repository is public but repo.public is false')
+    }
+
+    if (info.private === true && M.repo.public === true) {
+      warnings.push('the repository is private: set repo.public: false to drop the public-repository rules from the prompts')
     }
   } else {
     problems.push('cannot read the repository with gh')
@@ -415,7 +426,7 @@ function openBrowser(url) {
 }
 
 async function ui() {
-  const root = resolve(expandHome(values.root ?? '~/.rollouts'))
+  const root = rolloutRoot(values.root)
   const port = values.port ?? '0'
 
   if (!/^\d+$/.test(port) || Number(port) > 65535) {

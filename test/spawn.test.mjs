@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { failureSignals } from '../lib/spawn.mjs'
+import { join } from 'node:path'
+import { loadManifest } from '../lib/manifest.mjs'
+import { failureSignals, runAgent } from '../lib/spawn.mjs'
+import { makeRollout } from './fixtures.mjs'
 
 // What claude prints for `--resume` of a session that never reached disk.
 const RESUME_MISSING = {
@@ -30,4 +33,24 @@ test('failureSignals: the agent answer never counts, only stderr', () => {
   const result = { subtype: 'success', is_error: true, result: 'No conversation found; rate limit; billing' }
 
   assert.deepEqual(failureSignals(result, ''), { transient: false, account: false, sessionMissing: false })
+})
+
+test('runAgent: a missing claude binary fails the run instead of throwing', async () => {
+  const M = loadManifest(makeRollout())
+  const pr = M.all[0]
+
+  M.claudeBin = join(M.dir, 'no-such-claude')
+
+  const result = await runAgent(M, pr, {
+    role: 'implement',
+    prompt: 'unused',
+    effort: 'high',
+    sessionId: '00000000-0000-4000-8000-000000000000',
+    resume: false,
+    cwd: M.repo.path,
+    logName: 'A1-01-implement',
+  })
+
+  assert.equal(result.ok, false)
+  assert.match(result.error, /ENOENT/)
 })

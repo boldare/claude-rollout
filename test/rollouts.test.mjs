@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { appendFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { loadManifest } from '../lib/manifest.mjs'
@@ -10,6 +11,7 @@ import {
   findRollout,
   listRollouts,
   rolloutPr,
+  rolloutRoot,
   rolloutSnapshot,
   transcriptPage,
   watchRollout,
@@ -396,4 +398,15 @@ test('withEstimates: only interrupted or failed runs without a cost and with an 
   assert.deepEqual(estimated[0], { ...runs[0], estimateUsd: 2.67 })
   assert.equal('estimateUsd' in runs[0], false)
   assert.equal(withEstimates(M, [run('A1-01-implement', 'failed', 0)])[0].estimateUsd, null)
+})
+
+test('rolloutRoot: --root, then a non-empty ROLLOUT_ROOT, then ~/.rollouts', () => {
+  const env = { ROLLOUT_ROOT: '/tmp/from-env' }
+
+  assert.equal(rolloutRoot('/tmp/from-flag', env), '/tmp/from-flag')
+  assert.equal(rolloutRoot(undefined, env), '/tmp/from-env')
+  assert.equal(rolloutRoot(undefined, { ROLLOUT_ROOT: '' }), join(homedir(), '.rollouts'))
+  assert.equal(rolloutRoot(undefined, {}), join(homedir(), '.rollouts'))
+  assert.equal(rolloutRoot('~/elsewhere', env), join(homedir(), 'elsewhere'))
+  assert.equal(rolloutRoot(undefined, { ROLLOUT_ROOT: '~/from-env' }), join(homedir(), 'from-env'))
 })
