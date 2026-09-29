@@ -45,9 +45,7 @@ These apply to everything you write: code comments, doc comments, README and oth
 - **Short prose.** Short sentences, plain words, no filler. A doc comment is one or two sentences unless the API really needs more.
 - **Avoid semicolons in prose.** End the sentence with a period and start a new one, or use a comma or a list. This is about text, not code syntax.
 
-## Public repository
-
-Everything you write into code, tests, fixtures, commits, changesets and the PR is public. Never mention any of these terms: {{denylist}}. Never write absolute local paths (like `/Users/...`). Describe real-world projects generically ("a large jsdom project").
+{{publicRepo}}
 
 ## Hard limits
 

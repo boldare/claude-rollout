@@ -12,7 +12,7 @@ The plan is authoritative for scope and decisions (its "Decyzje" section and def
 
 ## Rules for the brief
 
-- **Public repository.** The implementer's code, comments, tests, changeset, commits and PR text are public. The brief must tell it never to mention client or project names from the plan ({{denylist}}), nor any local path such as `/Users/...`. Real-world numbers may appear without names ("a 493-test design system").
+{{publicBriefRule}}
 - **Scope.** Only PR {{id}}. List what is explicitly out of scope when the plan or the notes mix it with other PRs.
 - **Changeset.** {{changesetBriefRule}}
 - **Style.** Point to `STYLE.md` rules the PR needs (one export per file, braces everywhere, blank lines) when it adds files.

@@ -96,6 +96,20 @@ test('manifest validation catches cycles, unknown deps, bad efforts and bumps', 
   assert.match(errors, /above policy\.maxBump/)
 })
 
+test('repo.public must be a boolean', () => {
+  for (const value of ['yes', null]) {
+    const broken = structuredClone(base)
+    broken.repo.public = value
+    assert.deepEqual(validateManifest(broken), ['repo.public must be true or false'], String(value))
+  }
+
+  for (const value of [true, false]) {
+    const marked = structuredClone(base)
+    marked.repo.public = value
+    assert.deepEqual(validateManifest(marked), [], String(value))
+  }
+})
+
 test('changeset none is a valid manifest value', () => {
   const plain = structuredClone(base)
   plain.prs[0].changeset = 'none'

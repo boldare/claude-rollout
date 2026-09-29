@@ -1,11 +1,14 @@
-# Example rollout. Copy it to ~/.rollouts/<name>/manifest.yaml and adapt it.
+# Example rollout. Copy it to $ROLLOUT_ROOT/<name>/manifest.yaml (default ~/.rollouts) and adapt it.
 rollout: my-lib-1.2.0
 model: opus
+# claudeBin: ~/tools/claude # default: claude from PATH
 
 repo:
   path: ~/code/my-lib
   github: my-org/my-lib
   base: main
+  # false for a private repo drops the public-repository rules from the prompts. The denylist still applies.
+  public: true
   # Put tool versions the repo needs first on PATH (node, pnpm, gh).
   pathPrepend: []
   install: pnpm install --frozen-lockfile
@@ -21,7 +24,7 @@ repo:
     - '**/CHANGELOG.md'
     - .changeset/config.json
     - .github/workflows/release.yml
-  # Terms that must never appear in the public repo (client names, local paths).
+  # Terms that must never appear in the diff, PR or commits (client names, local paths). The gate checks them on every repo.
   denylist: [acme-client, /Users/]
   verify:
     common:
