@@ -21,8 +21,7 @@ function commit(cwd, file) {
   return git(cwd, 'rev-parse', 'HEAD')
 }
 
-// A local bare origin with one commit on main and a clone as the repo. No
-// GitHub: fetches and pushes stay on disk.
+// A local bare origin and a clone, no GitHub.
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'rollout-wt-'))
   const origin = join(dir, 'origin.git')
@@ -42,7 +41,6 @@ function fixture() {
   return { dir, M, repo, pr: { id: 'A1', branch: 'feat/a1' } }
 }
 
-// Lands a commit on origin/main, as a merged PR would.
 function mergeElsewhere(repo, file) {
   git(repo, 'checkout', '--quiet', '--detach', 'origin/main')
   const sha = commit(repo, file)
