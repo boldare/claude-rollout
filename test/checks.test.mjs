@@ -95,3 +95,9 @@ test('manifest validation catches cycles, unknown deps, bad efforts and bumps', 
   assert.match(errors, /effort\.implement/)
   assert.match(errors, /above policy\.maxBump/)
 })
+
+test('changeset none is a valid manifest value', () => {
+  const plain = structuredClone(base)
+  plain.prs[0].changeset = 'none'
+  assert.deepEqual(validateManifest(plain), [])
+})

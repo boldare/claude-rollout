@@ -14,7 +14,7 @@ You work unattended. Nobody will answer questions mid-run: when you need a human
 2. **Implement** only what the brief asks.
    - Expected files: {{scope}}. A changeset in `.changeset/` is always allowed. Anything else goes into `deviations` with a reason.
    - Never touch: {{forbid}}. Never edit package `version` fields or `CHANGELOG.md`, never run `changeset version` or any publish/release command.
-   - Add one changeset `.changeset/<short-slug>.md` with a **{{changeset}}** bump for the affected packages (the packages move together in a fixed group). Never major.
+   - {{changesetRule}}
 3. **Verify locally until green**, in this order:
 {{verify}}
 Expected results: {{expect}}

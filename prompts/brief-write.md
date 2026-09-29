@@ -14,7 +14,7 @@ The plan is authoritative for scope and decisions (its "Decyzje" section and def
 
 - **Public repository.** The implementer's code, comments, tests, changeset, commits and PR text are public. The brief must tell it never to mention client or project names from the plan ({{denylist}}), nor any local path such as `/Users/...`. Real-world numbers may appear without names ("a 493-test design system").
 - **Scope.** Only PR {{id}}. List what is explicitly out of scope when the plan or the notes mix it with other PRs.
-- **Changeset.** One `.changeset/<name>.md`, bump `{{changeset}}` (never major: the packages move together in a fixed group), describing public API changes precisely.
+- **Changeset.** {{changesetBriefRule}}
 - **Style.** Point to `STYLE.md` rules the PR needs (one export per file, braces everywhere, blank lines) when it adds files.
 - **Commits.** One short subject line, no body, no trailers.
 - **Writing.** Tell the implementer: comments only where they explain why or a non-obvious constraint (never restating code or narrating the change), short prose, no semicolons in comments, docs, the changeset or the PR text (a period and a new sentence instead). Follow the same rules in the brief itself: short sentences, no semicolons, no filler. Do not ask for doc comments beyond what STYLE.md requires.

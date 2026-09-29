@@ -248,3 +248,9 @@ test('manual mode: the gate says merge without any approval; the maintainer merg
     'wait',
   )
 })
+
+test('a PR in a repo without changesets needs none', () => {
+  const plain = facts({ files: [{ status: 'modified', path: 'packages/core/src/recorder.ts' }], changesets: [] })
+  assert.deepEqual(policyViolations(M, { ...pr, changeset: 'none' }, plain), [])
+  assert.match(policyViolations(M, pr, plain).join(), /no new changeset/)
+})
