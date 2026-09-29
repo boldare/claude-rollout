@@ -16,18 +16,19 @@ Everything lives in two places:
 
 ## Commands (run them with Bash; pass `--dir <rollout dir>`)
 
-| command                                          | what it does                                                                                                                                                                        |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `node $R preflight --dir D [--live]`             | checks tools, gh auth, repo settings, briefs; `--live` also proves the guard blocks merge/push/publish in a real headless agent                                                     |
-| `node $R run --dir D [--only A6,A1] [--dry-run]` | starts the driver in the foreground. The user runs it in its own terminal tab (cmux) under `caffeinate -is`; do not run it inside a Claude session's Bash, it runs for hours        |
-| `node $R status --dir D`                         | table of PR states, gate reasons, attempts, cost, driver heartbeat, recent events                                                                                                   |
-| `node $R card <id> --dir D`                      | the approval card: PR link, implementer summary, deviations, expected-vs-observed, verifier checklist and findings, gate verdict                                                    |
-| `node $R approve <id> --dir D`                   | approves the verified patch of a PR the maintainer authored (bound to its head and patch id). PRs opened by the agents' account are approved with a normal review on GitHub instead |
-| `node $R note <id> "<answer>" --dir D`           | answers a BLOCKED agent or escalation; the implementer session resumes with the answer                                                                                              |
-| `node $R retry <id> --dir D`                     | resets attempts after an escalation                                                                                                                                                 |
-| `node $R hold <id>` / `release <id>`             | holds one PR: no new runs, rebases, ready notices or merges for it, and a running agent finishes its step / lifts the hold                                                          |
-| `node $R pause` / `resume` / `unhalt`            | stop merging and starting work / continue / clear a halt after a red base branch                                                                                                    |
-| `node $R stop --dir D`                           | stops the driver and its agents; the next `run` resumes their sessions                                                                                                              |
+| command                                           | what it does                                                                                                                                                                                                                                   |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node $R preflight --dir D [--live]`              | checks tools, gh auth, repo settings, briefs; `--live` also proves the guard blocks merge/push/publish in a real headless agent                                                                                                                |
+| `node $R run --dir D [--only A6,A1] [--dry-run]`  | starts the driver in the foreground. The user runs it in its own terminal tab (cmux) under `caffeinate -is`; do not run it inside a Claude session's Bash, it runs for hours                                                                   |
+| `node $R status --dir D`                          | table of PR states, gate reasons, attempts, cost, driver heartbeat, recent events                                                                                                                                                              |
+| `node $R card <id> --dir D`                       | the approval card: PR link, implementer summary, deviations, expected-vs-observed, verifier checklist and findings, gate verdict                                                                                                               |
+| `node $R approve <id> --dir D`                    | approves the verified patch of a PR the maintainer authored (bound to its head and patch id). PRs opened by the agents' account are approved with a normal review on GitHub instead                                                            |
+| `node $R note <id> "<answer>" --dir D`            | answers a BLOCKED agent or escalation; the implementer session resumes with the answer                                                                                                                                                         |
+| `node $R retry <id> --dir D`                      | resets attempts after an escalation                                                                                                                                                                                                            |
+| `node $R hold <id>` / `release <id>`              | holds one PR: no new runs, rebases, ready notices or merges for it, and a running agent finishes its step / lifts the hold                                                                                                                     |
+| `node $R pause` / `resume` / `unhalt`             | stop merging and starting work / continue / clear a halt after a red base branch                                                                                                                                                               |
+| `node $R stop --dir D`                            | stops the driver and its agents; the next `run` resumes their sessions                                                                                                                                                                         |
+| `node $R ui [--root ROOT] [--port N] [--no-open]` | serves a local web UI over every rollout under ROOT (default `~/.rollouts`) and prints a URL with a token that lasts as long as the server. It only reads the rollout files. It runs until Ctrl-C, so the user starts it in their own terminal |
 
 A running driver watches `inbox/`, so commands apply within about a second instead of at the next tick.
 
@@ -74,4 +75,4 @@ The release PR ("chore: version packages") is never merged by the driver: mergin
 
 ## Tests
 
-`cd ~/.claude/skills/rollout && npm test` (gate, checks, globs, manifest validation, guard, commit-msg hook, the view model, the inbox and the commands).
+`cd ~/.claude/skills/rollout && npm test` (gate, checks, globs, manifest validation, guard, commit-msg hook, the view model, the inbox, the commands and the UI server).

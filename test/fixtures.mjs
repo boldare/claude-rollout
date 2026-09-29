@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { freshPr } from '../lib/ledger.mjs'
 
-// A synthetic rollout directory. Every part can be overridden, and null
-// leaves the file out.
+// A synthetic rollout directory, in a fresh temp dir unless `dir` names one.
+// Every part can be overridden, and null leaves the file out.
 
 export const START = Date.parse('2026-09-01T10:00:00.000Z')
 
@@ -203,10 +203,12 @@ export function makeRollout(overrides = {}) {
     lock: true,
     logs: { 'A1-01-implement': [...sampleTranscript(), '{"type":"assis'], 'A1-02-verify': sampleTranscript().slice(0, 1) },
     policy: {},
+    dir: null,
     ...overrides,
   }
-  const dir = mkdtempSync(join(tmpdir(), 'rollout-'))
+  const dir = options.dir ?? mkdtempSync(join(tmpdir(), 'rollout-'))
 
+  mkdirSync(dir, { recursive: true })
   mkdirSync(join(dir, 'repo'))
   mkdirSync(join(dir, 'logs'))
   writeFileSync(join(dir, 'plan.md'), '# Plan\n')
@@ -234,4 +236,21 @@ export function makeRollout(overrides = {}) {
   }
 
   return dir
+}
+
+// A root like ~/.rollouts: demo with a ledger and a brief, fresh without a
+// ledger or a driver, broken with an invalid manifest, and the worktrees
+// directory of demo, which holds no manifest.
+export function makeRolloutRoot() {
+  const root = mkdtempSync(join(tmpdir(), 'rollout-root-'))
+
+  makeRollout({ dir: join(root, 'demo') })
+  mkdirSync(join(root, 'demo', 'briefs'))
+  writeFileSync(join(root, 'demo', 'briefs', 'A1.md'), '# A1\n')
+  makeRollout({ dir: join(root, 'fresh'), prs: null, events: null, heartbeat: null, lock: false, logs: null })
+  mkdirSync(join(root, 'broken'))
+  writeFileSync(join(root, 'broken', 'manifest.yaml'), 'rollout: broken\n')
+  mkdirSync(join(root, 'demo.worktrees', 'A1'), { recursive: true })
+
+  return root
 }

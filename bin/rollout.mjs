@@ -11,18 +11,21 @@
 //   rollout.mjs pause | resume | unhalt [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
+//   rollout.mjs ui        [--root ROOT] [--port N] [--no-open]
+//                         (serves a local web UI over the rollouts in ROOT, default ~/.rollouts)
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadManifest } from '../lib/manifest.mjs'
 import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
-import { makeEnv, sh } from '../lib/sh.mjs'
+import { expandHome, makeEnv, sh } from '../lib/sh.mjs'
 import { agentGitHubEnv } from '../lib/identity.mjs'
 import { agentSettings, guardCommand } from '../lib/settings.mjs'
-import { spawnSync } from 'node:child_process'
+import { startServer } from '../lib/server.mjs'
+import { execFile, spawnSync } from 'node:child_process'
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -31,6 +34,10 @@ const { values, positionals } = parseArgs({
     only: { type: 'string' },
     'dry-run': { type: 'boolean', default: false },
     live: { type: 'boolean', default: false },
+    root: { type: 'string' },
+    port: { type: 'string' },
+    // Its own option because allowNegative is missing before Node 20.16.
+    'no-open': { type: 'boolean', default: false },
   },
 })
 
@@ -397,6 +404,39 @@ async function liveGuardTest(M, problems) {
   }
 }
 
+function openBrowser(url) {
+  const opener = { darwin: 'open', linux: 'xdg-open' }[process.platform]
+
+  if (opener) {
+    execFile(opener, [url], () => {})
+  }
+}
+
+async function ui() {
+  const root = resolve(expandHome(values.root ?? '~/.rollouts'))
+  const port = values.port ?? '0'
+
+  if (!/^\d+$/.test(port) || Number(port) > 65535) {
+    console.error(`rollout ui: --port must be a number from 0 to 65535, got ${port}`)
+    process.exit(1)
+  }
+
+  const server = await startServer({ root, port: Number(port) })
+  console.log(`rollout ui: ${server.url} (Ctrl-C stops it)`)
+
+  if (!values['no-open']) {
+    openBrowser(server.url)
+  }
+
+  async function shutdown() {
+    await server.close()
+    process.exit(0)
+  }
+
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
+}
+
 // The comment block right after the shebang.
 function usage() {
   const lines = readFileSync(new URL(import.meta.url), 'utf8').split('\n')
@@ -411,12 +451,19 @@ async function main() {
     return
   }
 
-  const M = manifest()
-
   if (process.env.ROLLOUT_ROLE && command !== 'status' && command !== 'card') {
     console.error('rollout: agents cannot drive the rollout (ROLLOUT_ROLE is set)')
     process.exit(1)
   }
+
+  // Before manifest(): ui works over a root of rollouts, not one --dir. Agents
+  // are refused above because the printed URL carries the token.
+  if (command === 'ui') {
+    await ui()
+    return
+  }
+
+  const M = manifest()
 
   switch (command) {
     case 'run':
