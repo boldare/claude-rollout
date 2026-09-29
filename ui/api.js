@@ -23,7 +23,6 @@ export async function apiGet(token, path, { signal } = {}) {
   return { status: response.status, body: parseJson(await response.text()) }
 }
 
-// The browser adds the Origin header, which the server needs on every POST.
 export async function apiPost(token, path, body) {
   const headers = { ...authorization(token), 'Content-Type': 'application/json' }
   const response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })

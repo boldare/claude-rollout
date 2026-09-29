@@ -1,4 +1,3 @@
-// What the controls show, ask and send. No DOM here, so Node tests it.
 const RETRY_STATES = ['escalated', 'blocked', 'interrupted']
 const PR_COMMANDS = ['hold', 'release', 'retry']
 const LOSES_VERIFICATION = ['verified', 'ready_claimed']
@@ -83,7 +82,6 @@ export function dialogFor(command, { rollout, driver, pr }) {
   }
 }
 
-// Stop carries no pid: the server reads driver.lock when the request arrives.
 export function commandBody(command, pr, answer) {
   if (command === 'note') {
     return { cmd: command, id: pr.id, text: answer.text }

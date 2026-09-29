@@ -288,7 +288,6 @@ function showNotice(current, notice) {
   scheduleRender()
 }
 
-// An answer for a rollout the page no longer shows is dropped, like a stream message.
 async function send(current, command) {
   clearTimeout(noticeTimer)
   current.notice = null
@@ -482,7 +481,6 @@ function failure() {
   return [element('p', text, 'error'), wrap('p', link(linkTo({}), 'all rollouts'))]
 }
 
-// No control shows before the first state says the server accepts commands.
 function context() {
   const current = session
 
