@@ -254,3 +254,15 @@ test('a PR in a repo without changesets needs none', () => {
   assert.deepEqual(policyViolations(M, { ...pr, changeset: 'none' }, plain), [])
   assert.match(policyViolations(M, pr, plain).join(), /no new changeset/)
 })
+
+test('a held PR waits: no merge, no rebase, no ready notice in manual mode', () => {
+  const held = { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z' } }
+  const verdict = judge(M, pr, held, facts())
+
+  assert.equal(verdict.action, 'wait')
+  assert.match(verdict.reasons.join(), /held/)
+  assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve PR|GitHub still blocks/)
+  assert.equal(judge(M, pr, held, facts({ baseIsAncestor: false })).action, 'wait')
+  assert.equal(judge({ ...M, policy: { ...M.policy, merge: 'manual' } }, pr, held, facts()).action, 'wait')
+  assert.equal(judge(M, pr, { ...held, held: null }, facts()).action, 'merge')
+})
