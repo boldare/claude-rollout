@@ -15,10 +15,10 @@ function headline(role, output) {
 }
 
 // A driver on a fixture rollout. Only commands that never notify are posted.
-function driverFor(prs) {
+function driverFor(prs, options) {
   const M = loadManifest(makeRollout({ prs, events: [] }))
 
-  return { M, driver: createDriver(M) }
+  return { M, driver: createDriver(M, options) }
 }
 
 // Posts the commands, applies them and returns the events they caused.
@@ -125,4 +125,29 @@ test('hold and release reject what they cannot do, and the rest of the batch sti
   assert.ok(driver.L.prs.A1.held)
   assert.equal(driver.L.prs.A2.held, null)
   assert.equal(driver.L.prs.A3.held, null)
+})
+
+test('onDone: a PR merged during the run stays merged and is cleaned up after the run', async () => {
+  for (const result of [agentResult({ output: { verdict: 'PASS' } }), agentResult({ ok: false, error: 'error_during_execution' })]) {
+    const cleaned = []
+    const { M, driver } = driverFor({ A1: { state: 'merged', pr: 7, costUsd: 2 } }, { cleanup: async (pr) => cleaned.push(pr.id) })
+    const before = readEvents(M).length
+
+    await driver.onDone(
+      M.prs.find((pr) => pr.id === 'A1'),
+      'verify',
+      result,
+      { sha: 'abc1234', run: 'A1-03-verify' },
+    )
+
+    assert.equal(driver.L.prs.A1.state, 'merged')
+    assert.equal(driver.L.prs.A1.costUsd, 3.25)
+    assert.deepEqual(cleaned, ['A1'])
+    assert.deepEqual(
+      readEvents(M)
+        .slice(before)
+        .map((event) => event.kind),
+      ['verify-done'],
+    )
+  }
 })
