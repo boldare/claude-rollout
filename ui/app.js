@@ -8,13 +8,15 @@ import { money } from './format.js'
 import { renderHeader, renderViewTabs } from './header.js'
 import { driverStatus, mergeEvents } from './model.js'
 import { renderTimeline } from './timeline.js'
+import { FOLLOW_MS, PAGE_SIZE, shouldFollow, transcriptRoute } from './transcript-model.js'
 
 // The whole view state lives in the fragment, next to the token, so it never
 // reaches the server, and a reload or a link opened in a new tab still works.
 const REFRESH_MS = 5000
 const TICK_MS = 30_000
+const STICK_PX = 40
 const OPEN_THE_URL = 'Open the URL that rollout ui printed in its terminal. It carries the access token.'
-const ROUTE_KEYS = ['r', 'view', 'pr', 'tab', 'state', 'id', 'kind']
+const ROUTE_KEYS = ['r', 'view', 'pr', 'tab', 'state', 'id', 'kind', 'run', 'from']
 const VIEWS = ['board', 'timeline', 'events', 'costs']
 const TABS = ['overview', 'runs', 'verifier', 'review', 'brief']
 const DEFAULTS = { view: 'board', tab: 'overview' }
@@ -23,6 +25,7 @@ const VIEW_RENDERERS = { board: renderBoard, timeline: renderTimeline, events: r
 const token = new URLSearchParams(location.hash.slice(1)).get('t')
 const app = document.getElementById('app')
 const openVerdicts = new Set()
+const openTranscript = new Map()
 
 let route = parseRoute(location.hash)
 let stopped = false
@@ -31,14 +34,26 @@ let listing = null
 let listTimer = null
 let listTicket = 0
 let detailTicket = 0
+let transcriptTicket = 0
+let transcriptBusy = false
+let followTimer = null
+let followed = false
 let session = freshSession(null)
 
 function freshSession(name) {
-  return { name, stream: null, state: null, events: [], status: null, problem: null, failure: null, detail: null }
+  return { name, stream: null, state: null, events: [], status: null, problem: null, failure: null, detail: null, transcript: null }
 }
 
 function oneOf(value, allowed) {
   return allowed.includes(value) ? value : allowed[0]
+}
+
+function pageFrom(value) {
+  if (value === 'end') {
+    return 'end'
+  }
+
+  return /^\d+$/.test(value ?? '') ? Number(value) : null
 }
 
 function parseRoute(hash) {
@@ -53,6 +68,8 @@ function parseRoute(hash) {
     state: value('state'),
     id: value('id'),
     kind: value('kind'),
+    run: value('run'),
+    from: pageFrom(value('from')),
   }
 }
 
@@ -71,7 +88,7 @@ function linkTo(target) {
 }
 
 function linkWith(changes) {
-  return linkTo({ ...route, ...changes })
+  return linkTo(transcriptRoute(route, changes))
 }
 
 function go(href) {
@@ -200,6 +217,8 @@ function stopList() {
 
 function closeStream() {
   session.stream?.close()
+  invalidateTranscript()
+  followed = false
   session = freshSession(null)
 }
 
@@ -229,6 +248,7 @@ function follow(name) {
       current.state = state
       current.problem = null
       loadDetail()
+      recheckFollow({ fetchWhenStopped: true })
       scheduleRender()
     },
     onEvents(update) {
@@ -288,6 +308,119 @@ function loadDetail() {
   fetchDetail(key, detailTicket)
 }
 
+function transcriptKey() {
+  if (!route.r || !route.pr || !route.run || route.tab !== 'runs') {
+    return null
+  }
+
+  return `${route.r}\n${route.run}\n${route.from ?? 0}`
+}
+
+function runOfKey(key) {
+  return key ? key.split('\n').slice(0, 2).join('\n') : null
+}
+
+function following() {
+  return transcriptKey() !== null && shouldFollow(route, session.state?.view?.runs)
+}
+
+function stopFollowing() {
+  clearTimeout(followTimer)
+  followTimer = null
+}
+
+function invalidateTranscript() {
+  transcriptTicket += 1
+  transcriptBusy = false
+  stopFollowing()
+}
+
+// A timeout chain rather than an interval, so at most one request is in flight.
+function scheduleFollow() {
+  stopFollowing()
+
+  if (transcriptBusy || !following()) {
+    return
+  }
+
+  const ticket = transcriptTicket
+
+  followTimer = setTimeout(() => {
+    followTimer = null
+
+    if (ticket === transcriptTicket) {
+      fetchTranscript(transcriptKey(), ticket)
+    }
+  }, FOLLOW_MS)
+}
+
+async function fetchTranscript(key, ticket) {
+  const path = `${apiPath(route.r, 'runs', route.run)}?from=${route.from ?? 0}&limit=${PAGE_SIZE}`
+
+  transcriptBusy = true
+
+  try {
+    const { status, body } = await apiGet(token, path)
+
+    if (ticket !== transcriptTicket) {
+      return
+    }
+
+    if (status === 401) {
+      stopAll()
+      return
+    }
+
+    session.transcript = { key, status, body }
+  } catch (error) {
+    if (ticket !== transcriptTicket) {
+      return
+    }
+
+    session.transcript = { key, status: 0, body: { error: `Cannot reach the server: ${error.message}` } }
+  }
+
+  transcriptBusy = false
+  scheduleFollow()
+  scheduleRender()
+}
+
+// Another page of the same run keeps the current one on screen until it arrives.
+function loadTranscript() {
+  const key = transcriptKey()
+  invalidateTranscript()
+
+  if (!key) {
+    session.transcript = null
+    return
+  }
+
+  if (runOfKey(session.transcript?.key) !== runOfKey(key)) {
+    session.transcript = { key, status: null, body: null }
+  }
+
+  fetchTranscript(key, transcriptTicket)
+}
+
+// The fetch after following stops shows the end of the log and the final report.
+function recheckFollow({ fetchWhenStopped }) {
+  const now = following()
+
+  if (followed && !now && fetchWhenStopped) {
+    loadTranscript()
+  } else if (!now) {
+    stopFollowing()
+  } else if (!followTimer) {
+    scheduleFollow()
+  }
+
+  followed = now
+}
+
+function nearBottom() {
+  return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - STICK_PX
+}
+
 function failure() {
   const { status, error } = session.failure
   const text = status === 404 ? 'unknown rollout' : (error ?? `The server answered ${status}.`)
@@ -307,7 +440,9 @@ function context() {
     status: session.status,
     problem: session.problem,
     detail: session.detail,
+    transcript: session.transcript,
     openVerdicts,
+    openTranscript,
     linkTo,
     linkWith,
     go,
@@ -355,7 +490,13 @@ function render() {
     return
   }
 
+  const stick = following() && nearBottom()
+
   renderRollout()
+
+  if (stick) {
+    window.scrollTo(0, document.documentElement.scrollHeight)
+  }
 }
 
 function onRoute() {
@@ -364,6 +505,7 @@ function onRoute() {
   }
 
   const previousKey = detailKey()
+  const previousTranscript = transcriptKey()
   route = parseRoute(location.hash)
 
   if (!route.r) {
@@ -383,6 +525,11 @@ function onRoute() {
     loadDetail()
   }
 
+  if (transcriptKey() !== previousTranscript || (transcriptKey() && !session.transcript)) {
+    loadTranscript()
+  }
+
+  recheckFollow({ fetchWhenStopped: false })
   render()
 }
 

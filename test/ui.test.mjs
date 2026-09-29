@@ -9,6 +9,17 @@ import { duration, money } from '../ui/format.js'
 import { ERROR_KINDS, STATES, driverStatus, errorCount, eventDetail, filterEvents, mergeEvents, stateCounts } from '../ui/model.js'
 import { parseSse } from '../ui/sse.js'
 import { MARKERS, timelineLayout } from '../ui/timeline-layout.js'
+import {
+  FOLLOW_MS,
+  PAGE_SIZE,
+  estimateNote,
+  logSize,
+  pageLabel,
+  pageLinks,
+  resultPreview,
+  shouldFollow,
+  transcriptRoute,
+} from '../ui/transcript-model.js'
 import { START, at, makeRollout } from './fixtures.mjs'
 
 const UI = fileURLToPath(new URL('../ui/', import.meta.url))
@@ -349,6 +360,83 @@ test('format: money and duration', () => {
   assert.equal(duration(3900), '1h 05m')
   assert.equal(duration(59.9), '59s')
   assert.equal(duration(null), '-')
+})
+
+test('transcriptRoute: run and from belong to one PR and its Runs tab', () => {
+  const route = { r: 'demo', view: 'board', pr: 'A1', tab: 'runs', run: 'A1-01-implement', from: 3 }
+  const pick = (changes) => {
+    const next = transcriptRoute(route, changes)
+
+    return [next.pr, next.tab, next.run, next.from]
+  }
+
+  assert.deepEqual(pick({ from: 'end' }), ['A1', 'runs', 'A1-01-implement', 'end'])
+  assert.deepEqual(pick({ tab: 'runs' }), ['A1', 'runs', 'A1-01-implement', 3])
+  assert.deepEqual(pick({ pr: 'A2', tab: null }), ['A2', null, null, null])
+  assert.deepEqual(pick({ tab: 'verifier' }), ['A1', 'verifier', null, null])
+  assert.deepEqual(pick({ pr: 'A2', tab: 'runs', run: 'A2-01-implement', from: 'end' }), ['A2', 'runs', 'A2-01-implement', 'end'])
+  assert.deepEqual(pick({ run: 'A1-02-verify' }), ['A1', 'runs', 'A1-02-verify', null])
+  assert.deepEqual(pick({ run: 'A1-01-implement' }), ['A1', 'runs', 'A1-01-implement', 3])
+  assert.deepEqual(transcriptRoute({ ...route, tab: null, run: null, from: null }, { tab: 'overview' }).tab, 'overview')
+  assert.equal(route.from, 3)
+})
+
+test('pageLinks and pageLabel: start, middle, end, past the end and an empty log', () => {
+  const page = (from, count, total) => ({ from, items: Array.from({ length: count }, (_, i) => ({ index: from + i })), total })
+
+  assert.equal(PAGE_SIZE, 200)
+  assert.equal(FOLLOW_MS, 3000)
+
+  assert.deepEqual(pageLinks(page(0, 200, 450)), { first: null, previous: null, next: 200, latest: 'end' })
+  assert.equal(pageLabel(page(0, 200, 450)), 'items 1–200 of 450')
+
+  assert.deepEqual(pageLinks(page(200, 200, 450)), { first: 0, previous: 0, next: 400, latest: 'end' })
+  assert.equal(pageLabel(page(200, 200, 450)), 'items 201–400 of 450')
+
+  assert.deepEqual(pageLinks(page(250, 200, 450)), { first: 0, previous: 50, next: null, latest: 'end' })
+  assert.deepEqual(pageLinks(page(5, 3, 8)), { first: 0, previous: 0, next: null, latest: 'end' })
+  assert.equal(pageLabel(page(5, 3, 8)), 'items 6–8 of 8')
+
+  assert.deepEqual(pageLinks(page(99, 0, 8)), { first: 0, previous: 0, next: null, latest: 'end' })
+  assert.equal(pageLabel(page(99, 0, 8)), 'no items here, 8 in the log')
+
+  assert.deepEqual(pageLinks(page(0, 0, 0)), { first: null, previous: null, next: null, latest: 'end' })
+  assert.equal(pageLabel(page(0, 0, 0)), 'no items yet')
+})
+
+test('resultPreview: the first non-blank line, cut at 120 characters, and the line count', () => {
+  assert.deepEqual(resultPreview('\n  \n  tests 12, pass 12  \nmore'), { line: 'tests 12, pass 12', lines: 4 })
+  assert.deepEqual(resultPreview('z'.repeat(121)), { line: `${'z'.repeat(119)}…`, lines: 1 })
+  assert.deepEqual(resultPreview('z'.repeat(120)), { line: 'z'.repeat(120), lines: 1 })
+  assert.deepEqual(resultPreview(''), { line: '', lines: 0 })
+})
+
+test('shouldFollow: only the end of a running run', () => {
+  const runs = [
+    { run: 'A1-01-implement', status: 'ok' },
+    { run: 'A2-01-implement', status: 'running' },
+  ]
+
+  assert.equal(shouldFollow({ run: 'A2-01-implement', from: 'end' }, runs), true)
+  assert.equal(shouldFollow({ run: 'A1-01-implement', from: 'end' }, runs), false)
+  assert.equal(shouldFollow({ run: 'A2-01-implement', from: 0 }, runs), false)
+  assert.equal(shouldFollow({ run: 'A2-01-implement', from: null }, runs), false)
+  assert.equal(shouldFollow({ run: 'Z9-01-implement', from: 'end' }, runs), false)
+  assert.equal(shouldFollow({ run: null, from: 'end' }, runs), false)
+  assert.equal(shouldFollow({ run: 'A2-01-implement', from: 'end' }, undefined), false)
+})
+
+test('logSize: bytes, whole KB and MB with one decimal', () => {
+  assert.equal(logSize(512), '512 B')
+  assert.equal(logSize(2048), '2 KB')
+  assert.equal(logSize(5 * 1024 * 1024), '5.0 MB')
+})
+
+test('estimateNote: so far while running, no cost reported after, nothing without an estimate', () => {
+  assert.equal(estimateNote(2.67, 'running'), '≈$2.67 so far, estimated from the token usage in the log')
+  assert.equal(estimateNote(2.67, 'interrupted'), '≈$2.67, estimated from the token usage in the log. The run reported no cost.')
+  assert.equal(estimateNote(null, 'failed'), null)
+  assert.equal(estimateNote(undefined, 'failed'), null)
 })
 
 test('ui scripts: no HTML sinks, eval, style attributes, browser storage or the SSE client', () => {

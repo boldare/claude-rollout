@@ -168,6 +168,48 @@ export function sampleTranscript() {
   ]
 }
 
+// The log of a run killed before its result line. Its token usage is
+// estimated at $2.67: $2.60 of Opus 5.5 and $0.07 of the Haiku subagent.
+export function interruptedTranscript() {
+  const usage = {
+    input_tokens: 100000,
+    cache_read_input_tokens: 1000000,
+    cache_creation_input_tokens: 200000,
+    cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 200000 },
+    output_tokens: 3,
+  }
+  const opus = (content) => ({ type: 'assistant', message: { id: 'msg-1', model: 'claude-opus-5-5', content, usage } })
+
+  return [
+    { type: 'system', subtype: 'init', model: 'claude-opus-5-5', session_id: 'session-2' },
+    opus([{ type: 'text', text: 'a'.repeat(3978) }]),
+    opus([{ type: 'tool_use', id: 'tool-9', name: 'Bash', input: { command: 'npm test' } }]),
+    { type: 'system', subtype: 'thinking_tokens', estimated_tokens_delta: 9000 },
+    { type: 'system', subtype: 'thinking_tokens', estimated_tokens_delta: 10000 },
+    {
+      type: 'assistant',
+      parent_tool_use_id: 'tool-9',
+      message: {
+        id: 'msg-2',
+        model: 'claude-haiku-4-5-20251001',
+        content: [{ type: 'text', text: 'b'.repeat(400) }],
+        usage: { input_tokens: 10000, cache_creation_input_tokens: 40000, output_tokens: 2000 },
+      },
+    },
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg-3',
+        model: '<synthetic>',
+        content: [{ type: 'text', text: 'No response requested.' }],
+        usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 },
+      },
+    },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-9', content: 'tests 3, pass 3' }] } },
+    '{"type":"assistant","message":{"id":"msg-4"',
+  ]
+}
+
 export function jsonLines(lines) {
   return lines.map((line) => (typeof line === 'string' ? line : JSON.stringify(line))).join('\n')
 }

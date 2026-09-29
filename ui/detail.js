@@ -1,5 +1,7 @@
 import { badge, cell, element, externalLink, link, list, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
 import { clock, duration, money } from './format.js'
+import { renderTranscript } from './transcript.js'
+import { estimateNote } from './transcript-model.js'
 
 const TABS = ['overview', 'runs', 'verifier', 'review', 'brief']
 const RUN_HEADINGS = ['run', 'role', 'effort', 'start', 'duration', 'cost', 'result', 'denials', 'error']
@@ -135,34 +137,68 @@ function runSeconds(run, now) {
   return null
 }
 
-function runRow(run, now) {
+function runName(run, ctx) {
+  if (!run.run) {
+    return '-'
+  }
+
+  return link(ctx.linkWith({ run: run.run, from: run.status === 'running' ? 'end' : null }), run.run)
+}
+
+function costCell(run) {
+  if (typeof run.estimateUsd !== 'number') {
+    return cell(money(run.costUsd), 'number')
+  }
+
+  const node = cell(`≈${money(run.estimateUsd)} est.`, 'number estimate')
+  node.title = estimateNote(run.estimateUsd, run.status)
+
+  return node
+}
+
+function runRow(run, ctx) {
+  const { now } = ctx
   const role = run.role === 'brief' && run.step ? `brief ${run.step}` : run.role
   const live = run.status === 'running' ? 'live' : ''
 
-  return wrap(
+  const row = wrap(
     'tr',
-    cell(run.run ?? '-'),
+    cell(runName(run, ctx)),
     cell(role),
     cell(run.effort ?? '-'),
     cell(clock(run.startedAt, now)),
     cell(duration(runSeconds(run, now)), `number ${live}`),
-    cell(money(run.costUsd), 'number'),
+    costCell(run),
     cell(run.result ?? run.status ?? '-', `status-${run.status}`),
     cell(String(run.denials ?? '-'), 'number'),
     cell(run.error ?? '', 'text'),
   )
+
+  if (run.run && run.run === ctx.route.run) {
+    row.className = 'selected'
+  }
+
+  return row
 }
 
-function renderRuns(pr, ctx) {
+function runsTable(pr, ctx) {
   if (pr.runs.length === 0) {
     return element('p', 'No runs yet.', 'muted')
   }
 
   return table(
     RUN_HEADINGS,
-    pr.runs.map((run) => runRow(run, ctx.now)),
+    pr.runs.map((run) => runRow(run, ctx)),
     'runs',
   )
+}
+
+function renderRuns(pr, ctx) {
+  if (!ctx.route.run) {
+    return runsTable(pr, ctx)
+  }
+
+  return wrap('div', runsTable(pr, ctx), renderTranscript(ctx))
 }
 
 function checklist(items) {

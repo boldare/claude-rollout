@@ -637,3 +637,92 @@ pre.document {
   border-radius: 4px;
   background: var(--surface);
 }
+
+/* Runs and the transcript viewer */
+
+tr.selected td {
+  background: var(--border);
+}
+
+.estimate {
+  color: var(--warning-text);
+}
+
+td.estimate {
+  font-style: italic;
+}
+
+.transcript {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.transcript-line {
+  margin: 0.25rem 0;
+}
+
+.transcript-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.transcript-text {
+  margin: 0.75rem 0;
+  max-width: 60rem;
+}
+
+.transcript-init,
+.cut-note {
+  margin: 0.25rem 0;
+  font-size: 0.85rem;
+}
+
+.transcript-tool {
+  margin: 0.5rem 0;
+}
+
+.tool-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tool-line code {
+  white-space: pre-wrap;
+}
+
+.transcript-tool details,
+.transcript-result {
+  margin: 0.25rem 0;
+}
+
+.transcript-result.is-error {
+  border-color: var(--critical-text);
+}
+
+.transcript-result.refused {
+  border-color: var(--warning-text);
+  background: color-mix(in srgb, var(--warning-text) 8%, transparent);
+}
+
+.badge.refused {
+  --tone: var(--warning-text);
+}
+
+.badge.result-error {
+  --tone: var(--critical-text);
+}
+
+.transcript-final {
+  margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--good-text);
+}
+
+.transcript-final pre {
+  padding: 0.75rem;
+  border-radius: 4px;
+  background: var(--surface);
+}

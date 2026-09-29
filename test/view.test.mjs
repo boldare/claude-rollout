@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import {
   costs,
+  isRunName,
   liveness,
   parseEvents,
   parseTranscript,
@@ -17,7 +18,7 @@ import {
   rolloutView,
   runsFromEvents,
 } from '../lib/view.mjs'
-import { START, at, jsonLines, makeRollout, sampleTranscript } from './fixtures.mjs'
+import { START, at, interruptedTranscript, jsonLines, makeRollout, sampleTranscript } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
 
@@ -325,6 +326,47 @@ test('parseTranscript: text, tool calls, results, refusals and the final report'
   })
 })
 
+test('parseTranscript: the init model and no usage for a log without it', () => {
+  const { model, usage } = parseTranscript(jsonLines(sampleTranscript()))
+
+  assert.equal(model, 'opus')
+  assert.deepEqual(usage, {})
+  assert.deepEqual(parseTranscript(''), { items: [], final: null, model: null, usage: {} })
+})
+
+test('parseTranscript: usage per model, deduplicated by message, with the output estimated', () => {
+  const { final, model, usage } = parseTranscript(jsonLines(interruptedTranscript()))
+
+  assert.equal(final, null)
+  assert.equal(model, 'claude-opus-5-5')
+  assert.deepEqual(usage, {
+    'claude-opus-5-5': { input: 100000, cacheRead: 1000000, cacheWrite5m: 0, cacheWrite1h: 200000, output: 20000 },
+    'claude-haiku-4-5-20251001': { input: 10000, cacheRead: 0, cacheWrite5m: 40000, cacheWrite1h: 0, output: 2000 },
+  })
+})
+
+test('parseTranscript: messages without a model or an id, and thinking without an init', () => {
+  const assistant = (message) => ({ type: 'assistant', message: { content: [], ...message } })
+  const lines = [
+    { type: 'system', subtype: 'thinking_tokens', estimated_tokens_delta: 50 },
+    assistant({ model: 'claude-sonnet-5', usage: { input_tokens: 10, output_tokens: 5 } }),
+    assistant({ model: 'claude-sonnet-5', usage: { input_tokens: 10, output_tokens: 5 } }),
+    assistant({ usage: { input_tokens: 7 } }),
+  ]
+
+  assert.deepEqual(parseTranscript(jsonLines(lines)).usage, {
+    'claude-sonnet-5': { input: 20, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 50 },
+    unknown: { input: 7, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0 },
+  })
+
+  const onlyThinking = [{ type: 'system', subtype: 'init', model: 'claude-opus-5-5' }, lines[0]]
+
+  assert.deepEqual(parseTranscript(jsonLines(onlyThinking)).usage, {
+    'claude-opus-5-5': { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 50 },
+  })
+  assert.deepEqual(parseTranscript(jsonLines([lines[0]])).usage, {})
+})
+
 test('parseTranscript: the last result wins, and without one there is no final', () => {
   const failed = { type: 'result', subtype: 'error_max_turns', is_error: true, total_cost_usd: 1, duration_ms: 1000, num_turns: 3 }
   const passed = {
@@ -349,7 +391,10 @@ test('readTranscript reads logs/<run>.jsonl and refuses names outside it', () =>
 
   for (const name of ['../ledger', 'a/b', '.hidden', 'a..b', '', null]) {
     assert.throws(() => readTranscript(M, name), /invalid run name/, String(name))
+    assert.equal(isRunName(name), false, String(name))
   }
+
+  assert.equal(isRunName('A1-01-implement'), true)
 
   assert.equal(readTranscript(M, 'Z9-01-implement'), null)
   assert.equal(readTranscript(M, 'A1-01-implement').final.costUsd, 4.25)
