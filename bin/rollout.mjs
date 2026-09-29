@@ -11,8 +11,9 @@
 //   rollout.mjs pause | resume | unhalt [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
-//   rollout.mjs ui        [--root ROOT] [--port N] [--no-open]
+//   rollout.mjs ui        [--root ROOT] [--port N] [--no-open] [--read-only]
 //                         (serves a local web UI over the rollouts in ROOT, default ~/.rollouts)
+//                         (--read-only disables the controls)
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -38,6 +39,7 @@ const { values, positionals } = parseArgs({
     port: { type: 'string' },
     // Its own option because allowNegative is missing before Node 20.16.
     'no-open': { type: 'boolean', default: false },
+    'read-only': { type: 'boolean', default: false },
   },
 })
 
@@ -421,8 +423,13 @@ async function ui() {
     process.exit(1)
   }
 
-  const server = await startServer({ root, port: Number(port) })
+  const readOnly = values['read-only']
+  const server = await startServer({ root, port: Number(port), readOnly })
   console.log(`rollout ui: ${server.url} (Ctrl-C stops it)`)
+
+  if (readOnly) {
+    console.log('read-only: the controls are disabled')
+  }
 
   if (!values['no-open']) {
     openBrowser(server.url)

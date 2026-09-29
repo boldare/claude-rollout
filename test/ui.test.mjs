@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutView, runsFromEvents } from '../lib/view.mjs'
+import { commandBody, commandNotice, dialogFor, prControls, rolloutControls } from '../ui/commands.js'
 import { duration, money } from '../ui/format.js'
 import { ERROR_KINDS, STATES, driverStatus, errorCount, eventDetail, filterEvents, mergeEvents, stateCounts } from '../ui/model.js'
 import { parseSse } from '../ui/sse.js'
@@ -437,6 +438,124 @@ test('estimateNote: so far while running, no cost reported after, nothing withou
   assert.equal(estimateNote(2.67, 'interrupted'), '≈$2.67, estimated from the token usage in the log. The run reported no cost.')
   assert.equal(estimateNote(null, 'failed'), null)
   assert.equal(estimateNote(undefined, 'failed'), null)
+})
+
+function viewWith(driver) {
+  const { view } = demo()
+
+  return { ...view, driver: { ...view.driver, ...driver } }
+}
+
+test('rolloutControls: pause or resume, unhalt when halted, stop or start', () => {
+  const { view } = demo()
+
+  assert.deepEqual(rolloutControls(view, false), ['pause', 'stop'])
+  assert.deepEqual(rolloutControls(viewWith({ paused: true, halted: 'main is red', running: false }), false), ['resume', 'unhalt', 'start'])
+  assert.deepEqual(rolloutControls(null, false), ['start'])
+  assert.deepEqual(rolloutControls(view, true), [])
+  assert.deepEqual(rolloutControls(null, true), [])
+})
+
+test('prControls: hold or release, note, and retry for a stuck PR', () => {
+  const { view } = demo()
+  const a1 = view.rows.find((row) => row.id === 'A1')
+
+  assert.equal(a1.state, 'verified')
+  assert.ok(a1.held)
+  assert.deepEqual(prControls(a1, false), ['release', 'note'])
+  assert.deepEqual(prControls({ id: 'A2', state: 'escalated', held: null }, false), ['hold', 'note', 'retry'])
+  assert.deepEqual(prControls({ id: 'A2', state: 'blocked', held: { at: at(1) } }, false), ['release', 'note', 'retry'])
+  assert.deepEqual(prControls({ id: 'A2', state: 'interrupted', held: null }, false), ['hold', 'note', 'retry'])
+  assert.deepEqual(prControls({ id: 'A2', state: 'implementing', held: null }, false), ['hold', 'note'])
+  assert.deepEqual(prControls({ id: 'A2', state: 'merged', held: null }, false), [])
+  assert.deepEqual(prControls(a1, true), [])
+})
+
+test('dialogFor: confirmations for stop, start, retry and unhalt, a text for note, nothing for the rest', () => {
+  const driver = { pid: 4242, halted: 'main is red' }
+  const pr = { id: 'A2', state: 'escalated' }
+  const context = { rollout: 'demo', driver, pr }
+
+  assert.deepEqual(dialogFor('stop', context), {
+    title: 'Stop the driver (pid 4242)?',
+    text: 'Its agents stop too. The next start resumes their sessions.',
+    confirmLabel: 'Stop',
+  })
+  assert.deepEqual(dialogFor('start', { rollout: 'demo', driver: null, pr: null }), {
+    title: 'Start the driver for demo?',
+    text: 'It runs detached. Its output goes to driver.log.',
+    confirmLabel: 'Start',
+    withDryRun: true,
+  })
+  assert.deepEqual(dialogFor('retry', context), { title: 'Retry A2?', text: 'Its attempts start from zero.', confirmLabel: 'Retry' })
+  assert.deepEqual(dialogFor('unhalt', context), {
+    title: 'Unhalt demo?',
+    text: 'Halted: main is red. Unhalt lets the driver merge again.',
+    confirmLabel: 'Unhalt',
+  })
+  assert.deepEqual(dialogFor('note', context), { title: 'Note for A2', confirmLabel: 'Send', withText: true })
+
+  for (const state of ['verified', 'ready_claimed']) {
+    assert.deepEqual(dialogFor('note', { ...context, pr: { id: 'A1', state } }), {
+      title: 'Note for A1',
+      text: 'The PR goes back to the implementer and loses its verification.',
+      confirmLabel: 'Send',
+      withText: true,
+    })
+  }
+
+  for (const command of ['pause', 'resume', 'hold', 'release']) {
+    assert.equal(dialogFor(command, context), null, command)
+  }
+})
+
+test('commandBody: the fields each command needs, and no pid for stop', () => {
+  const pr = { id: 'A1', state: 'verified' }
+
+  for (const command of ['pause', 'resume', 'unhalt', 'stop']) {
+    assert.deepEqual(commandBody(command, null, command === 'stop' ? { text: '', dryRun: false } : null), { cmd: command })
+  }
+
+  for (const command of ['hold', 'release', 'retry']) {
+    assert.deepEqual(commandBody(command, pr, null), { cmd: command, id: 'A1' })
+  }
+
+  assert.deepEqual(commandBody('note', pr, { text: 'use the old API', dryRun: false }), { cmd: 'note', id: 'A1', text: 'use the old API' })
+  assert.deepEqual(commandBody('start', null, { text: '', dryRun: true }), { cmd: 'start', dryRun: true })
+  assert.deepEqual(commandBody('start', null, { text: '', dryRun: false }), { cmd: 'start', dryRun: false })
+})
+
+test('commandNotice: queued, stopping, starting and the errors', () => {
+  const running = { running: true, pid: 4242 }
+  const stopped = { running: false, pid: null }
+  const queued = { status: 202, body: { cmd: 'pause', queued: '1-abc.json' } }
+  const later = ' It applies when the driver starts.'
+
+  assert.deepEqual(commandNotice({ cmd: 'pause' }, queued, running), { text: 'pause queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'hold', id: 'A1' }, queued, running), { text: 'hold A1 queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'note', id: 'A1', text: 'hi' }, queued, running), { text: 'note A1 queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'pause' }, queued, stopped), { text: `pause queued.${later}`, error: false })
+  assert.deepEqual(commandNotice({ cmd: 'hold', id: 'A1' }, queued, undefined), { text: `hold A1 queued.${later}`, error: false })
+  assert.deepEqual(commandNotice({ cmd: 'stop' }, { status: 202, body: { cmd: 'stop', pid: 4242 } }, running), {
+    text: 'Stopping the driver (pid 4242).',
+    error: false,
+  })
+
+  const start = (dryRun) => ({ status: 202, body: { cmd: 'start', pid: 7, dryRun, log: 'rollouts/demo/driver.log' } })
+  assert.deepEqual(commandNotice({ cmd: 'start', dryRun: false }, start(false), stopped), {
+    text: 'Starting the driver. Its output goes to rollouts/demo/driver.log.',
+    error: false,
+  })
+  assert.deepEqual(commandNotice({ cmd: 'start', dryRun: true }, start(true), stopped), {
+    text: 'Starting the driver. Its output goes to rollouts/demo/driver.log. Dry run.',
+    error: false,
+  })
+
+  assert.deepEqual(commandNotice({ cmd: 'stop' }, { status: 409, body: { error: 'no driver is running' } }, running), {
+    text: 'no driver is running',
+    error: true,
+  })
+  assert.deepEqual(commandNotice({ cmd: 'pause' }, { status: 502, body: null }, running), { text: 'The server answered 502.', error: true })
 })
 
 test('ui scripts: no HTML sinks, eval, style attributes, browser storage or the SSE client', () => {

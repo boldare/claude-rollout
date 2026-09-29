@@ -1,3 +1,4 @@
+import { renderPrControls } from './controls.js'
 import { badge, cell, element, externalLink, link, list, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
 import { clock, duration, money } from './format.js'
 import { renderTranscript } from './transcript.js'
@@ -55,6 +56,12 @@ function detailHeader(pr, ctx) {
   }
 
   header.append(link(ctx.linkWith({ pr: null, tab: null }), `← back to ${ctx.route.view}`), title, withClass(facts, 'facts'))
+
+  const controls = renderPrControls(pr, ctx)
+
+  if (controls) {
+    header.append(controls)
+  }
 
   return header
 }

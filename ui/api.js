@@ -23,6 +23,13 @@ export async function apiGet(token, path, { signal } = {}) {
   return { status: response.status, body: parseJson(await response.text()) }
 }
 
+export async function apiPost(token, path, body) {
+  const headers = { ...authorization(token), 'Content-Type': 'application/json' }
+  const response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })
+
+  return { status: response.status, body: parseJson(await response.text()) }
+}
+
 async function errorOf(response) {
   const body = parseJson(await response.text().catch(() => ''))
 

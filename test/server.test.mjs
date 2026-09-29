@@ -2,13 +2,16 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createDriver } from '../lib/driver.mjs'
+import { loadManifest } from '../lib/manifest.mjs'
 import { startServer } from '../lib/server.mjs'
-import { makeRolloutRoot } from './fixtures.mjs'
+import { readEvents } from '../lib/view.mjs'
+import { alive, makeRollout, makeRolloutRoot, waitFor } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
 const UI = fileURLToPath(new URL('../ui/', import.meta.url))
@@ -29,7 +32,7 @@ function bearer(server) {
 
 // fetch drops a custom Host header and normalizes paths, so the Host,
 // encoding and traversal tests send raw requests.
-function raw(port, path, { method = 'GET', host = `127.0.0.1:${port}`, headers = {} } = {}) {
+function raw(port, path, { method = 'GET', host = `127.0.0.1:${port}`, headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const outgoing = request({ host: '127.0.0.1', port, method, path, agent: false, headers: { host, ...headers } }, (response) => {
       let body = ''
@@ -40,8 +43,30 @@ function raw(port, path, { method = 'GET', host = `127.0.0.1:${port}`, headers =
     })
 
     outgoing.on('error', reject)
-    outgoing.end()
+    outgoing.end(body)
   })
+}
+
+// fetch sends no Origin and turns a string body into text/plain, so commands go through raw().
+async function post(server, name, body, { origin = server.origin, token = server.token, contentType = 'application/json' } = {}) {
+  const headers = {}
+
+  if (origin) {
+    headers.origin = origin
+  }
+
+  if (token) {
+    headers.authorization = `Bearer ${token}`
+  }
+
+  if (contentType) {
+    headers['content-type'] = contentType
+  }
+
+  const text = typeof body === 'string' ? body : JSON.stringify(body)
+  const response = await raw(server.port, `/api/rollouts/${name}/commands`, { method: 'POST', headers, body: text })
+
+  return { ...response, json: JSON.parse(response.body) }
 }
 
 async function get(server, path, headers = bearer(server)) {
@@ -180,6 +205,58 @@ function cliEnv(role) {
   }
 
   return env
+}
+
+function inboxFiles(dir) {
+  const inbox = join(dir, 'inbox')
+
+  return existsSync(inbox) ? readdirSync(inbox).filter((name) => !name.startsWith('.')) : []
+}
+
+// A driverCommand that must never run.
+function refusedDriver(calls) {
+  return (_, options) => {
+    calls.push(options)
+
+    return { command: process.execPath, args: ['-e', ''] }
+  }
+}
+
+const FAKE_DRIVER = `
+const { writeFileSync } = require('node:fs')
+
+process.on('SIGTERM', () => {
+  console.log('fake driver: SIGTERM')
+  process.exit(0)
+})
+writeFileSync('driver.lock', JSON.stringify({ pid: process.pid, at: new Date().toISOString() }))
+console.log('fake driver: dry-run=' + process.argv.includes('--dry-run') + ' env=' + JSON.stringify(process.env))
+setInterval(() => {}, 1000)
+`
+
+function fakeDriver() {
+  const script = join(mkdtempSync(join(tmpdir(), 'rollout-fake-')), 'driver.cjs')
+
+  writeFileSync(script, FAKE_DRIVER)
+
+  return (_, { dryRun }) => ({ command: process.execPath, args: [script, ...(dryRun ? ['--dry-run'] : [])] })
+}
+
+function lines(stream, count, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    let text = ''
+    const timer = setTimeout(() => reject(new Error(`no ${count} lines within ${timeoutMs} ms: ${text}`)), timeoutMs)
+
+    stream.setEncoding('utf8')
+    stream.on('data', (chunk) => {
+      text += chunk
+
+      if (text.split('\n').length > count) {
+        clearTimeout(timer)
+        resolve(text.split('\n').slice(0, count))
+      }
+    })
+  })
 }
 
 function firstLine(stream, timeoutMs = 5000) {
@@ -632,6 +709,8 @@ test('cli: help lists ui', () => {
 
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /rollout\.mjs ui +\[--root ROOT\] \[--port N\] \[--no-open\]/)
+  assert.ok(result.stdout.includes('rollout.mjs ui        [--root ROOT] [--port N] [--no-open] [--read-only]'), result.stdout)
+  assert.match(result.stdout, /--read-only disables the controls/)
 })
 
 test('cli: ui prints a URL with the token, never writes it, and exits 0 on SIGTERM', async (t) => {
@@ -680,4 +759,254 @@ test('cli: ui is refused to agents and rejects a bad port', () => {
     assert.equal(result.status, 1, port)
     assert.match(result.stderr, /--port must be a number from 0 to 65535/, port)
   }
+})
+
+test('commands: each inbox command becomes one inbox file with only its own fields', async (t) => {
+  const { server, root } = await serve(t, { driverCommand: refusedDriver([]) })
+  const dir = join(root, 'demo')
+  const cases = [
+    [{ cmd: 'pause', id: 'A1' }, { cmd: 'pause' }],
+    [{ cmd: 'resume' }, { cmd: 'resume' }],
+    [{ cmd: 'unhalt', sha: 'a1a1a1a' }, { cmd: 'unhalt' }],
+    [
+      { cmd: 'retry', id: 'A2', patchId: 'patch-a1' },
+      { cmd: 'retry', id: 'A2' },
+    ],
+    [
+      { cmd: 'note', id: 'A1', text: '  use the old API \n' },
+      { cmd: 'note', id: 'A1', text: 'use the old API' },
+    ],
+    [
+      { cmd: 'hold', id: 'A3', sha: 'a1a1a1a', patchId: 'patch-a1' },
+      { cmd: 'hold', id: 'A3' },
+    ],
+    [
+      { cmd: 'release', id: 'A1' },
+      { cmd: 'release', id: 'A1' },
+    ],
+  ]
+
+  for (const [body, command] of cases) {
+    const response = await post(server, 'demo', body)
+    const files = inboxFiles(dir)
+
+    assert.equal(response.status, 202, JSON.stringify(body))
+    assert.deepEqual(files.length, 1, JSON.stringify(body))
+    assert.deepEqual(response.json, { cmd: command.cmd, queued: files[0] })
+
+    const { at, ...written } = JSON.parse(readFileSync(join(dir, 'inbox', files[0]), 'utf8'))
+    assert.ok(Number.isFinite(Date.parse(at)), at)
+    assert.deepEqual(written, command)
+    rmSync(join(dir, 'inbox', files[0]))
+  }
+
+  const mixedCase = await post(server, 'demo', { cmd: 'pause' }, { contentType: 'Application/JSON; charset=utf-8' })
+  assert.equal(mixedCase.status, 202)
+})
+
+test('commands: a hold posted through the API becomes a held event in the driver', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'rollout-root-'))
+  const dir = join(root, 'demo')
+
+  makeRollout({ dir, events: [] })
+
+  const { server } = await serve(t, { root, driverCommand: refusedDriver([]) })
+
+  assert.equal((await post(server, 'demo', { cmd: 'hold', id: 'A3' })).status, 202)
+  createDriver(loadManifest(dir)).applyCommands()
+
+  const held = readEvents(loadManifest(dir)).filter((event) => event.kind === 'held')
+  assert.deepEqual(
+    held.map((event) => event.id),
+    ['A3'],
+  )
+  assert.deepEqual(inboxFiles(dir), [])
+})
+
+test('commands: the error answers leave no inbox file', async (t) => {
+  const calls = []
+  const { server, root } = await serve(t, { driverCommand: refusedDriver(calls) })
+  const dir = join(root, 'demo')
+  const pause = { cmd: 'pause' }
+  const cases = [
+    ['no token', await post(server, 'demo', pause, { token: null }), 401, 'unauthorized'],
+    ['a foreign Origin', await post(server, 'demo', pause, { origin: 'http://evil.example' }), 403, 'bad origin'],
+    ['no Origin', await post(server, 'demo', pause, { origin: null }), 403, 'bad origin'],
+    [
+      'text/plain',
+      await post(server, 'demo', pause, { contentType: 'text/plain;charset=UTF-8' }),
+      415,
+      'content type must be application/json',
+    ],
+    ['no Content-Type', await post(server, 'demo', pause, { contentType: null }), 415, 'content type must be application/json'],
+    [
+      'a JSON look-alike',
+      await post(server, 'demo', pause, { contentType: 'application/jsonp' }),
+      415,
+      'content type must be application/json',
+    ],
+    ['70 000 bytes', await post(server, 'demo', { cmd: 'note', id: 'A1', text: 'x'.repeat(70_000) }), 413, 'body too large'],
+    ['invalid JSON', await post(server, 'demo', '{"cmd":'), 400, 'invalid JSON'],
+    ['an empty body', await post(server, 'demo', ''), 400, 'invalid JSON'],
+    ['an unknown rollout', await post(server, 'nope', pause), 404, 'unknown rollout'],
+    ['a rollout outside the root', await post(server, '..%2fdemo', pause), 404, 'unknown rollout'],
+    [
+      'approve',
+      await post(server, 'demo', { cmd: 'approve', id: 'A1', sha: 'a1a1a1a', patchId: 'patch-a1' }),
+      400,
+      'unknown command approve',
+    ],
+    ['an array', await post(server, 'demo', [pause]), 400, 'body must be a JSON object'],
+    ['an unknown PR', await post(server, 'demo', { cmd: 'hold', id: 'Z9' }), 400, 'unknown or missing PR id'],
+    ['a note without text', await post(server, 'demo', { cmd: 'note', id: 'A1', text: ' ' }), 400, 'note needs text'],
+    ['a string dryRun', await post(server, 'demo', { cmd: 'start', dryRun: 'yes' }), 400, 'dryRun must be a boolean'],
+  ]
+
+  for (const [label, response, status, error] of cases) {
+    assert.equal(response.status, status, label)
+    assert.deepEqual(response.json, { error }, label)
+  }
+
+  const read = await get(server, '/api/rollouts/demo/commands')
+  assert.equal(read.status, 405)
+  assert.deepEqual(read.json(), { error: 'method not allowed' })
+
+  const put = await raw(server.port, '/api/rollouts/demo/commands', {
+    method: 'PUT',
+    headers: { ...bearer(server), origin: server.origin, 'content-type': 'application/json' },
+    body: JSON.stringify(pause),
+  })
+  assert.equal(put.status, 405)
+
+  assert.deepEqual(inboxFiles(dir), [])
+  assert.deepEqual(calls, [])
+})
+
+test('commands: read-only refuses all nine and says so in every state', async (t) => {
+  const calls = []
+  const { server, root } = await serve(t, { readOnly: true, driverCommand: refusedDriver(calls), pollMs: 60_000 })
+  const dir = join(root, 'demo')
+  const bodies = [
+    { cmd: 'pause' },
+    { cmd: 'resume' },
+    { cmd: 'unhalt' },
+    { cmd: 'retry', id: 'A2' },
+    { cmd: 'note', id: 'A1', text: 'hi' },
+    { cmd: 'hold', id: 'A3' },
+    { cmd: 'release', id: 'A1' },
+    { cmd: 'stop' },
+    { cmd: 'start', dryRun: true },
+  ]
+
+  for (const body of bodies) {
+    for (const name of ['demo', 'fresh']) {
+      const response = await post(server, name, body)
+      assert.equal(response.status, 403, `${name} ${body.cmd}`)
+      assert.deepEqual(response.json, { error: 'read-only' })
+    }
+  }
+
+  assert.deepEqual(inboxFiles(dir), [])
+  assert.deepEqual(inboxFiles(join(root, 'fresh')), [])
+  assert.deepEqual(calls, [])
+  assert.equal(existsSync(join(root, 'fresh', 'driver.log')), false)
+
+  const state = (await get(server, '/api/rollouts/demo')).json()
+  assert.equal(state.readOnly, true)
+  assert.equal((await get(server, '/api/rollouts/fresh')).json().readOnly, true)
+
+  const stream = await openStream(t, server, 'demo')
+  const first = await stream.next((message) => message.event === 'state')
+  assert.equal(first.data.readOnly, true)
+
+  await watcherLive(stream, dir)
+  replaceLedger(dir, readFileSync(join(dir, 'ledger.json'), 'utf8').replace('"paused": false', '"paused": true'))
+
+  const pushed = await stream.next((message) => message.event === 'state' && message.data.view.driver.paused)
+  assert.equal(pushed.data.readOnly, true)
+})
+
+test('commands: a default server sends readOnly false', async (t) => {
+  const { server } = await serve(t, { driverCommand: refusedDriver([]) })
+  const state = (await get(server, '/api/rollouts/demo')).json()
+
+  assert.equal(state.readOnly, false)
+  assert.deepEqual(Object.keys(state).slice(0, 3), ['name', 'at', 'view'])
+
+  const stream = await openStream(t, server, 'demo')
+  assert.equal((await stream.next((message) => message.event === 'state')).data.readOnly, false)
+})
+
+test('commands: start and stop a fake driver through the API', async (t) => {
+  const { server, root } = await serve(t, { driverCommand: fakeDriver() })
+  const dir = join(root, 'fresh')
+  const log = join(dir, 'driver.log')
+  let pid = null
+
+  t.after(() => {
+    if (pid && alive(pid)) {
+      process.kill(pid, 'SIGKILL')
+    }
+  })
+
+  const started = await post(server, 'fresh', { cmd: 'start', dryRun: true })
+  pid = started.json.pid
+
+  assert.equal(started.status, 202)
+  assert.deepEqual(started.json, { cmd: 'start', pid, dryRun: true, log })
+
+  await waitFor(() => existsSync(join(dir, 'driver.lock')), 'the driver lock')
+
+  const again = await post(server, 'fresh', { cmd: 'start' })
+  assert.equal(again.status, 409)
+  assert.deepEqual(again.json, { error: `a driver is already running (pid ${pid})` })
+
+  const stopped = await post(server, 'fresh', { cmd: 'stop' })
+  assert.equal(stopped.status, 202)
+  assert.deepEqual(stopped.json, { cmd: 'stop', pid })
+
+  await waitFor(() => readFileSync(log, 'utf8').includes('fake driver: SIGTERM'), 'the SIGTERM line')
+  await waitFor(() => !alive(pid), 'the driver to exit')
+
+  const text = readFileSync(log, 'utf8')
+  assert.match(text, /fake driver: dry-run=true env=\{/)
+  assert.equal(text.includes(server.token), false)
+
+  const gone = await post(server, 'fresh', { cmd: 'stop' })
+  assert.equal(gone.status, 409)
+  assert.deepEqual(gone.json, { error: 'no driver is running' })
+})
+
+test('commands: the fixture lock names the test process, so stop signals nothing', async (t) => {
+  const { server } = await serve(t, { driverCommand: refusedDriver([]) })
+  const response = await post(server, 'demo', { cmd: 'stop' })
+
+  assert.equal(response.status, 409)
+  assert.deepEqual(response.json, { error: 'driver.lock names no driver process' })
+})
+
+// Never post stop here: the fixture lock names this test process.
+test('cli: ui --read-only says so, sends readOnly true and refuses a pause', async (t) => {
+  const root = makeRolloutRoot()
+  const child = spawn(process.execPath, [BIN, 'ui', '--root', root, '--port', '0', '--no-open', '--read-only'], {
+    env: cliEnv(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  t.after(() => child.kill())
+
+  const [first, second] = await lines(child.stdout, 2)
+  const match = /^rollout ui: (http:\/\/127\.0\.0\.1:(\d+))\/#t=([^ ]+) \(Ctrl-C stops it\)$/.exec(first)
+
+  assert.ok(match, first)
+  assert.equal(second, 'read-only: the controls are disabled')
+
+  const [, origin, port, token] = match
+  const state = await fetch(`${origin}/api/rollouts/demo`, { headers: { authorization: `Bearer ${token}` } })
+  assert.equal((await state.json()).readOnly, true)
+
+  const pause = await post({ origin, port: Number(port), token }, 'demo', { cmd: 'pause' })
+  assert.equal(pause.status, 403)
+  assert.deepEqual(pause.json, { error: 'read-only' })
+  assert.deepEqual(inboxFiles(join(root, 'demo')), [])
 })
