@@ -1,0 +1,26 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 2rem;
+}
+
+.rollouts {
+  list-style: none;
+  padding: 0;
+}
+
+.rollout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #8884;
+}
+
+.error {
+  white-space: pre-wrap;
+  color: #c33;
+}
