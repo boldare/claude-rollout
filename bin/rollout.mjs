@@ -308,8 +308,8 @@ async function preflight(M) {
     warnings.push('no repo.agentToken: agents act on GitHub as you')
   }
 
-  if (M.policy.merge !== 'human') {
-    warnings.push(`policy.merge is ${M.policy.merge}: the driver merges without asking`)
+  if (M.policy.merge === 'auto') {
+    warnings.push('policy.merge is auto: the driver merges without asking')
   }
 
   hookSelfTest(M, problems)
