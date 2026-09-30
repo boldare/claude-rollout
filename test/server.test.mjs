@@ -200,12 +200,28 @@ function cliEnv(role) {
 
   delete env.ROLLOUT_ROLE
   delete env.ROLLOUT_ROOT
+  delete env.ROLLOUT_DIR
 
   if (role) {
     env.ROLLOUT_ROLE = role
   }
 
   return env
+}
+
+// Async, so this process can reap a child the CLI kills. A zombie still
+// answers process.kill(pid, 0), and the CLI would wait for it in vain.
+async function runCli(args) {
+  const child = spawn(process.execPath, [BIN, ...args], { env: cliEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
+  let stdout = ''
+  let stderr = ''
+
+  child.stdout.on('data', (chunk) => (stdout += chunk))
+  child.stderr.on('data', (chunk) => (stderr += chunk))
+
+  const [code] = await once(child, 'close')
+
+  return { code, stdout, stderr }
 }
 
 function inboxFiles(dir) {
@@ -745,6 +761,50 @@ test('cli: ui prints a URL with the token, never writes it, and exits 0 on SIGTE
   const exited = once(child, 'exit')
   child.kill('SIGTERM')
   assert.deepEqual(await exited, [0, null])
+})
+
+test('cli: an unknown flag or a missing value prints the error and the usage, without a stack', () => {
+  const cases = [
+    { args: ['status', '--bogus', '--dir', makeRollout()], error: "rollout: Unknown option '--bogus'" },
+    { args: ['status', '--dir'], error: "rollout: Option '--dir <value>' argument missing" },
+  ]
+
+  for (const { args, error } of cases) {
+    const result = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+
+    assert.equal(result.status, 1, result.stderr)
+    assert.ok(result.stderr.startsWith(error), result.stderr)
+    assert.ok(result.stderr.includes('rollout.mjs status'), result.stderr)
+    assert.doesNotMatch(result.stderr, /ERR_PARSE_ARGS|node:internal|\n\s+at /)
+  }
+})
+
+// Never run stop on a default fixture: its lock names this test process.
+test('cli: stop without a driver signals nothing', async () => {
+  const result = await runCli(['stop', '--dir', makeRollout({ lock: false })])
+
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.stdout, 'no driver is running\n')
+})
+
+test('cli: stop sends SIGTERM to the driver in driver.lock and waits for it', async (t) => {
+  const dir = makeRollout({ lock: false })
+  const driver = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+
+  t.after(() => driver.kill())
+  await once(driver, 'spawn')
+  writeFileSync(join(dir, 'driver.lock'), JSON.stringify({ pid: driver.pid, at: new Date().toISOString() }))
+
+  const exited = once(driver, 'exit')
+  const result = await runCli(['stop', '--dir', dir])
+
+  assert.deepEqual(await exited, [null, 'SIGTERM'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.stdout, `driver ${driver.pid} stopped; agents resume on the next run\n`)
+})
+
+test('cli: stop signals only through stopDriver', () => {
+  assert.doesNotMatch(readFileSync(BIN, 'utf8'), /process\.kill\(/)
 })
 
 async function servedRoot(t, args, env) {

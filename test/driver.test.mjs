@@ -1,5 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createDriver, doneDetail } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
@@ -34,6 +36,15 @@ function apply(M, driver, ...commands) {
   return readEvents(M)
     .slice(before)
     .map(({ at: _, ...event }) => event)
+}
+
+// postCommand names can tie within a millisecond and then sort at random,
+// so a batch whose order matters is written under numbered names.
+function writeBatch(M, contents) {
+  contents.forEach((content, index) => {
+    const text = typeof content === 'string' ? content : JSON.stringify(content)
+    writeFileSync(join(M.dir, 'inbox', `${String(index + 1).padStart(4, '0')}-test.json`), text)
+  })
 }
 
 function sorted(events) {
@@ -125,6 +136,85 @@ test('hold and release reject what they cannot do, and the rest of the batch sti
   assert.ok(driver.L.prs.A1.held)
   assert.equal(driver.L.prs.A2.held, null)
   assert.equal(driver.L.prs.A3.held, null)
+})
+
+test('each bad command is rejected with its reason, and the rest of the batch still applies', () => {
+  const { M, driver } = driverFor({ A1: { state: 'pending' } })
+
+  Object.defineProperty(driver.L.prs.A3, 'state', {
+    get() {
+      throw new Error('boom')
+    },
+  })
+  writeBatch(M, [
+    'null',
+    '[]',
+    '42',
+    '"pause"',
+    '{',
+    { cmd: 'approve' },
+    { cmd: 'note', text: 'x' },
+    { cmd: 'retry' },
+    { cmd: 'retry', id: 7 },
+    { cmd: 'hold', id: '__proto__' },
+    { cmd: 'retry', id: '__proto__' },
+    { cmd: 'launch' },
+    { cmd: 'hold', id: 'A3' },
+    { cmd: 'hold', id: 'A1' },
+  ])
+
+  const events = apply(M, driver)
+  const notAnObject = { id: '-', kind: 'command-rejected', command: null, reason: 'not a JSON object' }
+
+  // V8 words the rest of a JSON error differently across Node versions.
+  assert.match(events[4].reason, /^SyntaxError/)
+  events[4].reason = 'SyntaxError'
+
+  assert.deepEqual(events, [
+    notAnObject,
+    notAnObject,
+    notAnObject,
+    notAnObject,
+    { id: '-', kind: 'command-rejected', command: 'invalid', file: '0005-test.json', reason: 'SyntaxError' },
+    { id: '-', kind: 'command-rejected', command: 'approve', reason: 'needs a PR id' },
+    { id: '-', kind: 'command-rejected', command: 'note', reason: 'needs a PR id' },
+    { id: '-', kind: 'command-rejected', command: 'retry', reason: 'needs a PR id' },
+    { id: '-', kind: 'command-rejected', command: 'retry', reason: 'needs a PR id' },
+    { id: '-', kind: 'command-rejected', command: 'hold', reason: 'unknown PR __proto__' },
+    { id: '-', kind: 'command-rejected', command: 'retry', reason: 'unknown PR __proto__' },
+    { id: '-', kind: 'command-rejected', command: 'launch', reason: 'unknown command' },
+    { id: 'A3', kind: 'command-rejected', command: 'hold', reason: 'boom' },
+    { id: 'A1', kind: 'held', state: 'pending', running: null },
+  ])
+  assert.ok(driver.L.prs.A1.held)
+  assert.equal(driver.L.data.paused, false)
+  assert.equal(Object.prototype.held, undefined)
+  assert.equal(Object.prototype.state, undefined)
+  assert.equal(Object.prototype.attempts, undefined)
+})
+
+test('a PR still in the ledger but gone from the manifest is unknown, and a pause naming one still pauses', () => {
+  const { M, driver } = driverFor({ A1: { state: 'pending' }, B9: { state: 'needs_fix' } })
+  const before = structuredClone(driver.L.prs.B9)
+
+  const events = apply(
+    M,
+    driver,
+    { cmd: 'note', id: 'B9', text: 'x' },
+    { cmd: 'approve', id: 'B9', sha: 'x', patchId: 'y' },
+    { cmd: 'pause', id: 'Z9' },
+  )
+
+  assert.deepEqual(
+    sorted(events),
+    sorted([
+      { id: '-', kind: 'command-rejected', command: 'note', reason: 'unknown PR B9' },
+      { id: '-', kind: 'command-rejected', command: 'approve', reason: 'unknown PR B9' },
+      { id: '-', kind: 'paused' },
+    ]),
+  )
+  assert.deepEqual(driver.L.prs.B9, before)
+  assert.equal(driver.L.data.paused, true)
 })
 
 test('onDone: a PR merged during the run stays merged and is cleaned up after the run', async () => {
