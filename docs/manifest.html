@@ -241,7 +241,10 @@ prs:
                 <td>string</td>
                 <td>–</td>
                 <td>yes</td>
-                <td><code>owner/name</code> on GitHub. Preflight fails when the clone's <code>origin</code> does not contain it.</td>
+                <td>
+                  <code>owner/name</code> on GitHub. Preflight fails unless the clone's <code>origin</code> is this repository on
+                  github.com. The driver passes it to every gh call as <code>GH_REPO</code>.
+                </td>
               </tr>
               <tr id="repo-base">
                 <td>base</td>
