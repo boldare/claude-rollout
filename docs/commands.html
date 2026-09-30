@@ -474,7 +474,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>
                   Fails when the token's login is a maintainer or its permission is not exactly <code>write</code>, when agents could fall
                   back to a stored gh login, or when the token file is missing. Warns when the token lacks the <code>workflow</code> scope,
-                  and when there is no <code>repo.agentToken</code> at all.
+                  and when there is no <code>repo.agentToken</code> at all. Without it, warns again when <code>repo.maintainers</code> is
+                  set, because comments agents post under your login count as your review feedback.
                 </td>
               </tr>
               <tr>

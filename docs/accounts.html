@@ -118,6 +118,11 @@
             <strong>Without <code>repo.agentToken</code></strong> every row is you. Agents push through your normal remote, which may use
             your SSH key, and the driver's replies go out under your name. Preflight warns: "agents act on GitHub as you".
           </p>
+          <p>
+            The driver's replies and summary comment end with a hidden <code>&lt;!-- rollout-driver --&gt;</code> line, so the driver never
+            reads them back as your feedback. A comment an agent posts under your login has no marker, and it counts as your review
+            feedback. Preflight warns about this when <code>repo.maintainers</code> is set.
+          </p>
         </div>
 
         <h2 id="bot">The bot account <a class="anchor" href="#bot" aria-label="Link to this section">#</a></h2>
@@ -515,7 +520,7 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
                 <td>
                   That the token file exists, that its login has exactly the <code>write</code> permission and is not a maintainer, that
                   agents' gh has no stored login to fall back to, and a warning without the <code>workflow</code> scope. Without
-                  <code>repo.agentToken</code>, only a warning.
+                  <code>repo.agentToken</code>, one warning, plus a second one when <code>repo.maintainers</code> is set.
                 </td>
               </tr>
               <tr>
