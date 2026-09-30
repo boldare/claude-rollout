@@ -270,7 +270,8 @@
           <code>hooks/guard-bash.mjs</code> reads each Bash call before it runs. It exits with code 2 to refuse, and the agent gets
           <q>rollout guard: …</q> with the reason. It sees the Bash tool only, the file tools are covered by the permission rules. It fails
           closed. An empty payload, one that is not JSON or has no command string, and an error inside the guard also exit 2, because a
-          PreToolUse hook blocks only with that code.
+          PreToolUse hook blocks only with that code. It also runs when the skill directory is reached through a symlink, even under Node's
+          <code>--preserve-symlinks-main</code>, on the command line or in <code>NODE_OPTIONS</code>.
         </p>
 
         <p>

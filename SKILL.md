@@ -82,8 +82,8 @@ The release PR ("chore: version packages") is never merged by the driver: mergin
 
 ## Guard rails for agents
 
-- Settings passed per agent: deny `gh pr merge/review/close`, `gh repo/release/secret/variable/workflow/ruleset`, publish and release commands, and `git push origin` to `main` or `repo.base`; Edit and Write denied on the rollout and skill directories; attribution off.
-- `hooks/guard-bash.mjs` (PreToolUse, Bash): pushes only to `$ROLLOUT_BRANCH` with an explicit refspec, whatever the base branch is called, no force except `--force-with-lease`, `gh api` GET only, no `--no-verify`, no hooksPath overrides, no `changeset version|publish|tag|pre` in any form; the verifier and the brief writers cannot commit, push, switch branches or write to GitHub. It fails closed: an unreadable payload or an error of its own blocks with exit 2.
+- Settings passed per agent: deny `gh pr merge/review/close`, `gh repo/release/secret/variable/workflow/ruleset`, publish and release commands, and `git push origin` to `main` or `repo.base`. Edit and Write are denied on the rollout and skill directories. Attribution is off.
+- `hooks/guard-bash.mjs` (PreToolUse, Bash): pushes only to `$ROLLOUT_BRANCH` with an explicit refspec, whatever the base branch is called, no force except `--force-with-lease`, `gh api` GET only, no `--no-verify`, no hooksPath overrides, no `changeset version|publish|tag|pre` in any form. The verifier and the brief writers cannot commit, push, switch branches or write to GitHub. It fails closed: an unreadable payload or an error of its own blocks with exit 2.
 - `git-hooks/commit-msg` via per-worktree `core.hooksPath`: one subject line, at most 72 characters, no body, no trailers. `git-hooks/pre-push`: only the PR branch, only the HTTPS push URL.
 - `--permission-prompts none`: anything that would prompt is denied instead of hanging.
 
