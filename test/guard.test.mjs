@@ -4,12 +4,24 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { check, decide } from '../hooks/guard-bash.mjs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { check, decide, isEntry } from '../hooks/guard-bash.mjs'
 
 const BRANCH = 'fix/thing'
 const LIVE_X = { dir: '/Users/u/_Code/.rollouts/x', home: '/Users/u/.claude/skills/rollout', name: 'x' }
 const blocked = (command, role = 'worker') => check(command, role, BRANCH) !== null
+const REAL_GUARD = fileURLToPath(new URL('../hooks/guard-bash.mjs', import.meta.url))
+const MERGE_PAYLOAD = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --admin' } })
+const LS_PAYLOAD = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
+const PRESERVE_ENV = { ...process.env, NODE_OPTIONS: '--preserve-symlinks-main' }
+
+function linkSkill() {
+  const skill = join(mkdtempSync(join(tmpdir(), 'rollout-link-')), 'skill')
+
+  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), skill)
+
+  return skill
+}
 
 test('worker may push its own branch explicitly', () => {
   assert.ok(!blocked('git push -u origin fix/thing'))
@@ -152,17 +164,69 @@ test('the hook script fails closed on a payload it cannot read', () => {
 })
 
 test('the hook script still runs when reached through a symlink', () => {
-  const skill = join(mkdtempSync(join(tmpdir(), 'rollout-link-')), 'skill')
+  const script = join(linkSkill(), 'hooks', 'guard-bash.mjs')
+  const variants = {
+    plain: { args: [], env: process.env },
+    '--preserve-symlinks-main': { args: ['--preserve-symlinks-main'], env: process.env },
+    NODE_OPTIONS: { args: [], env: PRESERVE_ENV },
+  }
 
-  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), skill)
+  for (const [name, { args, env }] of Object.entries(variants)) {
+    const refused = spawnSync('node', [...args, script, 'worker'], { input: MERGE_PAYLOAD, env, encoding: 'utf8' })
 
-  const result = spawnSync('node', [join(skill, 'hooks', 'guard-bash.mjs'), 'worker'], {
-    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --admin' } }),
-    encoding: 'utf8',
-  })
+    assert.equal(refused.status, 2, `${name}: forbidden command`)
+    assert.match(refused.stderr, /^rollout guard: /, `${name}: forbidden command`)
 
-  assert.equal(result.status, 2)
-  assert.match(result.stderr, /^rollout guard: /)
+    const allowed = spawnSync('node', [...args, script, 'worker'], { input: LS_PAYLOAD, env, encoding: 'utf8' })
+
+    assert.equal(allowed.status, 0, `${name}: ls -la`)
+    assert.equal(allowed.stderr, '', `${name}: ls -la`)
+  }
+})
+
+test('importing the guard runs nothing', () => {
+  const skill = linkSkill()
+  const linked = join(skill, 'hooks', 'guard-bash.mjs')
+
+  for (const [where, path] of [
+    ['real', REAL_GUARD],
+    ['symlinked', linked],
+  ]) {
+    const code = `await import(${JSON.stringify(pathToFileURL(path).href)}); console.log('imported')`
+
+    for (const [how, env] of [
+      ['plain', process.env],
+      ['NODE_OPTIONS', PRESERVE_ENV],
+    ]) {
+      const result = spawnSync('node', ['--input-type=module', '-e', code], { input: MERGE_PAYLOAD, env, encoding: 'utf8' })
+
+      assert.equal(result.status, 0, `${where} path, ${how}: ${result.stderr}`)
+      assert.equal(result.stdout, 'imported\n', `${where} path, ${how}`)
+    }
+  }
+
+  const importer = join(skill, '..', 'importer.mjs')
+
+  writeFileSync(importer, `await import(${JSON.stringify(pathToFileURL(linked).href)})\nconsole.log('imported')\n`)
+
+  const result = spawnSync('node', ['--preserve-symlinks-main', importer], { input: MERGE_PAYLOAD, encoding: 'utf8' })
+
+  assert.equal(result.status, 0, `importer: ${result.stderr}`)
+  assert.equal(result.stdout, 'imported\n', 'importer')
+})
+
+test('isEntry resolves both paths and fails closed', () => {
+  const skill = linkSkill()
+  const linked = join(skill, 'hooks', 'guard-bash.mjs')
+  const realUrl = new URL('../hooks/guard-bash.mjs', import.meta.url).href
+  const linkedUrl = pathToFileURL(linked).href
+
+  assert.equal(isEntry(REAL_GUARD, realUrl), true, 'real path, real URL')
+  assert.equal(isEntry(linked, realUrl), true, 'plain run behind a symlink')
+  assert.equal(isEntry(REAL_GUARD, linkedUrl), true, '--preserve-symlinks-main')
+  assert.equal(isEntry(fileURLToPath(import.meta.url), realUrl), false, 'another file')
+  assert.equal(isEntry(undefined, realUrl), false, 'no argv[1]')
+  assert.equal(isEntry(join(skill, '..', 'missing.mjs'), realUrl), true, 'unresolvable path')
 })
 
 test('decide refuses when the check itself throws', () => {
@@ -173,6 +237,32 @@ test('decide refuses when the check itself throws', () => {
 
   assert.match(decide(payload, 'worker', {}, explode), /boom/)
   assert.equal(decide(payload, 'worker', {}), null)
+})
+
+test('decide refuses even when the thrown value cannot be printed', () => {
+  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
+  const unprintable = [
+    Object.create(null),
+    {
+      get message() {
+        throw new Error('x')
+      },
+    },
+    {
+      toString() {
+        throw new Error('x')
+      },
+    },
+    { message: Object.create(null) },
+  ]
+
+  for (const value of unprintable) {
+    const explode = () => {
+      throw value
+    }
+
+    assert.match(decide(payload, 'worker', {}, explode), /^the guard failed \(.+\), command refused$/)
+  }
 })
 
 test('commit-msg hook accepts one line and rejects bodies and trailers', () => {

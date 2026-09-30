@@ -459,9 +459,16 @@ export function decide(input, role, env, inspect = check) {
   try {
     return inspect(command, role, env.ROLLOUT_BRANCH, { dir: env.ROLLOUT_DIR, home: env.ROLLOUT_HOME, name: env.ROLLOUT_NAME })
   } catch (error) {
-    const message = String(error?.message ?? error).replace(/\s+/g, ' ')
+    return `the guard failed (${errorText(error)}), command refused`
+  }
+}
 
-    return `the guard failed (${message}), command refused`
+// A thrown value can be anything, even an object without a prototype.
+function errorText(error) {
+  try {
+    return String(error?.message ?? error).replace(/\s+/g, ' ')
+  } catch {
+    return 'an error that cannot be printed'
   }
 }
 
@@ -484,16 +491,22 @@ function main() {
   process.exit(0)
 }
 
-// Node loads the main module by its real path. Comparing that with argv[1] as
-// typed would skip main() behind a symlink and let every command through.
-function isMain() {
-  try {
-    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
-  } catch {
+// Node loads the main module by its real path, unless --preserve-symlinks-main
+// keeps the typed one. So both sides are resolved. No argv[1] means an import.
+// A path that cannot be resolved still runs main(), because skipping it would
+// let every command through.
+export function isEntry(entry, moduleUrl) {
+  if (typeof entry !== 'string') {
     return false
+  }
+
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl))
+  } catch {
+    return true
   }
 }
 
-if (isMain()) {
+if (isEntry(process.argv[1], import.meta.url)) {
   main()
 }
