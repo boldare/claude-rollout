@@ -729,13 +729,6 @@ prs:
                 <td>no</td>
                 <td>The tags of the briefing sources this PR's brief writer gets, on top of the untagged ones.</td>
               </tr>
-              <tr id="pr-hot">
-                <td>hot</td>
-                <td>list</td>
-                <td><code>[]</code></td>
-                <td>no</td>
-                <td>Reserved. The manifest accepts it and gives it a default, but nothing reads it yet.</td>
-              </tr>
             </tbody>
           </table>
         </div>
@@ -748,6 +741,7 @@ prs:
         </p>
 
         <ul>
+          <li>The manifest is a mapping, and so is every entry of <code>prs</code>.</li>
           <li><code>rollout</code>, <code>repo.path</code>, <code>repo.github</code> and at least one PR are there.</li>
           <li><code>repo.requiredChecks</code> is a list that is not empty.</li>
           <li>
@@ -757,9 +751,10 @@ prs:
           <li><code>repo.public</code>, when set, is a boolean.</li>
           <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
+            <code>effort.brief</code>, when set, is a known level too.
           </li>
           <li>Every <code>changeset</code> is a known bump or <code>none</code>, and none is above <code>policy.maxBump</code>.</li>
-          <li>Every dependency names a known PR, and there is no cycle.</li>
+          <li><code>deps</code> is a list, every dependency names a known PR, and there is no cycle.</li>
         </ul>
 
         <p>
@@ -773,7 +768,8 @@ prs:
           <li>
             <strong>Edits apply on the next tick.</strong> A running driver reloads <code>manifest.yaml</code> when the file changes,
             without a restart and without stopping its agents. An edit that does not validate is reported as
-            <code>manifest-rejected</code> and the driver keeps the previous manifest.
+            <code>manifest-rejected</code> and the driver keeps the previous manifest. A briefing source is read again when its size or
+            modification time changes, so an edited plan or design note reaches the next brief without a restart.
           </li>
           <li>
             <strong>Source paths are not relative to the rollout.</strong> A <code>briefing.sources[].path</code> without <code>~</code> or
