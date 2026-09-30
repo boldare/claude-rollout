@@ -20,6 +20,7 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadManifest } from '../lib/manifest.mjs'
 import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
+import { stopDriver } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
@@ -29,7 +30,7 @@ import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
 import { execFile, spawnSync } from 'node:child_process'
 
-const { values, positionals } = parseArgs({
+const CLI_OPTIONS = {
   allowPositionals: true,
   options: {
     dir: { type: 'string', default: process.env.ROLLOUT_DIR ?? process.cwd() },
@@ -42,7 +43,19 @@ const { values, positionals } = parseArgs({
     'no-open': { type: 'boolean', default: false },
     'read-only': { type: 'boolean', default: false },
   },
-})
+}
+
+function parseCli() {
+  try {
+    return parseArgs(CLI_OPTIONS)
+  } catch (error) {
+    console.error(`rollout: ${error.message}`)
+    console.error(usage())
+    process.exit(1)
+  }
+}
+
+const { values, positionals } = parseCli()
 
 const [command, ...rest] = positionals
 
@@ -550,20 +563,25 @@ async function main() {
       break
 
     case 'stop': {
-      const holder = lockHolder(M)
-
-      if (!holder) {
+      if (!lockHolder(M)) {
         console.log('no driver is running')
         break
       }
 
-      process.kill(holder.pid, 'SIGTERM')
+      const answer = stopDriver(M)
+
+      if (answer.status !== 202) {
+        console.error(answer.body.error)
+        process.exit(1)
+      }
+
+      const { pid } = answer.body
 
       for (let waited = 0; waited < 30 && lockHolder(M); waited += 1) {
         await new Promise((resolve) => setTimeout(resolve, 1000))
       }
 
-      console.log(lockHolder(M) ? `driver ${holder.pid} is still stopping` : `driver ${holder.pid} stopped; agents resume on the next run`)
+      console.log(lockHolder(M) ? `driver ${pid} is still stopping` : `driver ${pid} stopped; agents resume on the next run`)
       break
     }
 

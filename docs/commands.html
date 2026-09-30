@@ -157,7 +157,7 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <ul>
           <li>
             It takes <code>driver.lock</code>. A second driver for the same directory refuses to start and names the pid of the first. A
-            lock left by a dead process is cleared.
+            lock left by a dead process, or one without a real pid, is cleared.
           </li>
           <li>
             On start, runs that were in progress get their attempt back and become
@@ -201,10 +201,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <pre><code>node $R stop --dir D</code></pre>
 
         <p>
-          Sends <code>SIGTERM</code> to the pid in <code>driver.lock</code> and waits up to 30 s for the lock to go. The driver stops its
-          agents with <code>SIGTERM</code>, then <code>SIGKILL</code> after 5 s. The next <code>run</code> resumes the implementers'
-          sessions, and verifications and briefs start over. Without a driver it prints <code>no driver is running</code>. In the UI:
-          <a href="ui.html#control-stop">Stop</a>.
+          Sends <code>SIGTERM</code> to the pid in <code>driver.lock</code> and waits up to 30 s for the lock to go. It signals only a live
+          pid above 1, with the same check as the UI's <a href="ui.html#control-stop">Stop</a>. The driver stops its agents with
+          <code>SIGTERM</code>, then <code>SIGKILL</code> after 5 s. The next <code>run</code> resumes the implementers' sessions, and
+          verifications and briefs start over. Without a driver it prints <code>no driver is running</code>, and a lock with pid 0 or -1
+          counts as no driver. Any other refusal prints the reason and exits 1.
         </p>
 
         <h2 id="watching">Watch <a class="anchor" href="#watching" aria-label="Link to this section">#</a></h2>
@@ -517,8 +518,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <h2 id="flags">Flags <a class="anchor" href="#flags" aria-label="Link to this section">#</a></h2>
 
         <p>
-          One parser serves every command, so every command accepts every flag and ignores the ones it does not use. An unknown flag is an
-          error.
+          One parser serves every command, so every command accepts every flag and ignores the ones it does not use. An unknown flag or a
+          missing value prints the error and the usage, and exits 1.
         </p>
 
         <div class="scroll">
@@ -653,8 +654,13 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li>A running driver watches the inbox and applies a command within about a second. A burst of commands becomes one tick.</li>
           <li>Without a driver, the files wait and apply when the next <code>run</code> starts.</li>
           <li>
-            A command the driver cannot apply shows up as <code>command-rejected</code> or <code>approval-rejected</code> in
-            <code>events.jsonl</code>, with the reason.
+            Each command applies on its own. One that is not a JSON object, names no PR or a PR the manifest no longer has, or fails while
+            it applies shows up as <code>command-rejected</code> in <code>events.jsonl</code>, with the reason. A refused approval shows up
+            as <code>approval-rejected</code>. The rest of the batch still applies.
+          </li>
+          <li>
+            Entries that are not files are skipped. A file the driver cannot delete is rejected instead of applied, on every tick until
+            someone deletes it.
           </li>
         </ul>
 

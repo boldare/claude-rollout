@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { drainInbox, freshPr, postCommand, recordVerdict, reserveRunName, watchInbox } from '../lib/ledger.mjs'
+import { acquireLock, drainInbox, freshPr, lockHolder, postCommand, recordVerdict, reserveRunName, watchInbox } from '../lib/ledger.mjs'
+import { liveness } from '../lib/view.mjs'
 
 function scratch() {
   return { dir: mkdtempSync(join(tmpdir(), 'rollout-')) }
@@ -15,6 +16,14 @@ function unusable() {
   writeFileSync(file, '')
 
   return { dir: file }
+}
+
+function writeLock(M, pid) {
+  writeFileSync(join(M.dir, 'driver.lock'), JSON.stringify({ pid, at: new Date().toISOString() }))
+}
+
+function withoutAt(commands) {
+  return commands.map(({ at: _, ...command }) => command)
 }
 
 async function watching(M, task) {
@@ -126,3 +135,70 @@ test('watchInbox never throws: without an inbox it only times out', async () => 
     assert.equal(await inbox.wait(200), 'timeout')
   })
 })
+
+test('lockHolder: a lock with pid 0 or -1 names no driver, and acquireLock takes it over', () => {
+  for (const pid of [0, -1, '0', '-1']) {
+    const M = scratch()
+    writeLock(M, pid)
+
+    assert.equal(lockHolder(M), null, `pid ${pid}`)
+    assert.equal(liveness(M).running, false, `pid ${pid}`)
+
+    const release = acquireLock(M)
+
+    try {
+      assert.equal(JSON.parse(readFileSync(join(M.dir, 'driver.lock'), 'utf8')).pid, process.pid, `pid ${pid}`)
+    } finally {
+      release()
+    }
+  }
+})
+
+test('lockHolder: a lock naming a live process holds, and acquireLock refuses it', () => {
+  const M = scratch()
+  writeLock(M, process.pid)
+
+  assert.equal(lockHolder(M).pid, process.pid)
+  assert.throws(() => acquireLock(M), /already running/)
+})
+
+test('drainInbox skips a directory named like a command, and watchInbox never wakes for it', async () => {
+  const M = scratch()
+  const folder = join(M.dir, 'inbox', 'x.json')
+
+  mkdirSync(folder, { recursive: true })
+  postCommand(M, { cmd: 'hold', id: 'A1' })
+
+  assert.deepEqual(withoutAt(drainInbox(M)), [{ cmd: 'hold', id: 'A1' }])
+  assert.deepEqual(drainInbox(M), [])
+  assert.ok(existsSync(folder))
+
+  await watching(M, async (inbox) => {
+    assert.equal(await inbox.wait(300), 'timeout')
+  })
+})
+
+test('drainInbox without an inbox returns nothing', () => {
+  assert.deepEqual(drainInbox(scratch()), [])
+})
+
+test(
+  'drainInbox rejects a file it cannot delete instead of returning its command',
+  { skip: process.getuid?.() === 0 || process.platform === 'win32' ? 'root and Windows delete it anyway' : false },
+  (t) => {
+    const M = scratch()
+    const inbox = join(M.dir, 'inbox')
+    const name = postCommand(M, { cmd: 'retry', id: 'A1' })
+
+    chmodSync(inbox, 0o555)
+    t.after(() => chmodSync(inbox, 0o755))
+
+    const commands = drainInbox(M)
+
+    assert.equal(commands.length, 1)
+    assert.equal(commands[0].cmd, 'invalid')
+    assert.equal(commands[0].file, name)
+    assert.match(commands[0].error, /^cannot delete it: /)
+    assert.ok(existsSync(join(inbox, name)))
+  },
+)
