@@ -9,8 +9,8 @@
 // A regex guard is a seatbelt, not a sandbox. The guarantees that matter are
 // also enforced elsewhere: the pre-push hook, no npm credentials in the agent
 // environment, and the driver re-checking every claim before it merges.
-import { readFileSync } from 'node:fs'
-import { pathToFileURL } from 'node:url'
+import { readFileSync, realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 // Splits a shell line into simple commands on ; & && || | newlines and
 // subshell or group markers. Quoting is not honoured on purpose: a forbidden
@@ -484,6 +484,16 @@ function main() {
   process.exit(0)
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node loads the main module by its real path. Comparing that with argv[1] as
+// typed would skip main() behind a symlink and let every command through.
+function isMain() {
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+  } catch {
+    return false
+  }
+}
+
+if (isMain()) {
   main()
 }

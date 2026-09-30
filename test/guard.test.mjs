@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { check, decide } from '../hooks/guard-bash.mjs'
 
 const BRANCH = 'fix/thing'
@@ -148,6 +149,20 @@ test('the hook script fails closed on a payload it cannot read', () => {
     assert.equal(allowed.status, 0, role)
     assert.equal(allowed.stderr, '')
   }
+})
+
+test('the hook script still runs when reached through a symlink', () => {
+  const skill = join(mkdtempSync(join(tmpdir(), 'rollout-link-')), 'skill')
+
+  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), skill)
+
+  const result = spawnSync('node', [join(skill, 'hooks', 'guard-bash.mjs'), 'worker'], {
+    input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --admin' } }),
+    encoding: 'utf8',
+  })
+
+  assert.equal(result.status, 2)
+  assert.match(result.stderr, /^rollout guard: /)
 })
 
 test('decide refuses when the check itself throws', () => {
