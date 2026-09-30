@@ -226,7 +226,8 @@
                   <code>gh release</code>, <code>gh secret</code>, <code>gh variable</code>, <code>gh workflow</code>,
                   <code>gh ruleset</code>, <code>npm publish</code>, <code>pnpm publish</code>, <code>pnpm release</code>,
                   <code>pnpm run release</code>, <code>pnpm changeset publish</code>, <code>git push origin main*</code>,
-                  <code>git push origin HEAD:main*</code>
+                  <code>git push origin HEAD:main*</code>, and the same two for
+                  <a href="manifest.html#repo-base"><code>repo.base</code></a>
                 </td>
               </tr>
               <tr>
@@ -259,15 +260,17 @@
         </div>
 
         <p>
-          The deny rules name <code>main</code>. For another base branch, the guard and the pre-push hook hold the line, since both allow
-          pushes to the PR branch only.
+          The push deny rules name <code>main</code> and <code>repo.base</code>. For every other branch, the guard and the pre-push hook
+          hold the line, since both allow pushes to the PR branch only.
         </p>
 
         <h3 id="guard">The Bash guard</h3>
 
         <p>
           <code>hooks/guard-bash.mjs</code> reads each Bash call before it runs. It exits with code 2 to refuse, and the agent gets
-          <q>rollout guard: …</q> with the reason. It sees the Bash tool only, the file tools are covered by the permission rules.
+          <q>rollout guard: …</q> with the reason. It sees the Bash tool only, the file tools are covered by the permission rules. It fails
+          closed. An empty payload, one that is not JSON or has no command string, and an error inside the guard also exit 2, because a
+          PreToolUse hook blocks only with that code.
         </p>
 
         <p>
@@ -319,8 +322,10 @@
             <strong>Releases.</strong> <code>npm</code>, <code>pnpm</code>, <code>yarn</code>, <code>npx</code>, <code>pnpx</code>,
             <code>bun</code> or <code>bunx</code> with <code>publish</code>, <code>release</code>, <code>version-packages</code>,
             <code>unpublish</code>, <code>dist-tag</code>, <code>deprecate</code>, <code>owner</code>, <code>adduser</code>,
-            <code>login</code>, <code>logout</code> or <code>token</code>. <code>&lt;tool&gt; version</code>, and
-            <code>changeset version|publish|tag|pre</code> run through one of these tools.
+            <code>login</code>, <code>logout</code> or <code>token</code>. <code>&lt;tool&gt; version</code>.
+            <code>changeset version</code>, <code>publish</code>, <code>tag</code> and <code>pre</code>, run directly, through a package
+            manager, as <code>@changesets/cli</code> or through a path such as <code>node_modules/.bin/changeset</code>.
+            <code>changeset add</code> and <code>changeset status</code> stay allowed.
           </li>
         </ul>
 

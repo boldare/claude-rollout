@@ -330,19 +330,35 @@ async function preflight(M) {
   console.log('\npreflight ok')
 }
 
-// Starts a cheap headless agent with the worker settings in a scratch
-// directory and asks it to run forbidden commands; the guard must stop them.
+// Feeds the guard command a payload the way an agent's Bash call does. A
+// forbidden command must exit 2 and an allowed one must exit 0, so a guard
+// that refuses everything fails too.
 function hookSelfTest(M, problems) {
-  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --admin' } })
-  const result = spawnSync('sh', ['-c', guardCommand(M, 'implement')], { input: payload, encoding: 'utf8' })
-  const ok = result.status === 2 && /rollout guard/.test(result.stderr)
-  console.log(`${ok ? 'ok  ' : 'FAIL'} guard hook command exits 2 on a forbidden command`)
+  const denied = runGuard(M, 'gh pr merge 1 --admin')
+  const deniedOk = denied.status === 2 && /rollout guard/.test(denied.stderr)
+  console.log(`${deniedOk ? 'ok  ' : 'FAIL'} guard hook command exits 2 on a forbidden command`)
 
-  if (!ok) {
-    problems.push(`guard hook self-test failed (exit ${result.status}): ${result.stderr.slice(0, 200)}`)
+  if (!deniedOk) {
+    problems.push(`guard hook self-test failed (exit ${denied.status}): ${denied.stderr.slice(0, 200)}`)
+  }
+
+  const allowed = runGuard(M, 'echo allowed')
+  const allowedOk = allowed.status === 0
+  console.log(`${allowedOk ? 'ok  ' : 'FAIL'} guard hook command exits 0 on an allowed command`)
+
+  if (!allowedOk) {
+    problems.push(`guard hook self-test failed: an allowed command exited ${allowed.status}: ${allowed.stderr.slice(0, 200)}`)
   }
 }
 
+function runGuard(M, command) {
+  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command } })
+
+  return spawnSync('sh', ['-c', guardCommand(M, 'implement')], { input: payload, encoding: 'utf8' })
+}
+
+// Starts a cheap headless agent with the worker settings in a scratch
+// directory and asks it to run forbidden commands. The guard must stop them.
 async function liveGuardTest(M, problems) {
   const scratch = mkdtempSync(join(tmpdir(), 'rollout-guard-'))
   const prompt =

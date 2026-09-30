@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { check } from '../hooks/guard-bash.mjs'
+import { check, decide } from '../hooks/guard-bash.mjs'
 
 const BRANCH = 'fix/thing'
 const LIVE_X = { dir: '/Users/u/_Code/.rollouts/x', home: '/Users/u/.claude/skills/rollout', name: 'x' }
@@ -86,6 +86,78 @@ test('the hook script exits 2 with a reason on stdin payloads', () => {
   assert.equal(denied.status, 2)
   assert.match(denied.stderr, /rollout guard/)
   assert.equal(run('ls -la').status, 0)
+})
+
+test('changeset release commands are blocked in every form, for everyone', () => {
+  const forms = [
+    'changeset version',
+    'changeset pre enter next',
+    'changeset tag',
+    './node_modules/.bin/changeset publish',
+    'node node_modules/@changesets/cli/bin.js version',
+    'npx @changesets/cli version',
+    'pnpm changeset -- version',
+    'npx changeset --cwd . version',
+    'pnpm dlx @changesets/cli@2.29.0 version',
+    'node ./node_modules/@changesets/cli/bin.js pre exit',
+    'npx changeset@latest version',
+    'sh -c "changeset version"',
+  ]
+
+  for (const role of ['worker', 'verifier']) {
+    for (const command of forms) {
+      assert.ok(blocked(command, role), `${role}: ${command}`)
+    }
+  }
+})
+
+test('changeset add, status and .changeset files stay allowed', () => {
+  const forms = [
+    'changeset add',
+    'changeset status',
+    'npx changeset add --empty',
+    'pnpm changeset status --since=origin/main',
+    'git add .changeset/fix-thing.md',
+    'cat .changeset/pre.json',
+  ]
+
+  for (const role of ['worker', 'verifier']) {
+    for (const command of forms) {
+      assert.ok(!blocked(command, role), `${role}: ${command}`)
+    }
+  }
+})
+
+test('the hook script fails closed on a payload it cannot read', () => {
+  const script = new URL('../hooks/guard-bash.mjs', import.meta.url).pathname
+  const inputs = ['', 'not json', 'null', '{}', '{"tool_input":{}}', '{"tool_input":{"command":42}}', '{"tool_input":{"command":["ls"]}}']
+
+  for (const role of ['worker', 'verifier']) {
+    for (const input of inputs) {
+      const result = spawnSync('node', [script, role], { input, encoding: 'utf8' })
+
+      assert.equal(result.status, 2, `${role}: ${JSON.stringify(input)}`)
+      assert.match(result.stderr, /^rollout guard: /)
+    }
+
+    const allowed = spawnSync('node', [script, role], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } }),
+      encoding: 'utf8',
+    })
+
+    assert.equal(allowed.status, 0, role)
+    assert.equal(allowed.stderr, '')
+  }
+})
+
+test('decide refuses when the check itself throws', () => {
+  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
+  const explode = () => {
+    throw new Error('boom')
+  }
+
+  assert.match(decide(payload, 'worker', {}, explode), /boom/)
+  assert.equal(decide(payload, 'worker', {}), null)
 })
 
 test('commit-msg hook accepts one line and rejects bodies and trailers', () => {

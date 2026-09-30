@@ -2,7 +2,9 @@
 // PreToolUse guard for rollout agents. Reads the hook payload on stdin and
 // exits 2 (blocked, stderr goes back to the agent) when a Bash command could
 // merge, publish, rewrite shared history, push anywhere but the PR branch,
-// switch off the guard rails or drive the rollout itself.
+// switch off the guard rails or drive the rollout itself. A payload the guard
+// cannot read and an error of its own also exit 2, because a PreToolUse hook
+// blocks only with that code.
 //
 // A regex guard is a seatbelt, not a sandbox. The guarantees that matter are
 // also enforced elsewhere: the pre-push hook, no npm credentials in the agent
@@ -242,13 +244,30 @@ function checkPackageManagers(words) {
     }
   }
 
-  const changeset = words.findIndex((word) => word === 'changeset' || word.endsWith('/changeset'))
+  return null
+}
 
-  if (changeset !== -1 && ['version', 'publish', 'tag', 'pre'].includes(words[changeset + 1])) {
-    return `changeset ${words[changeset + 1]} belongs to the release PR`
+// The changesets CLI under any name it runs by: `changeset@latest`, a bin
+// path, `@changesets/cli` or its `bin.js`. `.changeset/pre.json` is not it.
+const CHANGESET_TOOL = /(^|\/)(changeset(@[^/]*)?|@changesets\/cli(@[^/]*)?(\/.*)?)$/
+const CHANGESET_RELEASE = ['version', 'publish', 'tag', 'pre']
+
+// Any later release word counts, so flags such as `--cwd .` or `--` before
+// the subcommand cannot hide it.
+function checkChangesets(words) {
+  const tool = words.findIndex((word) => CHANGESET_TOOL.test(word))
+
+  if (tool === -1) {
+    return null
   }
 
-  return null
+  const hit = words.slice(tool + 1).find((word) => CHANGESET_RELEASE.includes(word))
+
+  if (!hit) {
+    return null
+  }
+
+  return `changeset ${hit} belongs to the release PR`
 }
 
 function checkPush(args, branch) {
@@ -405,7 +424,7 @@ export function check(command, role, branch, context = {}) {
       return 'talk to GitHub through gh (read-only gh api), not raw HTTP; npm registry writes are not allowed'
     }
 
-    const problem = checkGh(words) ?? checkPackageManagers(words) ?? checkGit(words, role, branch)
+    const problem = checkGh(words) ?? checkChangesets(words) ?? checkPackageManagers(words) ?? checkGit(words, role, branch)
 
     if (problem) {
       return problem
@@ -419,27 +438,43 @@ export function check(command, role, branch, context = {}) {
   return null
 }
 
-function main() {
-  const role = process.argv[2] ?? 'worker'
+// Null allows the command, a string is the reason to refuse it. It never
+// throws, since a crash exits 1 and exit 1 lets the command run. Only tests
+// pass `inspect`.
+export function decide(input, role, env, inspect = check) {
   let payload
 
   try {
-    payload = JSON.parse(readFileSync(0, 'utf8'))
+    payload = JSON.parse(input)
   } catch {
-    process.exit(0)
+    return 'the hook payload is not JSON, command refused'
   }
 
   const command = payload?.tool_input?.command
 
   if (typeof command !== 'string') {
-    process.exit(0)
+    return 'the hook payload has no command string, command refused'
   }
 
-  const problem = check(command, role, process.env.ROLLOUT_BRANCH, {
-    dir: process.env.ROLLOUT_DIR,
-    home: process.env.ROLLOUT_HOME,
-    name: process.env.ROLLOUT_NAME,
-  })
+  try {
+    return inspect(command, role, env.ROLLOUT_BRANCH, { dir: env.ROLLOUT_DIR, home: env.ROLLOUT_HOME, name: env.ROLLOUT_NAME })
+  } catch (error) {
+    const message = String(error?.message ?? error).replace(/\s+/g, ' ')
+
+    return `the guard failed (${message}), command refused`
+  }
+}
+
+function readStdin() {
+  try {
+    return readFileSync(0, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+function main() {
+  const problem = decide(readStdin(), process.argv[2] ?? 'worker', process.env)
 
   if (problem) {
     process.stderr.write(`rollout guard: ${problem}\n`)
