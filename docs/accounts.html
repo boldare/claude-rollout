@@ -475,12 +475,19 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
 
         <ul>
           <li>
-            <strong>Temporary trouble</strong>: a rate or usage limit, an overload, a 429 or 5xx, a dropped connection. The run gives its
-            attempt back, up to 5 times per PR, and the PR waits before its next try: 2, 4, 8 and so on minutes, at most 30.
+            <strong>Temporary trouble</strong>: a rate or usage limit, an overload, a 429 or 5xx, a dropped connection, claude's own
+            <code>rate_limit</code>, <code>overloaded</code> and <code>server_error</code> errors, or a rejected
+            <code>rate_limit_event</code>. It still counts when the stall watchdog or the timeout killed the run. The run gives its attempt
+            back, up to 5 times per PR, and the PR waits before its next try: 2, 4, 8 and so on minutes, at most 30.
           </li>
           <li>
-            <strong>Account trouble</strong>: a message about a spend limit, a credit balance, billing or an exceeded budget. The whole
-            rollout pauses and notifies you. <code>rollout resume</code> continues it.
+            <strong>Account trouble</strong>: a message about a spend limit, a credit balance, billing or an exceeded budget, or claude's
+            own <code>billing_error</code>, <code>account_on_hold</code> and <code>authentication_failed</code> errors. The budget here is
+            the account's, not the run's cap. The whole rollout pauses and notifies you. <code>rollout resume</code> continues it.
+          </li>
+          <li>
+            <strong>The run's budget cap</strong>: a run that reaches its own <code>--max-budget-usd</code> fails with "hit its budget cap
+            ($N)". It is neither kind. It uses up its attempt and the rollout goes on.
           </li>
         </ul>
 

@@ -849,7 +849,9 @@
           <dd>
             The last <code>type: "result"</code> line carries <code>structured_output</code> (the report), <code>total_cost_usd</code>,
             <code>session_id</code> and the permission denials. A run without that line, with <code>is_error</code>, or without a report has
-            failed.
+            failed. The driver also reads claude's API error lines (<code>is_api_error_message</code> with an <code>error</code> kind) and
+            rejected <code>rate_limit_event</code> lines. They tell an outage or an account problem apart from a real failure. The agent's
+            own <code>result</code> text is shown as the error but never classifies it.
           </dd>
         </dl>
 
@@ -999,8 +1001,9 @@
               <tr>
                 <td>A run that did no work</td>
                 <td>
-                  Stopped by the driver, a transient error (rate or usage limit, overload, HTTP 429 or 5xx, a dropped connection), an
-                  account error, or under $0.01 and under 60 s. The attempt is given back, at most five times per PR.
+                  Stopped by the driver, a transient error (rate or usage limit, overload, HTTP 429 or 5xx, a dropped connection, claude's
+                  <code>rate_limit</code>, <code>overloaded</code> or <code>server_error</code>, a rejected <code>rate_limit_event</code>),
+                  an account error, or under $0.01 and under 60 s. The attempt is given back, at most five times per PR.
                 </td>
               </tr>
               <tr>
@@ -1035,6 +1038,14 @@
                 <td>No output, or too long</td>
                 <td>
                   The stall watchdog and the role's timeout kill the run. It ends as failed and the PR becomes <code>interrupted</code>.
+                  Stderr from before the kill still counts, so a rate limit there gives the attempt back.
+                </td>
+              </tr>
+              <tr>
+                <td>A run hit its budget cap</td>
+                <td>
+                  It reached <code>--max-budget-usd</code> and fails with "hit its budget cap ($N)". It counts as an attempt, and the
+                  rollout does not pause.
                 </td>
               </tr>
               <tr>
@@ -1044,7 +1055,8 @@
               <tr>
                 <td>An account limit</td>
                 <td>
-                  A spend limit, credit balance, billing or budget error pauses the whole rollout until
+                  A spend limit, credit balance, billing or account budget error, or claude's <code>billing_error</code>,
+                  <code>account_on_hold</code> or <code>authentication_failed</code>, pauses the whole rollout until
                   <a href="commands.html#cmd-resume"><code>resume</code></a
                   >. A notification says so.
                 </td>
