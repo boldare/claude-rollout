@@ -16,7 +16,7 @@ function render({ public: isPublic, denylist }) {
 
   return {
     implement: implementPrompt(M, pr, STATE),
-    briefWrite: briefWritePrompt(M, pr, STATE, null),
+    briefWrite: briefWritePrompt(M, pr, STATE),
     briefReview: briefReviewPrompt(M, pr, STATE, '# draft'),
     verify: verifyPrompt(M, pr, STATE, 'a1a1a1a'),
   }
@@ -70,4 +70,35 @@ test('prompts: a private repo without a denylist gets neither rule', () => {
 
   assert.ok(prompts.briefReview.includes('4. Check for scope leaking in from other PRs.\n'))
   assertFilled(prompts)
+})
+
+test('prompts: the brief writer sees every earlier answer, oldest first, under one heading', () => {
+  const M = loadManifest(makeRollout())
+  const pr = M.all[0]
+  const briefAnswers = [
+    { question: 'Which default for the delay?', answer: '120 seconds.' },
+    { question: 'Keep the old flag?', answer: 'Yes, as an alias.' },
+    { question: null, answer: 'The plan moved to a new file.' },
+  ]
+  const text = briefWritePrompt(M, pr, { ...STATE, briefAnswers })
+  const order = [
+    'Which default for the delay?',
+    '120 seconds.',
+    'Keep the old flag?',
+    'Yes, as an alias.',
+    'The plan moved to a new file.',
+  ].map((part) => text.indexOf(part))
+
+  assert.equal(text.split('## Answers from the maintainer').length, 2)
+  assert.ok(order.every((index) => index > -1))
+  assert.deepEqual(
+    order,
+    [...order].sort((a, b) => a - b),
+  )
+  assert.ok(text.includes('A note from the maintainer:\n\nThe plan moved to a new file.'))
+
+  const fresh = briefWritePrompt(M, pr, freshPr())
+
+  assert.equal(fresh.includes('## Answers from the maintainer'), false)
+  assert.equal(fresh.includes('{{'), false)
 })

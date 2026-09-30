@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { createDriver, doneDetail } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
@@ -215,6 +215,182 @@ test('a PR still in the ledger but gone from the manifest is unknown, and a paus
   )
   assert.deepEqual(driver.L.prs.B9, before)
   assert.equal(driver.L.data.paused, true)
+})
+
+test('retry rejects a merged PR and changes nothing', () => {
+  const attempts = { implement: 1, fix: 2, verify: 1, brief: 1 }
+  const { M, driver } = driverFor({ A1: { state: 'merged', pr: 7, attempts } })
+
+  assert.deepEqual(apply(M, driver, { cmd: 'retry', id: 'A1' }), [
+    { id: 'A1', kind: 'command-rejected', command: 'retry', reason: 'already merged' },
+  ])
+  assert.equal(driver.L.prs.A1.state, 'merged')
+  assert.deepEqual(driver.L.prs.A1.attempts, attempts)
+})
+
+test('retry rejects a PR whose agent is running and changes nothing', () => {
+  const attempts = { implement: 1, fix: 2, verify: 0, brief: 0 }
+  const { M, driver } = driverFor({ A1: { state: 'fixing', attempts } })
+  driver.running.set('A1', 'fix')
+
+  assert.deepEqual(apply(M, driver, { cmd: 'retry', id: 'A1' }), [
+    { id: 'A1', kind: 'command-rejected', command: 'retry', reason: 'an agent is working on this PR' },
+  ])
+  assert.equal(driver.L.prs.A1.state, 'fixing')
+  assert.deepEqual(driver.L.prs.A1.attempts, attempts)
+})
+
+test('retry resets the attempts, the refunds, the failure streak, the errors and the backoff', () => {
+  const briefAnswers = [{ question: 'Q1', answer: 'yes' }]
+  const { M, driver } = driverFor({
+    A1: {
+      state: 'escalated',
+      pr: 11,
+      sessionId: 'session-1',
+      refunds: 5,
+      failStreak: 3,
+      tickErrors: 5,
+      retryAfter: new Date(Date.now() + 3_600_000).toISOString(),
+      attempts: { implement: 2, fix: 4, verify: 1, brief: 1 },
+      briefAnswers,
+    },
+  })
+
+  assert.deepEqual(apply(M, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'interrupted' }])
+
+  const s = driver.L.prs.A1
+
+  assert.deepEqual(s.attempts, { implement: 0, fix: 0, verify: 0, brief: 0 })
+  assert.equal(s.refunds, 0)
+  assert.equal(s.failStreak, 0)
+  assert.equal(s.tickErrors, 0)
+  assert.equal(s.retryAfter, null)
+  assert.equal(s.state, 'interrupted')
+  assert.deepEqual(s.briefAnswers, briefAnswers)
+})
+
+test('note on needs_fix is queued for the fix run and keeps the reason it waits with', () => {
+  const { M, driver } = driverFor({
+    A1: {
+      state: 'needs_fix',
+      pr: 11,
+      fixReason: 'verifier findings',
+      fixNote: '<findings>',
+      attempts: { implement: 1, fix: 4, verify: 1, brief: 0 },
+    },
+  })
+
+  assert.deepEqual(apply(M, driver, { cmd: 'note', id: 'A1', text: 'Keep the old flag.' }), [
+    { id: 'A1', kind: 'note-queued', state: 'needs_fix' },
+  ])
+
+  const s = driver.L.prs.A1
+
+  assert.equal(s.fixReason, 'verifier findings')
+  assert.equal(s.fixNote, '<findings>')
+  assert.equal(s.pendingNote, 'Keep the old flag.')
+  assert.equal(s.attempts.fix, 3)
+  assert.equal(s.state, 'needs_fix')
+
+  apply(M, driver, { cmd: 'note', id: 'A1', text: 'And document it.' })
+
+  assert.equal(s.pendingNote, 'Keep the old flag.\n\nAnd document it.')
+  assert.equal(s.fixNote, '<findings>')
+  assert.equal(s.attempts.fix, 3)
+})
+
+test('note on a PR with no brief and no GitHub PR answers the brief writer', () => {
+  const escalated = { state: 'escalated', attempts: { implement: 0, fix: 0, verify: 0, brief: 2 } }
+  const { M, driver } = driverFor({ A1: escalated, A3: escalated })
+
+  assert.deepEqual(apply(M, driver, { cmd: 'note', id: 'A1', text: 'Write it from the second plan.' }), [
+    { id: 'A1', kind: 'brief-answered' },
+  ])
+
+  const s = driver.L.prs.A1
+
+  assert.equal(s.state, 'pending')
+  assert.equal(s.attempts.brief, 1)
+  assert.deepEqual(s.briefAnswers, [{ question: null, answer: 'Write it from the second plan.' }])
+  assert.equal(s.fixReason, undefined)
+
+  const withBrief = M.all.find((pr) => pr.id === 'A3')
+  mkdirSync(dirname(withBrief.brief), { recursive: true })
+  writeFileSync(withBrief.brief, '# A3\n')
+
+  assert.deepEqual(apply(M, driver, { cmd: 'note', id: 'A3', text: 'Try again.' }), [
+    { id: 'A3', kind: 'needs-fix', reason: 'answer from the maintainer' },
+  ])
+})
+
+test('answers to brief questions give the attempt back and keep every round until the brief is written', () => {
+  const { M, driver } = driverFor({
+    A1: {
+      state: 'blocked',
+      blocked: { kind: 'brief-questions', question: 'Q1', evidence: '' },
+      attempts: { implement: 0, fix: 0, verify: 0, brief: 1 },
+    },
+  })
+  const pr = M.all.find((item) => item.id === 'A1')
+  const s = driver.L.prs.A1
+
+  assert.deepEqual(apply(M, driver, { cmd: 'note', id: 'A1', text: 'A1 answer' }), [{ id: 'A1', kind: 'brief-answered' }])
+  assert.equal(s.state, 'pending')
+  assert.equal(s.attempts.brief, 0)
+  assert.equal(s.pendingNote, null)
+
+  s.state = 'blocked'
+  s.blocked = { kind: 'brief-questions', question: 'Q2', evidence: '' }
+  s.attempts.brief = 2
+  apply(M, driver, { cmd: 'note', id: 'A1', text: 'A2 answer' })
+
+  assert.equal(s.attempts.brief, 1)
+  assert.ok(s.attempts.brief < M.policy.attempts.brief)
+  assert.deepEqual(s.briefAnswers, [
+    { question: 'Q1', answer: 'A1 answer' },
+    { question: 'Q2', answer: 'A2 answer' },
+  ])
+
+  const before = readEvents(M).length
+  driver.onBriefDone(
+    pr,
+    agentResult({ output: { brief: '# A1\n', questions: [], notes: 'Checked.', expectedFiles: ['lib/a.mjs'], changesetBump: 'none' } }),
+  )
+
+  assert.deepEqual(
+    readEvents(M)
+      .slice(before)
+      .map((event) => event.kind),
+    ['brief-written'],
+  )
+  assert.deepEqual(s.briefAnswers, [])
+})
+
+test('launch never starts an implementer or a fixer without a brief and a GitHub PR', () => {
+  const attempts = { implement: 1, fix: 1, verify: 0, brief: 1 }
+  const { M, driver } = driverFor({ A1: { state: 'interrupted', interruptedRole: 'fix', sessionId: 'session-1', attempts } })
+  const pr = M.all.find((item) => item.id === 'A1')
+  M.claudeBin = join(M.dir, 'no-such-claude')
+  const before = readEvents(M).length
+
+  driver.launch(pr, 'fix', { reason: 'r', note: 'n' })
+  driver.launch(pr, 'implement')
+
+  const s = driver.L.prs.A1
+
+  assert.equal(driver.running.size, 0)
+  assert.deepEqual(s.attempts, attempts)
+  assert.equal(s.state, 'pending')
+  assert.equal(s.sessionId, 'session-1')
+  assert.deepEqual(
+    readEvents(M)
+      .slice(before)
+      .map(({ at: _, ...event }) => event),
+    [
+      { id: 'A1', kind: 'brief-missing', role: 'fix' },
+      { id: 'A1', kind: 'brief-missing', role: 'implement' },
+    ],
+  )
 })
 
 test('onDone: a PR merged during the run stays merged and is cleaned up after the run', async () => {
