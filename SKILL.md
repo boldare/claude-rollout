@@ -70,7 +70,7 @@ Anything off sends the PR to `needs_fix`, and the next tick resumes the implemen
 
 - A run that did no work (stopped, rate-limited, or under $0.01 and a minute) gives its attempt back, at most five times. Every failure backs off exponentially, up to 30 minutes.
 - Effort rises with attempts: each implement attempt after the first raises it one level, and so does each fix run from the third on. The verifier keeps its own.
-- A spend, credit or billing limit on the Claude account pauses the whole rollout until `resume`.
+- A spend, credit or billing limit on the Claude account, an account on hold or a failed login pauses the whole rollout until `resume`.
 - `held` is a flag on one PR, not a state. `paused` (no new runs, no merges) and `halted` (no merges, after a red base) apply to the whole rollout.
 - The driver reloads `manifest.yaml` every tick. An invalid edit is logged as `manifest-rejected` and the previous manifest stays.
 
