@@ -319,6 +319,12 @@ async function preflight(M) {
     }
   } else {
     warnings.push('no repo.agentToken: agents act on GitHub as you')
+
+    if (M.repo.maintainers.length > 0) {
+      warnings.push(
+        "repo.maintainers without repo.agentToken: comments agents post under your login count as your review feedback (the driver's own replies carry a marker and are skipped)",
+      )
+    }
   }
 
   if (M.policy.merge === 'auto') {

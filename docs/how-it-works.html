@@ -1081,6 +1081,8 @@
           <li>
             Only people in <a href="manifest.html#repo-maintainers"><code>repo.maintainers</code></a> count. It reads their inline review
             comments, review bodies (commented or changes requested) and conversation comments. With no maintainers set, it reads none.
+            Comments that end with the driver's <code>&lt;!-- rollout-driver --&gt;</code> line never count, even under a maintainer's login
+            (<code>maintainerFeedback</code> in <code>lib/github.mjs</code>).
           </li>
           <li>
             It looks at PRs that are <code>ready_claimed</code>, <code>verified</code> or <code>needs_fix</code>, while no agent runs for
@@ -1096,8 +1098,9 @@
             to. The fixer lists each comment id in <code>addressed</code>, with what it did.
           </li>
           <li>
-            After the fixer reports READY, the driver answers each inline thread with that action and the new short SHA, as the bot.
-            Everything else is summed up in one PR comment. Handled comments are remembered by id and never sent twice.
+            After the fixer reports READY, the driver answers each inline thread with that action and the new short SHA, as the bot. Without
+            <code>repo.agentToken</code> the replies go out under your login. Everything else is summed up in one PR comment. Handled
+            comments are remembered by id and never sent twice.
           </li>
         </ul>
 
