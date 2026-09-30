@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Commands · rollout docs</title>
+    <meta name="description" content="Every rollout command and flag, what each one really does, and where the web UI offers it." />
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <div class="facts">
+        <span class="badge alpha">internal alpha</span>
+        <span class="version">v0.1.0</span>
+        <span>Node 20+</span>
+      </div>
+      <div class="facts right"><a href="https://github.com/grzehub/claude-rollout">GitHub</a></div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Documentation">
+        <p class="group">Start</p>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="getting-started.html">Getting started</a></li>
+        </ul>
+        <p class="group">Setup</p>
+        <ul>
+          <li><a href="accounts.html">Accounts</a></li>
+          <li><a href="manifest.html">Manifest</a></li>
+        </ul>
+        <p class="group">Use</p>
+        <ul>
+          <li><a href="commands.html" aria-current="page">Commands</a></li>
+          <li><a href="ui.html">Web UI</a></li>
+        </ul>
+        <p class="group">Internals</p>
+        <ul>
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="security.html">Security</a></li>
+        </ul>
+      </nav>
+
+      <main class="page">
+        <header class="page-head">
+          <h1>Commands</h1>
+          <p class="page-meta">bin/rollout.mjs</p>
+        </header>
+
+        <p class="lead">
+          Everything goes through one script, <code>bin/rollout.mjs</code>. Run it with node and point it at a rollout directory. On this
+          page <code>$R</code> is the path to that script.
+        </p>
+
+        <pre><code>R=~/.claude/skills/rollout/bin/rollout.mjs
+node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
+
+        <p>
+          Every command except <code>ui</code> and <code>help</code> loads the manifest of <code>--dir</code> first and stops when it does
+          not validate. Commands that take a PR id refuse an unknown one and print the known ids.
+        </p>
+
+        <h2 id="overview">At a glance <a class="anchor" href="#overview" aria-label="Link to this section">#</a></h2>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>command</th>
+                <th>what it does</th>
+                <th>in the UI</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="name"><a href="#cmd-run">run</a></td>
+                <td>Starts the driver in the foreground.</td>
+                <td><span class="badge where-ui">Start button</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-stop">stop</a></td>
+                <td>Stops the driver and its agents.</td>
+                <td><span class="badge where-ui">rollout header</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-status">status</a></td>
+                <td>The PR table, the driver's heartbeat and recent events.</td>
+                <td><span class="badge where-ui">board</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-card">card</a></td>
+                <td>The approval card of one PR.</td>
+                <td><span class="badge where-ui">PR page</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-ui">ui</a></td>
+                <td>Serves the web UI over every rollout under a root.</td>
+                <td>–</td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-approve">approve</a></td>
+                <td>Approves a verified PR for the gate.</td>
+                <td><span class="badge where-cli">CLI only</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-note">note</a></td>
+                <td>Answers an agent or asks for a change.</td>
+                <td><span class="badge where-ui">PR page</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-retry">retry</a></td>
+                <td>Gives a PR fresh attempts.</td>
+                <td><span class="badge where-ui">PR page</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-hold">hold</a>, <a href="#cmd-release">release</a></td>
+                <td>Holds one PR, or lifts the hold.</td>
+                <td><span class="badge where-ui">PR page</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-pause">pause</a>, <a href="#cmd-resume">resume</a></td>
+                <td>Stops new work and merges for the whole rollout, or lets them go on.</td>
+                <td><span class="badge where-ui">rollout header</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-unhalt">unhalt</a></td>
+                <td>Clears a halt after a red base branch.</td>
+                <td><span class="badge where-ui">rollout header</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-preflight">preflight</a></td>
+                <td>Checks tools, logins, the repository and the guard.</td>
+                <td><span class="badge where-cli">CLI only</span></td>
+              </tr>
+              <tr>
+                <td class="name"><a href="#cmd-help">help</a></td>
+                <td>Prints the usage.</td>
+                <td><span class="badge where-cli">CLI only</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="running">Run <a class="anchor" href="#running" aria-label="Link to this section">#</a></h2>
+
+        <h3 id="cmd-run">run <a class="anchor" href="#cmd-run" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R run --dir D [--only P1,P2] [--dry-run]</code></pre>
+
+        <p>
+          Starts the driver in the foreground. It runs for hours, so start it in a terminal of your own, never inside a Claude session's
+          Bash. On macOS, <code>caffeinate -is node $R run …</code> keeps the machine awake.
+        </p>
+
+        <ul>
+          <li>
+            It takes <code>driver.lock</code>. A second driver for the same directory refuses to start and names the pid of the first. A
+            lock left by a dead process is cleared.
+          </li>
+          <li>
+            On start, runs that were in progress get their attempt back and become
+            <a href="how-it-works.html#state-interrupted">interrupted</a>, or pending for a brief. Then it fetches <code>origin</code>,
+            creates the label <code>rollout:&lt;name&gt;</code> and turns on per-worktree git config.
+          </li>
+          <li>
+            It ticks every <code>policy.tickSeconds</code> (60 s), and a new command in the inbox wakes it sooner. What one tick does is on
+            <a href="how-it-works.html">How it works</a>.
+          </li>
+          <li>When every PR of the run has merged, it reports the release PR for you to merge and exits.</li>
+          <li>
+            Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents, waits up to 15 s for them, saves and exits. A second
+            signal exits at once. The next <code>run</code> resumes the implementers' sessions. Verifications and briefs start over.
+          </li>
+        </ul>
+
+        <dl class="kv">
+          <dt><code>--only P1,P2</code></dt>
+          <dd>
+            Runs only these PRs. The rest of the manifest still counts for dependencies. A dependency outside the run counts as merged once
+            GitHub shows its branch merged into the base with the rollout label. Until then the PR waits, and the driver says so when it
+            starts.
+          </dd>
+          <dt><code>--dry-run</code></dt>
+          <dd>
+            Everything is real except the merge: agents, pushes, PRs, CI and the driver's own rebases. Where it would merge, it logs
+            <code>would-merge</code> and notifies you. Under <code>merge: manual</code> it changes nothing, because the driver never merges
+            then.
+          </dd>
+        </dl>
+
+        <p>
+          In the UI, the <a href="ui.html#control-start">Start</a> button starts the driver detached, with its output in
+          <code>driver.log</code>, under <code>caffeinate -is</code> on macOS when it exists. It offers a dry run but not
+          <code>--only</code>.
+        </p>
+
+        <h3 id="cmd-stop">stop <a class="anchor" href="#cmd-stop" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R stop --dir D</code></pre>
+
+        <p>
+          Sends <code>SIGTERM</code> to the pid in <code>driver.lock</code> and waits up to 30 s for the lock to go. The driver stops its
+          agents with <code>SIGTERM</code>, then <code>SIGKILL</code> after 5 s. The next <code>run</code> resumes the implementers'
+          sessions, and verifications and briefs start over. Without a driver it prints <code>no driver is running</code>. In the UI:
+          <a href="ui.html#control-stop">Stop</a>.
+        </p>
+
+        <h2 id="watching">Watch <a class="anchor" href="#watching" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          <code>status</code> and <code>card</code> only read the rollout directory. They never call GitHub, so they work for a stopped
+          rollout too. Agents may run both.
+        </p>
+
+        <h3 id="cmd-status">status <a class="anchor" href="#cmd-status" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R status --dir D</code></pre>
+
+        <p>Prints, from top to bottom:</p>
+
+        <ul>
+          <li>
+            The driver: running with its pid, heartbeat age and note, or <code>NOT RUNNING</code> with the time of its last heartbeat.
+          </li>
+          <li><code>PAUSED</code> and <code>HALTED</code> lines when they apply.</li>
+          <li>One row per PR: id, state, PR number, head, CI or gate info, attempts as implement/fix/verify, and cost.</li>
+          <li>The last 8 events.</li>
+        </ul>
+
+        <p>Before the first run there is no ledger yet, and it says so. The UI's board shows the same table with more columns.</p>
+
+        <h3 id="cmd-card">card <a class="anchor" href="#cmd-card" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R card P1 --dir D</code></pre>
+
+        <p>Everything you need before you approve one PR:</p>
+
+        <ul>
+          <li>Title, branch, state, PR link and cost, and since when it is held.</li>
+          <li>The verified head and patch id, the approved head, the author and how approval works for it.</li>
+          <li>The gate's last action and its reasons.</li>
+          <li>The brief's path, and the reviewer's notes when the driver wrote it.</li>
+          <li>For a blocked PR, the agent's question and evidence.</li>
+          <li>The implementer's summary, its deviations, and expected against observed results.</li>
+          <li>Changed CI and workflow files, to review before approving, and files outside the scope.</li>
+          <li>The verifier's verdict, checklist, blocking and non-blocking findings.</li>
+          <li>For a verified PR, how to approve it: the GitHub link or the <code>approve</code> command.</li>
+        </ul>
+
+        <p>In the UI, the same facts are on the PR page, across its overview and verifier tabs.</p>
+
+        <h3 id="cmd-ui">ui <a class="anchor" href="#cmd-ui" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R ui [--root ROOT] [--port N] [--no-open] [--read-only]</code></pre>
+
+        <ul>
+          <li>Serves the web UI over every rollout under the root. It needs no <code>--dir</code> and no manifest.</li>
+          <li>Listens on 127.0.0.1 only, on a random port unless <code>--port</code> is given.</li>
+          <li>Prints a URL with a token in its fragment and, on macOS and Linux, opens it in the browser unless <code>--no-open</code>.</li>
+          <li><code>--read-only</code> disables every control.</li>
+          <li>Runs until Ctrl-C, so start it in a terminal of your own.</li>
+          <li>Agents cannot run it, because the printed URL carries the token.</li>
+        </ul>
+
+        <p>What it shows and how it works: <a href="ui.html">Web UI</a>.</p>
+
+        <h2 id="deciding">Decide <a class="anchor" href="#deciding" aria-label="Link to this section">#</a></h2>
+
+        <h3 id="cmd-approve">approve <a class="anchor" href="#cmd-approve" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R approve P1 --dir D</code></pre>
+
+        <p>
+          Approves the verified patch of a PR. The CLI refuses a PR that is not <a href="how-it-works.html#state-verified">verified</a>, and
+          otherwise posts the exact head and patch id from the ledger. The driver accepts the approval only when all of this still holds:
+        </p>
+
+        <ul>
+          <li>The PR is still verified, with that same head and patch id.</li>
+          <li>The approval was posted after the verification finished.</li>
+          <li>No agent is working on the PR.</li>
+          <li>
+            The PR is not one the bot opened under <code>approval: github</code>. Those are approved with a normal review on GitHub, and the
+            driver rejects this command for them.
+          </li>
+        </ul>
+
+        <p>A rejected approval shows up as <code>approval-rejected</code> in the events, with a notification.</p>
+
+        <div class="callout">
+          <p>
+            <strong>The approval counts under <code>merge: human</code> only.</strong> The driver then merges
+            <code>policy.mergeDelaySeconds</code> (120 s) later, unless you <a href="#cmd-pause">pause</a> in that window. Under
+            <code>manual</code> you merge on GitHub yourself, and <code>auto</code> needs no approval. The CLI's reply mentions the delay in
+            every mode.
+          </p>
+        </div>
+
+        <p>The UI has no approve button, on purpose: approval stays a GitHub review or this command.</p>
+
+        <h3 id="cmd-note">note <a class="anchor" href="#cmd-note" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R note P1 "Keep the old flag as an alias." --dir D</code></pre>
+
+        <p>
+          Sends a message from you to the PR's agents. The words after the id are joined, so the quotes are optional. What happens depends
+          on the PR's state:
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>state</th>
+                <th>what the note does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap"><span class="badge state state-blocked">blocked</span> by brief questions</td>
+                <td>Your answers are queued. The PR goes back to pending and the brief writer runs again with them.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><span class="badge state state-pending">pending</span>, or an agent is running</td>
+                <td>Queued. The next brief, implement or fix prompt gets it.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">
+                  <span class="badge state state-verified">verified</span>
+                  <span class="badge state state-ready_claimed">ready_claimed</span>
+                </td>
+                <td>The verification is dropped and the PR goes to needs_fix, with the reason "request from the maintainer".</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><span class="badge state state-merged">merged</span></td>
+                <td>Rejected.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">any other state</td>
+                <td>
+                  The PR goes to needs_fix, with the reason "answer from the maintainer". This is how you answer an agent that reported
+                  BLOCKED.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          In both needs_fix cases the fix attempts are capped at one below the limit, so at least one more fix run is allowed. The fix run
+          resumes the implementer's own session when there is one. In the UI: <a href="ui.html#control-note">Note</a>.
+        </p>
+
+        <h3 id="cmd-retry">retry <a class="anchor" href="#cmd-retry" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R retry P1 --dir D</code></pre>
+
+        <ul>
+          <li>Resets all four attempt counters (implement, fix, verify and brief), the error count and the backoff.</li>
+          <li>
+            A PR with a GitHub PR or an agent session becomes <a href="how-it-works.html#state-interrupted">interrupted</a>, and the next
+            tick resumes it. That is a new verification when a claim waits for one, else a fix run.
+          </li>
+          <li>Any other PR goes back to pending.</li>
+          <li>It works from any state and does not clear a hold.</li>
+        </ul>
+
+        <p>The UI offers <a href="ui.html#control-retry">Retry</a> for escalated, blocked and interrupted PRs.</p>
+
+        <h2 id="controlling">Control <a class="anchor" href="#controlling" aria-label="Link to this section">#</a></h2>
+
+        <h3 id="cmd-hold">hold <a class="anchor" href="#cmd-hold" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R hold P1 --dir D</code></pre>
+
+        <p>
+          Holds one PR: no new runs, rebases, ready notices or merges for it. A running agent finishes its step. The driver still syncs the
+          PR with GitHub and collects review comments. It rejects a merged PR and one already held. In the UI:
+          <a href="ui.html#control-hold">Hold</a>.
+        </p>
+
+        <h3 id="cmd-release">release <a class="anchor" href="#cmd-release" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R release P1 --dir D</code></pre>
+
+        <p>Lifts the hold. It rejects a PR that is not held. In the UI: <a href="ui.html#control-release">Release</a>.</p>
+
+        <h3 id="cmd-pause">pause <a class="anchor" href="#cmd-pause" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R pause --dir D</code></pre>
+
+        <p>
+          Stops new runs and merges for the whole rollout. Running agents finish their step, and the driver keeps syncing with GitHub. It
+          also stops a merge that waits out <code>mergeDelaySeconds</code>. In the UI: <a href="ui.html#control-pause">Pause</a>.
+        </p>
+
+        <h3 id="cmd-resume">resume <a class="anchor" href="#cmd-resume" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R resume --dir D</code></pre>
+
+        <p>
+          Lifts the pause. The driver pauses itself when an agent run fails on an account problem, such as a spend limit, the credit balance
+          or billing, and waits for this command. In the UI: <a href="ui.html#control-resume">Resume</a>.
+        </p>
+
+        <h3 id="cmd-unhalt">unhalt <a class="anchor" href="#cmd-unhalt" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R unhalt --dir D</code></pre>
+
+        <p>
+          The driver halts when the base branch turns red after a rollout PR merges, by the driver or by you on GitHub. A halted rollout
+          merges nothing, while agents keep working. Fix the base, then unhalt. It clears the halt and marks the last merge as acknowledged,
+          so the same red commit does not halt the rollout again. In the UI: <a href="ui.html#control-unhalt">Unhalt</a>.
+        </p>
+
+        <h2 id="setting-up">Set up <a class="anchor" href="#setting-up" aria-label="Link to this section">#</a></h2>
+
+        <h3 id="cmd-preflight">preflight <a class="anchor" href="#cmd-preflight" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R preflight --dir D [--live]</code></pre>
+
+        <p>
+          Checks the machine, your logins and the repository before a run. It prints an <code>ok</code> or <code>FAIL</code> line for most
+          checks and a <code>warn</code> line per warning, and ends with <code>preflight ok</code> or <code>preflight FAILED</code> and the
+          list, with exit code 1.
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>check</th>
+                <th>fails or warns when</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>manifest</td>
+                <td>It does not validate, or a brief is missing and there are no briefing sources. Nothing else runs then.</td>
+              </tr>
+              <tr>
+                <td class="name">claude --version</td>
+                <td>The binary does not run. Put it on PATH or in <code>repo.pathPrepend</code>, or set <code>claudeBin</code>.</td>
+              </tr>
+              <tr>
+                <td class="name">node, pnpm</td>
+                <td>Either is missing. pnpm is required even for a repo that does not use it.</td>
+              </tr>
+              <tr>
+                <td class="name">gh auth status</td>
+                <td>Your own gh login is missing. The driver reads PRs, checks and reviews and merges with it.</td>
+              </tr>
+              <tr>
+                <td class="name">git fetch origin</td>
+                <td>
+                  <code>repo.path</code> is wrong or you cannot fetch. The <code>origin</code> URL must also contain
+                  <code>repo.github</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>repository settings</td>
+                <td>
+                  Fails when squash merges are disabled under <code>merge.method: squash</code>, when <code>merge.admin</code> is not
+                  <code>false</code> (the default <code>auto</code> counts) and you are not an admin, when a public repo is marked
+                  <code>public: false</code>, or when gh cannot read the repo. Warns when the squash default is not the PR title with a
+                  blank message, and when a private repo is marked <code>public: true</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>agent identity</td>
+                <td>
+                  Fails when the token's login is a maintainer or its permission is not exactly <code>write</code>, when agents could fall
+                  back to a stored gh login, or when the token file is missing. Warns when the token lacks the <code>workflow</code> scope,
+                  and when there is no <code>repo.agentToken</code> at all.
+                </td>
+              </tr>
+              <tr>
+                <td class="name">policy.merge</td>
+                <td>Warns for <code>auto</code>: the driver merges without asking.</td>
+              </tr>
+              <tr>
+                <td>guard hook</td>
+                <td>Feeding <code>gh pr merge 1 --admin</code> to the Bash guard does not end with exit code 2.</td>
+              </tr>
+              <tr>
+                <td class="name">--live</td>
+                <td>
+                  Starts a real headless <code>claude -p</code> (haiku, low effort) with the implementer's settings in a scratch directory.
+                  The guard must refuse a <code>gh pr merge</code>, a push to <code>main</code>, a <code>pnpm publish</code> and a
+                  <code>gh api -X PUT</code> merge, and <code>echo allowed</code> must run. A command that never ran fails too, so a Claude
+                  login or quota problem shows up here.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Preflight does not check rulesets, CODEOWNERS or code scanning, that <code>requiredChecks</code> name real jobs, that you are in
+          <code>repo.maintainers</code>, or that <code>repo.install</code> works. <a href="accounts.html">Accounts</a> covers those.
+        </p>
+
+        <h3 id="cmd-help">help <a class="anchor" href="#cmd-help" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R help</code></pre>
+
+        <p>
+          Prints the usage from the comment at the top of <code>bin/rollout.mjs</code>. So does <code>node $R</code> with no command. It
+          needs no manifest.
+        </p>
+
+        <h2 id="flags">Flags <a class="anchor" href="#flags" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          One parser serves every command, so every command accepts every flag and ignores the ones it does not use. An unknown flag is an
+          error.
+        </p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>flag</th>
+                <th>default</th>
+                <th>used by</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="flag-dir">
+                <td>--dir D</td>
+                <td><code>$ROLLOUT_DIR</code>, else the current directory</td>
+                <td>all but ui and help</td>
+                <td>The rollout directory, the one that holds <code>manifest.yaml</code>. A leading <code>~</code> expands.</td>
+              </tr>
+              <tr id="flag-only">
+                <td>--only A,B</td>
+                <td>every PR</td>
+                <td>run</td>
+                <td>The PRs this run drives, comma separated. Every command checks the ids against the manifest.</td>
+              </tr>
+              <tr id="flag-dry-run">
+                <td>--dry-run</td>
+                <td>off</td>
+                <td>run</td>
+                <td>Everything real except the merge.</td>
+              </tr>
+              <tr id="flag-live">
+                <td>--live</td>
+                <td>off</td>
+                <td>preflight</td>
+                <td>Also proves the guard in a real headless agent.</td>
+              </tr>
+              <tr id="flag-root">
+                <td>--root ROOT</td>
+                <td><code>$ROLLOUT_ROOT</code>, else <code>~/.rollouts</code></td>
+                <td>ui</td>
+                <td>The directory whose rollouts the UI lists: every subdirectory with a <code>manifest.yaml</code>.</td>
+              </tr>
+              <tr id="flag-port">
+                <td>--port N</td>
+                <td>random</td>
+                <td>ui</td>
+                <td>A port from 0 to 65535. 0 picks a free one.</td>
+              </tr>
+              <tr id="flag-no-open">
+                <td>--no-open</td>
+                <td>off</td>
+                <td>ui</td>
+                <td>Prints the URL without opening the browser.</td>
+              </tr>
+              <tr id="flag-read-only">
+                <td>--read-only</td>
+                <td>off</td>
+                <td>ui</td>
+                <td>Disables every control. The server refuses every command.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="environment">Environment <a class="anchor" href="#environment" aria-label="Link to this section">#</a></h2>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>variable</th>
+                <th>set by</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>ROLLOUT_DIR</td>
+                <td>you</td>
+                <td>The default for <code>--dir</code>.</td>
+              </tr>
+              <tr>
+                <td>ROLLOUT_ROOT</td>
+                <td>you</td>
+                <td>The default root for <code>ui</code>. An empty value counts as unset.</td>
+              </tr>
+              <tr>
+                <td>ROLLOUT_ROLE</td>
+                <td>the driver, for agents</td>
+                <td>
+                  The agent's role. While it is set, the CLI refuses every command but <code>status</code>, <code>card</code> and
+                  <code>help</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>ROLLOUT_ID, ROLLOUT_BRANCH, ROLLOUT_NAME, ROLLOUT_HOME</td>
+                <td>the driver, for agents</td>
+                <td>
+                  The PR, its branch (empty for the verifier and brief roles), the rollout and the skill's directory. The Bash guard reads
+                  them. Agents also get <code>ROLLOUT_DIR</code>, so <code>status</code> and <code>card</code> work for them without flags.
+                </td>
+              </tr>
+              <tr>
+                <td>GH_TOKEN, GH_CONFIG_DIR</td>
+                <td>the driver, for agents</td>
+                <td>The bot's token and an empty gh config directory, when <code>repo.agentToken</code> is set.</td>
+              </tr>
+              <tr>
+                <td>PATH</td>
+                <td>the driver</td>
+                <td>
+                  <code>repo.pathPrepend</code> goes first for the driver's own commands and for every agent. <code>CLAUDECODE</code> and
+                  <code>CLAUDE_CODE_ENTRYPOINT</code> are removed, so a driver started inside a Claude Code session does not make its agents
+                  look nested.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="inbox">How commands reach the driver <a class="anchor" href="#inbox" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          <code>approve</code>, <code>note</code>, <code>retry</code>, <code>hold</code>, <code>release</code>, <code>pause</code>,
+          <code>resume</code> and <code>unhalt</code> never write the ledger. Each writes one small JSON file into <code>inbox/</code>,
+          first under a dot-prefixed name and then renamed, so the driver never reads half a command. The CLI prints a short confirmation
+          and returns.
+        </p>
+
+        <ul>
+          <li>A running driver watches the inbox and applies a command within about a second. A burst of commands becomes one tick.</li>
+          <li>Without a driver, the files wait and apply when the next <code>run</code> starts.</li>
+          <li>
+            A command the driver cannot apply shows up as <code>command-rejected</code> or <code>approval-rejected</code> in
+            <code>events.jsonl</code>, with the reason.
+          </li>
+        </ul>
+
+        <p>
+          <code>stop</code> and the UI's Start are different: stop signals the driver's process and Start launches one. The UI writes the
+          same inbox files as the CLI for everything else.
+        </p>
+
+        <nav class="pager" aria-label="Pages">
+          <a class="prev" href="manifest.html"><span>Previous</span>Manifest</a>
+          <a class="next" href="ui.html"><span>Next</span>Web UI</a>
+        </nav>
+
+        <footer class="page-foot">
+          <a href="https://github.com/grzehub/claude-rollout/blob/main/docs/commands.html">Edit this page on GitHub</a>
+        </footer>
+      </main>
+
+      <aside class="toc" aria-label="On this page">
+        <p class="group">On this page</p>
+        <ul>
+          <li><a href="#overview">At a glance</a></li>
+          <li><a href="#running">Run</a></li>
+          <li><a href="#watching">Watch</a></li>
+          <li><a href="#deciding">Decide</a></li>
+          <li><a href="#controlling">Control</a></li>
+          <li><a href="#setting-up">Set up</a></li>
+          <li><a href="#flags">Flags</a></li>
+          <li><a href="#environment">Environment</a></li>
+          <li><a href="#inbox">How commands reach the driver</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>

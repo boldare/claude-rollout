@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Manifest · rollout docs</title>
+    <meta
+      name="description"
+      content="Every field of a rollout's manifest.yaml, its default and what the driver does with it, plus the layout of a rollout directory."
+    />
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <div class="facts">
+        <span class="badge alpha">internal alpha</span>
+        <span class="version">v0.1.0</span>
+        <span>Node 20+</span>
+      </div>
+      <div class="facts right"><a href="https://github.com/grzehub/claude-rollout">GitHub</a></div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Documentation">
+        <p class="group">Start</p>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="getting-started.html">Getting started</a></li>
+        </ul>
+        <p class="group">Setup</p>
+        <ul>
+          <li><a href="accounts.html">Accounts</a></li>
+          <li><a href="manifest.html" aria-current="page">Manifest</a></li>
+        </ul>
+        <p class="group">Use</p>
+        <ul>
+          <li><a href="commands.html">Commands</a></li>
+          <li><a href="ui.html">Web UI</a></li>
+        </ul>
+        <p class="group">Internals</p>
+        <ul>
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="security.html">Security</a></li>
+        </ul>
+      </nav>
+
+      <main class="page">
+        <header class="page-head">
+          <h1>Manifest</h1>
+          <p class="page-meta">lib/manifest.mjs · examples/manifest.yaml</p>
+        </header>
+
+        <p class="lead">
+          A rollout is one directory with one <code>manifest.yaml</code>. It names the repository, the PRs and their order, and the rules
+          the driver enforces. The driver validates it when it loads it and again every time the file changes.
+        </p>
+
+        <h2 id="example">An annotated example <a class="anchor" href="#example" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          This is <code>examples/manifest.yaml</code> with a few more comments. Copy it to
+          <code>~/.rollouts/&lt;name&gt;/manifest.yaml</code> and adapt it. Only the fields marked required in the tables below must be
+          there.
+        </p>
+
+        <pre><code>rollout: my-lib-1.2.0            <span class="dim"># PRs get the label rollout:my-lib-1.2.0</span>
+model: opus                      <span class="dim"># every agent role uses this model</span>
+<span class="dim"># claudeBin: ~/tools/claude      # default: claude from PATH</span>
+
+repo:
+  path: ~/code/my-lib            <span class="dim"># your local clone</span>
+  github: my-org/my-lib
+  base: main
+  public: true                   <span class="dim"># false for a private repo</span>
+  pathPrepend: []                <span class="dim"># tool directories that go first on PATH</span>
+  <span class="dim"># runs in every new worktree</span>
+  install: pnpm install --frozen-lockfile
+  <span class="dim"># check run names, as globs</span>
+  requiredChecks: ['test*', 'lint']
+  <span class="dim"># the bot account's token</span>
+  agentToken: ~/.config/rollout/agent-gh-token
+  maintainers: [my-github-login]
+  merge: { method: squash, admin: auto }
+  neverMerge:                    <span class="dim"># the release PR</span>
+    branches: ['changeset-release/*']
+    titles: ['chore: version packages', 'chore: version packages (next)']
+  forbid:                        <span class="dim"># paths no PR may touch</span>
+    - '**/CHANGELOG.md'
+    - .changeset/config.json
+    - .github/workflows/release.yml
+  <span class="dim"># terms that must never appear</span>
+  denylist: [acme-client, /Users/]
+  verify:
+    common:                      <span class="dim"># the recipe the implementer and the verifier run</span>
+      - pnpm install --frozen-lockfile
+      - pnpm build
+      - pnpm test
+      - pnpm lint:fix            <span class="dim"># the verifier's copy drops commands that rewrite files</span>
+      - pnpm lint &amp;&amp; pnpm format:check
+
+briefing:                        <span class="dim"># only needed when the driver writes briefs</span>
+  sources:
+    - title: Plan (authoritative)
+      path: ~/.rollouts/my-lib-1.2.0/plan.md
+      kind: markdown
+
+policy:
+  concurrency: 3
+  merge: manual                  <span class="dim"># the driver says "ready", you merge on GitHub</span>
+  approval: github
+  maxBump: minor
+  attempts: { implement: 2, fix: 4, verify: 3 }
+  timeouts: { implement: 240, fix: 120, verify: 90 }
+
+prs:
+  - id: P1
+    branch: feat/config-loader
+    title: 'feat: config loader'
+    brief: briefs/P1.md          <span class="dim"># written by the driver when it does not exist</span>
+    deps: []
+    priority: 10
+    effort: { implement: xhigh, verify: xhigh }
+    changeset: minor
+
+  - id: P2
+    branch: feat/cli-flags
+    title: 'feat: cli flags'
+    brief: briefs/P2.md
+    deps: [P1]                   <span class="dim"># starts once P1 has merged</span>
+    priority: 5
+    effort: { implement: high, verify: high }
+    changeset: minor
+    allowWorkflows: true         <span class="dim"># this PR adds a CI step</span></code></pre>
+
+        <p>
+          Paths expand a leading <code>~</code>. Globs follow <code>lib/glob.mjs</code>: <code>*</code> stays inside one path segment,
+          <code>**</code> spans directories and <code>?</code> is one character other than <code>/</code>.
+        </p>
+
+        <h2 id="top-level">Top level <a class="anchor" href="#top-level" aria-label="Link to this section">#</a></h2>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>type</th>
+                <th>default</th>
+                <th>required</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="manifest-rollout">
+                <td>rollout</td>
+                <td>string</td>
+                <td>–</td>
+                <td>yes</td>
+                <td>
+                  The rollout's name. Every PR gets the label <code>rollout:&lt;name&gt;</code>, which the driver creates when it starts and
+                  the gate requires.
+                </td>
+              </tr>
+              <tr id="manifest-model">
+                <td>model</td>
+                <td>string</td>
+                <td><code>opus</code></td>
+                <td>no</td>
+                <td>
+                  The model for every agent role: brief writer and reviewer, implementer, fixer and verifier. It is passed as
+                  <code>--model</code>.
+                </td>
+              </tr>
+              <tr id="manifest-claudeBin">
+                <td>claudeBin</td>
+                <td>path</td>
+                <td><code>claude</code></td>
+                <td>no</td>
+                <td>The Claude Code binary. The default finds <code>claude</code> on PATH, with <code>repo.pathPrepend</code> first.</td>
+              </tr>
+              <tr id="manifest-repo">
+                <td>repo</td>
+                <td>object</td>
+                <td>–</td>
+                <td>yes</td>
+                <td>The repository and its rules. See <a href="#repo">repo</a>.</td>
+              </tr>
+              <tr id="manifest-briefing">
+                <td>briefing</td>
+                <td>object</td>
+                <td>none</td>
+                <td>no</td>
+                <td>
+                  Sources for the briefs the driver writes itself. Needed as soon as one PR's brief file does not exist. See
+                  <a href="#briefing">briefing.sources</a>.
+                </td>
+              </tr>
+              <tr id="manifest-policy">
+                <td>policy</td>
+                <td>object</td>
+                <td>see below</td>
+                <td>no</td>
+                <td>Slots, the merge mode, approvals, attempts, timeouts and budgets. See <a href="#policy">policy</a>.</td>
+              </tr>
+              <tr id="manifest-prs">
+                <td>prs</td>
+                <td>list</td>
+                <td>–</td>
+                <td>at least one</td>
+                <td>The PRs of the plan. See <a href="#prs">prs</a>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="repo">repo <a class="anchor" href="#repo" aria-label="Link to this section">#</a></h2>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>type</th>
+                <th>default</th>
+                <th>required</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="repo-path">
+                <td>path</td>
+                <td>path</td>
+                <td>–</td>
+                <td>yes</td>
+                <td>Your local clone. The driver fetches there and adds the PR worktrees from it.</td>
+              </tr>
+              <tr id="repo-github">
+                <td>github</td>
+                <td>string</td>
+                <td>–</td>
+                <td>yes</td>
+                <td><code>owner/name</code> on GitHub. Preflight fails when the clone's <code>origin</code> does not contain it.</td>
+              </tr>
+              <tr id="repo-base">
+                <td>base</td>
+                <td>string</td>
+                <td><code>main</code></td>
+                <td>no</td>
+                <td>The branch every PR targets. After each merge the driver watches its checks and halts when they turn red.</td>
+              </tr>
+              <tr id="repo-public">
+                <td>public</td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>no</td>
+                <td>
+                  <code>true</code> adds the public-repository rules to the prompts: no client names, no local paths.
+                  <code>false</code> drops them and keeps the denylist. It must be a boolean. Preflight fails for a public repo marked
+                  <code>false</code> and warns for a private one marked <code>true</code>.
+                </td>
+              </tr>
+              <tr id="repo-pathPrepend">
+                <td>pathPrepend</td>
+                <td>list of paths</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>Directories that go first on PATH for the driver and every agent, for example a pinned node, pnpm or gh.</td>
+              </tr>
+              <tr id="repo-install">
+                <td>install</td>
+                <td>command</td>
+                <td>none</td>
+                <td>no</td>
+                <td>A shell command that runs in every new worktree through <code>sh -c</code>, with a 20 minute limit.</td>
+              </tr>
+              <tr id="repo-requiredChecks">
+                <td>requiredChecks</td>
+                <td>list of globs</td>
+                <td>–</td>
+                <td>yes, not empty</td>
+                <td>
+                  Check run names a PR needs. Every glob must match a run that succeeded, and every run on the commit must finish as
+                  success, skipped or neutral. Only the latest run of each name counts.
+                </td>
+              </tr>
+              <tr id="repo-agentToken">
+                <td>agentToken</td>
+                <td>path</td>
+                <td>none</td>
+                <td>no</td>
+                <td>
+                  A file with the bot account's token. Agents get it as <code>GH_TOKEN</code>, and worktrees push over HTTPS with it.
+                  Without it agents act on GitHub as you, and preflight warns. <code>policy.approval: github</code> requires it. See
+                  <a href="accounts.html">Accounts</a>.
+                </td>
+              </tr>
+              <tr id="repo-maintainers">
+                <td>maintainers</td>
+                <td>list of logins</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>
+                  Whose reviews and comments count. Their GitHub review approves under <code>approval: github</code>, their review comments
+                  start fix runs, and a PR one of them authored merges with <code>--admin</code> under <code>merge.admin: auto</code>. With
+                  an empty list, review comments are ignored. The bot must not be on it.
+                </td>
+              </tr>
+              <tr id="repo-pushUrl">
+                <td>pushUrl</td>
+                <td>URL</td>
+                <td>HTTPS URL of <code>github</code></td>
+                <td>no</td>
+                <td>
+                  The push URL set on each worktree when <code>agentToken</code> is set. The default is
+                  <code>https://github.com/&lt;github&gt;.git</code>. The pre-push hook refuses every other URL, so your SSH key is never
+                  used for agent pushes.
+                </td>
+              </tr>
+              <tr id="repo-merge">
+                <td>merge</td>
+                <td>object</td>
+                <td><code>{ method: squash, admin: auto }</code></td>
+                <td>no</td>
+                <td>
+                  <code>method</code> becomes <code>--&lt;method&gt;</code> on <code>gh pr merge</code>. Preflight checks the squash
+                  settings only for <code>squash</code>. <code>admin: true</code> always passes <code>--admin</code>,
+                  <code>auto</code> passes it only for a PR a maintainer authored, and <code>false</code> never does. Any value but
+                  <code>false</code> needs your gh login to be a repository admin, and preflight checks it.
+                </td>
+              </tr>
+              <tr id="repo-neverMerge">
+                <td>neverMerge</td>
+                <td>object</td>
+                <td>the Changesets release PR</td>
+                <td>no</td>
+                <td>
+                  The release PR. The defaults are the branch glob <code>changeset-release/*</code> and the title
+                  <code>chore: version packages</code>. The gate blocks any PR whose head branch matches one of
+                  <code>branches</code> (globs) or whose title equals one of <code>titles</code>. When everything has merged, the driver
+                  finds the open release PR by title and tells you to merge it. Each key you set replaces its default list.
+                </td>
+              </tr>
+              <tr id="repo-forbid">
+                <td>forbid</td>
+                <td>list of globs</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>
+                  Paths no PR may touch. The implementer's prompt lists them, and a hit is a policy violation that goes back to the
+                  implementer.
+                </td>
+              </tr>
+              <tr id="repo-alwaysInScope">
+                <td>alwaysInScope</td>
+                <td>list of globs</td>
+                <td><code>.changeset/*.md</code></td>
+                <td>no</td>
+                <td>Paths that never count as out of scope, whatever the PR's <code>scope</code> says.</td>
+              </tr>
+              <tr id="repo-denylist">
+                <td>denylist</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>
+                  Terms that must never appear: client names, local paths. The gate checks file paths, added lines, the PR title and body
+                  and commit messages, case-insensitively. A hit is a policy violation. The prompts name the terms too.
+                </td>
+              </tr>
+              <tr id="repo-verify">
+                <td>verify</td>
+                <td>object</td>
+                <td><code>{}</code></td>
+                <td>no</td>
+                <td>
+                  The verification recipe that the implementer and the verifier run, in order.
+                  <ul>
+                    <li><code>common</code>: a list of commands for every PR.</li>
+                    <li><code>smoke</code>: one command, added for a PR with <code>smoke: true</code>.</li>
+                    <li><code>viewer</code>: a list, added for a PR with <code>viewer: true</code>.</li>
+                  </ul>
+                  The PR's <code>extra</code> steps come last. The verifier's copy of <code>common</code> drops commands that rewrite files:
+                  <code>lint:fix</code>, <code>--fix</code>, <code>--write</code>, <code>pnpm format</code> and
+                  <code>pnpm install</code> without <code>--frozen-lockfile</code>.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="briefing">briefing.sources <a class="anchor" href="#briefing" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          A PR whose <code>brief</code> file does not exist gets one from the driver, once its dependencies have merged. A read-only writer
+          drafts it from these sources and a read-only reviewer checks it against the code. Without sources, the manifest fails to load as
+          soon as one brief is missing.
+        </p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>type</th>
+                <th>default</th>
+                <th>required</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="source-title">
+                <td>title</td>
+                <td>string</td>
+                <td>the path</td>
+                <td>no</td>
+                <td>The heading of this source in the writer's and the reviewer's prompt.</td>
+              </tr>
+              <tr id="source-path">
+                <td>path</td>
+                <td>path</td>
+                <td>–</td>
+                <td>yes</td>
+                <td>
+                  The file. Only a leading <code>~</code> expands, so a relative path resolves against the directory you started the driver
+                  in, not the rollout directory. A missing file is an error for every brief that needs it.
+                </td>
+              </tr>
+              <tr id="source-kind">
+                <td>kind</td>
+                <td><code>markdown</code> or <code>transcript</code></td>
+                <td>markdown</td>
+                <td>no</td>
+                <td>
+                  <code>transcript</code> reads a Claude Code session log (JSONL) and keeps the last assistant text longer than 200
+                  characters, such as design notes worked out in a chat. Anything else is read as plain text.
+                </td>
+              </tr>
+              <tr id="source-tag">
+                <td>tag</td>
+                <td>string</td>
+                <td>none</td>
+                <td>no</td>
+                <td>A tagged source goes only to PRs that list the tag in <code>briefTags</code>. Untagged sources go to every PR.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="policy">policy <a class="anchor" href="#policy" aria-label="Link to this section">#</a></h2>
+
+        <p>Every key is optional. The nested objects merge key by key, so <code>attempts: { fix: 6 }</code> keeps the other defaults.</p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>type</th>
+                <th>default</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="policy-concurrency">
+                <td>concurrency</td>
+                <td>number</td>
+                <td><code>2</code></td>
+                <td>
+                  Agents that run at once. A brief, writer and reviewer together, takes one slot, and so does a verifier. Gate checks,
+                  rebases and merges take none.
+                </td>
+              </tr>
+              <tr id="policy-merge">
+                <td>merge</td>
+                <td><code>human</code>, <code>manual</code> or <code>auto</code></td>
+                <td><code>human</code></td>
+                <td>
+                  <ul>
+                    <li><code>human</code>: the driver merges after your approval and <code>mergeDelaySeconds</code>.</li>
+                    <li>
+                      <code>manual</code>: the driver verifies, gates and rebases, then notifies "ready to merge". You merge on GitHub and
+                      it carries on from there.
+                    </li>
+                    <li><code>auto</code>: the driver merges without an approval. Preflight warns.</li>
+                  </ul>
+                </td>
+              </tr>
+              <tr id="policy-approval">
+                <td>approval</td>
+                <td><code>inbox</code> or <code>github</code></td>
+                <td><code>inbox</code></td>
+                <td>
+                  How your approval reaches the gate under <code>merge: human</code>. <code>inbox</code> means
+                  <a href="commands.html#cmd-approve">rollout approve</a>. <code>github</code> means a maintainer's review on GitHub for PRs
+                  the bot opened. PRs a maintainer authored still use <code>rollout approve</code>, because GitHub does not let authors
+                  approve their own PR. <code>github</code> needs <code>repo.agentToken</code> and <code>repo.maintainers</code>.
+                </td>
+              </tr>
+              <tr id="policy-maxBump">
+                <td>maxBump</td>
+                <td><code>patch</code>, <code>minor</code> or <code>major</code></td>
+                <td><code>minor</code></td>
+                <td>
+                  The highest changeset bump allowed. A PR's <code>changeset</code> above it fails validation, and a changeset file above it
+                  is a policy violation.
+                </td>
+              </tr>
+              <tr id="policy-attempts">
+                <td>attempts</td>
+                <td>object</td>
+                <td>implement <code>2</code>, fix <code>4</code>, verify <code>3</code>, brief <code>2</code></td>
+                <td>
+                  Runs per role before the PR becomes <a href="how-it-works.html#state-escalated">escalated</a> and waits for you. The
+                  verify count starts over once the PR is verified.
+                </td>
+              </tr>
+              <tr id="policy-timeouts">
+                <td>timeouts</td>
+                <td>object, minutes</td>
+                <td>implement <code>240</code>, fix <code>90</code>, verify <code>60</code>, brief <code>60</code></td>
+                <td>The hard limit of one run of that role. For a brief, the writer and the reviewer each get it.</td>
+              </tr>
+              <tr id="policy-stallMinutes">
+                <td>stallMinutes</td>
+                <td>number</td>
+                <td><code>20</code></td>
+                <td>An agent that prints nothing for this long is stopped.</td>
+              </tr>
+              <tr id="policy-ciStallMinutes">
+                <td>ciStallMinutes</td>
+                <td>number</td>
+                <td><code>20</code></td>
+                <td>
+                  CI on a claimed commit still pending after this long sends the PR back to the implementer, with the missing and running
+                  checks.
+                </td>
+              </tr>
+              <tr id="policy-budgetUsd">
+                <td>budgetUsd</td>
+                <td>object, USD per effort</td>
+                <td>low <code>3</code>, medium <code>8</code>, high <code>20</code>, xhigh <code>35</code>, max <code>60</code></td>
+                <td>
+                  The cap of one run at that effort, passed as <code>--max-budget-usd</code>. A raised effort gets its own cap. There is no
+                  cap for a PR or the whole rollout.
+                </td>
+              </tr>
+              <tr id="policy-tickSeconds">
+                <td>tickSeconds</td>
+                <td>number</td>
+                <td><code>60</code></td>
+                <td>The pause between ticks. A new command in the inbox wakes the driver sooner.</td>
+              </tr>
+              <tr id="policy-mergeDelaySeconds">
+                <td>mergeDelaySeconds</td>
+                <td>number</td>
+                <td><code>120</code></td>
+                <td>
+                  Under <code>merge: human</code>, the wait between an approval and the merge. It gives you time to notice an approval you
+                  did not expect and <a href="commands.html#cmd-pause">pause</a>.
+                </td>
+              </tr>
+              <tr id="policy-feedbackQuietMinutes">
+                <td>feedbackQuietMinutes</td>
+                <td>number</td>
+                <td><code>3</code></td>
+                <td>
+                  How long a maintainer's last review comment must be quiet before the driver starts a fix run for it, so a review made of
+                  several comments becomes one fix run.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="prs">prs <a class="anchor" href="#prs" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          One entry per PR. Their order breaks ties between equal priorities. Ids and branches must be unique, dependencies must name known
+          PRs, and a cycle fails validation.
+        </p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>type</th>
+                <th>default</th>
+                <th>required</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="pr-id">
+                <td>id</td>
+                <td>string</td>
+                <td>–</td>
+                <td>yes, unique</td>
+                <td>The short name you use in commands, like <code>P1</code>. It also names the worktree and the log files.</td>
+              </tr>
+              <tr id="pr-branch">
+                <td>branch</td>
+                <td>string</td>
+                <td>–</td>
+                <td>yes, unique</td>
+                <td>The PR's branch. It is the only branch its agents may push to.</td>
+              </tr>
+              <tr id="pr-title">
+                <td>title</td>
+                <td>string</td>
+                <td>–</td>
+                <td>yes</td>
+                <td>The PR title. The merge commit's subject is the PR's title on GitHub plus <code>(#N)</code>, with an empty body.</td>
+              </tr>
+              <tr id="pr-brief">
+                <td>brief</td>
+                <td>path</td>
+                <td>–</td>
+                <td>yes</td>
+                <td>
+                  The brief, relative to the rollout directory. When the file does not exist, the driver writes it from
+                  <a href="#briefing">briefing.sources</a> once the dependencies have merged.
+                </td>
+              </tr>
+              <tr id="pr-deps">
+                <td>deps</td>
+                <td>list of ids</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>
+                  PRs that must merge first. Work starts when they have merged, and the gate waits for them. A dependency left out by
+                  <a href="commands.html#flag-only">--only</a> counts once GitHub shows its branch merged into the base with the rollout
+                  label.
+                </td>
+              </tr>
+              <tr id="pr-priority">
+                <td>priority</td>
+                <td>number</td>
+                <td><code>0</code></td>
+                <td>no</td>
+                <td>Higher goes first, for free slots and for merges.</td>
+              </tr>
+              <tr id="pr-effort">
+                <td>effort</td>
+                <td>object</td>
+                <td>brief <code>xhigh</code></td>
+                <td>implement and verify</td>
+                <td>
+                  One of <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code> or <code>max</code> per role.
+                  <ul>
+                    <li>
+                      <code>implement</code> is used by the implementer and the fix runs. Each implement attempt after the first runs one
+                      level higher than the one before.
+                    </li>
+                    <li>Fix runs rise one level per run from the third fix attempt on.</li>
+                    <li><code>verify</code> stays fixed.</li>
+                    <li><code>brief</code> is for the brief writer and the reviewer.</li>
+                  </ul>
+                </td>
+              </tr>
+              <tr id="pr-changeset">
+                <td>changeset</td>
+                <td><code>patch</code>, <code>minor</code>, <code>major</code> or <code>none</code></td>
+                <td>–</td>
+                <td>yes</td>
+                <td>
+                  The bump of the changeset this PR must add, never above <code>policy.maxBump</code>. <code>none</code> is for a repo
+                  without changesets: none is written and none is required.
+                </td>
+              </tr>
+              <tr id="pr-scope">
+                <td>scope</td>
+                <td>list of globs</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>
+                  The files this PR is expected to change. When empty, the expected files of a brief the driver wrote are used. Files
+                  outside the scope and
+                  <code>repo.alwaysInScope</code> do not block the PR. They are listed on the card and the PR page for your review.
+                </td>
+              </tr>
+              <tr id="pr-extra">
+                <td>extra</td>
+                <td>list of commands</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>Verification steps for this PR only, run after the repository's recipe.</td>
+              </tr>
+              <tr id="pr-expect">
+                <td>expect</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>
+                  Expected results, like <code>pnpm test: 214 passed</code>. The implementer and the verifier compare their runs of the
+                  recipe with them. Without any, the expectation is "everything green".
+                </td>
+              </tr>
+              <tr id="pr-smoke">
+                <td>smoke</td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>no</td>
+                <td>Adds <code>repo.verify.smoke</code> to this PR's recipe.</td>
+              </tr>
+              <tr id="pr-viewer">
+                <td>viewer</td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>no</td>
+                <td>Adds <code>repo.verify.viewer</code> to this PR's recipe.</td>
+              </tr>
+              <tr id="pr-allowWorkflows">
+                <td>allowWorkflows</td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>no</td>
+                <td>
+                  Lets the PR change files under <code>.github/</code>. Without it, any such file is a policy violation. Changed workflow
+                  files are flagged on the card, so you review them before you approve.
+                </td>
+              </tr>
+              <tr id="pr-briefTags">
+                <td>briefTags</td>
+                <td>list of strings</td>
+                <td>none</td>
+                <td>no</td>
+                <td>The tags of the briefing sources this PR's brief writer gets, on top of the untagged ones.</td>
+              </tr>
+              <tr id="pr-hot">
+                <td>hot</td>
+                <td>list</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>Reserved. The manifest accepts it and gives it a default, but nothing reads it yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="validation">What loading checks <a class="anchor" href="#validation" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          Every command except <code>ui</code> and <code>help</code> loads the manifest first and stops with
+          <code>invalid manifest</code> and a list when any of these fails:
+        </p>
+
+        <ul>
+          <li><code>rollout</code>, <code>repo.path</code>, <code>repo.github</code> and at least one PR are there.</li>
+          <li><code>repo.requiredChecks</code> is a list that is not empty.</li>
+          <li>
+            <code>policy.merge</code> and <code>policy.approval</code> have known values, and <code>approval: github</code> has a token and
+            maintainers.
+          </li>
+          <li><code>repo.public</code>, when set, is a boolean.</li>
+          <li>
+            Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
+          </li>
+          <li>Every <code>changeset</code> is a known bump or <code>none</code>, and none is above <code>policy.maxBump</code>.</li>
+          <li>Every dependency names a known PR, and there is no cycle.</li>
+        </ul>
+
+        <p>
+          Loading also fails when a brief file is missing and there are no briefing sources, and when <code>--only</code> names an unknown
+          PR.
+        </p>
+
+        <h2 id="gotchas">Gotchas <a class="anchor" href="#gotchas" aria-label="Link to this section">#</a></h2>
+
+        <ul>
+          <li>
+            <strong>Edits apply on the next tick.</strong> A running driver reloads <code>manifest.yaml</code> when the file changes,
+            without a restart and without stopping its agents. An edit that does not validate is reported as
+            <code>manifest-rejected</code> and the driver keeps the previous manifest.
+          </li>
+          <li>
+            <strong>Source paths are not relative to the rollout.</strong> A <code>briefing.sources[].path</code> without <code>~</code> or
+            a leading <code>/</code> resolves against the directory you ran <code>rollout run</code> in. Brief paths do resolve against the
+            rollout directory.
+          </li>
+          <li>
+            <strong>Briefs are written at <code>xhigh</code>.</strong> <code>effort.brief</code> defaults to <code>xhigh</code> for both the
+            writer and the reviewer.
+          </li>
+          <li>
+            <strong><code>expect</code> and <code>extra</code> go into the prompts.</strong> <code>extra</code> steps join the verification
+            recipe both agents run. <code>expect</code> is the list of results they compare against. Neither is checked by the gate: the
+            gate reads CI.
+          </li>
+          <li>
+            <strong>The example is not the defaults.</strong> <code>examples/manifest.yaml</code> sets <code>concurrency: 3</code>,
+            <code>merge: manual</code>, <code>approval: github</code> and longer fix and verify timeouts. The defaults are in the tables
+            above.
+          </li>
+        </ul>
+
+        <h2 id="layout">The rollout directory <a class="anchor" href="#layout" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          A rollout lives outside any repository, in <code>$ROLLOUT_ROOT/&lt;name&gt;/</code>, by default
+          <code>~/.rollouts/&lt;name&gt;/</code>. You write the manifest and, if you like, the briefs. The rest is written for you.
+        </p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>file</th>
+                <th>written by</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>manifest.yaml</td>
+                <td>you</td>
+                <td>The plan as PRs, described on this page.</td>
+              </tr>
+              <tr>
+                <td>briefs/&lt;id&gt;.md</td>
+                <td>you or the driver</td>
+                <td>One brief per PR. The only description of the work an implementer sees. It may name clients, so it stays local.</td>
+              </tr>
+              <tr>
+                <td>briefs/&lt;id&gt;.review-notes.md</td>
+                <td>driver</td>
+                <td>The brief reviewer's notes, next to a brief the driver wrote.</td>
+              </tr>
+              <tr>
+                <td>ledger.json</td>
+                <td>driver</td>
+                <td>
+                  The state of every PR and of the rollout (paused, halted, last merge). Written to a temp file and renamed, so it is never
+                  half written.
+                </td>
+              </tr>
+              <tr>
+                <td>events.jsonl</td>
+                <td>driver</td>
+                <td>One JSON line per event: runs, gate decisions, merges, errors, rejected commands.</td>
+              </tr>
+              <tr>
+                <td>heartbeat</td>
+                <td>driver</td>
+                <td>The time and a note of the driver's last sign of life, written on every tick and every save.</td>
+              </tr>
+              <tr>
+                <td>driver.lock</td>
+                <td>driver</td>
+                <td>The pid of the running driver. A second driver refuses to start, and <code>stop</code> signals this pid.</td>
+              </tr>
+              <tr>
+                <td>inbox/</td>
+                <td>the CLI and the UI</td>
+                <td>Commands waiting for the driver, one small JSON file each. Deleted once the driver reads them.</td>
+              </tr>
+              <tr>
+                <td>logs/&lt;id&gt;-&lt;NN&gt;-&lt;role&gt;.jsonl</td>
+                <td>driver</td>
+                <td>
+                  The stream-json transcript of each agent run. <code>NN</code> is the sum of the PR's attempt counters, or the brief
+                  attempt for a brief run, and a name already taken gets a <code>-2</code> suffix. Brief runs have
+                  <code>brief-write</code> and <code>brief-review</code> as the role.
+                </td>
+              </tr>
+              <tr>
+                <td>driver.log</td>
+                <td>UI</td>
+                <td>The output of a driver the UI started. A driver you start yourself prints to its terminal instead.</td>
+              </tr>
+              <tr>
+                <td>.gh-agents/</td>
+                <td>driver, preflight</td>
+                <td>An empty gh config directory, so agents cannot fall back to your stored gh login.</td>
+              </tr>
+              <tr>
+                <td>.npmrc-agents</td>
+                <td>driver</td>
+                <td>An npm config without credentials for the agents.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          The worktrees live next to the rollout, not inside it, so agents work nowhere near the ledger, the inbox or the manifest. Each PR
+          gets
+          <code>&lt;name&gt;.worktrees/&lt;id&gt;/</code>, a git worktree of <code>repo.path</code> on the PR's branch. Its git hooks point
+          at the skill's <code>git-hooks/</code>, and with a token its push URL is <code>repo.pushUrl</code>. After the merge the driver
+          removes the worktree, the local branch and the remote branch.
+        </p>
+
+        <nav class="pager" aria-label="Pages">
+          <a class="prev" href="accounts.html"><span>Previous</span>Accounts</a>
+          <a class="next" href="commands.html"><span>Next</span>Commands</a>
+        </nav>
+
+        <footer class="page-foot">
+          <a href="https://github.com/grzehub/claude-rollout/blob/main/docs/manifest.html">Edit this page on GitHub</a>
+        </footer>
+      </main>
+
+      <aside class="toc" aria-label="On this page">
+        <p class="group">On this page</p>
+        <ul>
+          <li><a href="#example">An annotated example</a></li>
+          <li><a href="#top-level">Top level</a></li>
+          <li><a href="#repo">repo</a></li>
+          <li><a href="#briefing">briefing.sources</a></li>
+          <li><a href="#policy">policy</a></li>
+          <li><a href="#prs">prs</a></li>
+          <li><a href="#validation">What loading checks</a></li>
+          <li><a href="#gotchas">Gotchas</a></li>
+          <li><a href="#layout">The rollout directory</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>

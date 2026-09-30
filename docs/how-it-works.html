@@ -1,0 +1,1139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>How it works · rollout docs</title>
+    <meta
+      name="description"
+      content="How the rollout driver ticks, moves every PR through its lifecycle, runs headless Claude Code agents and decides what may merge."
+    />
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <div class="facts">
+        <span class="badge alpha">internal alpha</span>
+        <span class="version">v0.1.0</span>
+        <span>Node 20+</span>
+      </div>
+      <div class="facts right"><a href="https://github.com/grzehub/claude-rollout">GitHub</a></div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Documentation">
+        <p class="group">Start</p>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="getting-started.html">Getting started</a></li>
+        </ul>
+        <p class="group">Setup</p>
+        <ul>
+          <li><a href="accounts.html">Accounts</a></li>
+          <li><a href="manifest.html">Manifest</a></li>
+        </ul>
+        <p class="group">Use</p>
+        <ul>
+          <li><a href="commands.html">Commands</a></li>
+          <li><a href="ui.html">Web UI</a></li>
+        </ul>
+        <p class="group">Internals</p>
+        <ul>
+          <li><a href="how-it-works.html" aria-current="page">How it works</a></li>
+          <li><a href="security.html">Security</a></li>
+        </ul>
+      </nav>
+
+      <main class="page">
+        <header class="page-head">
+          <h1>How it works</h1>
+          <p class="page-meta">lib/driver.mjs · lib/spawn.mjs · lib/judge.mjs</p>
+        </header>
+
+        <p class="lead">
+          The driver is a plain Node process. It keeps the whole rollout in files, reads the truth from GitHub on every tick and starts one
+          headless agent per step of a PR. This page follows that loop from the outside in.
+        </p>
+
+        <h2 id="process">A process, not a model <a class="anchor" href="#process" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          <code>rollout run</code> is the orchestrator. No model decides what happens next, so a stalled chat session cannot stall a
+          rollout. Everything the driver knows lives in the rollout directory, and every decision it takes is written down there.
+        </p>
+
+        <ul>
+          <li>
+            <strong>One driver per rollout.</strong> It takes <code>driver.lock</code> with its pid. A second driver on the same directory
+            refuses to start. A lock left behind by a dead process is cleared.
+          </li>
+          <li>
+            <strong>A heartbeat.</strong> Every tick and every save writes <code>heartbeat</code>: a timestamp and a short note.
+            <code>status</code> and the UI read its age to tell a live driver from a stuck one.
+          </li>
+          <li>
+            <strong>State on disk.</strong> <code>ledger.json</code> holds the state of every PR and is replaced atomically, through a temp
+            file and a rename. <code>events.jsonl</code> only grows. <code>logs/</code> keeps every agent transcript.
+          </li>
+          <li>
+            <strong>A live manifest.</strong> A changed <code>manifest.yaml</code> is loaded again on the next tick, without a restart. An
+            invalid edit is rejected with a <code>manifest-rejected</code> event, and the previous manifest stays.
+          </li>
+          <li>
+            <strong>Stop and resume.</strong> The first Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents (SIGTERM, then
+            SIGKILL after 5 s), saves and exits. A second signal exits at once. On the next <code>run</code>, every run that was in progress
+            gets its attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. An implementer or fixer
+            then continues its own session, a verifier starts over and an unfinished brief is written again.
+          </li>
+        </ul>
+
+        <h2 id="map">System map <a class="anchor" href="#map" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The overview has a short version of this map. This one adds the UI server and the worktrees, and the table below it shows which
+          identity makes which GitHub call.
+        </p>
+
+        <figure class="diagram">
+          <svg viewBox="-2 -2 704 648" role="img" aria-labelledby="hiw-map-title">
+            <title id="hiw-map-title">
+              The CLI and the UI server write commands into the rollout directory. The driver reads them, runs agents in worktrees and talks
+              to GitHub as you, while the agents push as the bot.
+            </title>
+            <defs>
+              <marker
+                id="hiw-map-arrow"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto-start-reverse"
+              >
+                <path class="dg-head" d="M0,0 L8,4 L0,8 z" />
+              </marker>
+              <marker
+                id="hiw-map-arrow-accent"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto-start-reverse"
+              >
+                <path class="dg-head accent" d="M0,0 L8,4 L0,8 z" />
+              </marker>
+            </defs>
+
+            <rect class="dg-node" x="0" y="0" width="150" height="50" rx="8" />
+            <text class="dg-title" x="14" y="21">Terminal</text>
+            <text class="dg-mono" x="14" y="38">rollout &lt;command&gt;</text>
+
+            <rect class="dg-node" x="170" y="0" width="150" height="50" rx="8" />
+            <text class="dg-title" x="184" y="21">Browser</text>
+            <text class="dg-text" x="184" y="38">the UI page</text>
+
+            <rect class="dg-node" x="340" y="0" width="160" height="50" rx="8" />
+            <text class="dg-title" x="354" y="21">Notifications</text>
+            <text class="dg-text" x="354" y="38">osascript or notify-send</text>
+
+            <rect class="dg-node" x="170" y="92" width="150" height="50" rx="8" />
+            <text class="dg-title" x="184" y="113">UI server</text>
+            <text class="dg-text" x="184" y="130">127.0.0.1, with a token</text>
+
+            <rect class="dg-group" x="0" y="180" width="440" height="148" rx="12" />
+            <text class="dg-group-title mono" x="428" y="200" text-anchor="end">~/.rollouts/&lt;name&gt;/</text>
+            <rect class="dg-node" x="12" y="212" width="133" height="46" rx="8" />
+            <text class="dg-title mono" x="24" y="231">inbox/</text>
+            <text class="dg-text" x="24" y="248">your commands</text>
+            <rect class="dg-node" x="153" y="212" width="133" height="46" rx="8" />
+            <text class="dg-title mono" x="165" y="231">manifest.yaml</text>
+            <text class="dg-text" x="165" y="248">the plan as PRs</text>
+            <rect class="dg-node" x="294" y="212" width="134" height="46" rx="8" />
+            <text class="dg-title mono" x="306" y="231">briefs/</text>
+            <text class="dg-text" x="306" y="248">one brief per PR</text>
+            <rect class="dg-node" x="12" y="268" width="133" height="46" rx="8" />
+            <text class="dg-title mono" x="24" y="287">ledger.json</text>
+            <text class="dg-text" x="24" y="304">state of every PR</text>
+            <rect class="dg-node" x="153" y="268" width="133" height="46" rx="8" />
+            <text class="dg-title mono" x="165" y="287">events.jsonl</text>
+            <text class="dg-text" x="165" y="304">what happened</text>
+            <rect class="dg-node" x="294" y="268" width="134" height="46" rx="8" />
+            <text class="dg-title mono" x="306" y="287">logs/</text>
+            <text class="dg-text" x="306" y="304">agent transcripts</text>
+
+            <rect class="dg-node strong" x="0" y="380" width="500" height="60" rx="10" />
+            <text class="dg-title" x="16" y="405">Driver</text>
+            <text class="dg-mono" x="66" y="405">rollout run</text>
+            <text class="dg-text" x="16" y="425">Holds driver.lock, beats the heartbeat, ticks every minute.</text>
+
+            <rect class="dg-group" x="0" y="490" width="500" height="152" rx="12" />
+            <text class="dg-group-title" x="12" y="510">Agents: headless claude -p</text>
+            <g class="role-brief">
+              <rect class="dg-node toned" x="12" y="522" width="113" height="54" rx="8" />
+              <circle class="dg-dot" cx="25" cy="541" r="4" />
+              <text class="dg-title" x="35" y="545">Brief writer</text>
+              <text class="dg-text" x="24" y="564">read-only</text>
+            </g>
+            <g class="role-brief">
+              <rect class="dg-node toned" x="133" y="522" width="113" height="54" rx="8" />
+              <circle class="dg-dot" cx="146" cy="541" r="4" />
+              <text class="dg-title" x="156" y="545">Brief reviewer</text>
+              <text class="dg-text" x="145" y="564">read-only</text>
+            </g>
+            <g class="role-implement">
+              <rect class="dg-node toned" x="254" y="522" width="113" height="54" rx="8" />
+              <circle class="dg-dot" cx="267" cy="541" r="4" />
+              <text class="dg-title" x="277" y="545">Implementer</text>
+              <text class="dg-text" x="266" y="564">and fixer: writes</text>
+            </g>
+            <g class="role-verify">
+              <rect class="dg-node toned" x="375" y="522" width="113" height="54" rx="8" />
+              <circle class="dg-dot" cx="388" cy="541" r="4" />
+              <text class="dg-title" x="398" y="545">Verifier</text>
+              <text class="dg-text" x="387" y="564">read-only</text>
+            </g>
+            <rect class="dg-node" x="12" y="586" width="476" height="44" rx="8" />
+            <text class="dg-title mono" x="24" y="604">~/.rollouts/&lt;name&gt;.worktrees/&lt;id&gt;/</text>
+            <text class="dg-text" x="24" y="621">One git worktree per PR: its branch, the rollout's git hooks, the HTTPS push URL.</text>
+
+            <rect class="dg-group" x="580" y="360" width="120" height="282" rx="12" />
+            <text class="dg-group-title" x="592" y="380">GitHub</text>
+            <rect class="dg-node" x="592" y="392" width="96" height="48" rx="8" />
+            <text class="dg-title" x="604" y="412">Pull requests</text>
+            <text class="dg-text" x="604" y="429">and reviews</text>
+            <rect class="dg-node" x="592" y="522" width="96" height="54" rx="8" />
+            <text class="dg-title" x="604" y="545">Check runs</text>
+            <text class="dg-text" x="604" y="564">CI on each push</text>
+            <path class="dg-edge dashed" d="M640,440 V516" marker-end="url(#hiw-map-arrow)" />
+
+            <path class="dg-edge" d="M75,50 V206" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="68" y="130" text-anchor="end">commands</text>
+            <path class="dg-edge" d="M215,50 V86" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="207" y="74" text-anchor="end">commands</text>
+            <path class="dg-edge dashed" d="M275,86 V56" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="283" y="74">live state (SSE)</text>
+            <path class="dg-edge" d="M200,142 C200,178 110,174 110,206" marker-end="url(#hiw-map-arrow)" />
+            <path class="dg-edge dashed" d="M290,180 V148" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="298" y="168">reads files</text>
+            <path class="dg-edge" d="M320,117 H466 V374" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="330" y="111">stop, start the driver</text>
+
+            <path class="dg-edge" d="M60,328 V374" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="68" y="356">inbox, manifest</text>
+            <path class="dg-edge" d="M400,380 V334" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="392" y="356" text-anchor="end">ledger, events, logs</text>
+            <path class="dg-edge" d="M488,380 V56" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="496" y="260">notifies</text>
+
+            <path class="dg-edge accent" d="M80,440 V484" marker-end="url(#hiw-map-arrow-accent)" />
+            <text class="dg-label" x="88" y="467">claude -p, prompt, schema, settings</text>
+            <path class="dg-edge" d="M440,490 V446" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="432" y="467" text-anchor="end">stream-json, report</text>
+
+            <path class="dg-edge" d="M500,406 H586" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="508" y="398">reads, merges</text>
+            <text class="dg-label" x="508" y="422">as you</text>
+            <path class="dg-edge" d="M500,560 C548,560 540,432 586,432" marker-end="url(#hiw-map-arrow)" />
+            <text class="dg-label" x="508" y="582">push, open PR</text>
+            <text class="dg-label" x="508" y="596">as the bot</text>
+          </svg>
+          <figcaption>
+            The CLI and the UI server never call into the driver. They write command files into <code>inbox/</code>. Only stop and start act
+            on the process itself: a SIGTERM, or a new detached <code>rollout run</code>.
+          </figcaption>
+        </figure>
+
+        <h3 id="identities">Who calls GitHub as whom</h3>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Caller</th>
+                <th>Identity</th>
+                <th>Calls</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap">Driver</td>
+                <td class="nowrap">your <code>gh</code> login</td>
+                <td>Reads PRs, reviews, comments and check runs. Creates the rollout label, merges, and deletes merged branches.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">Driver</td>
+                <td class="nowrap">the bot's token</td>
+                <td>
+                  The <code>--force-with-lease</code> push after a rebase, replies in review threads, and the summary comment after a fix.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">Implementer, fixer</td>
+                <td class="nowrap">the bot's token</td>
+                <td>
+                  Pushes to the PR branch over HTTPS, <code>gh pr create</code> and <code>edit</code>, <code>gh pr checks</code>,
+                  <code>gh run view</code>, read-only <code>gh api</code>.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">Verifier, brief agents</td>
+                <td class="nowrap">the bot's token</td>
+                <td>
+                  Reads only: <code>gh pr view</code>, <code>checks</code> and <code>diff</code>, <code>gh run view</code>, read-only
+                  <code>gh api</code>.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          The bot's token is the file <a href="manifest.html#repo-agentToken"><code>repo.agentToken</code></a> names. Without it, every call
+          runs as you, and preflight warns about that. <a href="accounts.html">Accounts</a> explains the setup.
+        </p>
+
+        <h2 id="tick">One tick <a class="anchor" href="#tick" aria-label="Link to this section">#</a></h2>
+
+        <p>Once started, the driver repeats one tick until every PR of the run is merged. A tick does this, in order:</p>
+
+        <ol class="steps">
+          <li><strong>Beat.</strong> Write the heartbeat.</li>
+          <li><strong>Reload the manifest</strong> if the file changed.</li>
+          <li>
+            <strong>Apply the inbox.</strong> Every command file is read and deleted, then applied: approve, note, retry, hold, release,
+            pause, resume and unhalt. A command that cannot apply is logged as <code>command-rejected</code>, a refused approval as
+            <code>approval-rejected</code>.
+          </li>
+          <li><strong>Fetch.</strong> <code>git fetch --prune origin</code> in the repository.</li>
+          <li>
+            <strong>Check outside dependencies.</strong> With <a href="commands.html#flag-only"><code>--only</code></a
+            >, a dependency that is not in the run counts as merged once GitHub shows its branch merged into the base with the rollout
+            label.
+          </li>
+          <li>
+            <strong>Watch the base.</strong> After a rollout PR merges, by the driver or on GitHub, read the check runs on its merge commit.
+            Red halts the rollout, green clears the watch.
+          </li>
+          <li>
+            <strong>Sync every PR with GitHub.</strong> A merge or a close made on GitHub wins. A head that moved after verification is
+            checked again. Then look for new maintainer feedback on the PR.
+          </li>
+          <li>
+            <strong>Run the gate.</strong> Verified PRs go through the gate in priority order, then manifest order. PRs with an agent
+            running or feedback waiting are skipped. The first merge or rebase ends this step, so there is at most one per tick. The step is
+            skipped while the rollout is paused, halted or stopping.
+          </li>
+          <li>
+            <strong>Advance every PR</strong> in priority order, unless the rollout is paused. Briefs, implementers, fixers and verifiers
+            start while slots are free, and READY claims are checked.
+          </li>
+          <li><strong>Save</strong> the ledger.</li>
+        </ol>
+
+        <p>
+          Then the driver sleeps for <a href="manifest.html#policy-tickSeconds"><code>policy.tickSeconds</code></a> (60 s). A new file in
+          <code>inbox/</code> ends the sleep early, after a 500 ms pause that folds a burst of commands into one tick. Once every PR of the
+          run is merged and no agent runs, the driver reports the release PR and exits.
+        </p>
+
+        <ul>
+          <li>
+            <strong>A slot is one running agent.</strong>
+            <a href="manifest.html#policy-concurrency"><code>policy.concurrency</code></a> caps them (2 by default). A brief holds one slot
+            for its writer and reviewer together. Verifiers take slots too. Gate checks, rebases and merges do not.
+          </li>
+          <li>
+            <strong>The gate runs before slots are handed out.</strong> A conflict it finds on a high-priority PR then competes for a slot
+            in the same tick, ahead of new briefs for lower-priority PRs.
+          </li>
+          <li>
+            <strong>Errors belong to one PR.</strong> Every per-PR step runs inside <code>guarded()</code>. An error becomes an
+            <code>error</code> event for that PR and the tick goes on. Five in a row, with no agent running, escalate that PR alone. An
+            error outside those steps is a <code>tick-error</code> event, and the next tick starts as usual.
+          </li>
+        </ul>
+
+        <h2 id="lifecycle">The PR lifecycle <a class="anchor" href="#lifecycle" aria-label="Link to this section">#</a></h2>
+
+        <p>Every PR in the manifest has one state in the ledger. The colours are the state badges of the UI board.</p>
+
+        <figure class="diagram">
+          <svg viewBox="-2 -2 704 478" role="img" aria-labelledby="hiw-life-title">
+            <title id="hiw-life-title">
+              A PR moves from pending through implementing, ready_claimed, verifying and verified to merged. Problems send it to needs_fix
+              and a fixing run, which reports READY again. Blocked, escalated and interrupted wait for you or for the next tick.
+            </title>
+            <defs>
+              <marker
+                id="hiw-life-arrow"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto-start-reverse"
+              >
+                <path class="dg-head" d="M0,0 L8,4 L0,8 z" />
+              </marker>
+            </defs>
+
+            <g class="state-briefing">
+              <rect class="dg-node toned" x="40" y="20" width="130" height="34" rx="17" />
+              <circle class="dg-dot" cx="56" cy="37" r="4" />
+              <text class="dg-title" x="68" y="41">briefing</text>
+            </g>
+            <g class="state-pending">
+              <rect class="dg-node" x="250" y="20" width="130" height="34" rx="17" />
+              <circle class="dg-dot" cx="266" cy="37" r="4" />
+              <text class="dg-title" x="278" y="41">pending</text>
+            </g>
+            <g class="state-implementing">
+              <rect class="dg-node toned" x="250" y="100" width="130" height="34" rx="17" />
+              <circle class="dg-dot" cx="266" cy="117" r="4" />
+              <text class="dg-title" x="278" y="121">implementing</text>
+            </g>
+            <g class="state-ready_claimed">
+              <rect class="dg-node toned" x="250" y="180" width="130" height="34" rx="17" />
+              <circle class="dg-dot" cx="266" cy="197" r="4" />
+              <text class="dg-title" x="278" y="201">ready_claimed</text>
+            </g>
+            <g class="state-verifying">
+              <rect class="dg-node toned" x="250" y="260" width="130" height="34" rx="17" />
+              <circle class="dg-dot" cx="266" cy="277" r="4" />
+              <text class="dg-title" x="278" y="281">verifying</text>
+            </g>
+            <g class="state-verified">
+              <rect class="dg-node toned" x="250" y="340" width="130" height="34" rx="17" />
+              <circle class="dg-dot" cx="266" cy="357" r="4" />
+              <text class="dg-title" x="278" y="361">verified</text>
+            </g>
+            <g class="state-merged">
+              <rect class="dg-node toned" x="250" y="420" width="130" height="34" rx="17" />
+              <circle class="dg-dot" cx="266" cy="437" r="4" />
+              <text class="dg-title" x="278" y="441">merged</text>
+            </g>
+            <g class="state-fixing">
+              <rect class="dg-node toned" x="505" y="130" width="130" height="34" rx="17" />
+              <circle class="dg-dot" cx="521" cy="147" r="4" />
+              <text class="dg-title" x="533" y="151">fixing</text>
+            </g>
+            <g class="state-needs_fix">
+              <rect class="dg-node toned" x="470" y="250" width="200" height="80" rx="12" />
+              <circle class="dg-dot" cx="486" cy="267" r="4" />
+              <text class="dg-title" x="498" y="271">needs_fix</text>
+              <text class="dg-text" x="484" y="290">CI red, a policy violation,</text>
+              <text class="dg-text" x="484" y="305">verifier FAIL, gate, conflict,</text>
+              <text class="dg-text" x="484" y="320">a review or your note</text>
+            </g>
+
+            <rect class="dg-group" x="0" y="236" width="170" height="236" rx="12" />
+            <text class="dg-group-title" x="12" y="256">Waiting states</text>
+            <g class="state-interrupted">
+              <rect class="dg-node toned" x="12" y="268" width="146" height="34" rx="17" />
+              <circle class="dg-dot" cx="28" cy="285" r="4" />
+              <text class="dg-title" x="40" y="289">interrupted</text>
+            </g>
+            <text class="dg-text" x="14" y="320">resumes on a later tick</text>
+            <g class="state-blocked">
+              <rect class="dg-node toned" x="12" y="338" width="146" height="34" rx="17" />
+              <circle class="dg-dot" cx="28" cy="355" r="4" />
+              <text class="dg-title" x="40" y="359">blocked</text>
+            </g>
+            <text class="dg-text" x="14" y="390">rollout note, or retry</text>
+            <g class="state-escalated">
+              <rect class="dg-node toned" x="12" y="408" width="146" height="34" rx="17" />
+              <circle class="dg-dot" cx="28" cy="425" r="4" />
+              <text class="dg-title" x="40" y="429">escalated</text>
+            </g>
+            <text class="dg-text" x="14" y="460">rollout retry</text>
+
+            <path class="dg-edge" d="M250,30 H176" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="210" y="23" text-anchor="middle">no brief</text>
+            <path class="dg-edge" d="M170,46 H244" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="210" y="67" text-anchor="middle">written</text>
+
+            <path class="dg-edge" d="M315,54 V94" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="323" y="82">deps merged, free slot</text>
+            <path class="dg-edge" d="M315,134 V174" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="307" y="161" text-anchor="end">READY report</text>
+            <path class="dg-edge" d="M315,214 V254" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="307" y="241" text-anchor="end">CI green, policy ok</text>
+            <path class="dg-edge" d="M315,294 V334" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="307" y="321" text-anchor="end">PASS</text>
+            <path class="dg-edge" d="M315,374 V414" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="307" y="401" text-anchor="end">gate: merge</text>
+
+            <path class="dg-edge" d="M380,206 C425,206 430,268 464,268" marker-end="url(#hiw-life-arrow)" />
+            <path class="dg-edge" d="M380,288 H464" marker-end="url(#hiw-life-arrow)" />
+            <path class="dg-edge" d="M380,357 C425,357 430,312 464,312" marker-end="url(#hiw-life-arrow)" />
+            <path class="dg-edge" d="M570,250 V170" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="578" y="214">free slot</text>
+            <path class="dg-edge" d="M505,147 C450,147 420,190 386,190" marker-end="url(#hiw-life-arrow)" />
+            <text class="dg-label" x="456" y="140" text-anchor="end">READY</text>
+          </svg>
+          <figcaption>
+            Any running state can end in <code>interrupted</code>, and <code>blocked</code> or <code>escalated</code> can follow almost any
+            state. <code>held</code> is a flag on a PR, not a state.
+          </figcaption>
+        </figure>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>State</th>
+                <th>What happens</th>
+                <th>What moves it on</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="state-pending">
+                <td class="nowrap"><span class="badge state state-pending">pending</span></td>
+                <td>Waits for its dependencies to merge and for a free slot.</td>
+                <td>
+                  Both there: <code>briefing</code> when the PR's <a href="manifest.html#pr-brief"><code>brief</code></a> file is missing,
+                  else <code>implementing</code>.
+                </td>
+              </tr>
+              <tr id="state-briefing">
+                <td class="nowrap"><span class="badge state state-briefing">briefing</span></td>
+                <td>
+                  A read-only writer drafts the brief from <a href="manifest.html#manifest-briefing"><code>briefing.sources</code></a> on a
+                  worktree of the base. A read-only reviewer checks it against the code and returns the final text.
+                </td>
+                <td>
+                  The driver writes the brief file and a <code>.review-notes.md</code> file next to it, and the PR goes back to
+                  <code>pending</code>. Open questions: <code>blocked</code>. A failed run: <code>pending</code>, after a backoff.
+                </td>
+              </tr>
+              <tr id="state-implementing">
+                <td class="nowrap"><span class="badge state state-implementing">implementing</span></td>
+                <td>The implementer codes in the PR's worktree, pushes, opens the PR and waits for CI.</td>
+                <td>
+                  A READY report that names an open PR from the branch into the base: <code>ready_claimed</code>. A READY report that does
+                  not match GitHub: <code>needs_fix</code>. BLOCKED: <code>blocked</code>. No report: <code>interrupted</code>.
+                </td>
+              </tr>
+              <tr id="state-ready_claimed">
+                <td class="nowrap"><span class="badge state state-ready_claimed">ready_claimed</span></td>
+                <td>
+                  The driver checks the claim itself. It re-reads the PR head, waits for CI on that exact SHA, then applies the rollout
+                  policy to the diff.
+                </td>
+                <td>
+                  CI green, no policy violation and a free slot: <code>verifying</code>. CI red, CI still unsettled after
+                  <a href="manifest.html#policy-ciStallMinutes"><code>ciStallMinutes</code></a
+                  >, or a violation: <code>needs_fix</code>.
+                </td>
+              </tr>
+              <tr id="state-verifying">
+                <td class="nowrap"><span class="badge state state-verifying">verifying</span></td>
+                <td>A fresh read-only verifier tries to refute READY for that SHA, against the brief's acceptance checklist.</td>
+                <td>
+                  PASS from an untouched worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>. A PASS from a
+                  verifier that changed the tree, or for a stale SHA, is discarded: <code>ready_claimed</code>.
+                </td>
+              </tr>
+              <tr id="state-verified">
+                <td class="nowrap"><span class="badge state state-verified">verified</span></td>
+                <td>The verification is bound to the head SHA and the patch id. The gate runs on every tick.</td>
+                <td>
+                  Gate merge: <code>merged</code>. Rebase: the driver rebases the branch itself. Fix, a conflict or a maintainer review:
+                  <code>needs_fix</code>. Block: <code>blocked</code>. A new head with a different patch: <code>ready_claimed</code>.
+                </td>
+              </tr>
+              <tr id="state-needs_fix">
+                <td class="nowrap"><span class="badge state state-needs_fix">needs_fix</span></td>
+                <td>Waits for a slot, with a reason and a note that explains it.</td>
+                <td>A free slot: <code>fixing</code>.</td>
+              </tr>
+              <tr id="state-fixing">
+                <td class="nowrap"><span class="badge state state-fixing">fixing</span></td>
+                <td>
+                  The implementer's own session, resumed with the reason. Without a session, a fresh one gets the whole protocol again.
+                </td>
+                <td>The same as <code>implementing</code>.</td>
+              </tr>
+              <tr id="state-blocked">
+                <td class="nowrap"><span class="badge state state-blocked">blocked</span></td>
+                <td>
+                  Waits for you: a question from the agent, open questions about the brief, a gate block (for example the release PR or a
+                  draft), or a PR closed on GitHub.
+                </td>
+                <td>
+                  <a href="commands.html#cmd-note"><code>rollout note</code></a> answers it.
+                  <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts.
+                </td>
+              </tr>
+              <tr id="state-escalated">
+                <td class="nowrap"><span class="badge state state-escalated">escalated</span></td>
+                <td>The attempts of a role ran out, or five errors came in a row.</td>
+                <td><code>rollout retry</code> resets the attempts. <code>rollout note</code> sends an answer to a fix run.</td>
+              </tr>
+              <tr id="state-interrupted">
+                <td class="nowrap"><span class="badge state state-interrupted">interrupted</span></td>
+                <td>A run ended without a report: a crash, a stop, a stall, a timeout or an outage.</td>
+                <td>
+                  A later tick resumes it. An interrupted verifier re-checks the claim, an implementer with no session starts again, and
+                  anything else continues as a fix run.
+                </td>
+              </tr>
+              <tr id="state-merged">
+                <td class="nowrap"><span class="badge state state-merged">merged</span></td>
+                <td>Merged by the driver, or on GitHub by you. The worktree, the local branch and the remote branch are removed.</td>
+                <td>Final.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Three flags sit next to the states:</p>
+
+        <ul>
+          <li>
+            <strong>Held</strong> is set on one PR by <a href="commands.html#cmd-hold"><code>hold</code></a
+            >. It gets no new runs, rebases, ready notices or merges until <code>release</code>. A running agent finishes its step. Sync and
+            feedback still run.
+          </li>
+          <li><strong>Paused</strong> applies to the whole rollout. No new runs start and nothing merges. Running agents finish.</li>
+          <li>
+            <strong>Halted</strong> applies to the whole rollout after the base went red behind a merge. Only merges stop. Agents keep
+            working until <a href="commands.html#cmd-unhalt"><code>unhalt</code></a
+            >.
+          </li>
+        </ul>
+
+        <h2 id="roles">Roles <a class="anchor" href="#roles" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          Every agent is the same <code>claude -p</code> binary with a different prompt, session, set of permissions and report schema. The
+          prompts live in <code>prompts/</code> and the schemas in <code>schemas/</code>, in the skill's directory.
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Prompt</th>
+                <th>Session</th>
+                <th>May</th>
+                <th>Reports</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap"><span class="badge role-brief">brief writer</span></td>
+                <td><code>brief-write.md</code>, the briefing sources for the PR, your answers</td>
+                <td>new</td>
+                <td>Read the base branch. Edit, Write and NotebookEdit are denied.</td>
+                <td class="name">brief.json</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><span class="badge role-brief">brief reviewer</span></td>
+                <td><code>brief-review.md</code>, the sources, the writer's brief without its questions and notes</td>
+                <td>new</td>
+                <td>The same as the writer.</td>
+                <td class="name">brief.json</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><span class="badge role-implement">implementer</span></td>
+                <td><code>implement.md</code>: the protocol, the brief, the verify recipe, the scope, the forbidden paths</td>
+                <td>new, kept as the PR's session</td>
+                <td>Edit, commit, push its own branch, open and edit the PR, wait for CI.</td>
+                <td class="name">ready.json</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><span class="badge role-fix">fixer</span></td>
+                <td><code>fix.md</code>: the reason, the note, the current head</td>
+                <td>the implementer's, with <code>--resume</code></td>
+                <td>The same as the implementer.</td>
+                <td class="name">ready.json</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><span class="badge role-fix">fixer, fresh</span></td>
+                <td><code>resume-fresh.md</code>, which wraps the whole implement prompt</td>
+                <td>new, when the old one is gone</td>
+                <td>The same as the implementer.</td>
+                <td class="name">ready.json</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><span class="badge role-verify">verifier</span></td>
+                <td><code>verify.md</code>: the SHA, the READY report, the recipe without steps that rewrite files</td>
+                <td>new, every time</td>
+                <td>Read, build and test. No edits, commits, pushes or GitHub writes.</td>
+                <td class="name">verdict.json</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <ul>
+          <li>
+            <strong>Effort</strong> comes from the PR's <a href="manifest.html#pr-effort"><code>effort</code></a> and rises on retries. The
+            implementer goes up one level per attempt after the first. Fix runs use the implement effort and go up from the third fix
+            attempt. The verifier keeps <code>effort.verify</code>, and briefs use <code>effort.brief</code> (<code>xhigh</code> by
+            default).
+          </li>
+          <li>
+            <strong>Budget.</strong> Every run gets <code>--max-budget-usd</code> from
+            <a href="manifest.html#policy-budgetUsd"><code>policy.budgetUsd</code></a> for its effort. There is no cap for a whole PR or
+            rollout.
+          </li>
+          <li>
+            <strong>Model.</strong> Every role runs the manifest's <a href="manifest.html#manifest-model"><code>model</code></a
+            >, <code>opus</code> by default.
+          </li>
+        </ul>
+
+        <h2 id="run">One agent run <a class="anchor" href="#run" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The driver talks to a running agent in two ways. It writes the prompt to the agent's stdin, and it reads the agent's stdout and
+          stderr. Everything else the agent does goes through the worktree and GitHub, where the driver checks it.
+        </p>
+
+        <figure class="diagram">
+          <svg viewBox="-2 -2 704 524" role="img" aria-labelledby="hiw-run-title">
+            <title id="hiw-run-title">
+              The driver prepares the worktree and starts claude -p with the prompt on stdin. The agent works in the worktree and on GitHub,
+              streams JSON back and ends with a structured report. The driver records the transcript, checks the claim and moves the PR on.
+            </title>
+            <defs>
+              <marker
+                id="hiw-run-arrow"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto-start-reverse"
+              >
+                <path class="dg-head" d="M0,0 L8,4 L0,8 z" />
+              </marker>
+              <marker
+                id="hiw-run-arrow-accent"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto-start-reverse"
+              >
+                <path class="dg-head accent" d="M0,0 L8,4 L0,8 z" />
+              </marker>
+            </defs>
+
+            <line class="dg-lifeline" x1="70" y1="44" x2="70" y2="520" />
+            <line class="dg-lifeline" x1="260" y1="44" x2="260" y2="520" />
+            <line class="dg-lifeline" x1="450" y1="44" x2="450" y2="520" />
+            <line class="dg-lifeline" x1="620" y1="44" x2="620" y2="520" />
+
+            <rect class="dg-node strong" x="5" y="0" width="130" height="44" rx="8" />
+            <text class="dg-title" x="70" y="19" text-anchor="middle">Driver</text>
+            <text class="dg-mono" x="70" y="35" text-anchor="middle">rollout run</text>
+            <g class="role-implement">
+              <rect class="dg-node toned" x="195" y="0" width="130" height="44" rx="8" />
+              <text class="dg-title" x="260" y="19" text-anchor="middle">Agent</text>
+              <text class="dg-mono" x="260" y="35" text-anchor="middle">claude -p</text>
+            </g>
+            <rect class="dg-node" x="385" y="0" width="130" height="44" rx="8" />
+            <text class="dg-title" x="450" y="19" text-anchor="middle">Worktree, GitHub</text>
+            <text class="dg-mono" x="450" y="35" text-anchor="middle">branch, PR, CI</text>
+            <rect class="dg-node" x="555" y="0" width="130" height="44" rx="8" />
+            <text class="dg-title" x="620" y="19" text-anchor="middle">Rollout directory</text>
+            <text class="dg-mono" x="620" y="35" text-anchor="middle">logs/, ledger.json</text>
+
+            <g class="role-implement">
+              <rect class="dg-node toned" x="255" y="130" width="10" height="270" rx="3" />
+            </g>
+
+            <path class="dg-edge" d="M70,84 H444" marker-end="url(#hiw-run-arrow)" />
+            <text class="dg-label" x="355" y="77" text-anchor="middle">prepare the worktree</text>
+
+            <path class="dg-edge accent" d="M70,130 H249" marker-end="url(#hiw-run-arrow-accent)" />
+            <text class="dg-label" x="165" y="123" text-anchor="middle">claude -p, prompt on stdin</text>
+            <rect class="dg-node" x="80" y="142" width="168" height="74" rx="8" />
+            <text class="dg-mono" x="91" y="161">--json-schema &lt;report&gt;</text>
+            <text class="dg-mono" x="91" y="176">--settings, guard hook</text>
+            <text class="dg-mono" x="91" y="191">--session-id | --resume</text>
+            <text class="dg-mono" x="91" y="206">GH_TOKEN of the bot</text>
+
+            <path class="dg-edge" d="M265,246 H444" marker-end="url(#hiw-run-arrow)" />
+            <text class="dg-label" x="355" y="239" text-anchor="middle">edit, test, commit, push</text>
+            <path class="dg-edge" d="M265,282 H444" marker-end="url(#hiw-run-arrow)" />
+            <text class="dg-label" x="355" y="275" text-anchor="middle">open the PR, wait for CI</text>
+            <rect class="dg-node" x="96" y="236" width="148" height="44" rx="8" />
+            <text class="dg-text" x="108" y="254">The guard hook checks</text>
+            <text class="dg-text" x="108" y="270">every Bash call.</text>
+
+            <path class="dg-edge" d="M255,326 H76" marker-end="url(#hiw-run-arrow)" />
+            <text class="dg-label" x="165" y="319" text-anchor="middle">stream-json on stdout</text>
+            <path class="dg-edge" d="M70,352 H614" marker-end="url(#hiw-run-arrow)" />
+            <text class="dg-label mono" x="535" y="345" text-anchor="middle">logs/&lt;run&gt;.jsonl</text>
+
+            <rect class="dg-node" x="274" y="366" width="166" height="66" rx="8" />
+            <text class="dg-text" x="286" y="384">Watchdogs: no output for</text>
+            <text class="dg-text" x="286" y="399">stallMinutes, or the role's</text>
+            <text class="dg-text" x="286" y="414">timeout. SIGTERM, then</text>
+            <text class="dg-text" x="286" y="428">SIGKILL.</text>
+
+            <path class="dg-edge" d="M255,400 H76" marker-end="url(#hiw-run-arrow)" />
+            <text class="dg-label" x="165" y="393" text-anchor="middle">result: the report,</text>
+            <text class="dg-label" x="165" y="416" text-anchor="middle">cost, session_id</text>
+
+            <path class="dg-edge" d="M70,452 H444" marker-end="url(#hiw-run-arrow)" />
+            <text class="dg-label" x="355" y="445" text-anchor="middle">re-read the PR and CI</text>
+            <path class="dg-edge" d="M70,480 H614" marker-end="url(#hiw-run-arrow)" />
+            <text class="dg-label" x="535" y="473" text-anchor="middle">next state, cost</text>
+
+            <path class="dg-edge accent dashed" d="M70,510 H249" marker-end="url(#hiw-run-arrow-accent)" />
+            <text class="dg-label" x="165" y="503" text-anchor="middle">later: --resume, the reason</text>
+          </svg>
+          <figcaption>
+            The agent does not need the rollout directory. Its stdout reaches <code>logs/</code> through the driver. Deny rules and the
+            guard keep its tools out of the rollout and skill directories, as seatbelts, not a sandbox.
+          </figcaption>
+        </figure>
+
+        <h3 id="command">The command</h3>
+
+        <p>The prompt goes in on stdin, because briefs and brief sources get large. The working directory is the PR's worktree.</p>
+
+        <pre><code>claude -p --model &lt;model&gt; --effort &lt;effort&gt; \
+  --output-format stream-json --verbose \
+  --json-schema &lt;schemas/ready|verdict|brief.json&gt; \
+  --permission-mode auto --permission-prompts none \
+  --settings &lt;deny and allow rules, the guard hook&gt; \
+  --max-budget-usd &lt;policy.budgetUsd[effort]&gt; \
+  [--disallowedTools Edit Write NotebookEdit] <span class="dim"># verifier and brief roles</span>
+  --session-id &lt;new uuid&gt; | --resume &lt;the PR's session&gt;</code></pre>
+
+        <dl class="kv">
+          <dt>Environment</dt>
+          <dd>
+            Yours, with <a href="manifest.html#repo-pathPrepend"><code>repo.pathPrepend</code></a> first on <code>PATH</code>, plus the
+            <code>ROLLOUT_*</code> variables and no npm credentials. With a bot token also its <code>GH_TOKEN</code>, an empty
+            <code>GITHUB_TOKEN</code>, a <code>GH_CONFIG_DIR</code> that points at an empty directory and
+            <code>GIT_TERMINAL_PROMPT=0</code>.
+          </dd>
+          <dt>Settings</dt>
+          <dd>
+            Deny rules for merges, reviews, repo admin and publishing, allow rules per role, attribution off, and a
+            <code>PreToolUse</code> hook that runs <code>hooks/guard-bash.mjs</code> on every Bash call.
+            <a href="security.html">Security</a> has the details.
+          </dd>
+          <dt>Watchdogs</dt>
+          <dd>
+            No output for <a href="manifest.html#policy-stallMinutes"><code>policy.stallMinutes</code></a> (20) ends the run, and so does
+            the role's <a href="manifest.html#policy-timeouts"><code>policy.timeouts</code></a
+            >. SIGTERM first, SIGKILL 10 s later.
+          </dd>
+          <dt>Transcript</dt>
+          <dd>
+            stdout goes unchanged into <code>logs/&lt;id&gt;-&lt;NN&gt;-&lt;role&gt;.jsonl</code>. The UI shows it on the PR page's runs
+            tab.
+          </dd>
+          <dt>Result</dt>
+          <dd>
+            The last <code>type: "result"</code> line carries <code>structured_output</code> (the report), <code>total_cost_usd</code>,
+            <code>session_id</code> and the permission denials. A run without that line, with <code>is_error</code>, or without a report has
+            failed.
+          </dd>
+        </dl>
+
+        <h3 id="reports">The reports</h3>
+
+        <p>
+          <code>--json-schema</code> makes the agent end with a JSON document in a fixed shape. The driver acts on a few fields and checks
+          what it can on GitHub and in the worktree. The rest goes on the card for you.
+        </p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>Schema</th>
+                <th>Used by</th>
+                <th>Fields</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>ready.json</td>
+                <td class="nowrap">implementer, fixer</td>
+                <td>
+                  <code>status</code> (READY or BLOCKED) and <code>summary</code> are required. READY also needs <code>pr</code> and
+                  <code>headSha</code>, which the driver checks, not the schema. <code>blocked</code> with a kind, a question and evidence
+                  for BLOCKED. Optional: <code>checks</code>, <code>localVerification</code>, <code>checklist</code>, <code>expected</code>,
+                  <code>filesChanged</code>, <code>changeset</code>, <code>deviations</code>, and <code>addressed</code> for review
+                  comments.
+                </td>
+              </tr>
+              <tr>
+                <td>verdict.json</td>
+                <td class="nowrap">verifier</td>
+                <td>
+                  <code>verdict</code> (PASS or FAIL), <code>sha</code>, <code>summary</code>, <code>checklist</code> with pass, fail or
+                  unverifiable and evidence per item, <code>blocking</code>, <code>nonBlocking</code>. All required.
+                </td>
+              </tr>
+              <tr>
+                <td>brief.json</td>
+                <td class="nowrap">brief writer, reviewer</td>
+                <td>
+                  <code>brief</code> (markdown), <code>expectedFiles</code>, <code>changesetBump</code>, <code>questions</code>,
+                  <code>notes</code>. All required. The expected files become the PR's scope when the manifest has none.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="resume">How a fix resumes</h3>
+
+        <p>
+          A fix run resumes the implementer's session with <code>--resume</code>, so the agent keeps everything it knew. Its prompt names
+          the reason (for example <em>CI is red</em>, <em>rollout policy</em>, <em>verifier findings</em>, <em>merge gate</em>,
+          <em>rebase conflict</em> or <em>maintainer review</em>), a note with the details and the current head. A note you queued is
+          appended. If the session is gone, the driver drops it, and the next fix starts a new session with the whole implement prompt
+          inside <code>resume-fresh.md</code>.
+        </p>
+
+        <h2 id="gate">The merge gate <a class="anchor" href="#gate" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          <code>judge()</code> in <code>lib/judge.mjs</code> is a pure function of facts the driver read from GitHub and git. It never looks
+          at what an agent said. For a verified PR it returns one action: merge, rebase, fix, wait or block. It checks, in this order:
+        </p>
+
+        <ol>
+          <li><strong>Wait</strong> while the rollout is halted or the PR is held.</li>
+          <li>
+            <strong>Block</strong> when there is no PR for the branch, the PR is not open, it is the release PR (<a
+              href="manifest.html#repo-neverMerge"
+              ><code>repo.neverMerge</code></a
+            >), it is a draft, its base or head branch is wrong, or the rollout label is missing.
+          </li>
+          <li><strong>Wait</strong> for dependencies, and for a verification of the current patch id.</li>
+          <li>
+            <strong>Wait for approval</strong>, with <a href="manifest.html#policy-merge"><code>policy.merge: human</code></a> only. With
+            <a href="manifest.html#policy-approval"><code>policy.approval: github</code></a> and a PR that no maintainer authored, that is a
+            maintainer's GitHub review submitted after the current patch appeared, with no changes requested. Otherwise it is
+            <a href="commands.html#cmd-approve"><code>rollout approve</code></a> for this patch. In <code>manual</code> mode your own merge
+            is the approval, and <code>auto</code> needs none.
+          </li>
+          <li>
+            <strong>Fix</strong> on a policy violation: a forbidden path, <code>.github/</code> without <code>allowWorkflows</code>, a
+            package version edit, a removed or missing changeset, a bump above <code>maxBump</code>, a denylisted term, or a commit with
+            more than one line.
+          </li>
+          <li><strong>Rebase</strong> when the branch is behind the base or conflicts with it.</li>
+          <li><strong>Wait</strong> until GitHub reports the PR as mergeable.</li>
+          <li>
+            <strong>Fix</strong> when CI is red on the head. <strong>Wait</strong> while it is pending or a required check has not appeared.
+          </li>
+          <li><strong>Wait</strong> while the base branch is not green.</li>
+          <li>
+            <strong>Wait</strong> for GitHub's own merge state, unless the merge uses <code>--admin</code> or the mode is manual. It must be
+            clean, or has hooks, or unstable. <code>BLOCKED</code> usually means a ruleset requirement such as a review or code scanning
+            results.
+          </li>
+          <li><strong>Merge.</strong> In <code>manual</code> mode the driver notifies you that the PR is ready to merge instead.</li>
+        </ol>
+
+        <p>
+          With <code>merge: human</code> the driver then waits
+          <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a> (120 s) after the approval, so a
+          <code>pause</code> can still stop it. A dry run logs <code>would-merge</code> and stops there. Otherwise it merges the exact head
+          it judged:
+        </p>
+
+        <pre><code>gh pr merge &lt;n&gt; --&lt;method&gt; --match-head-commit &lt;sha&gt; \
+  --subject "&lt;title&gt; (#&lt;n&gt;)" --body "" [--admin] <span class="dim"># method: squash by default</span></code></pre>
+
+        <ul>
+          <li>
+            <strong><code>--admin</code></strong> is added when <a href="manifest.html#repo-merge"><code>repo.merge.admin</code></a> is
+            <code>true</code>, or when it is <code>auto</code> and a maintainer authored the PR, because GitHub does not let authors approve
+            their own PR.
+          </li>
+          <li>
+            <strong>GitHub refusing the merge</strong> is a state to wait in, not an error. The gate records it and you get a notification.
+          </li>
+          <li>
+            <strong>Rebases</strong> are the driver's own work. It rebases the judged head onto the base in the worktree and pushes with
+            <code>--force-with-lease</code> on that head, as the bot. A conflict aborts the rebase and goes back to the implementer with the
+            conflicting files. When the patch id stays the same, the verification and the approval carry over to the new head.
+          </li>
+          <li>
+            <strong>The release PR</strong> ("chore: version packages" by default) is never merged, because merging it publishes. After the
+            last PR, the driver finds it by title and tells you to merge it.
+          </li>
+        </ul>
+
+        <h2 id="failures">Failures and recovery <a class="anchor" href="#failures" aria-label="Link to this section">#</a></h2>
+
+        <p>The driver has to keep going for hours, unattended. This is how it treats what goes wrong.</p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>What happened</th>
+                <th>What the driver does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>A run that did no work</td>
+                <td>
+                  Stopped by the driver, a transient error (rate or usage limit, overload, HTTP 429 or 5xx, a dropped connection), an
+                  account error, or under $0.01 and under 60 s. The attempt is given back, at most five times per PR.
+                </td>
+              </tr>
+              <tr>
+                <td>Any failed run</td>
+                <td>
+                  Backs off before the next one: 2, 4, 8, 16, then 30 minutes. The streak resets on a successful run. A stop by the driver
+                  does not count.
+                </td>
+              </tr>
+              <tr>
+                <td>Attempts ran out</td>
+                <td>
+                  <a href="manifest.html#policy-attempts"><code>policy.attempts</code></a> caps each role (implement 2, fix 4, verify 3,
+                  brief 2). The next launch escalates the PR. A verified PR gets its verify attempts back.
+                </td>
+              </tr>
+              <tr>
+                <td>Five errors in a row</td>
+                <td><code>guarded()</code> escalates that PR, once no agent runs for it. The other PRs go on.</td>
+              </tr>
+              <tr>
+                <td>A run ended without a report</td>
+                <td>
+                  The PR becomes <code>interrupted</code> and resumes on a later tick. So does every run in progress when the driver stops.
+                </td>
+              </tr>
+              <tr>
+                <td>The session is gone</td>
+                <td>The driver forgets it, and the next fix starts a new session with the full protocol.</td>
+              </tr>
+              <tr>
+                <td>No output, or too long</td>
+                <td>
+                  The stall watchdog and the role's timeout kill the run. It ends as failed and the PR becomes <code>interrupted</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>The base went red after a merge</td>
+                <td>The rollout halts. Merges stop, agents go on, until you fix the base and run <code>unhalt</code>.</td>
+              </tr>
+              <tr>
+                <td>An account limit</td>
+                <td>
+                  A spend limit, credit balance, billing or budget error pauses the whole rollout until
+                  <a href="commands.html#cmd-resume"><code>resume</code></a
+                  >. A notification says so.
+                </td>
+              </tr>
+              <tr>
+                <td>A broken manifest edit</td>
+                <td>Rejected with a notification. The previous manifest stays in use.</td>
+              </tr>
+              <tr>
+                <td>GitHub refused the merge</td>
+                <td>The gate waits and notifies. Nothing counts as a failure.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="feedback">Maintainer feedback on GitHub <a class="anchor" href="#feedback" aria-label="Link to this section">#</a></h2>
+
+        <p>You can review a rollout PR on GitHub as you would any other. The driver turns your comments into a fix run.</p>
+
+        <ul>
+          <li>
+            Only people in <a href="manifest.html#repo-maintainers"><code>repo.maintainers</code></a> count. It reads their inline review
+            comments, review bodies (commented or changes requested) and conversation comments. With no maintainers set, it reads none.
+          </li>
+          <li>
+            It looks at PRs that are <code>ready_claimed</code>, <code>verified</code> or <code>needs_fix</code>, while no agent runs for
+            them.
+          </li>
+          <li>
+            It waits until you have been quiet for
+            <a href="manifest.html#policy-feedbackQuietMinutes"><code>policy.feedbackQuietMinutes</code></a>
+            (3), so a review in progress is not cut short. Meanwhile the gate skips the PR.
+          </li>
+          <li>
+            Then it drops the verification and sends the PR to a fix run with every new comment, the file and line, and the code it refers
+            to. The fixer lists each comment id in <code>addressed</code>, with what it did.
+          </li>
+          <li>
+            After the fixer reports READY, the driver answers each inline thread with that action and the new short SHA, as the bot.
+            Everything else is summed up in one PR comment. Handled comments are remembered by id and never sent twice.
+          </li>
+        </ul>
+
+        <h2 id="notifications">Notifications <a class="anchor" href="#notifications" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The driver sends desktop notifications through <code>osascript</code> on macOS and <code>notify-send</code> on Linux. Other
+          platforms get none, and a notification that fails is ignored. Nearly every notice is also a line in <code>events.jsonl</code>. The
+          gate's notices about a missing approval or GitHub still blocking show up there only as <code>gate-wait</code>.
+        </p>
+
+        <ul>
+          <li>
+            <strong>Waiting for you:</strong> verified (with how to approve), blocked, escalated, ready to merge in manual mode, brief
+            questions.
+          </li>
+          <li><strong>Decisions:</strong> approval accepted or rejected, merged, would merge in a dry run.</li>
+          <li>
+            <strong>Trouble:</strong> halted, paused by an account limit, merge refused or blocked by GitHub, the head moved after
+            verification, the verifier changed the tree, a dependency outside the run, a rejected manifest.
+          </li>
+          <li><strong>The end:</strong> all PRs merged, with the release PR to merge.</li>
+        </ul>
+
+        <p>Notices that could repeat on every tick are sent once per patch or head.</p>
+
+        <nav class="pager" aria-label="Pages">
+          <a class="prev" href="ui.html"><span>Previous</span>Web UI</a>
+          <a class="next" href="security.html"><span>Next</span>Security</a>
+        </nav>
+
+        <footer class="page-foot">
+          <a href="https://github.com/grzehub/claude-rollout/blob/main/docs/how-it-works.html">Edit this page on GitHub</a>
+        </footer>
+      </main>
+
+      <aside class="toc" aria-label="On this page">
+        <p class="group">On this page</p>
+        <ul>
+          <li><a href="#process">A process, not a model</a></li>
+          <li><a href="#map">System map</a></li>
+          <li><a href="#tick">One tick</a></li>
+          <li><a href="#lifecycle">The PR lifecycle</a></li>
+          <li><a href="#roles">Roles</a></li>
+          <li><a href="#run">One agent run</a></li>
+          <li><a href="#gate">The merge gate</a></li>
+          <li><a href="#failures">Failures and recovery</a></li>
+          <li><a href="#feedback">Maintainer feedback</a></li>
+          <li><a href="#notifications">Notifications</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>
