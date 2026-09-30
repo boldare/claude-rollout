@@ -67,7 +67,7 @@
         <ul>
           <li>
             <strong>One driver per rollout.</strong> It takes <code>driver.lock</code> with its pid. A second driver on the same directory
-            refuses to start. A lock left behind by a dead process is cleared.
+            refuses to start. A lock left behind by a dead process, or one without a real pid, is cleared.
           </li>
           <li>
             <strong>A heartbeat.</strong> Every tick and every save writes <code>heartbeat</code>: a timestamp and a short note.
@@ -306,8 +306,8 @@
           <li><strong>Reload the manifest</strong> if the file changed.</li>
           <li>
             <strong>Apply the inbox.</strong> Every command file is read and deleted, then applied: approve, note, retry, hold, release,
-            pause, resume and unhalt. A command that cannot apply is logged as <code>command-rejected</code>, a refused approval as
-            <code>approval-rejected</code>.
+            pause, resume and unhalt. Each command applies on its own, and a rejected one never stops the rest. A command that cannot apply
+            is logged as <code>command-rejected</code>, a refused approval as <code>approval-rejected</code>.
           </li>
           <li><strong>Fetch.</strong> <code>git fetch --prune origin</code> in the repository.</li>
           <li>
