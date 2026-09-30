@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Overview · rollout docs</title>
+    <meta
+      name="description"
+      content="claude-rollout ships a plan of several PRs with headless Claude Code agents, an independent verifier and a merge gate."
+    />
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <div class="facts">
+        <span class="badge alpha">internal alpha</span>
+        <span class="version">v0.1.0</span>
+        <span>Node 20+</span>
+      </div>
+      <div class="facts right"><a href="https://github.com/grzehub/claude-rollout">GitHub</a></div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Documentation">
+        <p class="group">Start</p>
+        <ul>
+          <li><a href="index.html" aria-current="page">Overview</a></li>
+          <li><a href="getting-started.html">Getting started</a></li>
+        </ul>
+        <p class="group">Setup</p>
+        <ul>
+          <li><a href="accounts.html">Accounts</a></li>
+          <li><a href="manifest.html">Manifest</a></li>
+        </ul>
+        <p class="group">Use</p>
+        <ul>
+          <li><a href="commands.html">Commands</a></li>
+          <li><a href="ui.html">Web UI</a></li>
+        </ul>
+        <p class="group">Internals</p>
+        <ul>
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="security.html">Security</a></li>
+        </ul>
+      </nav>
+
+      <main class="page">
+        <header class="page-head">
+          <h1>Ship a plan of PRs with Claude Code agents</h1>
+          <p class="page-meta">README.md</p>
+        </header>
+
+        <p class="lead">
+          claude-rollout takes a plan that needs several pull requests and ships it. Headless Claude Code agents write each PR, an
+          independent agent tries to refute it, and a merge gate re-checks everything on GitHub before anything merges.
+        </p>
+
+        <div class="callout warn">
+          <p>
+            <strong>Internal alpha.</strong> It shipped describe-me 0.5.0, 13 PRs, end to end. Expect rough edges and read the setup pages
+            first.
+          </p>
+        </div>
+
+        <h2 id="how">How it fits together <a class="anchor" href="#how" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The orchestrator is a process, not a model. <code>rollout run</code> ticks every minute, reads the truth from GitHub, starts
+          agents, runs the gate and records everything in a ledger. A stalled chat session cannot stall a rollout, and running the same
+          command again resumes it.
+        </p>
+
+        <figure class="diagram">
+          <svg viewBox="-2 -2 704 512" role="img" aria-labelledby="map-title">
+            <title id="map-title">
+              You send commands through the CLI or the web UI into the rollout directory. The driver reads them, starts agents and talks to
+              GitHub.
+            </title>
+            <defs>
+              <marker
+                id="map-arrow"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto-start-reverse"
+              >
+                <path class="dg-head" d="M0,0 L8,4 L0,8 z" />
+              </marker>
+            </defs>
+
+            <rect class="dg-node" x="0" y="0" width="150" height="50" rx="8" />
+            <text class="dg-title" x="14" y="21">Terminal</text>
+            <text class="dg-mono" x="14" y="38">rollout &lt;command&gt;</text>
+
+            <rect class="dg-node" x="170" y="0" width="150" height="50" rx="8" />
+            <text class="dg-title" x="184" y="21">Browser</text>
+            <text class="dg-mono" x="184" y="38">rollout ui</text>
+
+            <rect class="dg-node" x="340" y="0" width="160" height="50" rx="8" />
+            <text class="dg-title" x="354" y="21">Notifications</text>
+            <text class="dg-text" x="354" y="38">verified, blocked, merged</text>
+
+            <rect class="dg-group" x="0" y="100" width="440" height="148" rx="12" />
+            <text class="dg-group-title mono" x="428" y="120" text-anchor="end">~/.rollouts/&lt;name&gt;/</text>
+            <rect class="dg-node" x="12" y="132" width="133" height="46" rx="8" />
+            <text class="dg-title mono" x="24" y="151">inbox/</text>
+            <text class="dg-text" x="24" y="168">your commands</text>
+            <rect class="dg-node" x="153" y="132" width="133" height="46" rx="8" />
+            <text class="dg-title mono" x="165" y="151">manifest.yaml</text>
+            <text class="dg-text" x="165" y="168">the plan as PRs</text>
+            <rect class="dg-node" x="294" y="132" width="134" height="46" rx="8" />
+            <text class="dg-title mono" x="306" y="151">briefs/</text>
+            <text class="dg-text" x="306" y="168">one brief per PR</text>
+            <rect class="dg-node" x="12" y="188" width="133" height="46" rx="8" />
+            <text class="dg-title mono" x="24" y="207">ledger.json</text>
+            <text class="dg-text" x="24" y="224">state of every PR</text>
+            <rect class="dg-node" x="153" y="188" width="133" height="46" rx="8" />
+            <text class="dg-title mono" x="165" y="207">events.jsonl</text>
+            <text class="dg-text" x="165" y="224">what happened</text>
+            <rect class="dg-node" x="294" y="188" width="134" height="46" rx="8" />
+            <text class="dg-title mono" x="306" y="207">logs/</text>
+            <text class="dg-text" x="306" y="224">agent transcripts</text>
+
+            <rect class="dg-node strong" x="0" y="300" width="500" height="60" rx="10" />
+            <text class="dg-title" x="16" y="325">Driver</text>
+            <text class="dg-mono" x="66" y="325">rollout run</text>
+            <text class="dg-text" x="16" y="345">One tick a minute: read GitHub, start agents, check the gate, merge.</text>
+
+            <rect class="dg-group" x="0" y="410" width="500" height="98" rx="12" />
+            <text class="dg-group-title" x="12" y="430">Agents: headless claude -p, one worktree per PR</text>
+            <g class="role-brief">
+              <rect class="dg-node toned" x="12" y="442" width="113" height="54" rx="8" />
+              <circle class="dg-dot" cx="25" cy="461" r="4" />
+              <text class="dg-title" x="35" y="465">Brief writer</text>
+              <text class="dg-text" x="24" y="484">drafts the brief</text>
+            </g>
+            <g class="role-brief">
+              <rect class="dg-node toned" x="133" y="442" width="113" height="54" rx="8" />
+              <circle class="dg-dot" cx="146" cy="461" r="4" />
+              <text class="dg-title" x="156" y="465">Brief reviewer</text>
+              <text class="dg-text" x="145" y="484">checks it on code</text>
+            </g>
+            <g class="role-implement">
+              <rect class="dg-node toned" x="254" y="442" width="113" height="54" rx="8" />
+              <circle class="dg-dot" cx="267" cy="461" r="4" />
+              <text class="dg-title" x="277" y="465">Implementer</text>
+              <text class="dg-text" x="266" y="484">codes, then fixes</text>
+            </g>
+            <g class="role-verify">
+              <rect class="dg-node toned" x="375" y="442" width="113" height="54" rx="8" />
+              <circle class="dg-dot" cx="388" cy="461" r="4" />
+              <text class="dg-title" x="398" y="465">Verifier</text>
+              <text class="dg-text" x="387" y="484">tries to refute it</text>
+            </g>
+
+            <rect class="dg-group" x="580" y="280" width="120" height="228" rx="12" />
+            <text class="dg-group-title" x="592" y="300">GitHub</text>
+            <rect class="dg-node" x="592" y="312" width="96" height="48" rx="8" />
+            <text class="dg-title" x="604" y="332">Pull requests</text>
+            <text class="dg-text" x="604" y="349">and reviews</text>
+            <rect class="dg-node" x="592" y="442" width="96" height="54" rx="8" />
+            <text class="dg-title" x="604" y="465">Check runs</text>
+            <text class="dg-text" x="604" y="484">CI on each push</text>
+
+            <path class="dg-edge" d="M75,50 V126" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="68" y="92" text-anchor="end">commands</text>
+            <path class="dg-edge" d="M200,50 C200,90 110,88 110,126" marker-end="url(#map-arrow)" />
+            <path class="dg-edge dashed" d="M290,100 V56" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="298" y="82">reads files, live</text>
+
+            <path class="dg-edge" d="M60,248 V294" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="68" y="276">inbox, manifest</text>
+            <path class="dg-edge" d="M400,300 V254" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="392" y="276" text-anchor="end">ledger, events, logs</text>
+            <path class="dg-edge" d="M470,300 V56" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="478" y="180">notifies</text>
+
+            <path class="dg-edge accent" d="M80,360 V404" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="88" y="387">claude -p with prompt and schema</text>
+            <path class="dg-edge" d="M440,410 V366" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="432" y="387" text-anchor="end">report, cost, session</text>
+
+            <path class="dg-edge" d="M500,326 H586" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="508" y="318">reads, merges</text>
+            <text class="dg-label" x="508" y="342">as you</text>
+            <path class="dg-edge" d="M500,462 C548,462 540,352 586,352" marker-end="url(#map-arrow)" />
+            <text class="dg-label" x="508" y="482">push, open PR</text>
+            <text class="dg-label" x="508" y="496">as the bot</text>
+          </svg>
+          <figcaption>
+            Solid arrows carry commands and work, the dashed one only reads. The UI and the CLI never call the driver. They write commands
+            as files into its inbox. Only start and stop act on the driver process itself.
+          </figcaption>
+        </figure>
+
+        <ul>
+          <li>
+            You write the plan into <code>manifest.yaml</code> and send commands with the CLI or the web UI. Both drop them into
+            <code>inbox/</code>.
+          </li>
+          <li>
+            The driver wakes on a new command or once a minute. It reads GitHub, updates <code>ledger.json</code> and starts agents in free
+            slots.
+          </li>
+          <li>
+            Agents run as headless <code>claude -p</code> processes, each in the PR's own git worktree. They push and open PRs as a separate
+            bot account and report back with a JSON document.
+          </li>
+          <li>
+            The driver never trusts a report. It re-reads CI, the diff and the reviews on GitHub, and merges only what its gate passes.
+          </li>
+        </ul>
+
+        <p>The full picture, with the tick, the PR lifecycle and one agent run, is on <a href="how-it-works.html">How it works</a>.</p>
+
+        <h2 id="roles">One PR, four roles <a class="anchor" href="#roles" aria-label="Link to this section">#</a></h2>
+
+        <p>Every PR goes through the same agents. The colours are the ones the UI uses for runs on its timeline.</p>
+
+        <div class="cards">
+          <div class="card role-brief">
+            <h3>Brief writer and reviewer</h3>
+            <p>
+              A PR without a brief gets one from the plan. A read-only writer drafts it, a read-only reviewer checks every path and command
+              against the code.
+            </p>
+          </div>
+          <div class="card role-implement">
+            <h3>Implementer</h3>
+            <p>Codes the PR in its worktree, pushes the branch, opens the PR, waits for green CI and reports READY or BLOCKED.</p>
+          </div>
+          <div class="card role-fix">
+            <h3>Fixer</h3>
+            <p>
+              The implementer's own session, resumed with the reason: red CI, a policy violation, verifier findings, a review or a conflict.
+            </p>
+          </div>
+          <div class="card role-verify">
+            <h3>Verifier</h3>
+            <p>A fresh read-only session that tries to refute READY against the brief's acceptance checklist, for the exact commit.</p>
+          </div>
+        </div>
+
+        <h2 id="you">What stays with you <a class="anchor" href="#you" aria-label="Link to this section">#</a></h2>
+
+        <ul>
+          <li>The plan, and the answers when an agent or the brief reviewer asks a question.</li>
+          <li>Approval. A GitHub review or <code>rollout approve</code>, never an agent and never the UI.</li>
+          <li>The release PR. Merging it publishes, so the driver never touches it.</li>
+          <li>Pause, hold, retry and stop, when you want to step in.</li>
+        </ul>
+
+        <p>Everything else is the driver's job: slots, worktrees, rebases, retries, the gate and the merges in dependency order.</p>
+
+        <h2 id="safety">Safety in short <a class="anchor" href="#safety" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          Agents push and open PRs as a separate GitHub account with the Write role and no ruleset bypass. A Bash guard, deny rules and git
+          hooks keep them on their own branch. The gate decides on facts read from GitHub, never on what an agent says. The limits of all
+          this are spelled out on <a href="security.html">Security</a>.
+        </p>
+
+        <h2 id="next">Where next <a class="anchor" href="#next" aria-label="Link to this section">#</a></h2>
+
+        <div class="cards">
+          <a class="card" href="getting-started.html">
+            <h3>Getting started</h3>
+            <p>Install, set up a first rollout and do a dry run.</p>
+          </a>
+          <a class="card" href="accounts.html">
+            <h3>Accounts</h3>
+            <p>Your GitHub login, the bot account and the Claude login the agents use.</p>
+          </a>
+          <a class="card" href="commands.html">
+            <h3>Commands</h3>
+            <p>Every command and flag, and which of them the UI offers.</p>
+          </a>
+          <a class="card" href="ui.html">
+            <h3>Web UI</h3>
+            <p>What the local UI shows, how it stays live and what it can control.</p>
+          </a>
+        </div>
+
+        <nav class="pager" aria-label="Pages">
+          <a class="next" href="getting-started.html"><span>Next</span>Getting started</a>
+        </nav>
+
+        <footer class="page-foot">
+          <a href="https://github.com/grzehub/claude-rollout/blob/main/docs/index.html">Edit this page on GitHub</a>
+        </footer>
+      </main>
+
+      <aside class="toc" aria-label="On this page">
+        <p class="group">On this page</p>
+        <ul>
+          <li><a href="#how">How it fits together</a></li>
+          <li><a href="#roles">One PR, four roles</a></li>
+          <li><a href="#you">What stays with you</a></li>
+          <li><a href="#safety">Safety in short</a></li>
+          <li><a href="#next">Where next</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>

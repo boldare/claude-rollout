@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Security · rollout docs</title>
+    <meta
+      name="description"
+      content="What protects what in a rollout: hard boundaries, the merge gate, the seatbelts around every agent, and the web UI's checks."
+    />
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <div class="facts">
+        <span class="badge alpha">internal alpha</span>
+        <span class="version">v0.1.0</span>
+        <span>Node 20+</span>
+      </div>
+      <div class="facts right"><a href="https://github.com/grzehub/claude-rollout">GitHub</a></div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Documentation">
+        <p class="group">Start</p>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="getting-started.html">Getting started</a></li>
+        </ul>
+        <p class="group">Setup</p>
+        <ul>
+          <li><a href="accounts.html">Accounts</a></li>
+          <li><a href="manifest.html">Manifest</a></li>
+        </ul>
+        <p class="group">Use</p>
+        <ul>
+          <li><a href="commands.html">Commands</a></li>
+          <li><a href="ui.html">Web UI</a></li>
+        </ul>
+        <p class="group">Internals</p>
+        <ul>
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="security.html" aria-current="page">Security</a></li>
+        </ul>
+      </nav>
+
+      <main class="page">
+        <header class="page-head">
+          <h1>Security</h1>
+          <p class="page-meta">hooks/guard-bash.mjs · lib/settings.mjs · lib/server.mjs</p>
+        </header>
+
+        <p class="lead">
+          What protects what in a rollout, and what does not. Hard boundaries hold even against an agent that tries to break them. Seatbelts
+          stop accidents and naive prompt injection, not a determined attacker.
+        </p>
+
+        <h2 id="who">Who and what <a class="anchor" href="#who" aria-label="Link to this section">#</a></h2>
+
+        <ul>
+          <li>Agents run headless as the maintainer's OS user, with the settings from <code>lib/settings.mjs</code>.</li>
+          <li>
+            They read untrusted input: repo content, CI logs and PR comments. The driver passes on only comments by
+            <code>repo.maintainers</code> (<code>feedbackFor</code> in <code>lib/github.mjs</code>), but an agent can read the others with
+            <code>gh</code>.
+          </li>
+          <li>
+            The assets are the base branch, published packages, credentials, the rollout's control plane (manifest, inbox, ledger) and the
+            local briefs, which may name clients.
+          </li>
+        </ul>
+
+        <h2 id="boundaries">Hard boundaries <a class="anchor" href="#boundaries" aria-label="Link to this section">#</a></h2>
+
+        <p>These are enforced where the agent cannot edit them.</p>
+
+        <ul>
+          <li>
+            <strong>The bot account's GitHub role and the rulesets.</strong> The bot has the Write role and no bypass. A merge needs a
+            maintainer's review and green checks. See <a href="accounts.html">Accounts</a> and the preflight check of
+            <a href="manifest.html#repo-agentToken"><code>repo.agentToken</code></a
+            >.
+          </li>
+          <li>
+            <strong>npm trusted publishing with tokens disallowed.</strong> Set on npmjs.com, see <a href="accounts.html">Accounts</a>.
+          </li>
+          <li>
+            <strong>The UI's network checks.</strong> The UI listens on <code>127.0.0.1</code> and checks <code>Host</code> and
+            <code>Origin</code> (<code>handle</code> in <code>lib/server.mjs</code>), so other web pages cannot reach it through DNS
+            rebinding or CSRF. See <a href="#ui">The web UI</a>.
+          </li>
+        </ul>
+
+        <div class="callout danger">
+          <p>
+            <strong>The limit, stated plainly.</strong> These hold against the bot's token. Agents run as you, so any credential your user
+            can read (your <code>gh</code> login, <code>~/.npmrc</code>, SSH keys) is within their reach. A boundary against a hostile agent
+            needs another OS user, a VM or a container. This repo provides none.
+          </p>
+        </div>
+
+        <h2 id="gate">The driver's gate <a class="anchor" href="#gate" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The driver never trusts an agent's report. It merges only what <code>lib/judge.mjs</code> passes, on facts it reads from GitHub
+          and git (<code>collectFacts</code> in <code>lib/github.mjs</code>): the PR, its diff and commits, its reviews and the check runs
+          on the exact head. That is hard against a wrong or false report. The full list of checks is on
+          <a href="how-it-works.html">How it works</a>.
+        </p>
+
+        <p>
+          It is not a boundary against an agent that attacks the driver's own files (code, ledger, inbox). Only the seatbelts below protect
+          those.
+        </p>
+
+        <h2 id="seatbelts">Seatbelts <a class="anchor" href="#seatbelts" aria-label="Link to this section">#</a></h2>
+
+        <div class="scroll">
+          <table class="wide">
+            <thead>
+              <tr>
+                <th>seatbelt</th>
+                <th>what it does</th>
+                <th>where</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap">The Bash guard</td>
+                <td>A PreToolUse hook on every Bash call. It is a regex guard, and its header says so. <a href="#guard">Details</a>.</td>
+                <td class="name">hooks/guard-bash.mjs</td>
+              </tr>
+              <tr>
+                <td class="nowrap">Permission rules</td>
+                <td>
+                  Deny rules for merge, review, repo admin and publish commands, plus Edit and Write denies on the rollout and skill
+                  directories.
+                  <a href="#permissions">Details</a>.
+                </td>
+                <td class="name">lib/settings.mjs</td>
+              </tr>
+              <tr>
+                <td class="nowrap">The git hooks</td>
+                <td>
+                  <code>pre-push</code> allows only the PR branch and only the HTTPS push URL. <code>commit-msg</code> allows one subject
+                  line. <a href="#git-hooks">Details</a>.
+                </td>
+                <td class="name">git-hooks/</td>
+              </tr>
+              <tr>
+                <td class="nowrap">The agent environment</td>
+                <td>
+                  The bot's <code>GH_TOKEN</code>, an empty <code>gh</code> config directory, an empty npmrc and empty npm tokens.
+                  <a href="#environment">Details</a>.
+                </td>
+                <td class="name">lib/identity.mjs<br />lib/spawn.mjs</td>
+              </tr>
+              <tr>
+                <td class="nowrap">The CLI's role check</td>
+                <td><code>bin/rollout.mjs</code> refuses to drive a rollout when <code>ROLLOUT_ROLE</code> is set.</td>
+                <td class="name">bin/rollout.mjs</td>
+              </tr>
+              <tr>
+                <td class="nowrap">The UI token</td>
+                <td>
+                  It lives only in the server's memory, but it is printed in the terminal and stays in the browser history with the URL. It
+                  stops a plain <code>curl</code>, not code that reads your files.
+                </td>
+                <td class="name">lib/server.mjs</td>
+              </tr>
+              <tr>
+                <td class="nowrap">The verifier's read-only mode</td>
+                <td>
+                  Edit and Write are denied, and the guard applies its verifier role. The brief writer and reviewer get the same mode.
+                </td>
+                <td class="name">lib/spawn.mjs<br />lib/settings.mjs</td>
+              </tr>
+              <tr>
+                <td class="nowrap">The gate's denylist check</td>
+                <td>
+                  <a href="manifest.html#repo-denylist"><code>repo.denylist</code></a> is checked in the diff, the PR and the commits. It
+                  catches a leak before the merge, but a pushed branch of a public repo is already visible.
+                </td>
+                <td class="name">lib/judge.mjs</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="guard-rails">Guard rails for agents <a class="anchor" href="#guard-rails" aria-label="Link to this section">#</a></h2>
+
+        <p>Every agent gets the same layers, in two strengths.</p>
+
+        <ul>
+          <li><strong>Worker</strong>: the implementer and the fixer. They edit files, commit, push their own branch and open the PR.</li>
+          <li>
+            <strong>Read-only</strong>: the verifier and both brief agents (<code>readOnlyRole</code> in <code>lib/settings.mjs</code>).
+            They read, build and test, and change nothing.
+          </li>
+        </ul>
+
+        <h3 id="permissions">Permission rules</h3>
+
+        <p>
+          Each agent starts with <code>--settings</code> from <code>agentSettings</code>. Deny rules win over allow rules in any permission
+          mode. Agents run with <code>--permission-mode auto</code> and <code>--permission-prompts none</code>, so anything that would ask
+          for permission is denied instead of hanging a headless run.
+        </p>
+
+        <div class="scroll">
+          <table class="wide">
+            <thead>
+              <tr>
+                <th></th>
+                <th>worker</th>
+                <th>read-only</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap">denied Bash</td>
+                <td colspan="2">
+                  <code>gh pr merge</code>, <code>gh pr review</code>, <code>gh pr close</code>, <code>gh repo</code>,
+                  <code>gh release</code>, <code>gh secret</code>, <code>gh variable</code>, <code>gh workflow</code>,
+                  <code>gh ruleset</code>, <code>npm publish</code>, <code>pnpm publish</code>, <code>pnpm release</code>,
+                  <code>pnpm run release</code>, <code>pnpm changeset publish</code>, <code>git push origin main*</code>,
+                  <code>git push origin HEAD:main*</code>
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">denied files</td>
+                <td>Edit and Write under the rollout directory and the skill directory.</td>
+                <td>The same, plus Edit, Write and NotebookEdit everywhere. They are also passed as <code>--disallowedTools</code>.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">allowed Bash</td>
+                <td>
+                  <code>git *</code>, <code>pnpm *</code>, <code>node *</code>, <code>gh pr create|edit|view|checks|list</code>,
+                  <code>gh run view|list|rerun</code>, <code>gh api *</code>
+                </td>
+                <td>
+                  <code>git diff|log|show|status|rev-parse</code>, <code>pnpm *</code>, <code>node *</code>,
+                  <code>gh pr view|checks|diff</code>, <code>gh run view</code>, <code>gh api *</code>
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">attribution</td>
+                <td colspan="2">Off for commits and PRs.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">hook</td>
+                <td><code>guard-bash.mjs worker</code> on every Bash call</td>
+                <td><code>guard-bash.mjs verifier</code> on every Bash call</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          The deny rules name <code>main</code>. For another base branch, the guard and the pre-push hook hold the line, since both allow
+          pushes to the PR branch only.
+        </p>
+
+        <h3 id="guard">The Bash guard</h3>
+
+        <p>
+          <code>hooks/guard-bash.mjs</code> reads each Bash call before it runs. It exits with code 2 to refuse, and the agent gets
+          <q>rollout guard: …</q> with the reason. It sees the Bash tool only, the file tools are covered by the permission rules.
+        </p>
+
+        <p>
+          It splits a command line on <code>;</code>, <code>&amp;&amp;</code>, <code>||</code>, <code>|</code>, <code>&amp;</code>,
+          newlines, <code>$(</code>, backticks, parentheses and braces. It deletes quotes and backslashes, so
+          <code>sh -c "git push origin main"</code> and <code>p"u"sh</code> read as what they are. Quoting is not honoured on purpose: a
+          forbidden word inside a string still blocks.
+        </p>
+
+        <h4>Refused for every agent</h4>
+
+        <ul>
+          <li>
+            <strong>The control plane.</strong> Any command that names the rollout directory, the installed skill (<code>ROLLOUT_HOME</code>
+            and any <code>.claude/skills/rollout</code>), the rollout's name as a path, or the push markers <code>rollout-branch</code>,
+            <code>rollout-pushurl</code> and <code>rollout-ready</code>.
+          </li>
+          <li>
+            <strong>The environment the guard relies on.</strong> Setting <code>GH_TOKEN</code>, <code>GH_CONFIG_DIR</code>,
+            <code>GITHUB_TOKEN</code>, <code>GH_HOST</code>, <code>GIT_SSH*</code>, <code>GIT_CONFIG_*</code>, <code>GIT_DIR</code>,
+            <code>GIT_WORK_TREE</code> or any <code>ROLLOUT_*</code> variable, unsetting a <code>ROLLOUT_*</code> variable, and the
+            <code>--git-dir</code>, <code>--work-tree</code> and <code>--config-env</code> switches.
+          </li>
+          <li>
+            <strong>Git settings that switch off hooks or reroute pushes.</strong> <code>hooksPath</code>, credentials, push URLs,
+            <code>sshCommand</code>, <code>url.*</code>, <code>remote.*</code> and <code>alias.*</code>, whether through
+            <code>git config</code> or a <code>-c key=value</code> override, and <code>git config --remove-section</code> or
+            <code>--rename-section</code>.
+          </li>
+          <li>
+            <strong>Git commands that rewrite or bypass.</strong> <code>git remote add|set-url|rename|remove|rm|set-head</code>,
+            <code>git update-ref</code>, <code>send-pack</code>, <code>http-push</code>, <code>receive-pack</code>,
+            <code>filter-branch</code>, <code>replace</code>, <code>git commit --no-verify</code> or <code>-n</code>, <code>git tag</code>,
+            and <code>git branch -d|-D|-m|-M</code>.
+          </li>
+          <li>
+            <strong>GitHub administration.</strong> <code>gh repo</code>, <code>release</code>, <code>secret</code>, <code>variable</code>,
+            <code>workflow</code>, <code>ruleset</code>, <code>alias</code>, <code>extension</code>, <code>codespace</code>,
+            <code>gpg-key</code>, <code>ssh-key</code>, <code>cache</code> and <code>attestation</code>. <code>gh auth</code> except
+            <code>gh auth status</code> without the token. <code>gh pr merge|review|close|reopen|lock|unlock</code>.
+          </li>
+          <li>
+            <strong>Writes through the API.</strong> <code>gh api graphql</code>, and <code>gh api</code> with any method but GET, or with
+            fields and no method. Raw <code>curl</code>, <code>wget</code>, <code>http</code>, <code>https</code> or <code>xh</code> calls
+            to <code>api.github.com</code>, <code>uploads.github.com</code>, <code>registry.npmjs.org</code> or
+            <code>registry.yarnpkg.com</code>.
+          </li>
+          <li>
+            <strong>Releases.</strong> <code>npm</code>, <code>pnpm</code>, <code>yarn</code>, <code>npx</code>, <code>pnpx</code>,
+            <code>bun</code> or <code>bunx</code> with <code>publish</code>, <code>release</code>, <code>version-packages</code>,
+            <code>unpublish</code>, <code>dist-tag</code>, <code>deprecate</code>, <code>owner</code>, <code>adduser</code>,
+            <code>login</code>, <code>logout</code> or <code>token</code>. <code>&lt;tool&gt; version</code>, and
+            <code>changeset version|publish|tag|pre</code> run through one of these tools.
+          </li>
+        </ul>
+
+        <h4>Pushes from a worker</h4>
+
+        <p>
+          A worker pushes only with <code>git push origin &lt;refspec&gt;</code>, where every refspec targets <code>$ROLLOUT_BRANCH</code>.
+          The guard refuses:
+        </p>
+
+        <ul>
+          <li>a push without an explicit refspec, because a bare <code>git push</code> is too easy to aim at the wrong branch</li>
+          <li>any remote but <code>origin</code></li>
+          <li>
+            <code>--force</code>, <code>-f</code>, <code>--mirror</code>, <code>--all</code>, <code>--tags</code>, <code>--delete</code>,
+            <code>-d</code>, <code>--prune</code>, <code>--no-verify</code> and <code>--repo</code>
+          </li>
+          <li>a <code>+</code> refspec and any refspec that deletes a remote ref</li>
+          <li>a push at all when <code>ROLLOUT_BRANCH</code> is not set</li>
+        </ul>
+
+        <p><code>--force-with-lease</code> on the agent's own branch stays allowed, so an agent can rewrite its own commits.</p>
+
+        <h4>On top for the read-only role</h4>
+
+        <ul>
+          <li>
+            <code>git commit</code>, <code>push</code>, <code>rebase</code>, <code>merge</code>, <code>reset</code>, <code>clean</code>,
+            <code>stash</code>, <code>cherry-pick</code>, <code>revert</code>, <code>tag</code>, <code>am</code>, <code>apply</code>,
+            <code>checkout</code>, <code>switch</code>, <code>restore</code>, <code>update-ref</code>, <code>branch</code> and
+            <code>worktree</code>. The verifier stays on the PR head it was given.
+          </li>
+          <li><code>gh pr create|edit|comment|ready</code> and <code>gh issue</code>.</li>
+        </ul>
+
+        <div class="callout warn">
+          <p>
+            <strong>A seatbelt, not a sandbox.</strong> A regex guard can be fooled by a command it does not model. The guarantees that
+            matter are also enforced elsewhere: the pre-push hook, no npm credentials in the agent environment, and the gate re-checking
+            every claim on GitHub. <code>rollout preflight --live</code> proves in a real headless agent that the guard refuses a merge, a
+            push to <code>main</code>, a publish and a <code>gh api</code> write.
+          </p>
+        </div>
+
+        <h3 id="git-hooks">Git hooks</h3>
+
+        <p>
+          Every worktree gets its own <code>core.hooksPath</code>, pointing at <code>git-hooks/</code> in the skill directory. The hooks
+          cover <code>git push</code> however it starts: an alias, a script or a tool.
+        </p>
+
+        <ul>
+          <li>
+            <strong><code>pre-push</code></strong> reads the allowed branch from <code>rollout-branch</code>, a file the driver writes into
+            the worktree's git directory, never from the environment. It refuses any other ref and any deletion. When the driver set up a
+            push URL, it refuses any other URL too, so nothing reaches GitHub through your SSH remote.
+          </li>
+          <li>
+            <strong><code>commit-msg</code></strong> allows exactly one subject line of at most 72 characters. No body, no trailers.
+          </li>
+        </ul>
+
+        <p>
+          With <code>repo.agentToken</code> set, each worktree pushes over HTTPS to <code>repo.pushUrl</code> through
+          <code>gh auth git-credential</code>, so pushes use the bot's token and never your SSH key.
+        </p>
+
+        <h3 id="environment">The environment</h3>
+
+        <p>
+          Each agent starts from the driver's environment, with <code>repo.pathPrepend</code> first on <code>PATH</code> and these changes
+          (<code>makeEnv</code>, <code>agentGitHubEnv</code>, <code>runAgent</code>).
+        </p>
+
+        <div class="scroll">
+          <table class="fields wide">
+            <thead>
+              <tr>
+                <th>variable</th>
+                <th>value</th>
+                <th>why</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>GH_TOKEN</td>
+                <td>the contents of <code>repo.agentToken</code></td>
+                <td>Agents act on GitHub as the bot.</td>
+              </tr>
+              <tr>
+                <td>GITHUB_TOKEN</td>
+                <td>empty</td>
+                <td>No second token to fall back on.</td>
+              </tr>
+              <tr>
+                <td>GH_CONFIG_DIR</td>
+                <td><code>&lt;rollout&gt;/.gh-agents</code>, empty</td>
+                <td><code>gh</code> cannot fall back to your stored login when the token is dropped.</td>
+              </tr>
+              <tr>
+                <td>GIT_TERMINAL_PROMPT</td>
+                <td><code>0</code></td>
+                <td>Git fails instead of asking for a password.</td>
+              </tr>
+              <tr>
+                <td>ROLLOUT_BRANCH</td>
+                <td>the PR branch, empty for read-only roles</td>
+                <td>The one branch the guard lets a worker push.</td>
+              </tr>
+              <tr>
+                <td>ROLLOUT_ROLE, _ID, _DIR, _HOME, _NAME</td>
+                <td>role, PR id, rollout directory, skill directory, rollout name</td>
+                <td>The guard's context, and the CLI's refusal to take orders from an agent.</td>
+              </tr>
+              <tr>
+                <td>NPM_CONFIG_USERCONFIG</td>
+                <td><code>&lt;rollout&gt;/.npmrc-agents</code>, with no credentials</td>
+                <td>Every publish path fails for lack of auth.</td>
+              </tr>
+              <tr>
+                <td>NPM_TOKEN, NODE_AUTH_TOKEN</td>
+                <td>empty</td>
+                <td>The same.</td>
+              </tr>
+              <tr>
+                <td>CLAUDECODE, CLAUDE_CODE_ENTRYPOINT</td>
+                <td>removed</td>
+                <td>A driver started from a Claude Code session must not make its agents look nested.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Everything else passes through, <code>HOME</code> and your Claude login included. That is why the limit under
+          <a href="#boundaries">Hard boundaries</a> holds. Without <code>repo.agentToken</code> the GitHub variables are not set at all,
+          agents act on GitHub as you, and preflight warns about it.
+        </p>
+
+        <h3 id="cli-role">The CLI refuses agents</h3>
+
+        <p>
+          With <code>ROLLOUT_ROLE</code> set, <code>bin/rollout.mjs</code> runs only <code>help</code>, <code>status</code> and
+          <code>card</code>. An agent cannot run the driver, approve, note, retry, hold, pause, stop or open the UI, even if it finds the
+          skill.
+        </p>
+
+        <h2 id="ui">The web UI <a class="anchor" href="#ui" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          <code>rollout ui</code> runs as your user on a local port. Agents run as your user too and can reach any local port, so the server
+          trusts no caller by default (<code>lib/server.mjs</code>).
+        </p>
+
+        <ul>
+          <li><strong>Loopback only.</strong> It listens on <code>127.0.0.1</code>, never on a network interface.</li>
+          <li>
+            <strong>Host check.</strong> Every request must carry <code>Host: 127.0.0.1:&lt;port&gt;</code> or
+            <code>localhost:&lt;port&gt;</code>, otherwise it gets <code>403 bad host</code>. A page on another domain that resolves to
+            <code>127.0.0.1</code> still sends its own name, so DNS rebinding fails.
+          </li>
+          <li>
+            <strong>Origin check.</strong> Every request that is not a GET must carry the UI's own origin, otherwise it gets
+            <code>403 bad origin</code>. The server sends no CORS headers, so another origin cannot read an answer either.
+          </li>
+          <li>
+            <strong>The token.</strong> 32 random bytes, made at start, kept only in memory and compared in constant time. Every
+            <code>/api</code> call needs it as a Bearer header, or it gets <code>401</code>. It travels in the URL fragment, which browsers
+            never send, so it stays out of request lines and logs. It is still printed in the terminal and kept in the browser history.
+          </li>
+          <li>
+            <strong>Headers.</strong> A Content Security Policy of <code>default-src 'self'; frame-ancestors 'none'; base-uri 'none'</code>:
+            no inline scripts or styles, nothing from other hosts, no framing. Plus <code>Cache-Control: no-store</code>,
+            <code>X-Content-Type-Options: nosniff</code> and <code>Referrer-Policy: no-referrer</code>.
+          </li>
+          <li>
+            <strong>Narrow input.</strong> Static files come only from <code>ui/</code>, only as <code>.html</code>, <code>.js</code>,
+            <code>.css</code> or <code>.svg</code>, with no dotfiles and no <code>..</code>. A rollout name from a URL must stay one
+            directory below the root. Commands must be <code>application/json</code>, at most 64&nbsp;KiB, and pass
+            <code>parseCommand</code> in <code>lib/control.mjs</code>.
+          </li>
+          <li>
+            <strong>No approvals.</strong> <code>approve</code> is not a UI command, so nothing that reaches the page can approve a merge.
+            <code>--read-only</code> makes the server refuse every command with <code>403</code>.
+          </li>
+          <li>
+            <strong>Text, never HTML.</strong> Titles, verdicts, logs and transcripts are untrusted agent output. The page builds every
+            element from text, and <code>test/ui.test.mjs</code> fails on <code>innerHTML</code> and its relatives in <code>ui/</code>.
+          </li>
+        </ul>
+
+        <p>
+          The token stops a plain <code>curl</code> from another local process. It does not stop code that can read your terminal, your
+          browser history or your files, which is everything an agent running as you can do. Use <code>rollout ui --read-only</code> when
+          you only watch.
+        </p>
+
+        <h2 id="todo">What to do <a class="anchor" href="#todo" aria-label="Link to this section">#</a></h2>
+
+        <ul>
+          <li>Set up the repository as <a href="accounts.html">Accounts</a> describes.</li>
+          <li>
+            Run <a href="commands.html#cmd-preflight"><code>rollout preflight --live</code></a> before the first run. It proves the guard in
+            a real headless agent.
+          </li>
+          <li>
+            Review the workflow files that <a href="commands.html#cmd-card"><code>rollout card</code></a> flags before you approve a PR.
+          </li>
+        </ul>
+
+        <nav class="pager" aria-label="Pages">
+          <a class="prev" href="how-it-works.html"><span>Previous</span>How it works</a>
+        </nav>
+
+        <footer class="page-foot">
+          <a href="https://github.com/grzehub/claude-rollout/blob/main/docs/security.html">Edit this page on GitHub</a>
+        </footer>
+      </main>
+
+      <aside class="toc" aria-label="On this page">
+        <p class="group">On this page</p>
+        <ul>
+          <li><a href="#who">Who and what</a></li>
+          <li><a href="#boundaries">Hard boundaries</a></li>
+          <li><a href="#gate">The driver's gate</a></li>
+          <li><a href="#seatbelts">Seatbelts</a></li>
+          <li><a href="#guard-rails">Guard rails for agents</a></li>
+          <li><a href="#ui">The web UI</a></li>
+          <li><a href="#todo">What to do</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>

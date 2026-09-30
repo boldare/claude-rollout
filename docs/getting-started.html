@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Getting started · rollout docs</title>
+    <meta name="description" content="Install claude-rollout, set up a first rollout and run it on one PR as a dry run." />
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <div class="facts">
+        <span class="badge alpha">internal alpha</span>
+        <span class="version">v0.1.0</span>
+        <span>Node 20+</span>
+      </div>
+      <div class="facts right"><a href="https://github.com/grzehub/claude-rollout">GitHub</a></div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Documentation">
+        <p class="group">Start</p>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="getting-started.html" aria-current="page">Getting started</a></li>
+        </ul>
+        <p class="group">Setup</p>
+        <ul>
+          <li><a href="accounts.html">Accounts</a></li>
+          <li><a href="manifest.html">Manifest</a></li>
+        </ul>
+        <p class="group">Use</p>
+        <ul>
+          <li><a href="commands.html">Commands</a></li>
+          <li><a href="ui.html">Web UI</a></li>
+        </ul>
+        <p class="group">Internals</p>
+        <ul>
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="security.html">Security</a></li>
+        </ul>
+      </nav>
+
+      <main class="page">
+        <header class="page-head">
+          <h1>Getting started</h1>
+          <p class="page-meta">SKILL.md · examples/manifest.yaml</p>
+        </header>
+
+        <p class="lead">
+          Install the skill, describe your plan as a manifest and run it on one PR as a dry run. The first real merge comes after that, when
+          you trust what you saw.
+        </p>
+
+        <h2 id="requirements">Requirements <a class="anchor" href="#requirements" aria-label="Link to this section">#</a></h2>
+
+        <p>Everything runs on your machine, as your OS user. <code>rollout preflight</code> checks most of this list before a first run.</p>
+
+        <div class="scroll">
+          <table class="wide">
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th>Why</th>
+                <th>Preflight</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap">Node 20+</td>
+                <td>Runs the driver, the CLI and the UI. CI tests Node 20 and 22.</td>
+                <td><code>node --version</code> must run</td>
+              </tr>
+              <tr>
+                <td class="nowrap">git</td>
+                <td>Worktrees, fetches and rebases.</td>
+                <td><code>git fetch origin</code> in <code>repo.path</code></td>
+              </tr>
+              <tr>
+                <td class="nowrap">gh</td>
+                <td>Your login reads GitHub and merges. The bot's token opens PRs and pushes.</td>
+                <td><code>gh auth status</code> must pass</td>
+              </tr>
+              <tr>
+                <td class="nowrap">pnpm</td>
+                <td>Preflight requires it for every repo, even one that does not use pnpm.</td>
+                <td><code>pnpm --version</code> must run</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>claude</code></td>
+                <td>
+                  Every agent is a headless <code>claude -p</code>. It is found on PATH, with <code>repo.pathPrepend</code> first, or set
+                  <a href="manifest.html#manifest-claudeBin"><code>claudeBin</code></a> in the manifest.
+                </td>
+                <td><code>claude --version</code>. Only <code>--live</code> proves the login.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">osascript, notify-send</td>
+                <td>Desktop notifications on macOS and Linux. Other platforms get none.</td>
+                <td>not checked</td>
+              </tr>
+              <tr>
+                <td class="nowrap">caffeinate</td>
+                <td>Optional, macOS only. Keeps the machine awake during a long run.</td>
+                <td>not checked</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>You also need two GitHub accounts and a Claude login. <a href="accounts.html">Accounts</a> explains both.</p>
+
+        <h2 id="install">Install <a class="anchor" href="#install" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The repository is the skill. <code>SKILL.md</code> sits at its root, and Claude Code loads personal skills from
+          <code>~/.claude/skills/&lt;name&gt;/SKILL.md</code>. So one clone gives you both the CLI and the <code>/rollout</code> skill.
+        </p>
+
+        <h3 id="install-skill">Recommended: clone into the skills directory</h3>
+
+        <pre><code>git clone https://github.com/grzehub/claude-rollout ~/.claude/skills/rollout
+cd ~/.claude/skills/rollout
+npm ci
+
+R=~/.claude/skills/rollout/bin/rollout.mjs
+node $R help</code></pre>
+
+        <p>
+          <code>yaml</code> is the only runtime dependency. Always call the CLI as <code>node $R</code>. The file is not executable, and
+          <code>npm ci</code> puts no <code>rollout</code> command on your PATH. These docs write
+          <code>rollout &lt;command&gt;</code>
+          for short. An alias makes that literal:
+        </p>
+
+        <pre><code>alias rollout="node ~/.claude/skills/rollout/bin/rollout.mjs"</code></pre>
+
+        <h3 id="install-cli">CLI only</h3>
+
+        <p>
+          Clone it anywhere and run <code>npm ci</code> there. The driver finds its prompts, schemas, guard hook and git hooks next to its
+          own code (<code>HOME</code> in <code>lib/manifest.mjs</code>), so the location does not matter. Claude Code just does not know the
+          skill.
+        </p>
+
+        <h3 id="install-dev">Why not a symlink to your dev checkout</h3>
+
+        <p>
+          The driver reads its prompts, report schemas, guard hook and git hooks from its own directory on every agent run
+          (<code>lib/prompts.mjs</code>, <code>lib/spawn.mjs</code>, <code>lib/settings.mjs</code>, <code>lib/worktree.mjs</code>). When the
+          skill is a symlink to the checkout you work in, switching branches there swaps them under a running rollout.
+        </p>
+
+        <p>
+          So keep the installed copy as a clone of its own, and develop in a second clone. <code>CLAUDE.md</code> makes the same point for
+          agents that work on this repo.
+        </p>
+
+        <h3 id="update">Updating</h3>
+
+        <p>
+          Stop the driver, pull, and start it again. Implementer sessions resume where they stopped. A verifier or brief run starts over.
+        </p>
+
+        <pre><code>node $R stop --dir ~/.rollouts/my-lib-1.2.0
+cd ~/.claude/skills/rollout &amp;&amp; git pull &amp;&amp; npm ci
+node $R run --dir ~/.rollouts/my-lib-1.2.0</code></pre>
+
+        <div class="callout warn">
+          <p>
+            <strong>Copying instead of cloning?</strong> Keep the executable bits of <code>git-hooks/commit-msg</code> and
+            <code>git-hooks/pre-push</code>. Git skips a hook that is not executable, so the push and commit rules for agents would silently
+            stop applying.
+          </p>
+        </div>
+
+        <h2 id="first-rollout">Your first rollout <a class="anchor" href="#first-rollout" aria-label="Link to this section">#</a></h2>
+
+        <p>The example ships <code>my-lib</code> 1.2.0 in two PRs: P1 adds a config loader, P2 adds CLI flags on top of it.</p>
+
+        <ol class="steps">
+          <li>
+            <strong>Set up the accounts</strong>
+            <p>
+              A bot account with the Write role and its token, a ruleset on the base branch, squash merges, and a working
+              <code>claude</code> login. <a href="accounts.html">Accounts</a> walks through all of it.
+            </p>
+          </li>
+          <li>
+            <strong>Create the rollout directory</strong>
+            <p>One directory per rollout, outside any repo. The driver keeps its state there.</p>
+            <pre><code>mkdir -p ~/.rollouts/my-lib-1.2.0/briefs</code></pre>
+            <p>
+              The PR worktrees go next to it, in <code>~/.rollouts/my-lib-1.2.0.worktrees/</code>. Briefs stay local on purpose: they may
+              name clients.
+            </p>
+          </li>
+          <li>
+            <strong>Write <code>manifest.yaml</code></strong>
+            <p>The smallest useful manifest names the repo, its CI checks and the PRs:</p>
+            <pre><code>rollout: my-lib-1.2.0
+
+repo:
+  path: ~/code/my-lib
+  github: my-org/my-lib
+  requiredChecks: ['test*', 'lint']
+  install: pnpm install --frozen-lockfile
+  agentToken: ~/.config/rollout/agent-gh-token
+  maintainers: [my-github-login]
+
+policy:
+  merge: human <span class="dim"># the driver merges after your approval</span>
+  approval: github <span class="dim"># approve the bot's PRs with a GitHub review</span>
+
+prs:
+  - id: P1
+    branch: feat/config-loader
+    title: 'feat: config loader'
+    brief: briefs/P1.md
+    effort: { implement: xhigh, verify: xhigh }
+    changeset: minor
+
+  - id: P2
+    branch: feat/cli-flags
+    title: 'feat: cli flags'
+    brief: briefs/P2.md
+    deps: [P1]
+    effort: { implement: high, verify: high }
+    changeset: minor</code></pre>
+            <p>
+              A repo without changesets uses <code>changeset: none</code>. <code>examples/manifest.yaml</code> shows every section, and
+              <a href="manifest.html">Manifest</a> describes every field and its default.
+            </p>
+          </li>
+          <li>
+            <strong>Give every PR a brief</strong>
+            <p>
+              Either write <code>briefs/P1.md</code> yourself, or let the driver write it. The agent sees only the brief, the repo and its
+              protocol, so a brief must stand on its own. Write it in English, with:
+            </p>
+            <ul>
+              <li>the goal, and background with <code>file:line</code> references on the base branch</li>
+              <li>the concrete changes, and what is out of scope</li>
+              <li>the expected files and the changeset text</li>
+              <li>verification commands with the numbers you expect</li>
+              <li>an acceptance checklist that can be checked objectively</li>
+              <li>a skeleton of the PR description</li>
+            </ul>
+            <p>
+              To have briefs written, point <a href="manifest.html#manifest-briefing"><code>briefing.sources</code></a> at your plan. Use an
+              absolute or <code>~</code> path, because a relative one resolves against the directory you start the driver from. A read-only
+              writer drafts the brief once the PR's dependencies are merged, and a read-only reviewer checks it against the code. Open
+              questions stop the PR as <span class="badge state state-blocked">blocked</span> until you answer them with
+              <code>rollout note</code>.
+            </p>
+            <div class="callout warn">
+              <p>The brief writer's prompt assumes the plan is written in Polish, with a "Decyzje" section for its decisions.</p>
+            </div>
+          </li>
+          <li>
+            <strong>Run preflight, then the live preflight</strong>
+            <pre><code>node $R preflight --dir ~/.rollouts/my-lib-1.2.0
+node $R preflight --dir ~/.rollouts/my-lib-1.2.0 --live</code></pre>
+            <p>
+              The first checks your tools, both GitHub identities and the repository settings. <code>--live</code> also starts a real
+              headless agent with a small model and makes sure the guard refuses a merge, a push to <code>main</code>, a publish and a merge
+              through the API. It is also the only check that proves your Claude login works.
+            </p>
+          </li>
+          <li>
+            <strong>Do a dry run on one PR, in your own terminal</strong>
+            <pre><code>caffeinate -is node $R run --dir ~/.rollouts/my-lib-1.2.0 --only P1 --dry-run</code></pre>
+            <p>
+              The driver runs for hours in the foreground, so start it in a terminal of your own, never inside a Claude Code session's Bash.
+              <code>caffeinate -is</code> is optional and macOS only. <kbd>Ctrl</kbd> <kbd>C</kbd> stops the driver and its agents, and the
+              same command resumes them.
+            </p>
+          </li>
+          <li>
+            <strong>Watch it</strong>
+            <pre><code>node $R ui <span class="dim"># another terminal: opens the web UI</span>
+node $R status --dir ~/.rollouts/my-lib-1.2.0
+node $R card P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
+            <p>
+              <a href="ui.html">Web UI</a> shows every rollout under <code>~/.rollouts</code> live. <code>status</code> prints a similar
+              table in the terminal, and <code>card</code> shows what you need to approve one PR.
+            </p>
+          </li>
+          <li>
+            <strong>Answer and approve</strong>
+            <p>
+              A PR that needs an answer turns <span class="badge state state-blocked">blocked</span>, and you get a notification. A PR that
+              passed the verifier turns <span class="badge state state-verified">verified</span>. Read its card, then answer or approve:
+            </p>
+            <pre><code>node $R note P1 "Keep the old flag as an alias." --dir ~/.rollouts/my-lib-1.2.0
+node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
+            <p>
+              With <code>approval: github</code>, you approve the bot's PRs with a review on GitHub. <code>approve</code> is for a PR you
+              authored yourself, because GitHub does not let you approve your own PR.
+            </p>
+            <p>
+              The driver merges <code>policy.mergeDelaySeconds</code> (120 s) after the approval, and <code>rollout pause</code> in that
+              window stops it. In this dry run you get a "would merge" notification instead.
+            </p>
+          </li>
+          <li>
+            <strong>Go for real</strong>
+            <pre><code>node $R run --dir ~/.rollouts/my-lib-1.2.0</code></pre>
+            <p>
+              Without <code>--only</code> and <code>--dry-run</code>, the driver works through every PR. It merges at most one PR per tick.
+              A PR waits for its dependencies, and a higher <code>priority</code> goes first.
+            </p>
+          </li>
+          <li>
+            <strong>Merge the release PR yourself</strong>
+            <p>
+              When every PR is merged, the driver reports the release PR ("chore: version packages") and exits. It never merges that one,
+              because merging it publishes. Review it and merge it on GitHub.
+            </p>
+          </li>
+        </ol>
+
+        <h2 id="dry-run">What a dry run does <a class="anchor" href="#dry-run" aria-label="Link to this section">#</a></h2>
+
+        <div class="callout warn">
+          <p>
+            <strong>Everything is real except the merge.</strong> Agents run and cost money, branches are pushed, PRs are opened, CI runs,
+            and the driver rebases and force-pushes branches. Only the merge becomes a <code>would-merge</code> event and a notification.
+          </p>
+        </div>
+
+        <ul>
+          <li>Under <code>policy.merge: manual</code> the driver never merges anyway, so <code>--dry-run</code> changes nothing there.</li>
+          <li>
+            With <code>--only</code>, a PR whose dependency is outside the run waits for it. The dependency counts as merged once GitHub
+            shows its branch merged into the base with the rollout's label.
+          </li>
+          <li>The Start button in the UI offers a dry run, but not <code>--only</code>.</li>
+        </ul>
+
+        <h2 id="claude-code">From Claude Code <a class="anchor" href="#claude-code" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          With the skill installed, ask Claude Code about a rollout in plain words, or type <code>/rollout</code>. "How is the rollout
+          going?" makes it run <code>status</code>, read the cards of verified and blocked PRs, and tell you what waits for you, what runs
+          and what failed.
+        </p>
+
+        <ul>
+          <li>It can queue commands for you, such as a note, a retry, a hold or a pause.</li>
+          <li>It never approves on your behalf. It shows the card, and you review on GitHub or run <code>approve</code>.</li>
+          <li>
+            It does not start <code>run</code> or <code>ui</code> in its own Bash, because both run until you stop them. You start them in
+            your terminal.
+          </li>
+          <li>
+            Agents inside a rollout cannot drive it. With <code>ROLLOUT_ROLE</code> set, only <code>status</code>, <code>card</code> and
+            <code>help</code> work.
+          </li>
+        </ul>
+
+        <h2 id="next">Next steps <a class="anchor" href="#next" aria-label="Link to this section">#</a></h2>
+
+        <div class="cards">
+          <a class="card" href="accounts.html">
+            <h3>Accounts</h3>
+            <p>Your GitHub login, the bot account, the repository rules and the Claude login.</p>
+          </a>
+          <a class="card" href="manifest.html">
+            <h3>Manifest</h3>
+            <p>Every field of <code>manifest.yaml</code>, its default and what it changes.</p>
+          </a>
+          <a class="card" href="commands.html">
+            <h3>Commands</h3>
+            <p>Every command and flag, and which of them the UI offers.</p>
+          </a>
+          <a class="card" href="ui.html">
+            <h3>Web UI</h3>
+            <p>What the local UI shows, how it stays live and what it can control.</p>
+          </a>
+        </div>
+
+        <nav class="pager" aria-label="Pages">
+          <a class="prev" href="index.html"><span>Previous</span>Overview</a>
+          <a class="next" href="accounts.html"><span>Next</span>Accounts</a>
+        </nav>
+
+        <footer class="page-foot">
+          <a href="https://github.com/grzehub/claude-rollout/blob/main/docs/getting-started.html">Edit this page on GitHub</a>
+        </footer>
+      </main>
+
+      <aside class="toc" aria-label="On this page">
+        <p class="group">On this page</p>
+        <ul>
+          <li><a href="#requirements">Requirements</a></li>
+          <li><a href="#install">Install</a></li>
+          <li><a href="#first-rollout">Your first rollout</a></li>
+          <li><a href="#dry-run">What a dry run does</a></li>
+          <li><a href="#claude-code">From Claude Code</a></li>
+          <li><a href="#next">Next steps</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>

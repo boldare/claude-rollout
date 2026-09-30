@@ -13,7 +13,7 @@ repo:
   pathPrepend: []
   install: pnpm install --frozen-lockfile
   requiredChecks: ['test*', 'lint']
-  # Agents act as a separate non-admin account (see SKILL.md, "Identity and approvals").
+  # Agents act as a separate non-admin account (see docs/accounts.html).
   agentToken: ~/.config/rollout/agent-gh-token
   maintainers: [my-github-login]
   merge: { method: squash, admin: auto }

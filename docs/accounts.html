@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Accounts · rollout docs</title>
+    <meta
+      name="description"
+      content="The GitHub identities a rollout uses, the bot account and its token, the repository rules, merge and approval modes, and the Claude login of the agents."
+    />
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <div class="facts">
+        <span class="badge alpha">internal alpha</span>
+        <span class="version">v0.1.0</span>
+        <span>Node 20+</span>
+      </div>
+      <div class="facts right"><a href="https://github.com/grzehub/claude-rollout">GitHub</a></div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Documentation">
+        <p class="group">Start</p>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="getting-started.html">Getting started</a></li>
+        </ul>
+        <p class="group">Setup</p>
+        <ul>
+          <li><a href="accounts.html" aria-current="page">Accounts</a></li>
+          <li><a href="manifest.html">Manifest</a></li>
+        </ul>
+        <p class="group">Use</p>
+        <ul>
+          <li><a href="commands.html">Commands</a></li>
+          <li><a href="ui.html">Web UI</a></li>
+        </ul>
+        <p class="group">Internals</p>
+        <ul>
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="security.html">Security</a></li>
+        </ul>
+      </nav>
+
+      <main class="page">
+        <header class="page-head">
+          <h1>Accounts</h1>
+          <p class="page-meta">lib/identity.mjs · lib/github.mjs · lib/judge.mjs</p>
+        </header>
+
+        <p class="lead">
+          A rollout acts on GitHub with two identities: yours and a bot's. The agents talk to Claude with your login. This page sets up all
+          three and explains what each one may do.
+        </p>
+
+        <h2 id="identities">Two GitHub identities <a class="anchor" href="#identities" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The driver uses your own <code>gh</code> login. Agents never get it: they act as a separate bot account whose token
+          <a href="manifest.html#repo-agentToken"><code>repo.agentToken</code></a> points to.
+        </p>
+
+        <div class="scroll">
+          <table class="wide">
+            <thead>
+              <tr>
+                <th>What</th>
+                <th>Who</th>
+                <th>Where</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Read PRs, reviews, comments and check runs</td>
+                <td class="nowrap">you</td>
+                <td class="name">collectFacts, feedbackFor</td>
+              </tr>
+              <tr>
+                <td>Create the <code>rollout:&lt;name&gt;</code> label</td>
+                <td class="nowrap">you</td>
+                <td class="name">ensureLabel</td>
+              </tr>
+              <tr>
+                <td>Merge, and delete the merged branch</td>
+                <td class="nowrap">you</td>
+                <td class="name">merge, deleteRemoteBranch</td>
+              </tr>
+              <tr>
+                <td>Fetch</td>
+                <td class="nowrap">your remote</td>
+                <td class="name">fetchOrigin</td>
+              </tr>
+              <tr>
+                <td>Push the PR branch, open and edit the PR</td>
+                <td class="nowrap">bot</td>
+                <td class="name">runAgent, agentGitHubEnv</td>
+              </tr>
+              <tr>
+                <td>The driver's own rebase push</td>
+                <td class="nowrap">bot</td>
+                <td class="name">rebaseWorktree</td>
+              </tr>
+              <tr>
+                <td>Replies in review threads and the summary comment</td>
+                <td class="nowrap">bot</td>
+                <td class="name">replyAsAgents, commentAsAgents</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout warn">
+          <p>
+            <strong>Without <code>repo.agentToken</code></strong> every row is you. Agents push through your normal remote, which may use
+            your SSH key, and the driver's replies go out under your name. Preflight warns: "agents act on GitHub as you".
+          </p>
+        </div>
+
+        <h2 id="bot">The bot account <a class="anchor" href="#bot" aria-label="Link to this section">#</a></h2>
+
+        <p>Agents open PRs and push as a separate GitHub account, never as you.</p>
+
+        <ol class="steps">
+          <li>
+            <strong>Create the account and invite it with the Write role</strong>
+            <p>
+              Preflight requires its permission on the repository to be exactly <code>write</code>, and its login to be outside
+              <a href="manifest.html#repo-maintainers"><code>repo.maintainers</code></a
+              >. Admin fails the check.
+            </p>
+          </li>
+          <li>
+            <strong>Create a classic token with the <code>repo</code> and <code>workflow</code> scopes</strong>
+            <p>
+              <code>workflow</code> matters only for PRs that change <code>.github/workflows/</code>, and preflight warns when it is
+              missing. Preflight reads the scopes from the <code>x-oauth-scopes</code> header. A fine-grained token has none, so preflight
+              cannot confirm <code>workflow</code> and warns.
+            </p>
+          </li>
+          <li>
+            <strong>Save the token outside any repo</strong>
+            <pre><code>mkdir -p ~/.config/rollout
+<span class="dim"># paste the token, then Ctrl-D</span>
+cat &gt; ~/.config/rollout/agent-gh-token
+chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
+            <p>Point <code>repo.agentToken</code> at the file. <code>~</code> is expanded.</p>
+          </li>
+        </ol>
+
+        <h3 id="agent-env">What the agents get</h3>
+
+        <p><code>agentGitHubEnv</code> in <code>lib/identity.mjs</code> sets this for every agent run:</p>
+
+        <dl class="kv">
+          <dt><code>GH_TOKEN</code></dt>
+          <dd>the contents of the token file</dd>
+          <dt><code>GITHUB_TOKEN</code></dt>
+          <dd>empty</dd>
+          <dt><code>GH_CONFIG_DIR</code></dt>
+          <dd>an empty <code>.gh-agents/</code> in the rollout directory, so gh cannot fall back to your stored login</dd>
+          <dt><code>GIT_TERMINAL_PROMPT</code></dt>
+          <dd><code>0</code>, so git never waits for a password</dd>
+        </dl>
+
+        <p>
+          Worktrees push over HTTPS to <a href="manifest.html#repo-pushUrl"><code>repo.pushUrl</code></a
+          >, by default <code>https://github.com/&lt;github&gt;.git</code>, with <code>gh auth git-credential</code> as the only credential
+          helper (<code>lib/worktree.mjs</code>). The <code>pre-push</code> hook refuses any other URL and any branch but the PR's own, so
+          your SSH key is never used for a push. Fetches keep using your normal remote.
+        </p>
+
+        <p>
+          <a href="manifest.html#policy-approval"><code>policy.approval: github</code></a> needs both <code>repo.agentToken</code> and
+          <code>repo.maintainers</code>. The manifest is rejected otherwise (<code>validateManifest</code> in
+          <code>lib/manifest.mjs</code>).
+        </p>
+
+        <h2 id="rules">Repository rules <a class="anchor" href="#rules" aria-label="Link to this section">#</a></h2>
+
+        <h3 id="ruleset">A ruleset on the base branch</h3>
+
+        <p>
+          Add a branch ruleset on <a href="manifest.html#repo-base"><code>repo.base</code></a
+          >:
+        </p>
+
+        <ul>
+          <li>Require a pull request. Require one approval when <code>policy.approval</code> is <code>github</code>.</li>
+          <li>
+            Require the status checks that <a href="manifest.html#repo-requiredChecks"><code>repo.requiredChecks</code></a> matches.
+          </li>
+          <li>Block force pushes, and restrict deletions.</li>
+          <li>Requiring code scanning results is optional, see <a href="#code-scanning">below</a>.</li>
+        </ul>
+
+        <p>The bypass list holds only the repository admin role, never the bot.</p>
+
+        <h3 id="squash-admin">Squash merges and the admin role</h3>
+
+        <ul>
+          <li>
+            Enable squash merges in the repository settings. Preflight fails without them. It also suggests the PR title with a blank
+            message as the squash default and warns otherwise, although the driver passes its own subject and an empty body anyway.
+          </li>
+          <li>
+            Your own <code>gh</code> login must be a repository admin when
+            <a href="manifest.html#repo-merge"><code>merge.admin</code></a> is set, and the default <code>auto</code> counts. Preflight
+            checks it. The driver merges a PR you authored with <code>--admin</code> (<code>needsAdmin</code> in
+            <code>lib/judge.mjs</code>), because GitHub does not let you approve your own PR.
+          </li>
+        </ul>
+
+        <h3 id="codeowners">CODEOWNERS</h3>
+
+        <p>
+          Add <code>.github/CODEOWNERS</code> that names the maintainers for <code>.github/</code>, the release configuration and
+          <code>CODEOWNERS</code> itself, and make the ruleset require a code owner review. The bot is never a code owner.
+        </p>
+
+        <p>
+          This backs up <a href="manifest.html#repo-forbid"><code>repo.forbid</code></a> and
+          <a href="manifest.html#pr-allowWorkflows"><code>allowWorkflows</code></a
+          >. The driver's gate enforces both, GitHub does not.
+        </p>
+
+        <h3 id="code-scanning">Code scanning</h3>
+
+        <p>
+          Enable CodeQL default setup. When the ruleset requires its results, GitHub reports the merge state <code>BLOCKED</code> until they
+          exist. The gate then waits with a reason, unless it merges with <code>--admin</code>.
+        </p>
+
+        <h2 id="npm">npm trusted publishing <a class="anchor" href="#npm" aria-label="Link to this section">#</a></h2>
+
+        <p>Publish only from a GitHub Actions release workflow through OIDC, with no npm token anywhere.</p>
+
+        <h3 id="npm-driver">On the driver side</h3>
+
+        <ul>
+          <li>
+            <a href="manifest.html#repo-neverMerge"><code>repo.neverMerge</code></a> keeps the release PR away from the driver.
+          </li>
+          <li>The release workflow belongs in <code>repo.forbid</code>, as in <code>examples/manifest.yaml</code>.</li>
+          <li>
+            Agents get no npm credentials: an empty npmrc, and empty <code>NPM_TOKEN</code> and <code>NODE_AUTH_TOKEN</code> (<code
+              >runAgent</code
+            >
+            in <code>lib/spawn.mjs</code>).
+          </li>
+          <li>Publish and release commands are denied in the agents' settings (<code>lib/settings.mjs</code>).</li>
+        </ul>
+
+        <h3 id="npm-pitfalls">Pitfalls</h3>
+
+        <ul>
+          <li>Trusted publishing needs npm CLI 11.5.1 or newer. Upgrade npm in the workflow unless the Node version already bundles it.</li>
+          <li>The publishing job needs <code>permissions: id-token: write</code>.</li>
+          <li>
+            The trusted publisher is set per package on npmjs.com: owner, repository, workflow file name (for example
+            <code>release.yml</code>, the name only) and an optional environment. All must match exactly. Every package of a monorepo needs
+            its own entry.
+          </li>
+          <li><code>repository.url</code> in each <code>package.json</code> must match the GitHub repository, or the publish fails.</li>
+          <li>Only GitHub-hosted runners are supported.</li>
+          <li>
+            After the first trusted publish works, set the package to require two-factor authentication and disallow tokens, and delete any
+            <code>NPM_TOKEN</code> secret.
+          </li>
+        </ul>
+
+        <h2 id="modes">Merge and approval <a class="anchor" href="#modes" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          <a href="manifest.html#policy-merge"><code>policy.merge</code></a> decides who merges.
+          <a href="manifest.html#policy-approval"><code>policy.approval</code></a> decides how your approval reaches the driver, and it
+          matters only when the driver merges after an approval.
+        </p>
+
+        <div class="scroll">
+          <table class="wide">
+            <thead>
+              <tr>
+                <th><code>policy.merge</code></th>
+                <th><code>approval: inbox</code> (default)</th>
+                <th><code>approval: github</code></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="name">human (default)</td>
+                <td>You read the card and run <code>rollout approve &lt;id&gt;</code>. The driver merges after the delay.</td>
+                <td>
+                  A bot PR is approved by a maintainer's review on GitHub. A PR you authored still takes <code>rollout approve</code>. The
+                  driver merges after the delay.
+                </td>
+              </tr>
+              <tr>
+                <td class="name">manual</td>
+                <td colspan="2">
+                  The driver verifies, gates and rebases, then notifies you that the PR is ready to merge. You merge on GitHub, and the
+                  driver carries on from the merge. The gate skips its approval check, so <code>approval</code> changes only the wording of
+                  the card.
+                </td>
+              </tr>
+              <tr>
+                <td class="name">auto</td>
+                <td colspan="2">The driver merges as soon as the gate passes, with no approval at all. Preflight warns.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="github-approval">What counts as a GitHub approval</h3>
+
+        <ul>
+          <li>
+            Only reviews by <code>repo.maintainers</code> count, and only the latest approval, change request or dismissal of each
+            maintainer. A review that only comments does not count.
+          </li>
+          <li>Any maintainer whose latest review asks for changes holds the merge.</li>
+          <li>
+            An <code>APPROVED</code> review counts when it was submitted after the current patch appeared. Time decides, not the review's
+            commit, because GitHub moves a review that is not dismissed to new heads (<code>githubApproval</code> in
+            <code>lib/judge.mjs</code>).
+          </li>
+        </ul>
+
+        <h3 id="inbox-approval">What <code>rollout approve</code> binds to</h3>
+
+        <p>
+          <code>rollout approve</code> names the exact head and patch id the verifier passed. The driver rejects it when the PR is not
+          verified any more, when its head changed, when it was posted before the verification finished, or when an agent is working on the
+          PR. Under <code>approval: github</code> it also rejects it for a bot PR: approve that one on GitHub.
+        </p>
+
+        <p>A new head with the same patch id, such as the driver's own rebase, keeps both the verification and the approval.</p>
+
+        <div class="callout warn">
+          <p>
+            <strong>Bot PRs and <code>approval: inbox</code>.</strong> When the ruleset requires a review and the bot opened the PR,
+            <code>rollout approve</code> satisfies the driver but not GitHub. The gate then waits with "GitHub still blocks the merge". Use
+            <code>approval: github</code>, or <code>merge.admin: true</code>.
+          </p>
+        </div>
+
+        <h3 id="admin">merge.admin</h3>
+
+        <dl class="kv">
+          <dt><code>auto</code></dt>
+          <dd>the default: <code>--admin</code> only for a PR a maintainer authored</dd>
+          <dt><code>true</code></dt>
+          <dd><code>--admin</code> on every merge</dd>
+          <dt><code>false</code></dt>
+          <dd>never. A PR you authored then cannot pass a ruleset that requires an approval</dd>
+        </dl>
+
+        <p>
+          Without <code>--admin</code>, the gate waits until GitHub's merge state is <code>CLEAN</code>, <code>HAS_HOOKS</code> or
+          <code>UNSTABLE</code>, so a missing ruleset requirement shows up as a reason instead of a refused merge.
+        </p>
+
+        <h3 id="delay">The merge delay</h3>
+
+        <p>
+          Under <code>merge: human</code> the driver waits
+          <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a>
+          (120 s) after the approval before it merges. That leaves room to notice an approval you did not expect and stop it with
+          <code>rollout pause</code>. An approval through <code>rollout approve</code> also sends a notification.
+        </p>
+
+        <h2 id="claude">The Claude side <a class="anchor" href="#claude" aria-label="Link to this section">#</a></h2>
+
+        <h3 id="claude-login">The login the agents use</h3>
+
+        <p>
+          There is no Anthropic account in the manifest. The driver starts every agent with its own environment (<code>makeEnv</code> in
+          <code>lib/sh.mjs</code>), which drops only <code>CLAUDECODE</code> and <code>CLAUDE_CODE_ENTRYPOINT</code>.
+          <code>HOME</code> stays the same. So each agent's <code>claude</code> authenticates exactly as it would in your shell:
+        </p>
+
+        <ul>
+          <li>with your stored login, a subscription or a Console account, when you have run <code>claude</code> and logged in, or</li>
+          <li>with <code>ANTHROPIC_API_KEY</code>, when it is exported in the shell that starts the driver.</li>
+        </ul>
+
+        <p>
+          On top of that, <code>runAgent</code> in <code>lib/spawn.mjs</code> adds only the bot's GitHub variables, the
+          <code>ROLLOUT_*</code> variables and the empty npm credentials. A driver started from the UI inherits the environment of the
+          <code>rollout ui</code> process, so start the UI from a shell where <code>claude</code> works.
+        </p>
+
+        <div class="callout">
+          <p>
+            <strong>Check the login with the live preflight.</strong> Plain preflight only runs <code>claude --version</code>.
+            <code>preflight --live</code> starts a real headless agent, so a login or quota problem shows up there as five failed checks
+            that "never ran".
+          </p>
+        </div>
+
+        <h3 id="model">Model and effort</h3>
+
+        <p>
+          <a href="manifest.html#manifest-model"><code>model</code></a> defaults to <code>opus</code>, and the same
+          <code>--model</code> goes to every role: brief writer and reviewer, implementer, fixer and verifier. Only the live preflight uses
+          <code>haiku</code>.
+        </p>
+
+        <p>
+          Effort is one of <code>low</code>, <code>medium</code>, <code>high</code>, <code>xhigh</code> and <code>max</code>. Every PR sets
+          <code>effort.implement</code> and <code>effort.verify</code>, and <code>effort.brief</code> defaults to <code>xhigh</code>.
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Effort</th>
+                <th>Good for</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="name">max</td>
+                <td>Subtle runtime or concurrency work. Give the verifier <code>xhigh</code> then.</td>
+              </tr>
+              <tr>
+                <td class="name">xhigh</td>
+                <td>Public API or cross-package changes.</td>
+              </tr>
+              <tr>
+                <td class="name">high</td>
+                <td>Mechanical work across many files.</td>
+              </tr>
+              <tr>
+                <td class="name">medium</td>
+                <td>Docs.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Effort rises when a PR struggles (<code>raiseEffort</code> in <code>lib/manifest.mjs</code>). A second implement run goes one
+          level up. Fix runs start at <code>effort.implement</code> and go one level up with each fix attempt after the second. The verifier
+          and the brief runs keep their effort. <code>max</code> is the ceiling.
+        </p>
+
+        <h3 id="cost">Budget and cost</h3>
+
+        <ul>
+          <li>
+            Every run gets <code>--max-budget-usd</code> from <a href="manifest.html#policy-budgetUsd"><code>policy.budgetUsd</code></a> for
+            its effort, after raising: <code>low</code> 3, <code>medium</code> 8, <code>high</code> 20, <code>xhigh</code> 35 and
+            <code>max</code> 60 USD by default.
+          </li>
+          <li>
+            There is no cap per PR or per rollout. <a href="manifest.html#policy-attempts"><code>policy.attempts</code></a> bounds how many
+            runs of each role a PR gets before it escalates, and the costs show in <code>status</code>, the card and the UI.
+          </li>
+          <li>
+            A PR's cost is the sum of the <code>total_cost_usd</code> each run reports. On a subscription it is what the run would cost on
+            the API, not a charge.
+          </li>
+          <li>
+            A run killed before it reported a cost gets an estimate from the list prices in <code>lib/prices.mjs</code>. The UI shows
+            estimates apart and never adds them to the total.
+          </li>
+        </ul>
+
+        <h3 id="limits">Rate limits and spend limits</h3>
+
+        <ul>
+          <li>
+            <strong>Temporary trouble</strong>: a rate or usage limit, an overload, a 429 or 5xx, a dropped connection. The run gives its
+            attempt back, up to 5 times per PR, and the PR waits before its next try: 2, 4, 8 and so on minutes, at most 30.
+          </li>
+          <li>
+            <strong>Account trouble</strong>: a message about a spend limit, a credit balance, billing or an exceeded budget. The whole
+            rollout pauses and notifies you. <code>rollout resume</code> continues it.
+          </li>
+        </ul>
+
+        <h2 id="preflight">What preflight checks <a class="anchor" href="#preflight" aria-label="Link to this section">#</a></h2>
+
+        <div class="scroll">
+          <table class="wide">
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>Checked</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap">Your gh login</td>
+                <td>
+                  <code>gh auth status</code>, <code>git fetch origin</code>, that the origin URL matches <code>repo.github</code>, that
+                  squash merges are enabled, that you are an admin when <code>merge.admin</code> is set, and that
+                  <code>repo.public</code> matches the repository's visibility.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">The bot</td>
+                <td>
+                  That the token file exists, that its login has exactly the <code>write</code> permission and is not a maintainer, that
+                  agents' gh has no stored login to fall back to, and a warning without the <code>workflow</code> scope. Without
+                  <code>repo.agentToken</code>, only a warning.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">Claude</td>
+                <td>
+                  <code>claude --version</code>. With <code>--live</code>, a real headless agent whose guard must refuse four forbidden
+                  commands and allow one harmless command.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Preflight does not check:</p>
+
+        <ul>
+          <li>rulesets, CODEOWNERS, code scanning or npm trusted publishing</li>
+          <li>that <code>requiredChecks</code> names jobs your CI really has</li>
+          <li>that your own login is in <code>repo.maintainers</code></li>
+          <li>that <code>repo.install</code> works</li>
+          <li>your Claude login, unless you pass <code>--live</code></li>
+        </ul>
+
+        <p>
+          Run <a href="commands.html#cmd-preflight"><code>rollout preflight --live</code></a> before the first run, and again after you
+          change accounts or tokens. <a href="security.html">Security</a> explains what these accounts protect and what they do not.
+        </p>
+
+        <nav class="pager" aria-label="Pages">
+          <a class="prev" href="getting-started.html"><span>Previous</span>Getting started</a>
+          <a class="next" href="manifest.html"><span>Next</span>Manifest</a>
+        </nav>
+
+        <footer class="page-foot">
+          <a href="https://github.com/grzehub/claude-rollout/blob/main/docs/accounts.html">Edit this page on GitHub</a>
+        </footer>
+      </main>
+
+      <aside class="toc" aria-label="On this page">
+        <p class="group">On this page</p>
+        <ul>
+          <li><a href="#identities">Two GitHub identities</a></li>
+          <li><a href="#bot">The bot account</a></li>
+          <li><a href="#rules">Repository rules</a></li>
+          <li><a href="#npm">npm trusted publishing</a></li>
+          <li><a href="#modes">Merge and approval</a></li>
+          <li><a href="#claude">The Claude side</a></li>
+          <li><a href="#preflight">What preflight checks</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>

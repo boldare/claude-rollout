@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web UI · rollout docs</title>
+    <meta
+      name="description"
+      content="rollout ui: a local web page over every rollout, with live board, timeline, events, costs and PR pages, and the same controls as the CLI."
+    />
+    <link rel="icon" href="favicon.svg" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <div class="facts">
+        <span class="badge alpha">internal alpha</span>
+        <span class="version">v0.1.0</span>
+        <span>Node 20+</span>
+      </div>
+      <div class="facts right"><a href="https://github.com/grzehub/claude-rollout">GitHub</a></div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="Documentation">
+        <p class="group">Start</p>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="getting-started.html">Getting started</a></li>
+        </ul>
+        <p class="group">Setup</p>
+        <ul>
+          <li><a href="accounts.html">Accounts</a></li>
+          <li><a href="manifest.html">Manifest</a></li>
+        </ul>
+        <p class="group">Use</p>
+        <ul>
+          <li><a href="commands.html">Commands</a></li>
+          <li><a href="ui.html" aria-current="page">Web UI</a></li>
+        </ul>
+        <p class="group">Internals</p>
+        <ul>
+          <li><a href="how-it-works.html">How it works</a></li>
+          <li><a href="security.html">Security</a></li>
+        </ul>
+      </nav>
+
+      <main class="page">
+        <header class="page-head">
+          <h1>Web UI</h1>
+          <p class="page-meta">lib/server.mjs · lib/control.mjs · ui/</p>
+        </header>
+
+        <p class="lead">
+          <code>rollout ui</code> serves a local web page over every rollout on your machine. It shows what the driver and its agents are
+          doing, live, and it sends the same commands as the CLI. It reads files only and never calls GitHub.
+        </p>
+
+        <h2 id="what">What it is <a class="anchor" href="#what" aria-label="Link to this section">#</a></h2>
+
+        <p>The UI has two halves.</p>
+
+        <ul>
+          <li>
+            <strong>A view.</strong> It reads the files in each rollout directory: <code>manifest.yaml</code>, <code>ledger.json</code>,
+            <code>events.jsonl</code>, <code>heartbeat</code>, <code>driver.lock</code>, the briefs and the agent transcripts in
+            <code>logs/</code>. It builds its tables with the same model as <code>rollout status</code> (<code>lib/view.mjs</code>), so the
+            CLI and the UI never disagree.
+          </li>
+          <li>
+            <strong>A remote control.</strong> Pause, resume, unhalt, retry, note, hold and release become files in the rollout's
+            <code>inbox/</code>, exactly the files the CLI writes. Stop and start act on the driver process itself.
+          </li>
+        </ul>
+
+        <p>
+          It never calls GitHub or git. Stopped and finished rollouts work too, and watching costs no API calls. What you see about GitHub,
+          such as a PR number or the gate's reading of the merge state, is what the driver recorded on its last tick.
+        </p>
+
+        <div class="callout">
+          <p>
+            <strong>The UI is not the driver.</strong> Closing the page or stopping <code>rollout ui</code> changes nothing about a running
+            rollout, and a driver runs fine without the UI.
+          </p>
+        </div>
+
+        <h2 id="start">Starting it <a class="anchor" href="#start" aria-label="Link to this section">#</a></h2>
+
+        <p>Start it in a terminal of your own. It runs until <kbd>Ctrl</kbd>&nbsp;<kbd>C</kbd>.</p>
+
+        <pre><code><span class="dim">$</span> node $R ui
+rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYWw (Ctrl-C stops it)</code></pre>
+
+        <div class="scroll">
+          <table class="fields wide">
+            <thead>
+              <tr>
+                <th>flag</th>
+                <th>default</th>
+                <th>what it does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><a href="commands.html#flag-root">--root ROOT</a></td>
+                <td class="nowrap"><code>$ROLLOUT_ROOT</code>, else <code>~/.rollouts</code></td>
+                <td>
+                  The directory to list. Every entry in it with a <code>manifest.yaml</code> is a rollout. An empty
+                  <code>ROLLOUT_ROOT</code> counts as unset.
+                </td>
+              </tr>
+              <tr>
+                <td><a href="commands.html#flag-port">--port N</a></td>
+                <td>a random free port</td>
+                <td>A fixed port from 0 to 65535. The server listens on <code>127.0.0.1</code> only, whatever the port.</td>
+              </tr>
+              <tr>
+                <td><a href="commands.html#flag-no-open">--no-open</a></td>
+                <td>off</td>
+                <td>
+                  Prints the URL without opening a browser. Without it, the URL opens with <code>open</code> on macOS and
+                  <code>xdg-open</code> on Linux.
+                </td>
+              </tr>
+              <tr>
+                <td><a href="commands.html#flag-read-only">--read-only</a></td>
+                <td>off</td>
+                <td>Turns every control off. See <a href="#read-only">Read-only mode</a>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <ul>
+          <li>
+            The printed URL carries an access token after <code>#t=</code>. Open that exact URL. The token lives only in the server's
+            memory, so a restart of <code>rollout ui</code> prints a new one and old tabs stop working.
+          </li>
+          <li>
+            A rollout's name is its directory name. It must start with a letter, a digit or <code>_</code> and hold only letters, digits,
+            <code>_</code>, <code>.</code> and <code>-</code>, with no <code>..</code>. The sibling
+            <code>&lt;name&gt;.worktrees</code> directory has no manifest, so it never shows up.
+          </li>
+          <li>
+            Agents cannot start the UI. Every agent runs with <code>ROLLOUT_ROLE</code> set, and the CLI refuses <code>ui</code> for them
+            because the URL carries the token.
+          </li>
+        </ul>
+
+        <h2 id="how">How it works <a class="anchor" href="#how" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          <code>rollout ui</code> is a small <code>node:http</code> server in <code>lib/server.mjs</code>. The page is plain HTML, CSS and
+          ES modules from <code>ui/</code>, with no build step and no framework.
+        </p>
+
+        <figure class="diagram">
+          <svg viewBox="-2 -2 704 326" role="img" aria-labelledby="ui-flow-title">
+            <title id="ui-flow-title">
+              The browser calls the local server with a token. The server reads the rollout files, streams them back, writes commands into
+              the inbox and stops or starts the driver.
+            </title>
+            <defs>
+              <marker
+                id="ui-arrow"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto-start-reverse"
+              >
+                <path class="dg-head" d="M0,0 L8,4 L0,8 z" />
+              </marker>
+              <marker
+                id="ui-arrow-accent"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                markerUnits="userSpaceOnUse"
+                orient="auto-start-reverse"
+              >
+                <path class="dg-head accent" d="M0,0 L8,4 L0,8 z" />
+              </marker>
+            </defs>
+
+            <rect class="dg-node" x="0" y="56" width="130" height="160" rx="10" />
+            <text class="dg-title" x="14" y="80">Browser</text>
+            <text class="dg-mono" x="14" y="98">#t=&lt;token&gt;</text>
+            <text class="dg-text" x="14" y="130">board, timeline,</text>
+            <text class="dg-text" x="14" y="148">events, costs,</text>
+            <text class="dg-text" x="14" y="166">PR pages and</text>
+            <text class="dg-text" x="14" y="184">transcripts</text>
+
+            <rect class="dg-node strong" x="210" y="20" width="190" height="240" rx="10" />
+            <text class="dg-title" x="226" y="44">rollout ui</text>
+            <text class="dg-mono" x="226" y="62">127.0.0.1:&lt;port&gt;</text>
+            <circle class="dg-dot role-implement" cx="230" cy="88" r="3" />
+            <text class="dg-text" x="240" y="92">checks Host and Origin</text>
+            <circle class="dg-dot role-implement" cx="230" cy="110" r="3" />
+            <text class="dg-text" x="240" y="114">checks the Bearer token</text>
+            <circle class="dg-dot role-implement" cx="230" cy="132" r="3" />
+            <text class="dg-text" x="240" y="136">sends a strict CSP</text>
+            <circle class="dg-dot role-implement" cx="230" cy="154" r="3" />
+            <text class="dg-text" x="240" y="158">reads the rollout files</text>
+            <circle class="dg-dot role-implement" cx="230" cy="176" r="3" />
+            <text class="dg-text" x="240" y="180">writes inbox commands</text>
+            <circle class="dg-dot role-implement" cx="230" cy="198" r="3" />
+            <text class="dg-text" x="240" y="202">stops and starts the driver</text>
+            <text class="dg-mono" x="226" y="244">no GitHub, no git</text>
+
+            <rect class="dg-group" x="500" y="0" width="200" height="228" rx="12" />
+            <text class="dg-group-title" x="512" y="18">rollout directory</text>
+            <rect class="dg-node" x="512" y="28" width="176" height="22" rx="6" />
+            <text class="dg-mono" x="524" y="43">manifest.yaml</text>
+            <rect class="dg-node" x="512" y="55" width="176" height="22" rx="6" />
+            <text class="dg-mono" x="524" y="70">ledger.json</text>
+            <rect class="dg-node" x="512" y="82" width="176" height="22" rx="6" />
+            <text class="dg-mono" x="524" y="97">events.jsonl</text>
+            <rect class="dg-node" x="512" y="109" width="176" height="22" rx="6" />
+            <text class="dg-mono" x="524" y="124">heartbeat</text>
+            <rect class="dg-node" x="512" y="136" width="176" height="22" rx="6" />
+            <text class="dg-mono" x="524" y="151">driver.lock</text>
+            <rect class="dg-node" x="512" y="163" width="176" height="22" rx="6" />
+            <text class="dg-mono" x="524" y="178">logs/, briefs/</text>
+            <rect class="dg-node strong" x="512" y="194" width="176" height="22" rx="6" />
+            <text class="dg-title mono" x="524" y="209">inbox/</text>
+
+            <rect class="dg-node strong" x="500" y="264" width="200" height="54" rx="10" />
+            <text class="dg-title" x="514" y="286">Driver</text>
+            <text class="dg-mono" x="514" y="304">rollout run</text>
+
+            <path class="dg-edge accent" d="M130,100 H204" marker-end="url(#ui-arrow-accent)" />
+            <text class="dg-label" x="170" y="92" text-anchor="middle">Bearer token</text>
+            <path class="dg-edge" d="M210,170 H136" marker-end="url(#ui-arrow)" />
+            <text class="dg-label" x="170" y="162" text-anchor="middle">SSE stream</text>
+
+            <path class="dg-edge dashed" d="M500,104 H406" marker-end="url(#ui-arrow)" />
+            <text class="dg-label" x="450" y="96" text-anchor="middle">reads files</text>
+            <text class="dg-label" x="450" y="120" text-anchor="middle">watch + 5 s poll</text>
+            <path class="dg-edge accent" d="M400,205 H506" marker-end="url(#ui-arrow-accent)" />
+            <text class="dg-label" x="450" y="197" text-anchor="middle">commands</text>
+            <path class="dg-edge accent" d="M400,240 C450,240 450,291 494,291" marker-end="url(#ui-arrow-accent)" />
+            <text class="dg-label" x="404" y="306">SIGTERM, spawn</text>
+            <path class="dg-edge" d="M600,216 V258" marker-end="url(#ui-arrow)" />
+            <text class="dg-label" x="608" y="242">fs.watch</text>
+          </svg>
+          <figcaption>
+            The server only reads the rollout files, except for three kinds of write: a command file in <code>inbox/</code>, a SIGTERM for
+            stop, and a new detached driver for start. The driver picks the inbox up on its own.
+          </figcaption>
+        </figure>
+
+        <h3 id="token">The token</h3>
+
+        <ul>
+          <li>The server makes a random 32-byte token when it starts, prints it once in the URL and keeps it only in memory.</li>
+          <li>
+            The token sits in the URL fragment, after <code>#</code>. Browsers never send the fragment to a server, so it never shows up in
+            a request line or a log.
+          </li>
+          <li>
+            The page reads the token from the fragment and sends it as <code>Authorization: Bearer &lt;token&gt;</code> on every
+            <code>/api</code> call. The server compares it in constant time. The page itself and its scripts load without a token.
+          </li>
+          <li>
+            The whole view state lives in the fragment next to the token: the rollout, the view, the PR, the tab and the filters. A reload,
+            a bookmark or a link opened in a new tab lands on the same screen.
+          </li>
+        </ul>
+
+        <h3 id="live">Live updates</h3>
+
+        <ul>
+          <li>
+            An open rollout follows one Server-Sent Events stream, <code>GET /api/rollouts/&lt;name&gt;/stream</code>. On connect it sends
+            the whole state and every event so far. After that it pushes a new state and only the new events.
+          </li>
+          <li>
+            The server watches the rollout directory with <code>fs.watch</code>, debounced by 250&nbsp;ms, and polls it every 5&nbsp;s. It
+            pushes when the size or mtime of <code>manifest.yaml</code>, <code>ledger.json</code>, <code>events.jsonl</code>,
+            <code>heartbeat</code> or <code>driver.lock</code> changes, or when the driver's process appears or dies. The poll catches a
+            driver killed hard, which changes no file.
+          </li>
+          <li>
+            The stream sends a ping every 20&nbsp;s. The page reads it with <code>fetch</code>, because <code>EventSource</code> cannot send
+            the token header. After 45&nbsp;s without a byte it reconnects, waiting 1&nbsp;s at first and up to 30&nbsp;s.
+          </li>
+          <li>
+            The transcript of a running agent is fetched every 3&nbsp;s while its latest page is open. The rollout list refreshes every
+            5&nbsp;s.
+          </li>
+          <li>The page redraws every 30&nbsp;s, so times like <q>4m ago</q> stay true.</li>
+        </ul>
+
+        <h3 id="sending">Commands</h3>
+
+        <p>
+          A control posts JSON to <code>POST /api/rollouts/&lt;name&gt;/commands</code>, for example <code>{"cmd":"hold","id":"P2"}</code>.
+          The server checks it before it acts: a known command, a PR id from the manifest, a note with text, a JSON body of at most
+          64&nbsp;KiB.
+        </p>
+
+        <ul>
+          <li>
+            <strong>Inbox commands.</strong> Pause, resume, unhalt, retry, note, hold and release are written to <code>inbox/</code> through
+            a temporary file and a rename, so the driver never reads half a command. A running driver watches the inbox and applies the
+            command at the start of its next tick. When it sleeps between ticks, that is about half a second later. With no driver running,
+            the file waits for the next start.
+          </li>
+          <li>
+            <strong>Stop.</strong> The server sends SIGTERM to the pid in <code>driver.lock</code>. The driver stops its agents, saves and
+            exits, and the next start resumes their sessions. A second stop is refused while the first one is pending, because a second
+            SIGTERM makes the driver exit at once, without waiting for its agents.
+          </li>
+          <li>
+            <strong>Start.</strong> Refused while a driver holds the lock. Otherwise the server spawns
+            <code>node bin/rollout.mjs run --dir &lt;dir&gt;</code>, with <code>--dry-run</code> when you tick the box. It runs detached,
+            under <code>/usr/bin/caffeinate -is</code> on macOS when that exists, and its output is appended to <code>driver.log</code> in
+            the rollout directory. It uses the copy of the skill that serves the UI.
+          </li>
+        </ul>
+
+        <p>
+          The answer shows as a notice under the header for 15&nbsp;s: <q>hold P2 queued.</q>, with
+          <q>It applies when the driver starts.</q> when no driver runs, <q>Stopping the driver (pid 48213).</q> or
+          <q>Starting the driver. Its output goes to …/driver.log.</q>
+        </p>
+
+        <h2 id="views">The views <a class="anchor" href="#views" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The mockups below copy the UI's labels and layout, filled with made-up data. A rollout called
+          <code>my-lib-1.2.0</code> ships four PRs. P1 is merged, P2 waits for a review, P3 is being implemented and P4 waits for both.
+        </p>
+
+        <h3 id="view-list">Rollout list</h3>
+
+        <p>
+          The first page lists every rollout under the root, with the driver's status, how many PRs are merged and the cost so far. A
+          rollout whose manifest does not load shows the error instead. Click a name to open it.
+        </p>
+
+        <div class="mock" role="img" aria-label="Mockup of the rollout list">
+          <div class="header"><span class="title">rollouts</span></div>
+          <div class="mock-body">
+            <div class="scroll">
+              <table>
+                <tbody>
+                  <tr>
+                    <td><strong>my-lib-1.2.0</strong></td>
+                    <td class="small">running</td>
+                    <td class="small">1/4 merged</td>
+                    <td class="small">$21.44</td>
+                  </tr>
+                  <tr>
+                    <td><strong>my-lib-1.1.0</strong></td>
+                    <td class="small">stopped</td>
+                    <td class="small">5/5 merged</td>
+                    <td class="small">$63.10</td>
+                  </tr>
+                  <tr>
+                    <td><strong>notes-site</strong></td>
+                    <td class="small error-text" colspan="3">invalid manifest: - repo.path and repo.github are required</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <h3 id="view-header">Header</h3>
+
+        <p>Every page of a rollout starts with the same bar.</p>
+
+        <div class="mock" role="img" aria-label="Mockup of the rollout header">
+          <div class="header">
+            <span class="title">my-lib-1.2.0 <a class="back" href="#view-list">all rollouts</a></span>
+            <div class="facts">
+              <span
+                ><span class="badge driver driver-running">running</span><span class="muted">pid 48213</span
+                ><span class="muted">heartbeat 14s ago</span></span
+              >
+              <span><span class="label">merge</span> human</span>
+              <span><span class="label">cost</span> $21.44</span>
+              <span><span class="label">merged</span> 1/4</span>
+              <a class="error" href="#view-events">1 error</a>
+            </div>
+            <div class="controls"><span class="fake-button">Pause</span> <span class="fake-button danger">Stop</span></div>
+          </div>
+          <div class="mock-body">
+            <nav class="tabs" aria-label="Views">
+              <span class="tab active">board</span><span class="tab">timeline</span><span class="tab">events</span
+              ><span class="tab">costs</span>
+            </nav>
+          </div>
+        </div>
+
+        <ul>
+          <li>
+            <strong>Driver badge.</strong> <span class="badge driver driver-running">running</span> while a process holds
+            <code>driver.lock</code>, with its pid and the age of the heartbeat. Otherwise
+            <span class="badge driver driver-stopped">stopped</span>. <span class="badge driver driver-paused">paused</span> and
+            <span class="badge driver driver-halted">halted</span> win over both, because they are recorded in the ledger whether or not a
+            driver runs.
+          </li>
+          <li><strong>Heartbeat.</strong> Turns amber after 5 minutes without a beat. A healthy driver beats at least once a tick.</li>
+          <li>
+            <strong>merge, cost, merged.</strong> The merge policy from the manifest, the ledger's total cost and merged PRs out of all PRs.
+          </li>
+          <li><strong>Errors.</strong> The number of error events. The link opens the events view filtered to errors.</li>
+          <li>
+            <strong>Controls</strong> on the right, then banners: <q>reconnecting to the stream…</q>, a problem reading the files, or the
+            notice of the last command.
+          </li>
+          <li>A rollout that never ran has no ledger yet. Its header says <q>not started: no ledger yet</q> and offers only Start.</li>
+        </ul>
+
+        <h3 id="view-board">Board</h3>
+
+        <p>
+          The default view. Chips on top filter by state and count the PRs in each. One row per PR, in manifest order. Click a row to open
+          the PR page.
+        </p>
+
+        <div class="mock" role="img" aria-label="Mockup of the board">
+          <div class="mock-body">
+            <nav class="chips" aria-label="State filter">
+              <span class="chip active">all 4</span><span class="chip">pending 1</span><span class="chip">implementing 1</span
+              ><span class="chip">verified 1</span><span class="chip">merged 1</span>
+            </nav>
+            <div class="scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>PR</th>
+                    <th>title</th>
+                    <th>state</th>
+                    <th>GitHub</th>
+                    <th>deps</th>
+                    <th>attempts b/i/f/v</th>
+                    <th>cost</th>
+                    <th>last event</th>
+                    <th>info</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="id">P1</td>
+                    <td class="small wrap">feat: config loader</td>
+                    <td><span class="badge state state-merged">merged</span></td>
+                    <td class="small">#41</td>
+                    <td class="small">-</td>
+                    <td class="small num">1/1/0/0</td>
+                    <td class="small num">$9.80</td>
+                    <td class="small">2h 36m ago</td>
+                    <td class="small wrap info">merged as 3f2a9c1</td>
+                  </tr>
+                  <tr>
+                    <td class="id">P2</td>
+                    <td class="small wrap">feat: cli flags</td>
+                    <td><span class="badge state state-verified">verified</span></td>
+                    <td class="small">#42</td>
+                    <td class="small">P1 <span class="badge state state-merged">merged</span></td>
+                    <td class="small num">1/0/1/0</td>
+                    <td class="small num">$9.69</td>
+                    <td class="small">19m ago</td>
+                    <td class="small wrap info">wait: awaiting a maintainer review on GitHub (approve PR #42)</td>
+                  </tr>
+                  <tr>
+                    <td class="id">P3</td>
+                    <td class="small wrap">docs: config reference</td>
+                    <td>
+                      <span class="badge state state-implementing">implementing</span><span class="badge active-run">P3-01-implement</span>
+                    </td>
+                    <td class="small">-</td>
+                    <td class="small">-</td>
+                    <td class="small num">1/1/0/0</td>
+                    <td class="small num">$1.95</td>
+                    <td class="small">34m ago</td>
+                    <td class="small"></td>
+                  </tr>
+                  <tr>
+                    <td class="id">P4</td>
+                    <td class="small wrap">feat: watch mode</td>
+                    <td><span class="badge state state-pending">pending</span></td>
+                    <td class="small">-</td>
+                    <td class="small">
+                      P2 <span class="badge state state-verified">verified</span> P3
+                      <span class="badge state state-implementing">implementing</span>
+                    </td>
+                    <td class="small num">0/0/0/0</td>
+                    <td class="small num">$0.00</td>
+                    <td class="small">-</td>
+                    <td class="small"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <ul>
+          <li>
+            <strong>state</strong> is the ledger state, in the colours of <a href="how-it-works.html#state-pending">the PR lifecycle</a>. A
+            <span class="badge held">held</span> badge marks a held PR, and a mono badge names the agent run in progress.
+          </li>
+          <li><strong>GitHub</strong> links to the PR once the implementer opened it.</li>
+          <li><strong>deps</strong> lists the dependencies with their own state.</li>
+          <li>
+            <strong>attempts b/i/f/v</strong> counts brief, implement, fix and verify attempts, against the caps in
+            <code>policy.attempts</code>. A PASS sets the verify count back to zero, and a run that did no work gives its attempt back.
+          </li>
+          <li>
+            <strong>info</strong> is the most useful line the ledger has: the gate's action and reasons, the question of a blocked PR, the
+            reason of a fix, the last error, or the merge commit. It starts with <q>approved;</q> or <q>held;</q> when that applies.
+          </li>
+        </ul>
+
+        <h3 id="view-timeline">Timeline</h3>
+
+        <p>
+          One lane per PR, one bar per agent run, coloured by role. Gaps between bars are time spent waiting: for CI, a review or the next
+          tick. Click a bar to open that run's transcript.
+        </p>
+
+        <div class="mock" role="img" aria-label="Mockup of the timeline">
+          <div class="mock-body">
+            <div class="legend">
+              <span class="role-brief">brief</span><span class="role-implement">implement</span><span class="role-fix">fix</span
+              ><span class="role-verify">verify</span>
+            </div>
+            <div class="scroll">
+              <svg class="timeline-mock" viewBox="0 0 640 160" role="presentation">
+                <text class="dg-mono" x="8" y="28">P1</text>
+                <line class="tl-track" x1="56" y1="40" x2="636" y2="40" />
+                <rect class="tl-bar role-brief" x="64" y="20" width="13" height="12" rx="3" />
+                <rect class="tl-bar role-brief" x="79" y="20" width="14" height="12" rx="3" />
+                <rect class="tl-bar role-implement" x="95" y="20" width="107" height="12" rx="3" />
+                <rect class="tl-bar role-verify" x="207" y="20" width="43" height="12" rx="3" />
+                <circle class="tl-marker verdict-pass" cx="204" cy="26" r="5" />
+                <rect class="tl-marker state-merged" x="260" y="21" width="9" height="9" transform="rotate(45 264.5 25.5)" />
+
+                <text class="dg-mono" x="8" y="56">P2</text>
+                <line class="tl-track" x1="56" y1="68" x2="636" y2="68" />
+                <rect class="tl-bar role-brief" x="267" y="48" width="17" height="12" rx="3" />
+                <rect class="tl-bar role-brief" x="286" y="48" width="19" height="12" rx="3" />
+                <rect class="tl-bar role-implement interrupted" x="308" y="48" width="119" height="12" rx="3" />
+                <rect class="tl-bar role-fix" x="431" y="48" width="69" height="12" rx="3" />
+                <circle class="tl-marker verdict-pass" cx="500" cy="54" r="5" />
+                <rect class="tl-bar role-verify" x="505" y="48" width="50" height="12" rx="3" />
+
+                <text class="dg-mono" x="8" y="84">P3</text>
+                <line class="tl-track" x1="56" y1="96" x2="636" y2="96" />
+                <rect class="tl-bar role-brief" x="433" y="76" width="15" height="12" rx="3" />
+                <rect class="tl-bar role-brief" x="450" y="76" width="16" height="12" rx="3" />
+                <rect class="tl-bar role-implement running" x="560" y="76" width="76" height="12" rx="3" />
+
+                <text class="dg-mono" x="8" y="112">P4</text>
+                <line class="tl-track" x1="56" y1="124" x2="636" y2="124" />
+
+                <line class="dg-edge dashed" x1="427" y1="12" x2="427" y2="126" />
+
+                <text class="dg-mono" x="64" y="148">09:00</text>
+                <text class="dg-mono" x="207" y="148" text-anchor="middle">10:00</text>
+                <text class="dg-mono" x="350" y="148" text-anchor="middle">11:00</text>
+                <text class="dg-mono" x="493" y="148" text-anchor="middle">12:00</text>
+                <text class="dg-mono" x="636" y="148" text-anchor="end">13:00</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <ul>
+          <li>A brief shows as two bars, the writer and then the reviewer.</li>
+          <li>A hatched bar is an interrupted run, a red edge a failed one, and a dashed outline a run still going.</li>
+          <li>
+            Markers show the moments between runs: a green dot for a READY claim, a grey diamond for a rebase, an orange dot for review
+            feedback and a purple diamond for the merge.
+          </li>
+          <li>A dashed vertical line is a driver restart. The run it cut is interrupted, and the next run resumes it.</li>
+        </ul>
+
+        <h3 id="view-events">Events</h3>
+
+        <p>
+          Every line of <code>events.jsonl</code>, newest first, up to 500 rows. Two filters narrow it down: by PR (<q>driver (-)</q> for
+          the driver's own events) and by kind, with <q>errors</q> as a shortcut. Error rows are red.
+        </p>
+
+        <div class="mock" role="img" aria-label="Mockup of the events view">
+          <div class="mock-body">
+            <p class="chips"><span class="fake-button">PR: all ▾</span> <span class="fake-button">kind: all ▾</span></p>
+            <p class="count">6 shown</p>
+            <div class="scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>time</th>
+                    <th>PR</th>
+                    <th>kind</th>
+                    <th>detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="name">12:41</td>
+                    <td class="name">P2</td>
+                    <td class="name">gate-wait</td>
+                    <td class="detail">reasons=["awaiting a maintainer review on GitHub (approve PR #42)"]</td>
+                  </tr>
+                  <tr>
+                    <td class="name">12:26</td>
+                    <td class="name">P3</td>
+                    <td class="name">implement-start</td>
+                    <td class="detail">run=P3-01-implement log=logs/P3-01-implement.jsonl effort=high resume=false</td>
+                  </tr>
+                  <tr>
+                    <td class="name">12:25</td>
+                    <td class="name">P2</td>
+                    <td class="name">verified</td>
+                    <td class="detail">sha=9c4e1b2</td>
+                  </tr>
+                  <tr>
+                    <td class="name">12:25</td>
+                    <td class="name">P2</td>
+                    <td class="name">verify-done</td>
+                    <td class="detail">run=P2-02-verify ok=true result=PASS cost=1.84 seconds=1262 denials=0 stopped=false</td>
+                  </tr>
+                  <tr class="error-event">
+                    <td class="name">11:47</td>
+                    <td class="name">-</td>
+                    <td class="name">tick-error</td>
+                    <td class="detail">error=Error: gh: HTTP 502 (https://api.github.com/graphql)</td>
+                  </tr>
+                  <tr>
+                    <td class="name">11:31</td>
+                    <td class="name">-</td>
+                    <td class="name">driver-start</td>
+                    <td class="detail">prs=["P1","P2","P3","P4"] dryRun=false merge=human pid=48213</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <h3 id="view-costs">Costs</h3>
+
+        <p>
+          The total from the ledger, then bars per PR, per role and a step line of the cumulative cost over time. The per-role bars and the
+          line come from the <code>*-done</code> events of finished runs, so they can differ a little from the ledger's total.
+        </p>
+
+        <div class="mock" role="img" aria-label="Mockup of the costs view">
+          <div class="mock-body">
+            <p class="total">total $21.44 (from the ledger)</p>
+            <p class="count">
+              Runs that reported no cost: about $1.12 over 1 run, estimated from the token usage in their logs. Not in the totals.
+            </p>
+            <p class="eyebrow">per PR</p>
+            <svg class="bars-mock" viewBox="0 0 600 100" role="presentation">
+              <text class="dg-mono" x="0" y="15">P1</text>
+              <rect class="tl-rail" x="80" y="6" width="420" height="8" rx="4" />
+              <rect class="tl-bar role-implement" x="80" y="6" width="420" height="8" rx="4" />
+              <text class="dg-mono" x="600" y="15" text-anchor="end">$9.80</text>
+              <text class="dg-mono" x="0" y="40">P2</text>
+              <rect class="tl-rail" x="80" y="31" width="420" height="8" rx="4" />
+              <rect class="tl-bar role-implement" x="80" y="31" width="415" height="8" rx="4" />
+              <text class="dg-mono" x="600" y="40" text-anchor="end">$9.69</text>
+              <text class="dg-mono" x="0" y="65">P3</text>
+              <rect class="tl-rail" x="80" y="56" width="420" height="8" rx="4" />
+              <rect class="tl-bar role-implement" x="80" y="56" width="84" height="8" rx="4" />
+              <text class="dg-mono" x="600" y="65" text-anchor="end">$1.95</text>
+              <text class="dg-mono" x="0" y="90">P4</text>
+              <rect class="tl-rail" x="80" y="81" width="420" height="8" rx="4" />
+              <rect class="tl-bar role-implement" x="80" y="81" width="2" height="8" rx="1" />
+              <text class="dg-mono" x="600" y="90" text-anchor="end">$0.00</text>
+            </svg>
+            <p class="eyebrow">per role, from finished runs</p>
+            <svg class="bars-mock" viewBox="0 0 600 100" role="presentation">
+              <text class="dg-mono" x="0" y="15">brief</text>
+              <rect class="tl-rail" x="80" y="6" width="420" height="8" rx="4" />
+              <rect class="tl-bar role-brief" x="80" y="6" width="393" height="8" rx="4" />
+              <text class="dg-mono" x="600" y="15" text-anchor="end">$5.80</text>
+              <text class="dg-mono" x="0" y="40">implement</text>
+              <rect class="tl-rail" x="80" y="31" width="420" height="8" rx="4" />
+              <rect class="tl-bar role-implement" x="80" y="31" width="420" height="8" rx="4" />
+              <text class="dg-mono" x="600" y="40" text-anchor="end">$6.20</text>
+              <text class="dg-mono" x="0" y="65">fix</text>
+              <rect class="tl-rail" x="80" y="56" width="420" height="8" rx="4" />
+              <rect class="tl-bar role-fix" x="80" y="56" width="345" height="8" rx="4" />
+              <text class="dg-mono" x="600" y="65" text-anchor="end">$5.10</text>
+              <text class="dg-mono" x="0" y="90">verify</text>
+              <rect class="tl-rail" x="80" y="81" width="420" height="8" rx="4" />
+              <rect class="tl-bar role-verify" x="80" y="81" width="294" height="8" rx="4" />
+              <text class="dg-mono" x="600" y="90" text-anchor="end">$4.34</text>
+            </svg>
+          </div>
+        </div>
+
+        <p>
+          A run killed before it reported a cost, such as an interrupted one, has no cost in the ledger. The UI estimates it from the token
+          usage in its transcript and the list prices in <code>lib/prices.mjs</code>, and shows the estimate on its own line, never in the
+          totals. Costs are what Claude reports, see <a href="accounts.html">Accounts</a> for what they mean on a subscription.
+        </p>
+
+        <h3 id="view-pr">PR page</h3>
+
+        <p>
+          Click a PR anywhere to open its page: a back link, the id and title, the state and the PR's facts, the PR controls, and five tabs.
+        </p>
+
+        <div class="mock" role="img" aria-label="Mockup of a PR page">
+          <div class="mock-body">
+            <p class="back">← back to board</p>
+            <p class="detail-title">P2 <span class="muted">feat: cli flags</span></p>
+            <div class="facts pr-facts">
+              <span class="badge state state-verified">verified</span>
+              <a href="#view-pr">#42</a>
+              <span>branch feat/cli-flags</span>
+              <span>head 9c4e1b2</span>
+            </div>
+            <p class="chips"><span class="fake-button">Hold</span> <span class="fake-button">Note</span></p>
+            <nav class="tabs" aria-label="PR tabs">
+              <span class="tab active">overview</span><span class="tab">runs</span><span class="tab">verifier</span
+              ><span class="tab">review</span><span class="tab">brief</span>
+            </nav>
+            <dl class="kv">
+              <dt>info</dt>
+              <dd>wait: awaiting a maintainer review on GitHub (approve PR #42)</dd>
+              <dt>gate</dt>
+              <dd><strong>wait</strong> <span class="muted">at 12:41</span></dd>
+              <dt>reasons</dt>
+              <dd>awaiting a maintainer review on GitHub (approve PR #42)</dd>
+              <dt>GitHub merge state</dt>
+              <dd>BLOCKED, as the driver saw it at 12:41</dd>
+              <dt>gate sha</dt>
+              <dd>9c4e1b2</dd>
+              <dt>approval</dt>
+              <dd>a GitHub review on <a href="#view-pr">#42</a></dd>
+              <dt>verified</dt>
+              <dd>9c4e1b2 at 12:25</dd>
+              <dt>approved</dt>
+              <dd class="muted">no</dd>
+              <dt>deps</dt>
+              <dd>P1 <span class="badge state state-merged">merged</span></dd>
+              <dt>out of scope</dt>
+              <dd class="muted">none</dd>
+              <dt>workflow files</dt>
+              <dd class="muted">none</dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="scroll">
+          <table class="wide">
+            <thead>
+              <tr>
+                <th>tab</th>
+                <th>what it shows</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="name">overview</td>
+                <td>
+                  The board's info line, the gate's last decision with its reasons, GitHub's merge state and the sha it judged, the question
+                  and evidence of a blocked PR, the hold, how this PR is approved, the verified and approved stamps, the dependencies, files
+                  outside the PR's scope and changed workflow files. With the verifier and brief tabs it covers most of
+                  <a href="commands.html#cmd-card"><code>rollout card</code></a
+                  >. The implementer's summary, deviations and expected results are only on the card.
+                </td>
+              </tr>
+              <tr>
+                <td class="name">runs</td>
+                <td>
+                  Every agent run of the PR: run name, role, effort, start, duration, cost, result, permission denials and error. An
+                  estimated cost is marked <q>≈ est.</q>. Click a run to open its transcript below the table.
+                </td>
+              </tr>
+              <tr>
+                <td class="name">verifier</td>
+                <td>
+                  The latest verdict, PASS or FAIL, with the sha, the summary, the checklist with evidence, and the blocking and
+                  non-blocking findings. Below it, the history lists every verdict, newest first, as collapsed entries.
+                </td>
+              </tr>
+              <tr>
+                <td class="name">review</td>
+                <td>
+                  A link to the PR on GitHub and every maintainer comment the implementer handled, with what it did about it, the sha and
+                  the time.
+                </td>
+              </tr>
+              <tr>
+                <td class="name">brief</td>
+                <td>The brief the agents work from and the brief reviewer's notes, as plain text.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4 id="transcripts">Transcripts</h4>
+
+        <p>A transcript is the agent's <code>logs/&lt;run&gt;.jsonl</code>, read and laid out for people.</p>
+
+        <div class="mock" role="img" aria-label="Mockup of the runs tab">
+          <div class="mock-body">
+            <div class="scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>run</th>
+                    <th>role</th>
+                    <th>effort</th>
+                    <th>start</th>
+                    <th>duration</th>
+                    <th>cost</th>
+                    <th>result</th>
+                    <th>denials</th>
+                    <th>error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="name">P2-01-brief-write</td>
+                    <td class="small">brief write</td>
+                    <td class="small">xhigh</td>
+                    <td class="small">10:25</td>
+                    <td class="small num">7m</td>
+                    <td class="small num">$1.30</td>
+                    <td class="small">BRIEF</td>
+                    <td class="small num">0</td>
+                    <td class="small"></td>
+                  </tr>
+                  <tr>
+                    <td class="name">P2-01-brief-review</td>
+                    <td class="small">brief review</td>
+                    <td class="small">xhigh</td>
+                    <td class="small">10:32</td>
+                    <td class="small num">8m</td>
+                    <td class="small num">$1.45</td>
+                    <td class="small">BRIEF</td>
+                    <td class="small num">0</td>
+                    <td class="small"></td>
+                  </tr>
+                  <tr>
+                    <td class="name">P2-01-implement</td>
+                    <td class="small">implement</td>
+                    <td class="small">high</td>
+                    <td class="small">10:41</td>
+                    <td class="small num">-</td>
+                    <td class="small num"><em>≈$1.12 est.</em></td>
+                    <td class="small warning-text">interrupted</td>
+                    <td class="small num">-</td>
+                    <td class="small"></td>
+                  </tr>
+                  <tr>
+                    <td class="name">P2-01-fix</td>
+                    <td class="small">fix</td>
+                    <td class="small">high</td>
+                    <td class="small">11:33</td>
+                    <td class="small num">29m</td>
+                    <td class="small num">$5.10</td>
+                    <td class="small">READY</td>
+                    <td class="small num">0</td>
+                    <td class="small"></td>
+                  </tr>
+                  <tr class="selected">
+                    <td class="name">P2-02-verify</td>
+                    <td class="small">verify</td>
+                    <td class="small">high</td>
+                    <td class="small">12:04</td>
+                    <td class="small num">21m</td>
+                    <td class="small num">$1.84</td>
+                    <td class="small">PASS</td>
+                    <td class="small num">0</td>
+                    <td class="small"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <ul>
+          <li>
+            The header names the run, role, effort and status, the model, the number of items and the log size. A finished run adds its
+            outcome, cost, duration, turns and denials. A run without a result shows its token usage per model and the cost estimate
+            instead.
+          </li>
+          <li>
+            The items follow in order: the agent's text, each tool call with its command and a collapsible input, and each tool result,
+            collapsed to its first line. A result the guard refused carries a <span class="badge verdict-fail">guard refused</span> badge
+            and starts open.
+          </li>
+          <li>Text over 10,000 characters is cut, with a note that the full text is in the log file.</li>
+          <li>The agent's final report ends the transcript as formatted JSON.</li>
+          <li>
+            Pages hold 200 items, with first, previous, next and latest links. A running run opens on its latest page, is fetched again
+            every 3&nbsp;s, and the page sticks to the bottom while you are there.
+          </li>
+        </ul>
+
+        <h2 id="controls">Controls <a class="anchor" href="#controls" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          The rollout controls sit on the right of the header, the PR controls on the PR page. Each one shows only when it makes sense, and
+          the ones that are hard to undo ask first. In every confirmation Cancel has the focus, so <kbd>Enter</kbd> never confirms by
+          accident. The Note dialog puts the focus in its text box.
+        </p>
+
+        <div class="scroll">
+          <table class="fields wide">
+            <thead>
+              <tr>
+                <th>control</th>
+                <th>where and when</th>
+                <th>asks first</th>
+                <th>what it does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="control-pause">
+                <td>Pause</td>
+                <td>Header, while not paused.</td>
+                <td>no</td>
+                <td>
+                  Queues <a href="commands.html#cmd-pause"><code>pause</code></a
+                  >. The driver starts no runs and merges nothing. Running agents finish their step.
+                </td>
+              </tr>
+              <tr id="control-resume">
+                <td>Resume</td>
+                <td>Header, in place of Pause while paused.</td>
+                <td>no</td>
+                <td>
+                  Queues <a href="commands.html#cmd-resume"><code>resume</code></a
+                  >. Also the way out of a pause the driver made itself after an account limit.
+                </td>
+              </tr>
+              <tr id="control-unhalt">
+                <td>Unhalt</td>
+                <td>Header, while the rollout is halted.</td>
+                <td>yes, with the halt's reason</td>
+                <td>
+                  Queues <a href="commands.html#cmd-unhalt"><code>unhalt</code></a
+                  >. Clears the halt after a red base branch, so the driver merges again.
+                </td>
+              </tr>
+              <tr id="control-stop">
+                <td>Stop</td>
+                <td>Header, while a driver runs. Drawn in red.</td>
+                <td>yes: <q>Its agents stop too. The next start resumes their sessions.</q></td>
+                <td>
+                  SIGTERM to the driver in <code>driver.lock</code>, like <a href="commands.html#cmd-stop"><code>rollout stop</code></a
+                  >. Refused while a stop is already pending.
+                </td>
+              </tr>
+              <tr id="control-start">
+                <td>Start</td>
+                <td>Header, while no driver runs. The only control before a rollout's first run.</td>
+                <td>yes, with a <q>dry run</q> box</td>
+                <td>
+                  Starts a detached <a href="commands.html#cmd-run"><code>rollout run</code></a
+                  >, with <code>--dry-run</code> when ticked, and appends its output to <code>driver.log</code>.
+                </td>
+              </tr>
+              <tr id="control-hold">
+                <td>Hold</td>
+                <td>PR page, while the PR is not held and not merged.</td>
+                <td>no</td>
+                <td>
+                  Queues <a href="commands.html#cmd-hold"><code>hold</code></a
+                  >. No new runs, rebases, ready notices or merges for this PR. A running agent finishes its step.
+                </td>
+              </tr>
+              <tr id="control-release">
+                <td>Release</td>
+                <td>PR page, in place of Hold while held.</td>
+                <td>no</td>
+                <td>
+                  Queues <a href="commands.html#cmd-release"><code>release</code></a
+                  >, which lifts the hold.
+                </td>
+              </tr>
+              <tr id="control-note">
+                <td>Note</td>
+                <td>PR page, until the PR is merged.</td>
+                <td>a text box, Send stays off until you type</td>
+                <td>
+                  Queues <a href="commands.html#cmd-note"><code>note</code></a> with your text. What it does depends on the PR's state. For
+                  a verified or ready_claimed PR the dialog warns that the PR goes back to the implementer and loses its verification.
+                </td>
+              </tr>
+              <tr id="control-retry">
+                <td>Retry</td>
+                <td>PR page, for an escalated, blocked or interrupted PR.</td>
+                <td>yes: <q>Its attempts start from zero.</q></td>
+                <td>
+                  Queues <a href="commands.html#cmd-retry"><code>retry</code></a
+                  >, which resets the attempt counters and lets the PR run again.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="not-here">What the UI does not do <a class="anchor" href="#not-here" aria-label="Link to this section">#</a></h2>
+
+        <ul>
+          <li>
+            <strong>Approve.</strong> Approval stays a GitHub review or <a href="commands.html#cmd-approve"><code>rollout approve</code></a
+            >. The server rejects an <code>approve</code> command, so nothing that can reach the page can approve a merge.
+          </li>
+          <li>
+            <strong>Start a subset.</strong> Start has no <code>--only</code>. Run <code>rollout run --only P1,P2</code> in a terminal for
+            that.
+          </li>
+          <li>
+            <strong>Preflight, status and card</strong> stay in the CLI. The board and the PR page show most of the same facts as
+            <code>status</code> and <code>card</code>, but not the implementer's report.
+          </li>
+          <li>
+            <strong>Edit the manifest.</strong> Edit <code>manifest.yaml</code> in your editor. The driver reloads it on its next tick.
+          </li>
+        </ul>
+
+        <h2 id="read-only">Read-only mode <a class="anchor" href="#read-only" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          <code>rollout ui --read-only</code> is the UI for watching only. The terminal says <q>read-only: the controls are disabled</q>,
+          the header carries a <span class="badge read-only">read-only</span> badge, and no control is drawn.
+        </p>
+
+        <p>
+          The server enforces it too: it answers every command with <code>403 read-only</code>, whatever the page sends. The page also
+          treats a state without the flag as read-only, so a mismatch fails closed.
+        </p>
+
+        <h2 id="troubleshooting">Troubleshooting <a class="anchor" href="#troubleshooting" aria-label="Link to this section">#</a></h2>
+
+        <dl class="kv">
+          <dt>Open the URL that rollout ui printed…</dt>
+          <dd>
+            The page has no token, or the server no longer knows it (401). Open the URL from the terminal again. After a restart of
+            <code>rollout ui</code> that is a new URL.
+          </dd>
+          <dt>reconnecting to the stream…</dt>
+          <dd>
+            The stream dropped or went silent for 45&nbsp;s. The page retries on its own. If it stays, check that
+            <code>rollout ui</code> still runs.
+          </dd>
+          <dt>An amber heartbeat</dt>
+          <dd>
+            The driver has not beaten for over 5 minutes. It may be stuck in a long git or GitHub call, or the machine slept. Look at the
+            terminal that runs it, or at <code>driver.log</code> when the UI started it.
+          </dd>
+          <dt>stopped, but work is left</dt>
+          <dd>No driver holds the lock. Press Start, or run <code>rollout run</code> in a terminal. Agents resume their sessions.</dd>
+          <dt>No rollouts in …</dt>
+          <dd>The root has no directory with a <code>manifest.yaml</code>. Check <code>--root</code> and <code>ROLLOUT_ROOT</code>.</dd>
+          <dt>unknown rollout</dt>
+          <dd>The rollout directory was renamed or lost its manifest while the page was open. Go back to the list.</dd>
+        </dl>
+
+        <h2 id="security">Security in short <a class="anchor" href="#security" aria-label="Link to this section">#</a></h2>
+
+        <ul>
+          <li>The server listens on <code>127.0.0.1</code> only.</li>
+          <li>
+            It checks <code>Host</code> on every request and <code>Origin</code> on every write, so another web page cannot reach it through
+            DNS rebinding or a cross-site form.
+          </li>
+          <li>
+            Every API call needs the token. It stops a plain <code>curl</code> from another process, not code that can read your terminal or
+            your browser history.
+          </li>
+          <li>
+            A strict Content Security Policy allows only the page's own files: no inline scripts or styles, no framing. The page builds
+            every element with text, never HTML, because titles, verdicts and transcripts are untrusted agent output.
+          </li>
+        </ul>
+
+        <p>The details and their limits are on <a href="security.html#ui">Security</a>.</p>
+
+        <nav class="pager" aria-label="Pages">
+          <a class="prev" href="commands.html"><span>Previous</span>Commands</a>
+          <a class="next" href="how-it-works.html"><span>Next</span>How it works</a>
+        </nav>
+
+        <footer class="page-foot">
+          <a href="https://github.com/grzehub/claude-rollout/blob/main/docs/ui.html">Edit this page on GitHub</a>
+        </footer>
+      </main>
+
+      <aside class="toc" aria-label="On this page">
+        <p class="group">On this page</p>
+        <ul>
+          <li><a href="#what">What it is</a></li>
+          <li><a href="#start">Starting it</a></li>
+          <li><a href="#how">How it works</a></li>
+          <li><a href="#views">The views</a></li>
+          <li><a href="#controls">Controls</a></li>
+          <li><a href="#not-here">What the UI does not do</a></li>
+          <li><a href="#read-only">Read-only mode</a></li>
+          <li><a href="#troubleshooting">Troubleshooting</a></li>
+          <li><a href="#security">Security in short</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>

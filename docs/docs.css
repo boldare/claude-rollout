@@ -1,0 +1,1369 @@
+/* Styles of the docs site. No scripts, no inline styles, no web fonts: the same rules as the UI. */
+
+/* Tokens, copied from ui/style.css so the docs, the UI and the describe-me viewer feel like one family. test/docs.test.mjs keeps them equal. */
+
+:root {
+  color-scheme: light dark;
+  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --raised: #ffffff;
+  --well: #f1f3f6;
+
+  --ink: #1c2024;
+  --ink-2: #4f5762;
+  --ink-3: #6b7381;
+
+  --line: #e6e9ee;
+  --line-soft: #eff1f5;
+  --hover: #f1f3f6;
+
+  --accent: #4a63d8;
+  --pass: #2f9e5f;
+  --fail: #d04747;
+  --warn: #b0760c;
+  --skip: #a8b0bb;
+
+  --brief: #c98a12;
+  --implement: #4a63d8;
+  --fix: #2f9e5f;
+  --verify: #d0652f;
+  --merged: #7b5bd6;
+
+  --tint: color-mix(in srgb, var(--accent) 7%, transparent);
+  --tint-strong: color-mix(in srgb, var(--accent) 13%, transparent);
+  --ring: color-mix(in srgb, var(--accent) 45%, transparent);
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(20, 24, 32, 0.05);
+  --shadow-md: 0 1px 2px rgba(20, 24, 32, 0.05), 0 6px 16px -6px rgba(20, 24, 32, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111316;
+    --panel: #171a1f;
+    --raised: #1c2026;
+    --well: #0f1114;
+
+    --ink: #e2e6ea;
+    --ink-2: #b0b9c5;
+    --ink-3: #8a939f;
+
+    --line: #252a31;
+    --line-soft: #1e2228;
+    --hover: #21262d;
+
+    --accent: #8ea2ff;
+    --pass: #4fbb7d;
+    --fail: #e8756f;
+    --warn: #d3a24a;
+    --skip: #5c646f;
+
+    --brief: #d3a24a;
+    --implement: #7f95f7;
+    --fix: #4fbb7d;
+    --verify: #e38a5c;
+    --merged: #b59bff;
+
+    --tint: color-mix(in srgb, var(--accent) 10%, transparent);
+    --tint-strong: color-mix(in srgb, var(--accent) 18%, transparent);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 20px -8px rgba(0, 0, 0, 0.6);
+  }
+}
+
+/* Base */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  /* Anchors land below the sticky bar, not under it. */
+  scroll-padding-top: 72px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 13px/1.5 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--tint-strong);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+code,
+pre,
+kbd,
+.mono {
+  font-family: var(--font-mono);
+}
+
+code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--hover);
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+/* Top bar: the same 52px panel strip as the UI header and the describe-me header. */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 52px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.wordmark {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.wordmark:hover {
+  text-decoration: none;
+}
+
+.wordmark .me {
+  color: var(--accent);
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.facts > * {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* A hairline between facts, the way the describe-me header splits its stats. A badge has its own edge. */
+.facts > * + :not(.badge)::before {
+  content: '';
+  width: 1px;
+  height: 11px;
+  margin-right: 8px;
+  background: var(--line);
+}
+
+.facts a {
+  color: var(--ink-3);
+}
+
+.facts a:hover {
+  color: var(--ink);
+}
+
+.topbar > .right {
+  margin-left: auto;
+}
+
+/* Layout: sidebar, page and an "on this page" column, like the viewer's sidebar, stage and inspector. */
+
+.layout {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr) 208px;
+  align-items: start;
+}
+
+.sidebar,
+.toc {
+  position: sticky;
+  top: 52px;
+  max-height: calc(100vh - 52px);
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.sidebar {
+  min-height: calc(100vh - 52px);
+  padding: 18px 10px 32px;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.sidebar ul,
+.toc ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sidebar ul + .group {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.group {
+  margin: 0 0 6px;
+  padding: 0 9px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.sidebar a,
+.toc a {
+  position: relative;
+  display: block;
+  padding: 4px 9px;
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.sidebar a:hover,
+.toc a:hover {
+  background: var(--hover);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+/* Selection is a tinted row with an accent edge, as in the describe-me tree. */
+.sidebar a[aria-current='page'] {
+  background: var(--tint);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.sidebar a[aria-current='page']::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.toc {
+  padding: 28px 16px 32px 4px;
+}
+
+.toc a {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
+/* The page */
+
+.page {
+  width: 100%;
+  max-width: 50rem;
+  margin: 0 auto;
+  padding: 28px 36px 64px;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-head h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.page-head .page-meta {
+  margin: 0 0 0 auto;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.lead {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: 15px;
+}
+
+.page h2 {
+  margin: 44px 0 10px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+
+.page h3 {
+  margin: 28px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.page h4 {
+  margin: 20px 0 4px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.page p,
+.page ul,
+.page ol {
+  margin: 10px 0;
+}
+
+.page ul,
+.page ol {
+  padding-left: 22px;
+}
+
+.page li + li {
+  margin-top: 4px;
+}
+
+.page li > ul,
+.page li > ol {
+  margin: 4px 0;
+}
+
+/* Heading anchors show up on hover, so the headings stay quiet at rest. */
+.anchor {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-weight: 400;
+  opacity: 0;
+}
+
+:is(h2, h3):hover > .anchor,
+.anchor:focus-visible {
+  opacity: 1;
+}
+
+.anchor:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.eyebrow {
+  margin: 22px 0 8px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* Code */
+
+pre {
+  margin: 12px 0;
+  padding: 11px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--well);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+  overflow-wrap: normal;
+}
+
+/* A comment or a prompt inside a code block steps back. */
+pre .dim {
+  color: var(--ink-3);
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: 11px;
+  text-align: center;
+}
+
+/* Cards and tables */
+
+.scroll {
+  margin: 12px 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  border-bottom-color: var(--line);
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+td {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* A reference table: the name column is code and never wraps. */
+td.name,
+table.fields td:first-child {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+td.name code,
+table.fields td:first-child code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+td.nowrap {
+  white-space: nowrap;
+}
+
+tr:target td {
+  background: var(--tint);
+}
+
+tr:target td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+dl.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 18px;
+  margin: 12px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  font-size: 13px;
+}
+
+dl.kv dt {
+  color: var(--ink-3);
+}
+
+dl.kv dd {
+  margin: 0;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.card {
+  display: block;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  color: var(--ink);
+}
+
+a.card:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+}
+
+.card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 13.5px;
+}
+
+.card p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* A role card carries its role colour as a dot, the same tone as the timeline bars. */
+.card[class*='role-'] h3::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 18%, transparent);
+}
+
+.callout {
+  --tone: var(--accent);
+  margin: 14px 0;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--tone) 28%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--tone) 6%, transparent);
+  font-size: 13.5px;
+}
+
+.callout > :first-child {
+  margin-top: 0;
+}
+
+.callout > :last-child {
+  margin-bottom: 0;
+}
+
+.callout strong:first-child {
+  color: color-mix(in srgb, var(--tone) 75%, var(--ink));
+}
+
+.callout.warn {
+  --tone: var(--warn);
+}
+
+.callout.danger {
+  --tone: var(--fail);
+}
+
+.callout.pass {
+  --tone: var(--pass);
+}
+
+/* Numbered steps, each with its number in a tinted disc. */
+
+ol.steps {
+  padding: 0;
+  counter-reset: step;
+  list-style: none;
+}
+
+ol.steps > li {
+  position: relative;
+  padding-left: 38px;
+  counter-increment: step;
+}
+
+ol.steps > li + li {
+  margin-top: 18px;
+}
+
+ol.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--tint-strong);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+ol.steps > li > strong:first-child {
+  display: block;
+}
+
+/* Badges, copied from the UI so a state reads the same in the docs and on the board. */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--tone, var(--skip)) 14%, transparent);
+  color: color-mix(in srgb, var(--tone, var(--ink-3)) 75%, var(--ink));
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 19px;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+.badge.state::before,
+.badge.driver::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tone, var(--skip));
+}
+
+/* Waiting is the norm, so a pending PR stays quiet: a hollow dot and no fill. */
+.badge.state-pending {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-3);
+}
+
+.badge.state-pending::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--skip);
+}
+
+.badge.driver-running::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pass) 22%, transparent);
+}
+
+.state-pending,
+.driver-stopped,
+.read-only,
+.where-cli {
+  --tone: var(--skip);
+}
+
+.state-briefing {
+  --tone: var(--brief);
+}
+
+.state-implementing,
+.state-verifying,
+.state-fixing,
+.active-run,
+.where-ui {
+  --tone: var(--implement);
+}
+
+.state-ready_claimed {
+  --tone: var(--fix);
+}
+
+.state-verified,
+.driver-running,
+.verdict-pass {
+  --tone: var(--pass);
+}
+
+.state-needs_fix {
+  --tone: var(--verify);
+}
+
+.state-blocked,
+.state-escalated,
+.driver-halted,
+.verdict-fail {
+  --tone: var(--fail);
+}
+
+.state-interrupted,
+.held,
+.driver-paused,
+.alpha {
+  --tone: var(--warn);
+}
+
+.state-merged {
+  --tone: var(--merged);
+}
+
+.role-brief {
+  --tone: var(--brief);
+}
+
+.role-implement {
+  --tone: var(--implement);
+}
+
+.role-fix {
+  --tone: var(--fix);
+}
+
+.role-verify {
+  --tone: var(--verify);
+}
+
+.role-driver {
+  --tone: var(--ink-3);
+}
+
+/* UI mockups: the UI's own markup on synthetic data, at the UI's own size. */
+
+.mock {
+  margin: 14px 0 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--bg);
+  box-shadow: var(--shadow-md);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mock-body {
+  padding: 14px 16px 16px;
+  overflow-x: auto;
+}
+
+.mock-caption {
+  margin: 0 0 14px;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: right;
+}
+
+.mock .header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 22px;
+  min-height: 52px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.mock .title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.mock .controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.mock .scroll {
+  margin: 0;
+}
+
+.mock td {
+  padding: 7px 12px;
+  font-size: 13px;
+}
+
+.mock th {
+  padding: 7px 12px;
+}
+
+.mock td.id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.mock td.small {
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mock .tabs {
+  margin-bottom: 12px;
+}
+
+.fake-button {
+  display: inline-block;
+  padding: 4px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.fake-button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
+}
+
+.fake-button.danger {
+  border-color: color-mix(in srgb, var(--fail) 40%, transparent);
+  color: var(--fail);
+}
+
+/* A segmented control, not a row of loose links. */
+
+.tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-md);
+  background: var(--hover);
+}
+
+.tab {
+  padding: 3px 12px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tab.active {
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.chip {
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip.active {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--tint);
+  color: var(--ink);
+}
+
+/* Timeline mockup, drawn as SVG: one lane per PR, bars in role colours. */
+
+.tl-bar {
+  fill: var(--tone);
+}
+
+.tl-bar.interrupted {
+  fill: color-mix(in srgb, var(--tone) 35%, transparent);
+  stroke: var(--tone);
+}
+
+.tl-bar.running {
+  stroke: var(--ink-3);
+  stroke-dasharray: 3 2;
+}
+
+.tl-track {
+  stroke: var(--line-soft);
+}
+
+.tl-marker {
+  fill: var(--tone);
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0 0 10px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend > span::before {
+  content: '';
+  width: 16px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--tone);
+}
+
+/* Diagrams: inline SVG, coloured only through the tokens, so dark mode needs nothing extra. */
+
+.diagram {
+  margin: 18px 0 8px;
+  padding: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.diagram svg {
+  display: block;
+  width: 100%;
+  min-width: 640px;
+  height: auto;
+  font-family: var(--font-ui);
+}
+
+.diagram figcaption {
+  margin-top: 12px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dg-group {
+  fill: var(--well);
+  stroke: var(--line);
+  stroke-dasharray: 3 3;
+}
+
+.dg-node {
+  fill: var(--panel);
+  stroke: var(--line);
+}
+
+.dg-node.toned {
+  fill: color-mix(in srgb, var(--tone) 12%, var(--panel));
+  stroke: color-mix(in srgb, var(--tone) 60%, var(--panel));
+}
+
+.dg-node.strong {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.dg-dot {
+  fill: var(--tone);
+}
+
+.dg-title {
+  fill: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.dg-group-title {
+  fill: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.dg-title.mono,
+.dg-group-title.mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.dg-text {
+  fill: var(--ink-2);
+  font-size: 11.5px;
+}
+
+.dg-mono {
+  fill: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.dg-edge {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.25;
+}
+
+.dg-edge.accent {
+  stroke: var(--accent);
+}
+
+.dg-edge.fail {
+  stroke: var(--fail);
+}
+
+.dg-edge.dashed {
+  stroke-dasharray: 4 3;
+}
+
+.dg-head {
+  fill: var(--ink-3);
+}
+
+.dg-head.accent {
+  fill: var(--accent);
+}
+
+.dg-head.fail {
+  fill: var(--fail);
+}
+
+/* Edge labels get a halo in the card colour, so a line never runs through the text. */
+.dg-label {
+  fill: var(--ink-3);
+  font-size: 11px;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.dg-label.mono {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.dg-lifeline {
+  stroke: var(--line);
+  stroke-dasharray: 3 4;
+}
+
+/* Previous and next page */
+
+.pager {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 48px;
+}
+
+.pager a {
+  display: block;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.pager a:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  text-decoration: none;
+}
+
+.pager span {
+  display: block;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.pager .next {
+  grid-column: 2;
+  text-align: right;
+}
+
+.page-foot {
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.page-foot a {
+  color: var(--ink-3);
+}
+
+/* Narrow screens: the "on this page" column goes first, then the sidebar folds into a list above the page. */
+
+@media (max-width: 1180px) {
+  .layout {
+    grid-template-columns: 232px minmax(0, 1fr);
+  }
+
+  .toc {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    padding: 0 16px;
+  }
+
+  .topbar .facts:not(.right) > :not(.badge) {
+    display: none;
+  }
+
+  .layout {
+    display: block;
+  }
+
+  .sidebar {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    min-height: 0;
+    max-height: none;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .sidebar .group {
+    display: none;
+  }
+
+  .sidebar ul {
+    display: contents;
+  }
+
+  .sidebar ul + .group {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .sidebar a {
+    padding: 3px 8px;
+  }
+
+  .page {
+    padding: 22px 16px 48px;
+  }
+
+  .page-head .page-meta {
+    margin-left: 0;
+  }
+
+  .pager {
+    grid-template-columns: 1fr;
+  }
+
+  .pager .next {
+    grid-column: 1;
+  }
+}
+
+/* A prose table that would squeeze into one-word lines on a phone scrolls inside its card instead. */
+.scroll > table.wide {
+  min-width: 34rem;
+}
+
+/* UI page mockups: the details of the UI's views that the shared mock rules leave out. */
+
+.mock .label,
+.mock .back,
+.mock p.count {
+  color: var(--ink-3);
+}
+
+.mock .back {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.mock p.back {
+  margin: 0 0 6px;
+}
+
+.mock p.count {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.mock .facts {
+  color: var(--ink);
+}
+
+.mock .facts .muted {
+  color: var(--ink-3);
+}
+
+.mock .facts a.error,
+.mock td.error-text {
+  color: var(--fail);
+}
+
+.mock td.warning-text {
+  color: var(--warn);
+}
+
+.mock td.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.mock td.detail {
+  min-width: 16rem;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.mock tr.error-event td {
+  background: color-mix(in srgb, var(--fail) 6%, transparent);
+  color: var(--fail);
+}
+
+.mock tr.selected td {
+  background: var(--tint);
+}
+
+.mock tr.selected td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.mock .total,
+.mock .detail-title {
+  margin: 0 0 4px;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.mock .detail-title .muted {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.mock .pr-facts {
+  margin: 6px 0 10px;
+}
+
+.mock .chips {
+  align-items: center;
+}
+
+.mock svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--font-ui);
+}
+
+.timeline-mock {
+  min-width: 34rem;
+  padding: 8px 12px 2px;
+}
+
+.bars-mock {
+  max-width: 44rem;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+}
+
+.tl-rail {
+  fill: var(--line-soft);
+}
+
+.mock td.small.wrap {
+  min-width: 9rem;
+  white-space: normal;
+}
+
+.mock td.small.info {
+  min-width: 16rem;
+}
+
+/* On a phone a key and its value stack, so a long key never squeezes its value into one-word lines. */
+@media (max-width: 760px) {
+  dl.kv {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  dl.kv dd + dt {
+    margin-top: 10px;
+  }
+}
