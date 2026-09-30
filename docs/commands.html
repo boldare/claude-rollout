@@ -482,7 +482,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               </tr>
               <tr>
                 <td>guard hook</td>
-                <td>Feeding <code>gh pr merge 1 --admin</code> to the Bash guard does not end with exit code 2.</td>
+                <td>
+                  Feeding <code>gh pr merge 1 --admin</code> to the Bash guard does not end with exit code 2, or feeding it
+                  <code>echo allowed</code> does not end with exit code 0.
+                </td>
               </tr>
               <tr>
                 <td class="name">--live</td>
