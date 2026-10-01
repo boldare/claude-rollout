@@ -143,6 +143,31 @@ test('draft, wrong base, wrong branch and missing label block', () => {
   }
 })
 
+test('a PR merged on GitHub waits for sync whatever else is off, and a closed one still blocks', () => {
+  const merged = { ...facts().pr, state: 'MERGED' }
+  const changes = [
+    {},
+    { isDraft: true },
+    { baseRefName: 'develop' },
+    { headRefName: 'other' },
+    { labels: [] },
+    { title: 'chore: version packages' },
+  ]
+
+  for (const change of changes) {
+    const verdict = judge(M, pr, verifiedAndApproved, facts({ pr: { ...merged, ...change } }))
+
+    assert.equal(verdict.action, 'wait', JSON.stringify(change))
+    assert.deepEqual(verdict.reasons, ['merged on GitHub (the next sync records it)'])
+    assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve PR|GitHub still blocks/)
+  }
+
+  const closed = judge(M, pr, verifiedAndApproved, facts({ pr: { ...facts().pr, state: 'CLOSED' } }))
+
+  assert.equal(closed.action, 'block')
+  assert.deepEqual(closed.reasons, ['PR is CLOSED'])
+})
+
 test('policy: forbidden paths, versions, changesets, denylist, multi-line commits', () => {
   const bad = facts({
     files: [

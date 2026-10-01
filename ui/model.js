@@ -13,7 +13,17 @@ export const STATES = [
   'merged',
 ]
 
-export const ERROR_KINDS = ['tick-error', 'error', 'on-done-error', 'reply-failed', 'manifest-rejected']
+export const ERROR_KINDS = [
+  'tick-error',
+  'error',
+  'on-done-error',
+  'reply-failed',
+  'manifest-rejected',
+  'fetch-failed',
+  'outside-deps-failed',
+  'watch-base-failed',
+  'report-unchecked',
+]
 
 const DETAIL_LIMIT = 200
 const HIDDEN_FIELDS = new Set(['at', 'id', 'kind'])
