@@ -257,7 +257,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           </li>
         </ul>
 
-        <p>In the UI, the same facts are on the PR page, across its overview and verifier tabs.</p>
+        <p>
+          In the UI, most of these facts are on the PR page, across its overview, verifier and brief tabs. The patch id, the author and the
+          implementer's summary, deviations and expected-vs-observed are only on the card.
+        </p>
 
         <h3 id="cmd-ui">ui <a class="anchor" href="#cmd-ui" aria-label="Link to this command">#</a></h3>
 
@@ -677,8 +680,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>the driver, for agents</td>
                 <td>
                   The PR, its branch (empty for the verifier, brief and delegate roles), the rollout and the skill's directory. The Bash
-                  guard reads them. Agents also get <code>ROLLOUT_DIR</code>, so <code>status</code> and <code>card</code> work for them
-                  without flags.
+                  guard reads all of them but <code>ROLLOUT_ID</code>. Agents also get <code>ROLLOUT_DIR</code>, so <code>status</code> and
+                  <code>card</code> work for them without flags.
                 </td>
               </tr>
               <tr>

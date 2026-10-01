@@ -642,8 +642,9 @@
           </li>
           <li><strong>Paused</strong> applies to the whole rollout. No new runs start and nothing merges. Running agents finish.</li>
           <li>
-            <strong>Halted</strong> applies to the whole rollout after the base went red behind a merge. Only merges stop. Agents keep
-            working until <a href="commands.html#cmd-unhalt"><code>unhalt</code></a
+            <strong>Halted</strong> applies to the whole rollout after the base went red behind a merge. The gate step stops, so nothing
+            merges or rebases and no ready notice goes out. Agents keep working until
+            <a href="commands.html#cmd-unhalt"><code>unhalt</code></a
             >.
           </li>
         </ul>
@@ -1160,6 +1161,7 @@
                 <td>A run ended without a report</td>
                 <td>
                   The PR becomes <code>interrupted</code> and resumes on a later tick. So does every run in progress when the driver stops.
+                  A brief run goes back to <code>pending</code> instead, and a delegate run leaves the PR <code>blocked</code>.
                 </td>
               </tr>
               <tr>
@@ -1207,7 +1209,8 @@
                 <td>Code scanning could not be read</td>
                 <td>
                   A repo without code scanning answers 404 or 403. The driver logs <code>code-scanning-unavailable</code> once per PR and
-                  goes on without it. Any other error, a rate limit included, counts as an error of that PR.
+                  goes on without it. Any other error counts as an error of that PR, unless it is an <a href="#outage">outage</a> such as a
+                  rate limit.
                 </td>
               </tr>
             </tbody>
@@ -1274,7 +1277,10 @@
           <li><strong>The end:</strong> all PRs merged, with the release PR to merge.</li>
         </ul>
 
-        <p>Notices that could repeat on every tick are sent once per patch or head, and once per outage.</p>
+        <p>
+          Notices that could repeat on every tick are sent once per patch or head, and once per outage. A merge GitHub refuses is the
+          exception: it notifies on each refused attempt.
+        </p>
 
         <nav class="pager" aria-label="Pages">
           <a class="prev" href="ui.html"><span>Previous</span>Web UI</a>
