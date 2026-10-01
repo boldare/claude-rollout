@@ -11,10 +11,12 @@ import {
   commentAsAgents,
   deleteRemoteBranch,
   ensureLabel,
+  githubUnavailable,
   maintainerFeedback,
   parseAddedLines,
   parseCommits,
   parseNameStatus,
+  refreshOutsideDeps,
   remoteRepo,
   replyAsAgents,
 } from '../lib/github.mjs'
@@ -370,6 +372,115 @@ test('codeScanningUnavailable: a 404 or a 403 means no code scanning, a rate lim
     assert.equal(codeScanningUnavailable(text), false, text)
     assert.equal(codeScanningUnavailable(new Error(`${prefix}${text}`)), false, text)
   }
+})
+
+// What gh, git, curl and ssh print when GitHub or the network is down.
+const OUTAGES = [
+  'HTTP 502: Bad Gateway',
+  'gh: Server Error (HTTP 500)',
+  'HTTP 429: Too Many Requests',
+  'non-200 OK status code: 502 Bad Gateway body: ""',
+  "fatal: unable to access 'https://github.com/example/demo.git/': The requested URL returned error: 503",
+  "fatal: unable to access 'https://github.com/example/demo.git/': The requested URL returned error: 429",
+  'Server Error',
+  'GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug.',
+  'gh: API rate limit exceeded for user ID 1. (HTTP 403)',
+  'gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)',
+  "fatal: unable to access 'https://github.com/example/demo.git/': Could not resolve host: github.com",
+  'ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known',
+  'Get "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host',
+  'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com',
+  "fatal: unable to access 'https://github.com/example/demo.git/': Failed to connect to github.com port 443 after 75000 ms",
+  "curl: (7) Couldn't connect to server",
+  'dial tcp 192.0.2.10:443: connect: connection refused',
+  'read tcp 192.0.2.2:50000->192.0.2.10:443: read: connection reset by peer',
+  'dial tcp 192.0.2.10:443: connect: network is unreachable',
+  'Get "https://api.github.com/graphql": net/http: TLS handshake timeout',
+  'ssh: connect to host github.com port 22: No route to host',
+  "fatal: unable to access 'https://github.com/example/demo.git/': Operation timed out after 300000 milliseconds with 0 bytes received",
+  'kex_exchange_identification: read: Connection timed out',
+  'git -C repo fetch --quiet --prune origin timed out after 600 s',
+  'dial tcp: lookup api.github.com on 192.0.2.53:53: read udp 192.0.2.2:5353->192.0.2.53:53: i/o timeout',
+  'Get "https://api.github.com/graphql": net/http: request canceled (Client.Timeout exceeded while awaiting headers)',
+  'Post "https://api.github.com/graphql": context deadline exceeded',
+]
+
+// Failures of the call itself. They still count as errors.
+const NOT_OUTAGES = [
+  'HTTP 401: Bad credentials (https://api.github.com/graphql)',
+  'HTTP 403: Resource not accessible by integration (https://api.github.com/repos/example/demo/pulls/11)',
+  'HTTP 404: Not Found (https://api.github.com/repos/example/demo/pulls/12)',
+  'HTTP 422: Validation Failed',
+  'GraphQL: Could not resolve to a PullRequest with the number of 12. (repository.pullRequest)',
+  "GraphQL: Could not resolve to a Repository with the name 'example/demo'. (repository)",
+  'no pull requests found for branch "feat/a1"',
+  'git@github.com: Permission denied (publickey).',
+  'fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.',
+  "fatal: unable to access 'https://github.com/example/demo.git/': The requested URL returned error: 403",
+  'fatal: unable to access the remote',
+  'fake gh: no rule for pr view 11 --json number',
+  'gate down',
+  " ! [rejected]        fix/timeout -> fix/timeout (fetch first)\nerror: failed to push some refs to 'https://github.com/example/demo.git'",
+]
+
+function failedView(text) {
+  return new Error(`gh pr view 11 --json number exited 1: ${text}`)
+}
+
+test('githubUnavailable: a 5xx, a 429, a rate limit, DNS, a failed connection and a timeout are an outage', () => {
+  for (const text of OUTAGES) {
+    assert.equal(githubUnavailable(text), true, text)
+    assert.equal(githubUnavailable(failedView(text)), true, text)
+  }
+})
+
+test('githubUnavailable: 401, 403, 404, 422, an unknown PR, a refused key and a bare timeout are not', () => {
+  for (const text of NOT_OUTAGES) {
+    assert.equal(githubUnavailable(text), false, text)
+    assert.equal(githubUnavailable(failedView(text)), false, text)
+  }
+
+  assert.equal(githubUnavailable(new Error('gate down')), false)
+})
+
+test('githubUnavailable reads what the tool said, never the command line', () => {
+  const merge = new Error('gh pr merge 11 --subject fix: Server Error timed out exited 1: HTTP 422: Validation Failed')
+
+  assert.equal(githubUnavailable(merge), false)
+})
+
+test('githubUnavailable: an AggregateError is an outage only when every error in it is one, whatever its message says', () => {
+  const badGateway = failedView('HTTP 502: Bad Gateway')
+  const refused = failedView('dial tcp 192.0.2.10:443: connect: connection refused')
+  const denied = failedView('HTTP 401: Bad credentials')
+
+  assert.equal(githubUnavailable(new AggregateError([badGateway, refused], 'two lookups failed')), true)
+  assert.equal(githubUnavailable(new AggregateError([badGateway, denied], 'HTTP 502: Bad Gateway')), false)
+  assert.equal(githubUnavailable(new AggregateError([], 'HTTP 502: Bad Gateway')), false)
+})
+
+test('refreshOutsideDeps throws every failed lookup, so one that is not an outage still counts', async () => {
+  const dir = makeRollout()
+  fakeTools(dir, [
+    { tool: 'gh', args: 'pr list --head feat/a1', code: 1, stderr: 'HTTP 502: Bad Gateway' },
+    { tool: 'gh', args: 'pr list --head feat/a2', code: 1, stderr: 'HTTP 401: Bad credentials' },
+  ])
+  const M = loadManifest(dir, { only: ['A3'] })
+  const ledger = { prs: { A1: { state: 'pending' }, A2: { state: 'pending' } }, event: () => {} }
+  M.prs[0].deps = ['A1', 'A2']
+
+  await assert.rejects(refreshOutsideDeps(M, ledger), (error) => {
+    assert.ok(error instanceof AggregateError)
+    assert.equal(error.errors.length, 2)
+    assert.match(
+      error.message,
+      /^A1: gh pr list --head feat\/a1 .*HTTP 502: Bad Gateway\nA2: gh pr list --head feat\/a2 .*HTTP 401: Bad credentials$/,
+    )
+    assert.equal(githubUnavailable(error), false)
+    assert.equal(githubUnavailable(error.errors[0]), true)
+
+    return true
+  })
 })
 
 // A fixture rollout whose gh answers from the rules, as in test/driver.test.mjs.

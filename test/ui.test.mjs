@@ -161,14 +161,15 @@ test('model: the states and error kinds', () => {
     'fetch-failed',
     'outside-deps-failed',
     'watch-base-failed',
+    'github-unavailable',
     'report-unchecked',
   ])
 })
 
 test('errorCount: counts only error kinds', () => {
-  const events = [...ERROR_KINDS, 'merged', 'tick', 'errors', 'merge-unconfirmed'].map((kind) => ({ id: '-', kind }))
+  const events = [...ERROR_KINDS, 'merged', 'tick', 'errors', 'merge-unconfirmed', 'github-back'].map((kind) => ({ id: '-', kind }))
 
-  assert.equal(errorCount(events), 9)
+  assert.equal(errorCount(events), 10)
   assert.equal(errorCount([]), 0)
 })
 

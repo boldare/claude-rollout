@@ -369,8 +369,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td class="nowrap">any other state</td>
                 <td>
-                  The PR goes to needs_fix, with the reason "answer from the maintainer". This is how you answer an agent that reported
-                  BLOCKED.
+                  The PR goes to needs_fix, with the reason "answer from the maintainer", and loses any verification it still had. This is
+                  how you answer an agent that reported BLOCKED.
                 </td>
               </tr>
             </tbody>
@@ -399,8 +399,17 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             streak and the delegate's run count.
           </li>
           <li>
-            A PR with a GitHub PR or an agent session becomes <a href="how-it-works.html#state-interrupted">interrupted</a>, and the next
-            tick resumes it. That is a new verification when a claim waits for one, else a fix run.
+            A PR whose verification still holds goes back to <a href="how-it-works.html#state-verified">verified</a>. The next tick syncs
+            its head with GitHub, then the gate looks again.
+          </li>
+          <li>
+            A verification for an older head is dropped, and the PR goes to
+            <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>. The driver checks the claim again, then verifies it.
+          </li>
+          <li>A READY report that waits to be checked is claimed again on the next tick, with no agent run.</li>
+          <li>
+            Otherwise a PR with a GitHub PR or an agent session becomes <a href="how-it-works.html#state-interrupted">interrupted</a>, and
+            the next tick resumes it. That is a new verification when a claim waits for one, else a fix run.
           </li>
           <li>Any other PR goes back to pending.</li>
           <li>It is rejected for a merged PR and while an agent works on the PR. It does not clear a hold.</li>
