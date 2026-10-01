@@ -385,8 +385,9 @@ prs:
                     <li><code>viewer</code>: a list, added for a PR with <code>viewer: true</code>.</li>
                   </ul>
                   The PR's <code>extra</code> steps come last. The verifier's copy of <code>common</code> drops commands that rewrite files:
-                  <code>lint:fix</code>, <code>--fix</code>, <code>--write</code>, <code>pnpm format</code> and
-                  <code>pnpm install</code> without <code>--frozen-lockfile</code>.
+                  <code>lint:fix</code>, <code>--fix</code>, <code>--write</code>, a <code>format</code> script run with npm, pnpm, yarn or
+                  bun, and an install with any of them without <code>--frozen-lockfile</code> or <code>--immutable</code>.
+                  <code>npm ci</code> stays.
                 </td>
               </tr>
             </tbody>

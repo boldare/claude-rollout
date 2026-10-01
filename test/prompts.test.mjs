@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { freshPr } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
-import { briefReviewPrompt, briefWritePrompt, implementPrompt, verifyPrompt } from '../lib/prompts.mjs'
+import { briefReviewPrompt, briefWritePrompt, implementPrompt, verifyPrompt, verifyRecipe } from '../lib/prompts.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 const STATE = { ...freshPr(), pr: 12, ready: { status: 'READY' } }
@@ -101,4 +101,92 @@ test('prompts: the brief writer sees every earlier answer, oldest first, under o
 
   assert.equal(fresh.includes('## Answers from the maintainer'), false)
   assert.equal(fresh.includes('{{'), false)
+})
+
+function stepNumbers(text) {
+  return [...text.matchAll(/^(\d+)\. /gm)].map((match) => Number(match[1]))
+}
+
+test('prompts: every step starts its own line and the recipe sits indented under its step', () => {
+  const M = loadManifest(makeRollout())
+  const pr = M.all[0]
+
+  M.repo.verify = { common: ['npm ci', 'npm test', 'npm run format:check'] }
+
+  const implement = implementPrompt(M, pr, STATE)
+  const verify = verifyPrompt(M, pr, STATE, 'a1a1a1a')
+
+  assert.deepEqual(stepNumbers(implement), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.deepEqual(stepNumbers(verify), [1, 2, 3, 4, 5, 6, 7])
+  assert.ok(implement.includes('\n   1. `npm ci`\n   2. `npm test`\n'))
+  assert.ok(verify.includes('\n   1. `npm ci`\n   2. `npm test`\n'))
+  assert.ok(briefWritePrompt(M, pr, STATE).includes('\n  1. `npm ci`\n  2. `npm test`\n'))
+})
+
+test('prompts: the brief writer assumes no plan language', () => {
+  const M = loadManifest(makeRollout())
+  const text = briefWritePrompt(M, M.all[0], STATE)
+
+  assert.doesNotMatch(text, /Decyzje/)
+  assert.doesNotMatch(text, /Polish/)
+  assert.ok(text.includes('always in English'))
+})
+
+test('prompts: the verifier skips steps that rewrite files for npm, pnpm, yarn and bun', () => {
+  const M = loadManifest(makeRollout())
+  const pr = M.all[0]
+  const kept = [
+    'npm ci',
+    'npm test',
+    'npm run format:check',
+    'pnpm format:check',
+    'pnpm install --frozen-lockfile',
+    'yarn install --frozen-lockfile',
+    'yarn install --immutable',
+    'yarn --frozen-lockfile',
+    'bun install --frozen-lockfile',
+    'bun test',
+  ]
+  const dropped = [
+    'pnpm lint:fix',
+    'eslint --fix .',
+    'prettier --write .',
+    'npm run format',
+    'npm run format -- --log-level warn',
+    'pnpm format',
+    'pnpm run format',
+    'yarn format',
+    'yarn run format',
+    'bun run format',
+    'npm install',
+    'npm i',
+    'pnpm install',
+    'pnpm i',
+    'yarn install',
+    'yarn',
+    'bun install',
+    'bun i',
+  ]
+
+  M.repo.verify = { common: [...kept, ...dropped] }
+
+  assert.deepEqual(verifyRecipe(M, pr, { forVerifier: true }), kept)
+  assert.deepEqual(verifyRecipe(M, pr), [...kept, ...dropped])
+})
+
+test('prompts: the changeset rules follow policy.maxBump', () => {
+  const M = loadManifest(makeRollout())
+  const pr = M.all[0]
+
+  pr.changeset = 'major'
+  M.policy.maxBump = 'major'
+
+  assert.doesNotMatch(implementPrompt(M, pr, STATE), /never major/i)
+  assert.doesNotMatch(briefWritePrompt(M, pr, STATE), /never major/i)
+
+  pr.changeset = 'patch'
+  M.policy.maxBump = 'patch'
+
+  assert.ok(implementPrompt(M, pr, STATE).includes('Never above patch.'))
+  assert.ok(briefWritePrompt(M, pr, STATE).includes('never above `patch`'))
 })

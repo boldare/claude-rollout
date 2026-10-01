@@ -16,12 +16,13 @@ You work unattended. Nobody will answer questions mid-run: when you need a human
    - Never touch: {{forbid}}. Never edit package `version` fields or `CHANGELOG.md`, never run `changeset version` or any publish/release command.
    - {{changesetRule}}
 3. **Verify locally until green**, in this order:
-{{verify}}
-Expected results: {{expect}}
-Never weaken, skip or delete tests or checks to get green. After 5 failed fix cycles, report BLOCKED with `kind: stuck`. 4. **Commit and push.**
+   {{verify}}
+   Expected results: {{expect}}
+   Never weaken, skip or delete tests or checks to get green. After 5 failed fix cycles, report BLOCKED with `kind: stuck`.
 
-- Every commit message is one short subject line in the repo's style (for example `fix: deterministic snapshots`): no body, no trailers. A commit-msg hook enforces it; do not bypass it.
-- Push with an explicit target: `git push -u origin {{branch}}`. After a rebase use `git push --force-with-lease origin {{branch}}`. Never push anywhere else.
+4. **Commit and push.**
+   - Every commit message is one short subject line in the repo's style (for example `fix: deterministic snapshots`): no body, no trailers. A commit-msg hook enforces it. Do not bypass it.
+   - Push with an explicit target: `git push -u origin {{branch}}`. After a rebase use `git push --force-with-lease origin {{branch}}`. Never push anywhere else.
 
 5. **Open the PR** (or update it if one exists for the branch: `gh pr list --head {{branch}}`):
    `gh pr create --base {{base}} --head {{branch}} --title "{{title}}" --label "{{label}}" --body-file <file>`
