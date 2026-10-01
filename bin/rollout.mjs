@@ -25,6 +25,8 @@ import { runDriver } from '../lib/driver.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { agentGitHubEnv } from '../lib/identity.mjs'
+import { ghEnv } from '../lib/github.mjs'
+import { originCheck, probeTools, sshHostname } from '../lib/preflight.mjs'
 import { agentSettings, guardCommand } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
@@ -244,18 +246,23 @@ async function preflight(M) {
   await probe('claude', M.claudeBin, ['--version'], {
     problem: `claude (${M.claudeBin}) did not run: put it on PATH or repo.pathPrepend, or set claudeBin in manifest.yaml`,
   })
-  await probe('node', 'node', ['--version'])
-  await probe('pnpm', 'pnpm', ['--version'])
-  await probe('gh auth', 'gh', ['auth', 'status'])
+
+  for (const tool of probeTools(M)) {
+    await probe(tool, tool, ['--version'])
+  }
+
+  await probe('gh auth', 'gh', ['auth', 'status'], { env: ghEnv(M) })
   await probe('git fetch', 'git', ['-C', M.repo.path, 'fetch', '--quiet', 'origin'])
 
   const remote = await sh('git', ['-C', M.repo.path, 'remote', 'get-url', 'origin'], { env })
+  const origin = await originCheck(M, remote.code === 0 ? remote.stdout.trim() : '', (host) => sshHostname(M, host))
+  console.log(`${origin.ok ? 'ok  ' : 'FAIL'} origin: ${origin.text}`)
 
-  if (!remote.stdout.includes(M.repo.github)) {
-    problems.push(`origin ${remote.stdout.trim()} does not match ${M.repo.github}`)
+  if (!origin.ok) {
+    problems.push(origin.text)
   }
 
-  const repo = await sh('gh', ['api', `repos/${M.repo.github}`], { env })
+  const repo = await sh('gh', ['api', `repos/${M.repo.github}`], { env: ghEnv(M) })
 
   if (repo.code === 0) {
     const info = JSON.parse(repo.stdout)
@@ -290,10 +297,12 @@ async function preflight(M) {
 
   if (M.repo.agentToken) {
     try {
-      const agentEnv = makeEnv(M, agentGitHubEnv(M))
+      const agentEnv = ghEnv(M, agentGitHubEnv(M))
       const who = await sh('gh', ['api', 'user', '--jq', '.login'], { env: agentEnv })
       const login = who.stdout.trim()
-      const permission = await sh('gh', ['api', `repos/${M.repo.github}/collaborators/${login}/permission`, '--jq', '.permission'], { env })
+      const permission = await sh('gh', ['api', `repos/${M.repo.github}/collaborators/${login}/permission`, '--jq', '.permission'], {
+        env: ghEnv(M),
+      })
       const scopes =
         (await sh('gh', ['api', '-i', 'user'], { env: agentEnv })).stdout.match(/^x-oauth-scopes:\s*(.*)$/im)?.[1]?.trim() ?? '?'
       const fallback = await sh('gh', ['auth', 'status'], { env: { ...agentEnv, GH_TOKEN: '' } })

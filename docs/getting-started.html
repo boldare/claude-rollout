@@ -76,7 +76,10 @@
               <tr>
                 <td class="nowrap">git</td>
                 <td>Worktrees, fetches and rebases.</td>
-                <td><code>git fetch origin</code> in <code>repo.path</code></td>
+                <td>
+                  <code>git fetch origin</code> in <code>repo.path</code>, and <code>origin</code> must be <code>repo.github</code> on
+                  github.com
+                </td>
               </tr>
               <tr>
                 <td class="nowrap">gh</td>
@@ -84,9 +87,9 @@
                 <td><code>gh auth status</code> must pass</td>
               </tr>
               <tr>
-                <td class="nowrap">pnpm</td>
-                <td>Preflight requires it for every repo, even one that does not use pnpm.</td>
-                <td><code>pnpm --version</code> must run</td>
+                <td class="nowrap">package manager</td>
+                <td>npm, pnpm, yarn or bun, the one <code>repo.install</code> and <code>repo.verify.common</code> start with.</td>
+                <td><code>--version</code> must run</td>
               </tr>
               <tr>
                 <td class="nowrap"><code>claude</code></td>

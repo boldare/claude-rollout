@@ -15,7 +15,7 @@ git clone https://github.com/grzehub/claude-rollout ~/.claude/skills/rollout
 cd ~/.claude/skills/rollout && npm ci
 ```
 
-The repository is also a Claude Code skill (`SKILL.md`), so this makes `/rollout` available too. Requirements: Node 20+, git, gh, pnpm and `claude` on PATH. [Getting started](https://grzehub.github.io/claude-rollout/getting-started.html) explains the other ways to install and why the installed copy stays apart from a checkout you develop in.
+The repository is also a Claude Code skill (`SKILL.md`), so this makes `/rollout` available too. Requirements: Node 20+, git, gh, the repo's package manager and `claude` on PATH. [Getting started](https://grzehub.github.io/claude-rollout/getting-started.html) explains the other ways to install and why the installed copy stays apart from a checkout you develop in.
 
 ## Quick start
 

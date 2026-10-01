@@ -464,8 +464,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>The binary does not run. Put it on PATH or in <code>repo.pathPrepend</code>, or set <code>claudeBin</code>.</td>
               </tr>
               <tr>
-                <td class="name">node, pnpm</td>
-                <td>Either is missing. pnpm is required even for a repo that does not use it.</td>
+                <td class="name">node, package manager</td>
+                <td>
+                  Either is missing. The manager is the first word of <code>repo.install</code> or of a
+                  <code>repo.verify.common</code> step, when it is npm, pnpm, yarn or bun. npx, pnpx and bunx count as their manager.
+                </td>
               </tr>
               <tr>
                 <td class="name">gh auth status</td>
@@ -473,9 +476,14 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               </tr>
               <tr>
                 <td class="name">git fetch origin</td>
+                <td><code>repo.path</code> is wrong or you cannot fetch.</td>
+              </tr>
+              <tr>
+                <td class="name">origin</td>
                 <td>
-                  <code>repo.path</code> is wrong or you cannot fetch. The <code>origin</code> URL must also contain
-                  <code>repo.github</code>.
+                  Its owner and name must equal <code>repo.github</code>, case aside, so <code>my-org/my-lib-next</code> never passes for
+                  <code>my-org/my-lib</code>. The host must be github.com. An SSH host alias passes when <code>ssh -G</code> resolves it to
+                  github.com. HTTPS hosts are never resolved.
                 </td>
               </tr>
               <tr>

@@ -3,7 +3,17 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { commentAsAgents, maintainerFeedback, parseAddedLines, parseCommits, parseNameStatus, replyAsAgents } from '../lib/github.mjs'
+import {
+  commentAsAgents,
+  deleteRemoteBranch,
+  ensureLabel,
+  maintainerFeedback,
+  parseAddedLines,
+  parseCommits,
+  parseNameStatus,
+  remoteRepo,
+  replyAsAgents,
+} from '../lib/github.mjs'
 
 test('name-status with renames and deletions', () => {
   const files = parseNameStatus('M\tREADME.md\nA\t.changeset/a.md\nD\tpackages/core/src/quick-hash.ts\nR087\told/x.ts\tnew/x.ts\n')
@@ -130,7 +140,8 @@ const { appendFileSync, readFileSync } = require('node:fs')
 const { join } = require('node:path')
 const args = process.argv.slice(2)
 const stdin = args.includes('--body-file') ? readFileSync(0, 'utf8') : null
-appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ args, stdin }) + '\\n')
+const { GH_REPO, GH_HOST } = process.env
+appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ args, stdin, GH_REPO, GH_HOST }) + '\\n')
 `
 
 test('the driver marks what it posts and never reads it back as feedback', async () => {
@@ -166,4 +177,94 @@ test('the driver marks what it posts and never reads it back as feedback', async
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('the driver pins every gh call to the manifest repo on github.com', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rollout-gh-'))
+  const inherited = { GH_REPO: process.env.GH_REPO, GH_HOST: process.env.GH_HOST }
+  process.env.GH_REPO = 'someone/else'
+  process.env.GH_HOST = 'ghe.example.com'
+
+  try {
+    writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 })
+    const M = {
+      label: 'rollout:demo',
+      repo: { path: dir, github: 'example/demo', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] },
+    }
+
+    await ensureLabel(M)
+    await deleteRemoteBranch(M, 'feat/x')
+    await replyAsAgents(M, 7, 101, 'Done')
+    await commentAsAgents(M, 7, 'Done')
+
+    const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+
+    assert.equal(calls.length, 4)
+
+    for (const call of calls) {
+      assert.equal(call.GH_REPO, 'github.com/example/demo')
+      assert.equal(call.GH_HOST, 'github.com')
+    }
+  } finally {
+    for (const [name, value] of Object.entries(inherited)) {
+      if (value === undefined) {
+        delete process.env[name]
+      } else {
+        process.env[name] = value
+      }
+    }
+
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+const GITHUB_SSH = { protocol: 'ssh', host: 'github.com', repo: 'my-org/my-lib' }
+const GITHUB_HTTPS = { protocol: 'https', host: 'github.com', repo: 'my-org/my-lib' }
+
+test('remote URLs in SSH form give host and repo', () => {
+  assert.deepEqual(remoteRepo('git@github.com:my-org/my-lib.git'), GITHUB_SSH)
+  assert.deepEqual(remoteRepo('ssh://git@github.com/my-org/my-lib'), GITHUB_SSH)
+  assert.deepEqual(remoteRepo('git+ssh://git@github.com/my-org/my-lib.git'), GITHUB_SSH)
+  assert.deepEqual(remoteRepo('ssh://git@GitHub-Work:2222/My-Org/My-Lib.git'), {
+    protocol: 'ssh',
+    host: 'github-work',
+    repo: 'my-org/my-lib',
+  })
+})
+
+test('remote URLs in HTTPS form give host and repo', () => {
+  assert.deepEqual(remoteRepo('https://github.com/my-org/my-lib.git'), GITHUB_HTTPS)
+  assert.deepEqual(remoteRepo('https://github.com/my-org/my-lib/'), GITHUB_HTTPS)
+  assert.deepEqual(remoteRepo('http://github.com/my-org/my-lib'), GITHUB_HTTPS)
+  assert.deepEqual(remoteRepo('https://x-access-token:secret@GitHub.com/My-Org/My-Lib.git/'), GITHUB_HTTPS)
+})
+
+test('remote URLs keep a longer name and another host', () => {
+  assert.equal(remoteRepo('git@github.com:my-org/my-lib-next.git').repo, 'my-org/my-lib-next')
+  assert.equal(remoteRepo('https://gitlab.com/my-org/my-lib.git').host, 'gitlab.com')
+})
+
+test('remote URLs that are not SSH or HTTPS owner/name give null', () => {
+  const rejected = [
+    '',
+    '/srv/git/my-lib.git',
+    './x:my-org/my-lib',
+    'file:///srv/git/my-lib.git',
+    'git://github.com/my-org/my-lib.git',
+    'https://github.com/my-org',
+    'https://gitlab.com/group/sub/my-lib.git',
+    'ssh://git@github.com:my-org/my-lib.git',
+    '-oProxyCommand=x:my-org/my-lib',
+    'ssh://-oProxyCommand=x/my-org/my-lib',
+  ]
+
+  for (const url of rejected) {
+    assert.equal(remoteRepo(url), null, url)
+  }
+
+  assert.equal(remoteRepo(null), null)
+  assert.equal(remoteRepo(42), null)
 })
