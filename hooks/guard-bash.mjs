@@ -3,8 +3,10 @@
 // exits 2 (blocked, stderr goes back to the agent) when a Bash command could
 // merge, publish, rewrite shared history, push anywhere but the PR branch,
 // switch off the guard rails or drive the rollout itself. A payload the guard
-// cannot read and an error of its own also exit 2, because a PreToolUse hook
-// blocks only with that code.
+// cannot read, a command too long to check and an error of its own also exit
+// 2 with a reason. A PreToolUse hook blocks only with that code, so the hook
+// command (lib/settings.mjs) turns any other exit, such as a crash or running
+// out of memory, into 2 as well.
 //
 // A regex guard is a seatbelt, not a sandbox. The guarantees that matter are
 // also enforced elsewhere: the pre-push hook, no npm credentials in the agent
@@ -35,30 +37,34 @@ function isTool(word, name) {
   return word === name || word.endsWith(`/${name}`)
 }
 
-// Arguments after every occurrence of a tool in a segment, global flags
-// (and their values) skipped: `git -C dir -c x=y push` → ['push', ...].
+// Where the arguments of every occurrence of a tool in a segment start, global
+// flags (and their values) skipped: `git -C dir -c x=y push` → the index of
+// `push`. The arguments run to the end of the segment. Indices, not copies,
+// keep memory linear when a segment repeats the tool.
 function invocations(words, name, flagsWithValue) {
-  const found = []
+  const starts = []
 
   words.forEach((word, index) => {
     if (!isTool(word, name)) {
       return
     }
 
-    const rest = words.slice(index + 1)
+    let start = index + 1
 
-    while (rest.length > 0 && rest[0].startsWith('-')) {
-      const flag = rest.shift()
+    while (start < words.length && words[start].startsWith('-')) {
+      const flag = words[start]
 
-      if (flagsWithValue.includes(flag) && rest.length > 0) {
-        rest.shift()
+      start += 1
+
+      if (flagsWithValue.includes(flag) && start < words.length) {
+        start += 1
       }
     }
 
-    found.push(rest)
+    starts.push(start)
   })
 
-  return found
+  return starts
 }
 
 // The first positionals after the subcommand, skipping flags and the values
@@ -177,7 +183,8 @@ const GH_FORBIDDEN = [
 ]
 
 function checkGh(words) {
-  for (const args of invocations(words, 'gh', ['-R', '--repo', '--hostname'])) {
+  for (const start of invocations(words, 'gh', ['-R', '--repo', '--hostname'])) {
+    const args = words.slice(start)
     const [sub, action] = positionals(args, GH_VALUE_FLAGS)
 
     if (GH_FORBIDDEN.includes(sub)) {
@@ -237,8 +244,8 @@ function checkPackageManagers(words) {
   }
 
   for (const name of PACKAGE_MANAGERS) {
-    for (const args of invocations(words, name, ['-C', '--dir', '--filter', '-F', '-w', '--workspace'])) {
-      if (args[0] === 'version') {
+    for (const start of invocations(words, name, ['-C', '--dir', '--filter', '-F', '-w', '--workspace'])) {
+      if (words[start] === 'version') {
         return `${name} version is not allowed: versions are bumped by the release PR`
       }
     }
@@ -339,7 +346,7 @@ const VERIFIER_GIT_FORBIDDEN = [
 ]
 
 function checkGit(words, role, branch) {
-  for (const args of invocations(words, 'git', [
+  for (const start of invocations(words, 'git', [
     '-C',
     '-c',
     '--git-dir',
@@ -349,11 +356,13 @@ function checkGit(words, role, branch) {
     '--config-env',
     '--super-prefix',
   ])) {
-    const [sub, ...rest] = args
+    const sub = words[start]
 
     if (!sub) {
       continue
     }
+
+    const rest = words.slice(start + 1)
 
     if (
       sub === 'config' &&
@@ -402,7 +411,20 @@ function checkGit(words, role, branch) {
   return null
 }
 
+// Some rules cost the square of a line's length, and a hook that times out
+// lets the command run. The caps keep the guard's work far below the timeout.
+const MAX_COMMAND = 262_144
+const MAX_LINE = 16_384
+
 export function check(command, role, branch, context = {}) {
+  if (command.length > MAX_COMMAND) {
+    return `a command of more than ${MAX_COMMAND} characters is too long for the guard, split it`
+  }
+
+  if (command.split('\n').some((line) => line.length > MAX_LINE)) {
+    return `a line of more than ${MAX_LINE} characters is too long for the guard, split the command`
+  }
+
   for (const pattern of [...ALWAYS, ...contextPatterns(context)]) {
     if (pattern.test(command)) {
       return 'the rollout control plane, its hooks and git hook settings are off limits to agents'
@@ -439,8 +461,8 @@ export function check(command, role, branch, context = {}) {
 }
 
 // Null allows the command, a string is the reason to refuse it. It never
-// throws, since a crash exits 1 and exit 1 lets the command run. Only tests
-// pass `inspect`.
+// throws, so the agent learns why its command was refused. The hook command
+// turns any other failure into exit 2. Only tests pass `inspect`.
 export function decide(input, role, env, inspect = check) {
   let payload
 

@@ -531,8 +531,9 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td>guard hook</td>
                 <td>
-                  Feeding <code>gh pr merge 1 --admin</code> to the Bash guard does not end with exit code 2, or feeding it
-                  <code>echo allowed</code> does not end with exit code 0.
+                  Feeding <code>gh pr merge 1 --admin</code> to the Bash guard does not end with exit code 2 and a
+                  <code>rollout guard:</code> reason, or feeding it <code>echo allowed</code> does not end with exit code 0. The reason
+                  matters because the hook command ends with <code>|| exit 2</code>, so a guard that never ran exits 2 too.
                 </td>
               </tr>
               <tr>

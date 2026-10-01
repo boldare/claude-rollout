@@ -264,8 +264,8 @@
               </tr>
               <tr>
                 <td class="nowrap">hook</td>
-                <td><code>guard-bash.mjs worker</code> on every Bash call</td>
-                <td><code>guard-bash.mjs verifier</code> on every Bash call</td>
+                <td><code>guard-bash.mjs worker || exit 2</code> on every Bash call, with a 30 s timeout</td>
+                <td><code>guard-bash.mjs verifier || exit 2</code> on every Bash call, with a 30 s timeout</td>
               </tr>
             </tbody>
           </table>
@@ -281,9 +281,10 @@
         <p>
           <code>hooks/guard-bash.mjs</code> reads each Bash call before it runs. It exits with code 2 to refuse, and the agent gets
           <q>rollout guard: …</q> with the reason. It sees the Bash tool only, the file tools are covered by the permission rules. It fails
-          closed. An empty payload, one that is not JSON or has no command string, and an error inside the guard also exit 2, because a
-          PreToolUse hook blocks only with that code. It also runs when the skill directory is reached through a symlink, even under Node's
-          <code>--preserve-symlinks-main</code>, on the command line or in <code>NODE_OPTIONS</code>.
+          closed. A PreToolUse hook blocks only with exit code 2, so an empty payload, one that is not JSON or has no command string, and an
+          error inside the guard exit 2 with a reason. The hook command ends with <code>|| exit 2</code>, so every exit other than 0 blocks.
+          That covers a crash, running out of memory and a file node cannot load. It also runs when the skill directory is reached through a
+          symlink, even under Node's <code>--preserve-symlinks-main</code>, on the command line or in <code>NODE_OPTIONS</code>.
         </p>
 
         <p>
@@ -296,6 +297,10 @@
         <h4>Refused for every agent</h4>
 
         <ul>
+          <li>
+            <strong>Commands too long to check.</strong> A line longer than 16,384 characters or a command longer than 262,144. Some rules
+            cost the square of a line's length, so the guard refuses these before any other rule and asks for the command to be split.
+          </li>
           <li>
             <strong>The control plane.</strong> Any command that names the rollout directory, the installed skill (<code>ROLLOUT_HOME</code>
             and any <code>.claude/skills/rollout</code>), the rollout's name as a path, or the push markers <code>rollout-branch</code>,
@@ -380,6 +385,10 @@
             matter are also enforced elsewhere: the pre-push hook, no npm credentials in the agent environment, and the gate re-checking
             every claim on GitHub. <code>rollout preflight --live</code> proves in a real headless agent that the guard refuses a merge, a
             push to <code>main</code>, a publish and a <code>gh api</code> write.
+          </p>
+          <p>
+            The hook has a 30 s timeout. Claude Code runs a command whose hook timed out, so a timeout is the one remaining way past the
+            guard. The guard decides any realistic command in well under a second.
           </p>
         </div>
 

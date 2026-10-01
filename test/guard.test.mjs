@@ -1,11 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, mkdirSync, mkdtempSync, openSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { check, decide, isEntry } from '../hooks/guard-bash.mjs'
+import { loadManifest } from '../lib/manifest.mjs'
+import { guardSelfTest } from '../lib/preflight.mjs'
+import { guardCommand } from '../lib/settings.mjs'
+import { makeRollout } from './fixtures.mjs'
 
 const BRANCH = 'fix/thing'
 const LIVE_X = { dir: '/Users/u/_Code/.rollouts/x', home: '/Users/u/.claude/skills/rollout', name: 'x' }
@@ -14,6 +18,38 @@ const REAL_GUARD = fileURLToPath(new URL('../hooks/guard-bash.mjs', import.meta.
 const MERGE_PAYLOAD = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --admin' } })
 const LS_PAYLOAD = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
 const PRESERVE_ENV = { ...process.env, NODE_OPTIONS: '--preserve-symlinks-main' }
+
+// The agent role passed to guardCommand and the guard role it runs as.
+const HOOK_ROLES = { implement: 'worker', verify: 'verifier' }
+
+function payload(command) {
+  return JSON.stringify({ tool_name: 'Bash', tool_input: { command } })
+}
+
+// On macOS, spawnSync now and then never ends a large `input` pipe, so the
+// payload goes in through a file. A killed run has status null, so a guard
+// that hangs fails the test instead of stalling it.
+function spawnGuard(file, args, input, options) {
+  const path = join(mkdtempSync(join(tmpdir(), 'rollout-payload-')), 'payload.json')
+
+  writeFileSync(path, input)
+
+  const stdin = openSync(path, 'r')
+
+  try {
+    return spawnSync(file, args, { stdio: [stdin, 'pipe', 'pipe'], encoding: 'utf8', timeout: 10_000, ...options })
+  } finally {
+    closeSync(stdin)
+  }
+}
+
+function runHook(M, role, input, options = {}) {
+  return spawnGuard('sh', ['-c', guardCommand(M, role)], input, options)
+}
+
+function runScript(role, input) {
+  return spawnGuard('node', [REAL_GUARD, role], input, {})
+}
 
 function linkSkill() {
   const skill = join(mkdtempSync(join(tmpdir(), 'rollout-link-')), 'skill')
@@ -423,4 +459,124 @@ test('pre-push hook refuses URLs other than the push URL marker', () => {
 
   assert.equal(sh(`cd work && git push -q origin HEAD:refs/heads/${BRANCH}`).status, 0)
   assert.notEqual(sh(`cd work && git push -q ../other.git HEAD:refs/heads/${BRANCH}`).status, 0)
+})
+
+test('one padded line is refused by the hook command and the bare script, in both roles', () => {
+  const M = loadManifest(makeRollout())
+  const input = payload('git '.repeat(50_000) + '; gh api -X PUT repos/o/r/pulls/1/merge')
+
+  for (const [role, guardRole] of Object.entries(HOOK_ROLES)) {
+    for (const [how, result] of [
+      [`hook ${role}`, runHook(M, role, input)],
+      [`script ${guardRole}`, runScript(guardRole, input)],
+    ]) {
+      assert.equal(result.status, 2, `${how}: ${result.stderr}`)
+      assert.equal(result.signal, null, how)
+      assert.match(result.stderr, /^rollout guard: .*16384/, how)
+    }
+  }
+})
+
+test('padding over many lines does not hide the command after it', () => {
+  const M = loadManifest(makeRollout())
+  const command = ('git '.repeat(1_000) + '\n').repeat(50) + 'gh api -X PUT repos/o/r/pulls/1/merge'
+
+  for (const role of Object.keys(HOOK_ROLES)) {
+    const result = runHook(M, role, payload(command))
+
+    assert.equal(result.status, 2, `${role}: ${result.stderr}`)
+    assert.match(result.stderr, /gh api is read-only/, role)
+  }
+})
+
+test('a long run of spaces after unset is refused before the regex rules', () => {
+  const M = loadManifest(makeRollout())
+  const command = 'unset' + ' '.repeat(250_000) + 'x\n' + 'gh api -X PUT repos/o/r/pulls/1/merge'
+
+  for (const role of Object.keys(HOOK_ROLES)) {
+    const result = runHook(M, role, payload(command))
+
+    assert.equal(result.status, 2, `${role}: ${result.stderr}`)
+    assert.equal(result.signal, null, role)
+    assert.match(result.stderr, /16384/, role)
+  }
+})
+
+test('the line and command caps hold at the boundary', () => {
+  const longestLine = 'ls' + ' '.repeat(16_382)
+  const longestCommand = ('ls' + ' '.repeat(1_021) + '\n').repeat(256)
+
+  assert.equal(longestLine.length, 16_384)
+  assert.equal(longestCommand.length, 262_144)
+
+  for (const role of Object.values(HOOK_ROLES)) {
+    assert.equal(check(longestLine, role, BRANCH), null, role)
+    assert.match(check(longestLine + ' ', role, BRANCH), /line of more than 16384 characters/, role)
+    assert.equal(check(longestCommand, role, BRANCH), null, role)
+    assert.match(check(longestCommand + ' ', role, BRANCH), /command of more than 262144 characters/, role)
+  }
+})
+
+test('the arguments of a call run to the end of its segment', () => {
+  assert.match(check('git commit -m "fix git" --no-verify', 'worker', BRANCH), /--no-verify/)
+})
+
+test('the hook command exits 2 when the guard cannot run', () => {
+  const broken = {
+    'a missing file': null,
+    'a syntax error': 'export const = 1\n',
+    'exit 1': 'process.exit(1)\n',
+    SIGABRT: "process.kill(process.pid, 'SIGABRT')\n",
+  }
+
+  for (const [name, source] of Object.entries(broken)) {
+    const M = loadManifest(makeRollout())
+
+    M.home = mkdtempSync(join(tmpdir(), 'rollout-broken-'))
+
+    if (source !== null) {
+      mkdirSync(join(M.home, 'hooks'))
+      writeFileSync(join(M.home, 'hooks', 'guard-bash.mjs'), source)
+    }
+
+    for (const role of Object.keys(HOOK_ROLES)) {
+      const result = runHook(M, role, LS_PAYLOAD, { cwd: M.home })
+
+      assert.equal(result.status, 2, `${name}, ${role}: ${result.stderr}`)
+    }
+  }
+
+  // Node 20 and 22 cannot load a path with a backslash. A Node that can still refuses the merge.
+  const M = loadManifest(makeRollout())
+
+  M.home = join(mkdtempSync(join(tmpdir(), 'rollout-backslash-')), 'sk\\ill')
+  mkdirSync(join(M.home, 'hooks'), { recursive: true })
+  copyFileSync(REAL_GUARD, join(M.home, 'hooks', 'guard-bash.mjs'))
+
+  for (const role of Object.keys(HOOK_ROLES)) {
+    const result = runHook(M, role, MERGE_PAYLOAD, { cwd: M.home })
+
+    assert.equal(result.status, 2, `backslash, ${role}: ${result.stderr}`)
+  }
+})
+
+test('the preflight guard self-test passes with this checkout and fails without a guard', () => {
+  const M = loadManifest(makeRollout())
+  const working = guardSelfTest(M)
+
+  assert.deepEqual(working.problems, [])
+  assert.deepEqual(working.lines, [
+    'ok   guard hook command exits 2 on a forbidden command',
+    'ok   guard hook command exits 0 on an allowed command',
+  ])
+
+  M.home = mkdtempSync(join(tmpdir(), 'rollout-no-guard-'))
+
+  const missing = guardSelfTest(M)
+
+  assert.equal(missing.problems.length, 2, missing.problems.join('\n'))
+  assert.ok(
+    missing.lines.every((line) => line.startsWith('FAIL')),
+    missing.lines.join('\n'),
+  )
 })
