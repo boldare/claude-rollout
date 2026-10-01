@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { approvalChannel, approveRefusal, highestBump, judge, outOfScope, policyViolations } from '../lib/judge.mjs'
+import { approvalChannel, approveRefusal, codeScanningFindings, highestBump, judge, outOfScope, policyViolations } from '../lib/judge.mjs'
 
 const M = {
   label: 'rollout:demo',
@@ -11,6 +11,7 @@ const M = {
     alwaysInScope: ['.changeset/*.md'],
     denylist: ['acme corp', '/Users/'],
     neverMerge: { branches: ['changeset-release/*'], titles: ['chore: version packages'] },
+    codeScanning: { action: 'fix', minSeverity: 'medium' },
   },
 }
 
@@ -327,4 +328,128 @@ test('a record of a GitHub approval never passes for rollout approve', () => {
   assert.equal(verdict.action, 'wait')
   assert.match(verdict.reasons.join(), /rollout approve/)
   assert.equal(judge(M, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'inbox' } }, facts()).action, 'merge')
+})
+
+const withScanning = (codeScanning) => ({ ...M, repo: { ...M.repo, codeScanning: { ...M.repo.codeScanning, ...codeScanning } } })
+
+function alert(overrides = {}) {
+  return {
+    number: 4,
+    rule: 'js/shell-command-injection-from-environment',
+    securitySeverity: 'medium',
+    severity: 'warning',
+    tool: 'CodeQL',
+    path: 'bin/rollout.mjs',
+    line: 357,
+    message: 'This shell command depends on an uncontrolled absolute path.',
+    url: 'https://github.com/example/demo/security/code-scanning/4',
+    sha: 'abc1234def',
+    ...overrides,
+  }
+}
+
+function scanned(alerts, baseOpen = [], overrides = {}) {
+  return facts({ codeScanning: { available: true, alerts, baseOpen }, ...overrides })
+}
+
+const ALERT_REASON =
+  'CodeQL js/shell-command-injection-from-environment (medium) bin/rollout.mjs:357: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4'
+const NONE = { action: 'none', reasons: [] }
+
+test('codeScanningFindings: a new security alert at the threshold sends the PR back', () => {
+  assert.deepEqual(codeScanningFindings(M, scanned([alert()])), { action: 'fix', reasons: [ALERT_REASON] })
+})
+
+test('codeScanningFindings: an alert also open on the base is not new', () => {
+  assert.deepEqual(codeScanningFindings(M, scanned([alert()], [4])), NONE)
+  assert.deepEqual(codeScanningFindings(M, scanned([alert()], [3])), { action: 'fix', reasons: [ALERT_REASON] })
+})
+
+test('codeScanningFindings: alerts below the threshold do not count', () => {
+  const low = alert({ securitySeverity: 'low', severity: 'error' })
+  const warning = alert({ securitySeverity: null, severity: 'warning' })
+
+  assert.deepEqual(codeScanningFindings(M, scanned([low, warning])), NONE)
+  assert.equal(codeScanningFindings(withScanning({ minSeverity: 'low' }), scanned([low, warning])).action, 'fix')
+})
+
+test('codeScanningFindings: without a security level, error ranks as medium and note never counts', () => {
+  const error = alert({ securitySeverity: null, severity: 'error', path: null, line: null })
+  const note = alert({ securitySeverity: null, severity: 'note' })
+
+  assert.deepEqual(codeScanningFindings(M, scanned([error])), {
+    action: 'fix',
+    reasons: [
+      'CodeQL js/shell-command-injection-from-environment (medium) ?:?: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4',
+    ],
+  })
+  assert.deepEqual(codeScanningFindings(withScanning({ minSeverity: 'high' }), scanned([error])), NONE)
+
+  for (const severity of ['note', 'none', null]) {
+    assert.deepEqual(codeScanningFindings(withScanning({ minSeverity: 'low' }), scanned([{ ...note, severity }])), NONE, severity)
+  }
+})
+
+test('codeScanningFindings: an alert from an older commit waits for the analysis of the head', () => {
+  const stale = alert({ sha: 'def5678abc' })
+  const unknown = alert({ number: 5, sha: null })
+  const verdict = codeScanningFindings(M, scanned([stale, unknown, alert({ number: 6 })]))
+
+  assert.deepEqual(verdict, {
+    action: 'wait',
+    reasons: [
+      'code scanning has not analysed abc1234 yet (alert #4 is from def5678)',
+      'code scanning has not analysed abc1234 yet (alert #5 is from unknown)',
+    ],
+  })
+  assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve/)
+})
+
+test('codeScanningFindings: no code scanning, or none available, finds nothing', () => {
+  assert.deepEqual(codeScanningFindings(M, facts()), NONE)
+  assert.deepEqual(codeScanningFindings(M, facts({ codeScanning: null })), NONE)
+  assert.deepEqual(
+    codeScanningFindings(
+      M,
+      facts({ codeScanning: { available: false, reason: 'no analysis found (HTTP 404)', alerts: [alert()], baseOpen: [] } }),
+    ),
+    NONE,
+  )
+})
+
+test('codeScanningFindings: block blocks, and ignore never reads the facts', () => {
+  assert.deepEqual(codeScanningFindings(withScanning({ action: 'block' }), scanned([alert()])), {
+    action: 'block',
+    reasons: [ALERT_REASON],
+  })
+
+  const unread = facts()
+  Object.defineProperty(unread, 'codeScanning', {
+    get() {
+      throw new Error('ignore read the code scanning facts')
+    },
+  })
+
+  assert.deepEqual(codeScanningFindings(withScanning({ action: 'ignore' }), scanned([alert()])), NONE)
+  assert.deepEqual(codeScanningFindings(withScanning({ action: 'ignore' }), unread), NONE)
+})
+
+test('judge: code scanning comes after red and pending CI, and before the base and the merge', () => {
+  const red = { state: 'red', missing: [], pending: [], failing: ['smoke: failure'] }
+  const pending = { state: 'pending', missing: [], pending: ['test'], failing: [] }
+  const redBase = { state: 'red', missing: [], pending: [], failing: ['check'] }
+  const flagged = { action: 'fix', reasons: [ALERT_REASON], kind: 'code-scanning' }
+
+  assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()], [], { checks: red })), {
+    action: 'fix',
+    reasons: ['smoke: failure', 'CI is red on the PR head'],
+  })
+  assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()], [], { checks: pending })), {
+    action: 'wait',
+    reasons: ['CI pending (missing: -; running: test)'],
+  })
+  assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()])), flagged)
+  assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()], [], { mainChecks: redBase })), flagged)
+  assert.deepEqual(judge(withScanning({ action: 'block' }), pr, verifiedAndApproved, scanned([alert()])), { ...flagged, action: 'block' })
+  assert.equal(judge(M, pr, verifiedAndApproved, scanned([alert()], [4])).action, 'merge')
 })

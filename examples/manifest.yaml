@@ -26,6 +26,8 @@ repo:
     - .github/workflows/release.yml
   # Terms that must never appear in the diff, PR or commits (client names, local paths). The gate checks them on every repo.
   denylist: [acme-client, /Users/]
+  # New code scanning alerts on a PR: fix (back to the implementer), block or ignore.
+  codeScanning: { action: fix, minSeverity: medium }
   verify:
     common:
       - pnpm install --frozen-lockfile
