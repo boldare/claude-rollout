@@ -567,21 +567,25 @@
                   draft), or a PR closed on GitHub.
                 </td>
                 <td>
-                  <a href="commands.html#cmd-note"><code>rollout note</code></a> answers it.
-                  <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts.
+                  <a href="commands.html#cmd-note"><code>rollout note</code></a> answers it. An answer to brief questions gives the brief
+                  attempt back. <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts.
                 </td>
               </tr>
               <tr id="state-escalated">
                 <td class="nowrap"><span class="badge state state-escalated">escalated</span></td>
                 <td>The attempts of a role ran out, or five errors came in a row.</td>
-                <td><code>rollout retry</code> resets the attempts. <code>rollout note</code> sends an answer to a fix run.</td>
+                <td>
+                  <code>rollout retry</code> resets the attempts. <code>rollout note</code> sends an answer to a fix run. On a PR with no
+                  brief and no GitHub PR, the note goes to the brief writer instead.
+                </td>
               </tr>
               <tr id="state-interrupted">
                 <td class="nowrap"><span class="badge state state-interrupted">interrupted</span></td>
                 <td>A run ended without a report: a crash, a stop, a stall, a timeout or an outage.</td>
                 <td>
                   A later tick resumes it. An interrupted verifier re-checks the claim, an implementer with no session starts again, and
-                  anything else continues as a fix run.
+                  anything else continues as a fix run. A PR with no brief file and no GitHub PR goes back to <code>pending</code> instead,
+                  so the brief writer runs first.
                 </td>
               </tr>
               <tr id="state-merged">
@@ -633,7 +637,7 @@
             <tbody>
               <tr>
                 <td class="nowrap"><span class="badge role-brief">brief writer</span></td>
-                <td><code>brief-write.md</code>, the briefing sources for the PR, your answers</td>
+                <td><code>brief-write.md</code>, the briefing sources for the PR, every earlier question with your answer</td>
                 <td>new</td>
                 <td>Read the base branch. Edit, Write and NotebookEdit are denied.</td>
                 <td class="name">brief.json</td>
@@ -1004,13 +1008,14 @@
                   Stopped by the driver, a transient error (rate or usage limit, overload, HTTP 429 or 5xx, a dropped connection, claude's
                   <code>rate_limit</code>, <code>overloaded</code> or <code>server_error</code>, a rejected <code>rate_limit_event</code>),
                   an account error, or under $0.01 and under 60 s. The attempt is given back, at most five times per PR.
+                  <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts that count over.
                 </td>
               </tr>
               <tr>
                 <td>Any failed run</td>
                 <td>
                   Backs off before the next one: 2, 4, 8, 16, then 30 minutes. The streak resets on a successful run. A stop by the driver
-                  does not count.
+                  does not count. <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts the streak over.
                 </td>
               </tr>
               <tr>

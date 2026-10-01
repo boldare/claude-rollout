@@ -321,11 +321,25 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             <tbody>
               <tr>
                 <td class="nowrap"><span class="badge state state-blocked">blocked</span> by brief questions</td>
-                <td>Your answers are queued. The PR goes back to pending and the brief writer runs again with them.</td>
+                <td>
+                  Your answer is kept with its questions until the brief is written. The PR returns to pending with its brief attempt back,
+                  and the brief writer runs again with every answer so far.
+                </td>
               </tr>
               <tr>
                 <td class="nowrap"><span class="badge state state-pending">pending</span>, or an agent is running</td>
                 <td>Queued. The next brief, implement or fix prompt gets it.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><span class="badge state state-merged">merged</span></td>
+                <td>Rejected.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">no brief file and no GitHub PR</td>
+                <td>
+                  For example a PR that escalated because no brief could be written. The note becomes an answer for the brief writer, as for
+                  brief questions.
+                </td>
               </tr>
               <tr>
                 <td class="nowrap">
@@ -335,8 +349,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>The verification is dropped and the PR goes to needs_fix, with the reason "request from the maintainer".</td>
               </tr>
               <tr>
-                <td class="nowrap"><span class="badge state state-merged">merged</span></td>
-                <td>Rejected.</td>
+                <td class="nowrap"><span class="badge state state-needs_fix">needs_fix</span></td>
+                <td>Queued for the fix run. The reason the PR waits with, and its details, stay.</td>
               </tr>
               <tr>
                 <td class="nowrap">any other state</td>
@@ -350,8 +364,9 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         </div>
 
         <p>
-          In both needs_fix cases the fix attempts are capped at one below the limit, so at least one more fix run is allowed. The fix run
-          resumes the implementer's own session when there is one. In the UI: <a href="ui.html#control-note">Note</a>.
+          For a verified or ready_claimed PR, a needs_fix PR and any other state, the fix attempts are capped at one below the limit, so at
+          least one more fix run is allowed. The fix run resumes the implementer's own session when there is one. In the UI:
+          <a href="ui.html#control-note">Note</a>.
         </p>
 
         <h3 id="cmd-retry">retry <a class="anchor" href="#cmd-retry" aria-label="Link to this command">#</a></h3>
@@ -359,13 +374,16 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <pre><code>node $R retry P1 --dir D</code></pre>
 
         <ul>
-          <li>Resets all four attempt counters (implement, fix, verify and brief), the error count and the backoff.</li>
+          <li>
+            Resets all four attempt counters (implement, fix, verify and brief), the error count, the backoff, the refund count and the
+            failure streak.
+          </li>
           <li>
             A PR with a GitHub PR or an agent session becomes <a href="how-it-works.html#state-interrupted">interrupted</a>, and the next
             tick resumes it. That is a new verification when a claim waits for one, else a fix run.
           </li>
           <li>Any other PR goes back to pending.</li>
-          <li>It works from any state and does not clear a hold.</li>
+          <li>It is rejected for a merged PR and while an agent works on the PR. It does not clear a hold.</li>
         </ul>
 
         <p>The UI offers <a href="ui.html#control-retry">Retry</a> for escalated, blocked and interrupted PRs.</p>
