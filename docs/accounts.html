@@ -281,8 +281,8 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
 
         <p>
           <a href="manifest.html#policy-merge"><code>policy.merge</code></a> decides who merges.
-          <a href="manifest.html#policy-approval"><code>policy.approval</code></a> decides how your approval reaches the driver, and it
-          matters only when the driver merges after an approval.
+          <a href="manifest.html#policy-approval"><code>policy.approval</code></a> decides how your approval reaches the driver. It matters
+          only under <code>merge: human</code>, the one mode in which an approval counts.
         </p>
 
         <div class="scroll">
@@ -307,13 +307,15 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
                 <td class="name">manual</td>
                 <td colspan="2">
                   The driver verifies, gates and rebases, then notifies you that the PR is ready to merge. You merge on GitHub, and the
-                  driver carries on from the merge. The gate skips its approval check, so <code>approval</code> changes only the wording of
-                  the card.
+                  driver carries on from the merge. No approval counts, and <code>rollout approve</code> is refused.
                 </td>
               </tr>
               <tr>
                 <td class="name">auto</td>
-                <td colspan="2">The driver merges as soon as the gate passes, with no approval at all. Preflight warns.</td>
+                <td colspan="2">
+                  The driver merges as soon as the gate passes. No approval counts, and <code>rollout approve</code> is refused. Preflight
+                  warns.
+                </td>
               </tr>
             </tbody>
           </table>
@@ -339,7 +341,13 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
         <p>
           <code>rollout approve</code> names the exact head and patch id the verifier passed. The driver rejects it when the PR is not
           verified any more, when its head changed, when it was posted before the verification finished, or when an agent is working on the
-          PR. Under <code>approval: github</code> it also rejects it for a bot PR: approve that one on GitHub.
+          PR.
+        </p>
+
+        <p>
+          Under <code>merge: manual</code> and <code>merge: auto</code> no approval counts. Under <code>approval: github</code> a bot PR is
+          approved on GitHub. In these cases the CLI refuses <code>rollout approve</code> before it posts anything and says what to do
+          instead. The driver refuses the same command if it reaches the inbox another way.
         </p>
 
         <p>A new head with the same patch id, such as the driver's own rebase, keeps both the verification and the approval.</p>
@@ -373,9 +381,23 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
         <p>
           Under <code>merge: human</code> the driver waits
           <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a>
-          (120 s) after the approval before it merges. That leaves room to notice an approval you did not expect and stop it with
-          <code>rollout pause</code>. An approval through <code>rollout approve</code> also sends a notification.
+          (120 s) before it merges, counted from when the driver first sees the approval. That leaves room to notice an approval you did not
+          expect and stop it with <code>rollout pause</code>.
         </p>
+
+        <ul>
+          <li>For <code>rollout approve</code>, the window starts when the driver accepts the command.</li>
+          <li>
+            For a GitHub review, it starts at the first gate pass that finds a maintainer's approval for the current patch, never at the
+            review's own time. A review given while CI still runs gets the full window too.
+          </li>
+          <li>Both send a notification when the window starts.</li>
+          <li>A change request or a dismissal clears a GitHub approval the driver has seen, so the next approval starts a new window.</li>
+          <li>
+            The driver does not look for GitHub approvals while a PR is held or the rollout is paused. An approval it first sees after the
+            release or the resume starts its window then.
+          </li>
+        </ul>
 
         <h2 id="claude">The Claude side <a class="anchor" href="#claude" aria-label="Link to this section">#</a></h2>
 
