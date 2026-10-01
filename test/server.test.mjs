@@ -645,7 +645,7 @@ test('stream: a driver that dies without touching a file shows as stopped', asyn
   child.kill()
   await exited
 
-  const stopped = await stream.next((message) => message.event === 'state' && message.data.view.driver.running === false, 2000)
+  const stopped = await stream.next((message) => message.event === 'state' && message.data.view.driver.running === false)
   assert.equal(stopped.data.view.driver.pid, null)
 })
 
@@ -670,7 +670,7 @@ test('stream: needs the token, and close() ends open streams', async (t) => {
 
   await Promise.race([server.close(), tooSlow]).finally(() => clearTimeout(timer))
   await assert.rejects(
-    stream.next(() => true, 2000),
+    stream.next(() => true),
     /stream ended|terminated|aborted/,
   )
   await server.close()
