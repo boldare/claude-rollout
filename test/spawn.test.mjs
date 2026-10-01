@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadManifest } from '../lib/manifest.mjs'
 import { failureReason, failureSignals, runAgent, streamError } from '../lib/spawn.mjs'
@@ -241,4 +241,30 @@ test('runAgent: a run that hits its budget cap fails as a normal attempt', async
   assert.equal(result.costUsd, 20.4)
   assert.equal(result.transient, false)
   assert.equal(result.account, false)
+})
+
+test('runAgent: the delegate runs read-only, with no branch and its own schema', async () => {
+  const M = loadManifest(makeRollout())
+  const argsFile = join(M.dir, 'args.bin')
+  const branchFile = join(M.dir, 'branch.txt')
+
+  fakeClaude(M, `printf '%s\\0' "$@" > '${argsFile}'\nprintf '%s' "\${ROLLOUT_BRANCH-unset}" > '${branchFile}'\nexit 1`)
+
+  const result = await runAgent(M, M.all[0], {
+    role: 'delegate',
+    prompt: 'unused',
+    effort: 'high',
+    sessionId: '00000000-0000-4000-8000-000000000000',
+    resume: false,
+    cwd: M.repo.path,
+    logName: 'A1-01-delegate',
+  })
+  const args = readFileSync(argsFile, 'utf8').split('\0').slice(0, -1)
+  const disallowed = args.indexOf('--disallowedTools')
+  const schema = JSON.parse(readFileSync(new URL('../schemas/delegate.json', import.meta.url), 'utf8'))
+
+  assert.equal(result.ok, false)
+  assert.deepEqual(args.slice(disallowed, disallowed + 4), ['--disallowedTools', 'Edit', 'Write', 'NotebookEdit'])
+  assert.equal(readFileSync(branchFile, 'utf8'), '')
+  assert.deepEqual(JSON.parse(args[args.indexOf('--json-schema') + 1]), schema)
 })

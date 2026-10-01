@@ -331,6 +331,24 @@ test('timelineLayout: an interrupted run without a later driver start ends at th
   near(bar.width, 0.5, 'width')
 })
 
+test('timelineLayout: a delegate run gets its own bar', () => {
+  const events = [
+    { at: at(0), id: '-', kind: 'driver-start' },
+    { at: at(10), id: 'A1', kind: 'delegate-start', run: 'A1-01-delegate', blocked: 'needs-decision' },
+    { at: at(20), id: 'A1', kind: 'delegate-done', run: 'A1-01-delegate', ok: true, result: 'ANSWER', cost: 0.5 },
+  ]
+  const runs = runsFromEvents(events, { driverRunning: true })
+  const layout = timelineLayout({ rows: [{ id: 'A1' }], runs, events, now: Date.parse(at(20)), live: false })
+  const [bar] = layout.lanes[0].bars
+
+  assert.equal(layout.lanes[0].bars.length, 1)
+  assert.equal(bar.role, 'delegate')
+  assert.equal(bar.run, 'A1-01-delegate')
+  assert.equal(bar.status, 'ok')
+  near(bar.left, 0.5, 'left')
+  near(bar.width, 0.5, 'width')
+})
+
 test('timelineLayout: no times at all gives one empty lane per row', () => {
   const events = [
     { id: 'A1', kind: 'merged' },

@@ -6,7 +6,8 @@ import { createDriver, doneDetail } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { at, fakeTools, makeRollout, samplePrs } from './fixtures.mjs'
+import { worktreePath } from '../lib/worktree.mjs'
+import { at, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
 
 function agentResult(overrides = {}) {
   return { ok: true, output: null, costUsd: 1.25, seconds: 60, denials: [], error: null, stopped: false, ...overrides }
@@ -18,8 +19,8 @@ function headline(role, output) {
 
 // A driver on a fixture rollout. It never sends a desktop notification: a
 // test that checks them passes its own notify.
-function driverFor(prs, options) {
-  const M = loadManifest(makeRollout({ prs, events: [] }))
+function driverFor(prs, { policy = {}, ...options } = {}) {
+  const M = loadManifest(makeRollout({ prs, events: [], policy }))
 
   return { M, driver: createDriver(M, { notify: () => {}, ...options }) }
 }
@@ -148,6 +149,8 @@ test('doneDetail: the headline of each role', () => {
   assert.equal(headline('verify', { verdict: 'FAIL' }), 'FAIL')
   assert.equal(headline('brief', { brief: '# A1', questions: [] }), 'BRIEF')
   assert.equal(headline('brief', { brief: '', questions: ['Which API?'] }), 'QUESTIONS')
+  assert.equal(headline('delegate', { decision: 'answer' }), 'ANSWER')
+  assert.equal(headline('delegate', { decision: 'escalate' }), 'ESCALATE')
 })
 
 test('doneDetail: no headline when not ok, stopped as a boolean, denials as a count', () => {
@@ -1009,4 +1012,273 @@ test('checkClaim: a claimed PR merged or closed since sync is left to the next s
   assert.equal(driver.L.prs.A1.state, 'ready_claimed')
   assert.equal(driver.L.prs.A1.claimPatchId, undefined)
   assert.deepEqual(kindsSince(M), [])
+})
+
+const PREFIX = "Answer from the delegate, on the maintainer's behalf, from the plan:\n\n"
+const DECISION = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 still reads it.' }
+const BRIEF_QUESTIONS = { kind: 'brief-questions', question: 'Which API?', evidence: 'The plan names two.' }
+
+function delegateReport(overrides = {}) {
+  return agentResult({
+    output: {
+      decision: 'answer',
+      answer: '  Keep it as an alias.  ',
+      planRefs: ['Decisions: flags'],
+      reasoning: 'The plan keeps it.',
+      ...overrides,
+    },
+  })
+}
+
+// A blocked A1 under policy.delegate, with its worktree in place so no git
+// runs, and a fake runAgent that records its calls. Each call gets the next
+// of `results`: a result, or a promise the test resolves.
+function delegateDriver(state, { policy = { delegate: {} }, results = [], brief = true } = {}) {
+  const notices = []
+  const calls = []
+  const runAgent = async (_, pr, options) => {
+    calls.push({ id: pr.id, ...options })
+
+    return results.shift() ?? delegateReport()
+  }
+  const { M, driver } = driverFor(
+    { A1: { state: 'blocked', blocked: DECISION, ...state } },
+    { policy, runAgent, notify: (_, message) => notices.push(message) },
+  )
+  const pr = M.all.find((item) => item.id === 'A1')
+
+  mkdirSync(worktreePath(M, pr), { recursive: true })
+
+  if (brief) {
+    mkdirSync(dirname(pr.brief), { recursive: true })
+    writeFileSync(pr.brief, '# A1\n')
+  }
+
+  return { M, driver, pr, s: driver.L.prs.A1, notices, calls }
+}
+
+async function advanced(driver, pr) {
+  await driver.advance(pr)
+  await waitFor(() => driver.running.size === 0, 'the delegate to finish')
+}
+
+test('delegate: no run while it is off, for a kind it never answers, or with a note pending', async () => {
+  const cases = [
+    { state: {}, policy: {} },
+    { state: { blocked: { kind: 'ci', question: 'CI is red three times.', evidence: '' } }, policy: { delegate: {} } },
+    { state: { pendingNote: 'Wait for me.' }, policy: { delegate: {} } },
+  ]
+
+  for (const { state, policy } of cases) {
+    const { M, driver, pr, s, notices, calls } = delegateDriver({ pr: 11, ...state }, { policy })
+
+    await advanced(driver, pr)
+
+    assert.deepEqual(calls, [])
+    assert.deepEqual(kindsSince(M), [])
+    assert.deepEqual(notices, [])
+    assert.equal(s.state, 'blocked')
+    assert.equal(s.delegate.runs, 0)
+  }
+})
+
+test('delegate: an answer to brief questions gives the brief attempt back and notifies', async () => {
+  const { M, driver, pr, s, notices, calls } = delegateDriver(
+    { blocked: BRIEF_QUESTIONS, attempts: { implement: 0, fix: 0, verify: 0, brief: 1 } },
+    { brief: false },
+  )
+
+  await advanced(driver, pr)
+
+  assert.equal(s.state, 'pending')
+  assert.equal(s.blocked, null)
+  assert.equal(s.attempts.brief, 0)
+  assert.deepEqual(s.briefAnswers, [{ question: 'Which API?', answer: `${PREFIX}Keep it as an alias.` }])
+  assert.deepEqual(kindsSince(M), ['delegate-start', 'delegate-done', 'brief-answered', 'delegate-answered'])
+  assert.deepEqual(eventsSince(M)[0], {
+    id: 'A1',
+    kind: 'delegate-start',
+    run: 'A1-01-delegate',
+    log: 'logs/A1-01-delegate.jsonl',
+    effort: 'high',
+    blocked: 'brief-questions',
+  })
+  assert.equal(notices.length, 1)
+  assert.ok(notices[0].includes('Override with rollout note A1'), notices[0])
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].role, 'delegate')
+  assert.equal(calls[0].cwd, worktreePath(M, pr))
+  assert.equal(calls[0].effort, 'high')
+  assert.equal(calls[0].resume, false)
+  assert.equal(calls[0].logName, 'A1-01-delegate')
+  assert.ok(calls[0].prompt.includes('Which API?'))
+
+  assert.equal(s.delegate.runs, 1)
+  assert.equal(s.costUsd, 1.25)
+  assert.deepEqual(
+    s.delegate.answers.map((entry) => [entry.decision, entry.kind, entry.question, entry.answer, entry.run]),
+    [['answer', 'brief-questions', 'Which API?', '  Keep it as an alias.  ', 'A1-01-delegate']],
+  )
+  assert.deepEqual(
+    s.noteHistory.map((entry) => [entry.by, entry.kind, entry.question]),
+    [['delegate', 'brief-questions', 'Which API?']],
+  )
+})
+
+test('delegate: an answer to needs-decision sends the PR to a fix run with the answer', async () => {
+  const { M, driver, pr, s, notices } = delegateDriver({ pr: 11, sessionId: 'session-1' })
+
+  await advanced(driver, pr)
+
+  assert.equal(s.state, 'needs_fix')
+  assert.equal(s.fixReason, 'answer from the delegate')
+  assert.ok(s.fixNote.startsWith(PREFIX), s.fixNote)
+  assert.deepEqual(kindsSince(M), ['delegate-start', 'delegate-done', 'needs-fix', 'delegate-answered'])
+  assert.deepEqual(eventsSince(M).at(-1), {
+    id: 'A1',
+    kind: 'delegate-answered',
+    run: 'A1-01-delegate',
+    blocked: 'needs-decision',
+    planRefs: ['Decisions: flags'],
+  })
+  assert.equal(notices.length, 1)
+  assert.ok(notices[0].includes('Override with rollout note A1'), notices[0])
+})
+
+test('delegate: an escalation keeps the PR blocked, notifies once, and the same question starts no second run', async () => {
+  const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent on the flag.' })
+  const { M, driver, pr, s, notices, calls } = delegateDriver({ pr: 11 }, { results: [escalate] })
+
+  await advanced(driver, pr)
+  await advanced(driver, pr)
+
+  assert.equal(calls.length, 1)
+  assert.equal(s.state, 'blocked')
+  assert.deepEqual(eventsSince(M).slice(2), [
+    { id: 'A1', kind: 'delegate-escalated', run: 'A1-01-delegate', blocked: 'needs-decision', reason: 'The plan is silent on the flag.' },
+  ])
+  assert.equal(notices.length, 1)
+  assert.ok(notices[0].includes('passes this to you (needs-decision): Keep the old flag?'), notices[0])
+  assert.ok(notices[0].includes('Reason: The plan is silent on the flag.'), notices[0])
+  assert.deepEqual(
+    s.delegate.answers.map((entry) => entry.decision),
+    ['escalate'],
+  )
+})
+
+test('delegate: an empty answer is an escalation', async () => {
+  const { M, driver, pr, s } = delegateDriver({ pr: 11 }, { results: [delegateReport({ answer: '  ' })] })
+
+  await advanced(driver, pr)
+
+  assert.equal(s.state, 'blocked')
+  assert.equal(eventsSince(M).at(-1).reason, 'the delegate gave an empty answer')
+})
+
+test('delegate: at maxPerPr it starts nothing and notifies once', async () => {
+  const { M, driver, pr, s, notices, calls } = delegateDriver({
+    pr: 11,
+    delegate: { runs: 2, lastQuestion: null, limitNotified: false, answers: [] },
+  })
+
+  await advanced(driver, pr)
+  await advanced(driver, pr)
+
+  assert.deepEqual(calls, [])
+  assert.deepEqual(eventsSince(M), [{ id: 'A1', kind: 'delegate-limit', runs: 2, maxPerPr: 2 }])
+  assert.equal(notices.length, 1)
+  assert.ok(notices[0].includes('policy.delegate.maxPerPr'), notices[0])
+  assert.equal(s.delegate.limitNotified, true)
+})
+
+test('delegate: a maintainer note while it runs applies at once, and the late answer is dropped', async () => {
+  let finish
+  const late = new Promise((resolve) => {
+    finish = resolve
+  })
+  const { M, driver, pr, s, notices } = delegateDriver({ pr: 11 }, { results: [late] })
+
+  await driver.advance(pr)
+  assert.equal(driver.running.get('A1'), 'delegate')
+
+  assert.deepEqual(apply(M, driver, { cmd: 'note', id: 'A1', text: 'Drop the old flag.' }), [
+    { id: 'A1', kind: 'needs-fix', reason: 'answer from the maintainer' },
+  ])
+  assert.equal(s.state, 'needs_fix')
+
+  finish(delegateReport())
+  await waitFor(() => driver.running.size === 0, 'the delegate to finish')
+
+  const kinds = kindsSince(M)
+
+  assert.deepEqual(kinds.slice(-2), ['delegate-done', 'delegate-dropped'])
+  assert.ok(!kinds.includes('delegate-answered'))
+  assert.equal(s.state, 'needs_fix')
+  assert.equal(s.fixNote, 'Drop the old flag.')
+  assert.deepEqual(eventsSince(M).at(-1), { id: 'A1', kind: 'delegate-dropped', run: 'A1-01-delegate', state: 'needs_fix' })
+  assert.deepEqual(
+    s.delegate.answers.map((entry) => entry.decision),
+    ['dropped'],
+  )
+  assert.deepEqual(notices, [])
+})
+
+test('delegate: a failed run escalates, backs off, and the same question starts no second run', async () => {
+  const failure = agentResult({ ok: false, output: null, error: 'killed by SIGKILL', costUsd: 0.5, seconds: 300 })
+  const { M, driver, pr, s, notices, calls } = delegateDriver({ pr: 11 }, { results: [failure] })
+
+  await advanced(driver, pr)
+
+  assert.equal(s.state, 'blocked')
+  assert.equal(s.failStreak, 1)
+  assert.ok(Date.parse(s.retryAfter) > Date.now())
+  assert.equal(s.lastError, 'killed by SIGKILL')
+  assert.deepEqual(kindsSince(M), ['delegate-start', 'delegate-done', 'delegate-escalated'])
+  assert.equal(eventsSince(M).at(-1).reason, 'the run failed: killed by SIGKILL')
+  assert.equal(notices.length, 1)
+  assert.deepEqual(
+    s.delegate.answers.map((entry) => [entry.decision, entry.reasoning]),
+    [['failed', 'killed by SIGKILL']],
+  )
+
+  s.retryAfter = null
+  await advanced(driver, pr)
+
+  assert.equal(calls.length, 1)
+})
+
+test('delegate: a stopped run gives its run back, and a PR merged meanwhile is cleaned up', async () => {
+  const cleaned = []
+  const { driver, pr, s } = delegateDriver({ pr: 11, delegate: { runs: 1, lastQuestion: null, limitNotified: false, answers: [] } })
+  const context = { run: 'A1-01-delegate', question: 'q', blocked: DECISION }
+
+  await driver.onDelegateDone(pr, agentResult({ ok: false, stopped: true, output: null, error: 'driver stopping' }), context)
+
+  assert.equal(s.delegate.runs, 0)
+  assert.equal(s.delegate.lastQuestion, null)
+  assert.deepEqual(s.delegate.answers, [])
+
+  const merged = driverFor({ A1: { state: 'merged', pr: 11 } }, { cleanup: async (item) => cleaned.push(item.id) })
+
+  await merged.driver.onDelegateDone(pr, delegateReport(), context)
+
+  assert.deepEqual(cleaned, ['A1'])
+  assert.equal(merged.driver.L.prs.A1.state, 'merged')
+  assert.deepEqual(merged.driver.L.prs.A1.delegate.answers, [])
+})
+
+test('retry resets the delegate run count and keeps its answers, and waits while the delegate runs', () => {
+  const answers = [{ decision: 'escalate', question: 'Keep the old flag?' }]
+  const { M, driver, s } = delegateDriver({ pr: 11, delegate: { runs: 2, lastQuestion: 'abc', limitNotified: true, answers } })
+
+  driver.running.set('A1', 'delegate')
+  assert.deepEqual(apply(M, driver, { cmd: 'retry', id: 'A1' }), [
+    { id: 'A1', kind: 'command-rejected', command: 'retry', reason: 'an agent is working on this PR' },
+  ])
+
+  driver.running.delete('A1')
+  apply(M, driver, { cmd: 'retry', id: 'A1' })
+
+  assert.deepEqual(s.delegate, { runs: 0, lastQuestion: 'abc', limitNotified: false, answers })
 })

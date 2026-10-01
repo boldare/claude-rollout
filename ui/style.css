@@ -30,6 +30,7 @@
   --implement: #4a63d8;
   --fix: #2f9e5f;
   --verify: #d0652f;
+  --delegate: #15899a;
   --merged: #7b5bd6;
 
   --tint: color-mix(in srgb, var(--accent) 7%, transparent);
@@ -70,6 +71,7 @@
     --implement: #7f95f7;
     --fix: #4fbb7d;
     --verify: #e38a5c;
+    --delegate: #45bccb;
     --merged: #b59bff;
 
     --tint: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -648,6 +650,10 @@ a.lane-label {
 
 .role-verify {
   --tone: var(--verify);
+}
+
+.role-delegate {
+  --tone: var(--delegate);
 }
 
 .role-none {

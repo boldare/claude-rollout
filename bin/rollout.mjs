@@ -159,6 +159,24 @@ function approveHint(M, s, id) {
   return approveRefusal(M, s)
 }
 
+function printDelegate(delegate) {
+  if (delegate.maxPerPr === null && delegate.answers.length === 0) {
+    return
+  }
+
+  const runs = delegate.maxPerPr === null ? `off, ${delegate.runs} runs` : `${delegate.runs} of ${delegate.maxPerPr} runs`
+  console.log(`\ndelegate: ${runs}`)
+
+  for (const entry of delegate.answers) {
+    const text = ['answer', 'dropped'].includes(entry.decision) ? entry.answer : entry.reasoning
+    console.log(`  ${entry.decision} on ${entry.kind} at ${entry.at} (${entry.run}): ${(text ?? '').slice(0, 300)}`)
+
+    if (entry.planRefs?.length > 0) {
+      console.log(`    plan: ${entry.planRefs.join(', ')}`)
+    }
+  }
+}
+
 function card(M, id) {
   const ledger = readLedger(M)
 
@@ -194,6 +212,8 @@ function card(M, id) {
   if (s.blocked && s.state === 'blocked') {
     console.log(`\nBLOCKED (${s.blocked.kind}): ${s.blocked.question}\n${s.blocked.evidence ?? ''}`)
   }
+
+  printDelegate(s.delegate)
 
   if (s.ready) {
     console.log(`\nimplementer: ${s.ready.summary}`)

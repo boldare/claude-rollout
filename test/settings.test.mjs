@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
-import { agentSettings, guardCommand } from '../lib/settings.mjs'
+import { agentSettings, guardCommand, readOnlyRole } from '../lib/settings.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 function pushRules(branch) {
@@ -64,4 +64,18 @@ test('guardCommand: the shell expands nothing in the skill path', () => {
 
   assert.equal(existsSync(join(root, 'pwned')), false)
   assert.equal(existsSync(join(root, 'tick')), false)
+})
+
+test('the delegate is read-only: the verifier guard and no file edits', () => {
+  const M = loadManifest(makeRollout())
+  const { deny, allow } = agentSettings(M, 'delegate').permissions
+
+  assert.equal(readOnlyRole('delegate'), true)
+
+  for (const tool of ['Edit', 'Write', 'NotebookEdit']) {
+    assert.ok(deny.includes(tool), tool)
+  }
+
+  assert.deepEqual(allow, agentSettings(M, 'verify').permissions.allow)
+  assert.ok(guardCommand(M, 'delegate').endsWith(' verifier'))
 })

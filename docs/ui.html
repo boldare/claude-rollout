@@ -533,7 +533,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
           <div class="mock-body">
             <div class="legend">
               <span class="role-brief">brief</span><span class="role-implement">implement</span><span class="role-fix">fix</span
-              ><span class="role-verify">verify</span>
+              ><span class="role-verify">verify</span><span class="role-delegate">delegate</span>
             </div>
             <div class="scroll">
               <svg class="timeline-mock" viewBox="0 0 640 160" role="presentation">
@@ -771,8 +771,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                 <td class="name">overview</td>
                 <td>
                   The board's info line, the gate's last decision with its reasons, GitHub's merge state and the sha it judged, the question
-                  and evidence of a blocked PR, the hold, how this PR is approved, the verified and approved stamps, the dependencies, files
-                  outside the PR's scope and changed workflow files. With the verifier and brief tabs it covers most of
+                  and evidence of a blocked PR, the delegate's runs and answers with their plan references, the hold, how this PR is
+                  approved, the verified and approved stamps, the dependencies, files outside the PR's scope and changed workflow files.
+                  With the verifier and brief tabs it covers most of
                   <a href="commands.html#cmd-card"><code>rollout card</code></a
                   >. The implementer's summary, deviations and expected results are only on the card.
                 </td>
