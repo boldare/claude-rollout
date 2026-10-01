@@ -22,6 +22,7 @@ export const ERROR_KINDS = [
   'fetch-failed',
   'outside-deps-failed',
   'watch-base-failed',
+  'github-unavailable',
   'report-unchecked',
 ]
 

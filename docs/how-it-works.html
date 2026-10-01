@@ -312,7 +312,8 @@
           </li>
           <li>
             <strong>Fetch.</strong> <code>git fetch --prune origin</code> in the repository. A failed fetch logs <code>fetch-failed</code>,
-            and the gate step is skipped for that tick, because a stale base would mislead it.
+            and the gate step is skipped for that tick, because a stale base would mislead it. A fetch lost to an
+            <a href="#outage">outage</a> logs <code>github-unavailable</code> instead, and skips the gate too.
           </li>
           <li>
             <strong>Check outside dependencies.</strong> With <a href="commands.html#flag-only"><code>--only</code></a
@@ -366,6 +367,11 @@
             <code>error</code> event for that PR and the tick goes on. A PR counts one error per tick, and the count resets after a tick
             without one. Five erroring ticks in a row, with no agent running, escalate that PR alone, once. Any other error is a
             <code>tick-error</code> event, and the next tick starts as usual. Five failed ticks in a row notify you once.
+          </li>
+          <li>
+            <strong>An outage is nobody's error.</strong> When GitHub or the network is down, a failed call counts against no PR and no
+            step, and fires no five-in-a-row notice. The tick logs one <code>github-unavailable</code> event and tries again on the next
+            tick. After 30 minutes in a row you get one notice, and one more when GitHub answers again (<code>github-back</code>).
           </li>
         </ul>
 
@@ -586,15 +592,20 @@
                   attempt back. <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts. With
                   <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, <a href="#delegate">the delegate</a> may
                   answer first. After a code scanning block, dismiss a false positive on GitHub. Then <code>rollout retry</code> checks the
-                  claim again with no fix run.
+                  claim again with no fix run. After a gate block or a reopened PR, <code>rollout retry</code> keeps a verification that
+                  still holds, and the gate looks again.
                 </td>
               </tr>
               <tr id="state-escalated">
                 <td class="nowrap"><span class="badge state state-escalated">escalated</span></td>
-                <td>The attempts of a role ran out, or the PR had an error in five ticks in a row.</td>
                 <td>
-                  <code>rollout retry</code> resets the attempts. <code>rollout note</code> sends an answer to a fix run. On a PR with no
-                  brief and no GitHub PR, the note goes to the brief writer instead.
+                  The attempts of a role ran out, or the PR had an error in five ticks in a row. An <a href="#outage">outage</a> never
+                  counts toward the five.
+                </td>
+                <td>
+                  <code>rollout retry</code> resets the attempts. A PR whose verification still holds goes back to <code>verified</code>.
+                  <code>rollout note</code> sends an answer to a fix run. On a PR with no brief and no GitHub PR, the note goes to the brief
+                  writer instead.
                 </td>
               </tr>
               <tr id="state-interrupted">
@@ -631,8 +642,9 @@
           </li>
           <li><strong>Paused</strong> applies to the whole rollout. No new runs start and nothing merges. Running agents finish.</li>
           <li>
-            <strong>Halted</strong> applies to the whole rollout after the base went red behind a merge. Only merges stop. Agents keep
-            working until <a href="commands.html#cmd-unhalt"><code>unhalt</code></a
+            <strong>Halted</strong> applies to the whole rollout after the base went red behind a merge. The gate step stops, so nothing
+            merges or rebases and no ready notice goes out. Agents keep working until
+            <a href="commands.html#cmd-unhalt"><code>unhalt</code></a
             >.
           </li>
         </ul>
@@ -1098,7 +1110,8 @@
                 <td>
                   A PR counts one error per tick, and a tick without one starts the count over. After the fifth erroring tick in a row,
                   <code>guarded()</code> escalates that PR as soon as no agent runs for it. An escalated PR is not escalated again. The
-                  other PRs go on.
+                  other PRs go on. An <a href="#outage">outage</a> never counts, and a tick that only met an outage leaves the count as it
+                  was.
                 </td>
               </tr>
               <tr>
@@ -1106,7 +1119,18 @@
                 <td>
                   A failed fetch, outside-dependency check or base watch logs <code>fetch-failed</code>, <code>outside-deps-failed</code> or
                   <code>watch-base-failed</code> and counts against no PR. The rest of the tick runs, except the gate after a failed fetch.
-                  Five failures in a row of one step notify you.
+                  Five failures in a row of one step notify you. An <a href="#outage">outage</a> never counts toward the five and logs no
+                  such event.
+                </td>
+              </tr>
+              <tr id="outage">
+                <td>GitHub or the network is unreachable</td>
+                <td>
+                  A gh or git call fails with an HTTP 5xx or 429, a rate limit, a DNS or connection failure, or a timeout. The rules are
+                  <code>githubUnavailable</code> in <code>lib/github.mjs</code>. Such a failure counts against no PR and no driver-wide
+                  step. The first one in a tick logs <code>github-unavailable</code>, and the next tick tries again. After 30 minutes in a
+                  row the driver notifies you once. The first tick with no outage logs <code>github-back</code>, and notifies you only if
+                  you got that notice. A 401, a 403 that is no rate limit, a 404 or a 422 is no outage, and counts as an error.
                 </td>
               </tr>
               <tr>
@@ -1121,7 +1145,9 @@
                 <td>
                   The PR becomes <code>interrupted</code> with a <code>report-unchecked</code> event, and the report waits. A later tick
                   checks it again with no agent run and no attempt spent. A report that names a PR GitHub does not know still goes back to
-                  the implementer.
+                  the implementer, but only gh's "Could not resolve to a PullRequest" or "no pull requests found" says so. Any other error,
+                  a 404 included, waits, and counts as an error of the PR on each later tick that fails, unless it is an
+                  <a href="#outage">outage</a>.
                 </td>
               </tr>
               <tr>
@@ -1135,6 +1161,7 @@
                 <td>A run ended without a report</td>
                 <td>
                   The PR becomes <code>interrupted</code> and resumes on a later tick. So does every run in progress when the driver stops.
+                  A brief run goes back to <code>pending</code> instead, and a delegate run leaves the PR <code>blocked</code>.
                 </td>
               </tr>
               <tr>
@@ -1182,7 +1209,8 @@
                 <td>Code scanning could not be read</td>
                 <td>
                   A repo without code scanning answers 404 or 403. The driver logs <code>code-scanning-unavailable</code> once per PR and
-                  goes on without it. Any other error, a rate limit included, counts as an error of that PR.
+                  goes on without it. Any other error counts as an error of that PR, unless it is an <a href="#outage">outage</a> such as a
+                  rate limit.
                 </td>
               </tr>
             </tbody>
@@ -1244,12 +1272,15 @@
           <li>
             <strong>Trouble:</strong> halted, paused by an account limit, merge refused or blocked by GitHub, the head moved after
             verification, the verifier changed the tree, a dependency outside the run, a rejected manifest, five failed ticks in a row, five
-            failures in a row of a driver-wide step.
+            failures in a row of a driver-wide step, GitHub unreachable for 30 minutes, and GitHub back after that.
           </li>
           <li><strong>The end:</strong> all PRs merged, with the release PR to merge.</li>
         </ul>
 
-        <p>Notices that could repeat on every tick are sent once per patch or head.</p>
+        <p>
+          Notices that could repeat on every tick are sent once per patch or head, and once per outage. A merge GitHub refuses is the
+          exception: it notifies on each refused attempt.
+        </p>
 
         <nav class="pager" aria-label="Pages">
           <a class="prev" href="ui.html"><span>Previous</span>Web UI</a>

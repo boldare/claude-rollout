@@ -697,7 +697,7 @@ test('tick: outside dependencies are looked up one by one, and one already merge
       only: ['A3'],
       rules: [
         FETCH,
-        { tool: 'gh', args: 'pr list --head feat/a1', code: 1, stderr: 'HTTP 502: Bad Gateway' },
+        { tool: 'gh', args: 'pr list --head feat/a1', code: 1, stderr: 'HTTP 401: Bad credentials' },
         { tool: 'gh', args: 'pr list --head feat/a2', stdout: [mergedA2] },
       ],
     },
@@ -725,7 +725,7 @@ test('tick: outside dependencies are looked up one by one, and one already merge
   )
   assert.equal(failed.length, 1)
   assert.equal(failed[0].id, '-')
-  assert.match(failed[0].error, /^A1: gh pr list --head feat\/a1 .*HTTP 502/)
+  assert.match(failed[0].error, /^A1: gh pr list --head feat\/a1 .*HTTP 401/)
   assert.doesNotMatch(failed[0].error, /A2/)
 
   const before = tools.calls().length
@@ -781,7 +781,7 @@ test('tick: a deleted manifest.yaml is rejected once, and loads again when it is
 })
 
 test('guarded: a PR counts one error per tick, a clean tick resets it, and five erroring ticks escalate it once', async () => {
-  const viewFails = { tool: 'gh', args: 'pr view 11', code: 1, stderr: 'HTTP 502: Bad Gateway' }
+  const viewFails = { tool: 'gh', args: 'pr view 11', code: 1, stderr: 'HTTP 404: Not Found' }
   const { M, driver, tools, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewFails] })
   const entry = driver.L.prs.A1
   const errorCounts = (from) =>
@@ -826,6 +826,135 @@ test('guarded: a PR counts one error per tick, a clean tick resets it, and five 
   assert.equal(entry.state, 'escalated')
   assert.equal(notices.length, 1)
   assert.equal(kindsSince(M).filter((kind) => kind === 'escalated').length, 1)
+})
+
+const VIEW_502 = { tool: 'gh', args: 'pr view 11', code: 1, stderr: 'HTTP 502: Bad Gateway' }
+const FETCH_UNREACHABLE = {
+  tool: 'git',
+  args: 'fetch',
+  code: 128,
+  stderr: "fatal: unable to access 'https://github.com/example/demo.git/': Could not resolve host: github.com",
+}
+
+// Runs the ticks and returns how many github-unavailable events each one logged.
+async function unavailablePerTick(M, driver, ticks) {
+  const counts = []
+
+  for (let i = 0; i < ticks; i += 1) {
+    const before = readEvents(M).length
+    await driver.tick()
+    counts.push(kindsSince(M, before).filter((kind) => kind === 'github-unavailable').length)
+  }
+
+  return counts
+}
+
+test('tick: six ticks of HTTP 502 escalate nothing, and an outage of 30 minutes notifies once and again when it ends', async () => {
+  const { M, driver, tools, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH, VIEW_502] })
+  const entry = driver.L.prs.A1
+  gate.error = new Error('gh api -X GET repos/example/demo/pulls/11/reviews -f per_page=100 exited 1: gh: Server Error (HTTP 500)')
+
+  assert.deepEqual(await unavailablePerTick(M, driver, 6), [1, 1, 1, 1, 1, 1])
+  assert.deepEqual(kindsSince(M), Array(6).fill('github-unavailable'))
+  assert.equal(entry.state, 'verified')
+  assert.equal(entry.tickErrors ?? 0, 0)
+  assert.equal(entry.lastError, null)
+  assert.equal(gate.calls, 6)
+  assert.deepEqual(notices, [])
+
+  const [first] = eventsSince(M)
+  const outage = driver.L.data.githubUnavailable
+
+  assert.deepEqual({ ...first, error: null }, { id: '-', kind: 'github-unavailable', source: 'A1', error: null, minutes: 0 })
+  assert.match(first.error, /^gh pr view 11 --json .* exited 1: HTTP 502: Bad Gateway$/)
+  assert.equal(outage.notified, false)
+  assert.deepEqual(JSON.parse(readFileSync(join(M.dir, 'ledger.json'), 'utf8')).githubUnavailable, outage)
+
+  outage.since = new Date(Date.parse(outage.since) - 31 * 60_000).toISOString()
+  await driver.tick()
+
+  assert.deepEqual(notices, [
+    '-: GitHub has been unreachable for 31 minutes. The driver keeps trying every tick. Last error: HTTP 502: Bad Gateway',
+  ])
+  assert.equal(driver.L.data.githubUnavailable.notified, true)
+
+  await driver.tick()
+
+  assert.equal(notices.length, 1)
+
+  tools.answer([FETCH, viewRule()])
+  gate.error = null
+  const before = readEvents(M).length
+  await driver.tick()
+
+  assert.deepEqual(eventsSince(M, before), [{ id: '-', kind: 'github-back', minutes: 31 }])
+  assert.deepEqual(notices.slice(1), ['-: GitHub answers again after 31 minutes'])
+  assert.equal(driver.L.data.githubUnavailable, null)
+
+  const after = readEvents(M).length
+  await driver.tick()
+
+  assert.deepEqual(kindsSince(M, after), [])
+  assert.equal(notices.length, 2)
+})
+
+test('guarded: an outage neither counts nor resets the errors of a PR, and a short one ends with github-back and no notice', async () => {
+  const { M, driver, tools, gate, notices } = tickDriver({ A1: { ...samplePrs().A1, tickErrors: 3 } }, { rules: [FETCH, VIEW_502] })
+  const entry = driver.L.prs.A1
+
+  await driver.tick()
+
+  assert.equal(entry.tickErrors, 3)
+  assert.deepEqual(kindsSince(M), ['github-unavailable'])
+
+  gate.error = new Error('gate down')
+  const mixed = readEvents(M).length
+  await driver.tick()
+
+  assert.equal(entry.tickErrors, 4)
+  assert.deepEqual(
+    eventsSince(M, mixed).map((event) => [event.kind, event.count]),
+    [
+      ['github-unavailable', undefined],
+      ['error', 4],
+    ],
+  )
+
+  tools.answer([FETCH, viewRule()])
+  gate.error = null
+  const before = readEvents(M).length
+  await driver.tick()
+
+  assert.equal(entry.tickErrors, 0)
+  assert.deepEqual(eventsSince(M, before), [{ id: '-', kind: 'github-back', minutes: 0 }])
+  assert.equal(driver.L.data.githubUnavailable, null)
+  assert.deepEqual(notices, [])
+})
+
+test('tick: a fetch lost to an outage skips the gate, logs no fetch-failed and leaves the count of fetch failures alone', async () => {
+  const { M, driver, tools, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH_UNREACHABLE, viewRule()] })
+
+  assert.deepEqual(await unavailablePerTick(M, driver, 5), [1, 1, 1, 1, 1])
+  assert.deepEqual(
+    eventsSince(M).map((event) => [event.kind, event.source]),
+    Array(5).fill(['github-unavailable', 'fetch']),
+  )
+  assert.equal(gate.calls, 0)
+  assert.deepEqual(notices, [])
+
+  for (const fetch of [FETCH_FAILS, FETCH_UNREACHABLE, FETCH_FAILS]) {
+    tools.answer([fetch, viewRule()])
+    await driver.tick()
+  }
+
+  assert.deepEqual(
+    eventsSince(M)
+      .filter((event) => event.kind === 'fetch-failed')
+      .map((event) => event.count),
+    [1, 2],
+  )
+  assert.equal(gate.calls, 0)
+  assert.deepEqual(notices, [])
 })
 
 test('runTick: a failed tick never rejects, and the fifth in a row notifies once', async () => {
@@ -898,6 +1027,7 @@ test('onDone: a READY report GitHub could not read waits, and a later tick claim
   await driver.tick()
 
   assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.interruptedRole, null)
   assert.equal(entry.pr, 12)
   assert.equal(entry.claimedSha, NEW_HEAD)
   assert.equal(entry.attempts.fix, 0)
@@ -906,7 +1036,10 @@ test('onDone: a READY report GitHub could not read waits, and a later tick claim
 })
 
 test('onDone: a READY report that names a PR GitHub does not know still goes to a fix run', async () => {
-  const unknown = ['GraphQL: Could not resolve to a PullRequest with the number of 12. (repository.pullRequest)', 'HTTP 404: Not Found']
+  const unknown = [
+    'GraphQL: Could not resolve to a PullRequest with the number of 12. (repository.pullRequest)',
+    'no pull requests found for branch "feat/a1"',
+  ]
 
   for (const stderr of unknown) {
     const { M, driver } = tickDriver({ A1: IMPLEMENTING }, { rules: [{ tool: 'gh', args: 'pr view 12', code: 1, stderr }] })
@@ -925,6 +1058,121 @@ test('onDone: a READY report that names a PR GitHub does not know still goes to 
     assert.deepEqual(eventsSince(M).at(-1), { id: 'A1', kind: 'needs-fix', reason: 'report does not match GitHub' })
     assert.deepEqual(kindsSince(M), ['implement-done', 'needs-fix'])
   }
+})
+
+test('onDone: a READY report whose PR answers 404 waits, and counts as an error of the PR on the next tick', async () => {
+  const notFound = { tool: 'gh', args: 'pr view 12', code: 1, stderr: 'HTTP 404: Not Found' }
+  const { M, driver } = tickDriver({ A1: IMPLEMENTING }, { rules: [FETCH, notFound] })
+  const pr = M.prs.find((item) => item.id === 'A1')
+  const entry = driver.L.prs.A1
+
+  await driver.onDone(pr, 'implement', READY, { run: 'A1-01-implement' })
+
+  const events = eventsSince(M)
+
+  assert.equal(entry.state, 'interrupted')
+  assert.equal(entry.interruptedRole, 'report')
+  assert.equal(entry.attempts.fix, 0)
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ['implement-done', 'report-unchecked'],
+  )
+  assert.match(events[1].error, /HTTP 404: Not Found/)
+
+  await driver.tick()
+
+  const later = eventsSince(M, events.length)
+
+  assert.deepEqual(
+    later.map((event) => [event.id, event.kind, event.count]),
+    [['A1', 'error', 1]],
+  )
+  assert.match(later[0].error, /HTTP 404: Not Found/)
+  assert.equal(entry.tickErrors, 1)
+  assert.equal(entry.state, 'interrupted')
+  assert.equal(entry.interruptedRole, 'report')
+  assert.equal(entry.attempts.fix, 0)
+})
+
+test('advance: a parked READY report GitHub now contradicts goes to a fix run and is never claimed again', async () => {
+  const parked = { ...IMPLEMENTING, state: 'interrupted', interruptedRole: 'report', ready: READY.output }
+  const { M, driver } = tickDriver({ A1: parked }, { rules: [FETCH, viewRule({ number: 12, headRefOid: NEW_HEAD, state: 'CLOSED' })] })
+  const entry = driver.L.prs.A1
+
+  await driver.tick()
+
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixReason, 'report does not match GitHub')
+  assert.equal(entry.interruptedRole, null)
+  assert.deepEqual(kindsSince(M), ['needs-fix'])
+})
+
+const GATE_BLOCK = { kind: 'gate', question: 'PR is a draft', evidence: '' }
+
+test('retry: a PR whose verification still holds goes back to verified, keeps its hold, and the gate looks again with no agent', async () => {
+  for (const state of [
+    { state: 'escalated', tickErrors: 5 },
+    { state: 'blocked', blocked: GATE_BLOCK },
+  ]) {
+    const { M, driver, gate } = tickDriver({ A1: { ...samplePrs().A1, ...state } }, { rules: [FETCH, viewRule()] })
+    const entry = driver.L.prs.A1
+
+    assert.deepEqual(apply(M, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'verified' }], state.state)
+    assert.deepEqual(entry.verified, samplePrs().A1.verified, state.state)
+    assert.equal(entry.interruptedRole, null, state.state)
+    assert.ok(entry.held, state.state)
+
+    await driver.tick()
+
+    assert.equal(gate.calls, 1, state.state)
+    assert.equal(driver.running.size, 0, state.state)
+    assert.equal(entry.state, 'verified', state.state)
+    assert.deepEqual(entry.attempts, { implement: 0, fix: 0, verify: 0, brief: 0 }, state.state)
+  }
+})
+
+test('retry: a verification for an older head is dropped, and the PR goes back to its claim', () => {
+  const stale = { ...samplePrs().A1, state: 'escalated', verified: { ...samplePrs().A1.verified, sha: NEW_HEAD }, ciPendingSince: at(85) }
+  const { M, driver } = tickDriver({ A1: stale }, { rules: [FETCH, viewRule()] })
+  const entry = driver.L.prs.A1
+
+  assert.deepEqual(apply(M, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'ready_claimed' }])
+  assert.equal(entry.verified, null)
+  assert.equal(entry.ciPendingSince, null)
+  assert.equal(entry.interruptedRole, null)
+  assert.equal(entry.claimedSha, SHA)
+})
+
+test('note: an answer to a gate block on a verified PR drops the verification', () => {
+  const { M, driver } = tickDriver({ A1: { ...samplePrs().A1, state: 'blocked', blocked: GATE_BLOCK } }, { rules: [FETCH, viewRule()] })
+  const entry = driver.L.prs.A1
+
+  assert.deepEqual(apply(M, driver, { cmd: 'note', id: 'A1', text: 'Mark it ready for review.' }), [
+    { id: 'A1', kind: 'needs-fix', reason: 'answer from the maintainer' },
+  ])
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixNote, 'Mark it ready for review.')
+  assert.equal(entry.verified, null)
+})
+
+test('retry: a parked READY report stays parked, and the next tick claims it with no agent', async () => {
+  const parked = { ...IMPLEMENTING, state: 'escalated', interruptedRole: 'report', ready: READY.output }
+  const { M, driver } = tickDriver({ A1: parked }, { rules: [FETCH, viewRule({ number: 12, headRefOid: NEW_HEAD })] })
+  const entry = driver.L.prs.A1
+
+  assert.deepEqual(apply(M, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'interrupted' }])
+  assert.equal(entry.interruptedRole, 'report')
+
+  const before = readEvents(M).length
+  await driver.tick()
+
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.interruptedRole, null)
+  assert.equal(entry.pr, 12)
+  assert.equal(entry.claimedSha, NEW_HEAD)
+  assert.equal(entry.attempts.fix, 0)
+  assert.equal(driver.running.size, 0)
+  assert.deepEqual(kindsSince(M, before), ['ready-claimed'])
 })
 
 test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sync sees it merged', async () => {
