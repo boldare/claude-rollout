@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadManifest } from '../lib/manifest.mjs'
-import { failureReason, failureSignals, runAgent, streamError } from '../lib/spawn.mjs'
+import { children, failureReason, failureSignals, runAgent, streamError } from '../lib/spawn.mjs'
 import { jsonLines, makeRollout, sampleTranscript } from './fixtures.mjs'
 
 // What claude prints for `--resume` of a session that never reached disk.
@@ -178,15 +178,54 @@ function fakeClaude(M, script, lines = null) {
   M.claudeBin = bin
 }
 
-function run(M, logName) {
-  return runAgent(M, M.all[0], {
-    role: 'implement',
-    prompt: 'unused',
-    effort: 'high',
-    sessionId: '00000000-0000-4000-8000-000000000000',
-    resume: false,
-    cwd: M.repo.path,
-    logName,
+function run(M, logName, seams) {
+  return runAgent(
+    M,
+    M.all[0],
+    {
+      role: 'implement',
+      prompt: 'unused',
+      effort: 'high',
+      sessionId: '00000000-0000-4000-8000-000000000000',
+      resume: false,
+      cwd: M.repo.path,
+      logName,
+    },
+    seams,
+  )
+}
+
+// Records the deadline instead of arming it, so the test decides when it fires.
+function manualTimers() {
+  const timeouts = []
+  const timers = {
+    setTimeout: (callback, ms) => {
+      timeouts.push({ callback, ms })
+
+      return timeouts.length
+    },
+    clearTimeout: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
+  }
+
+  return { timers, timeouts }
+}
+
+// Resolves on close too, so a broken fake fails the test instead of hanging it.
+function stderrSeen(child, text) {
+  return new Promise((resolve) => {
+    let seen = ''
+
+    child.stderr.on('data', (chunk) => {
+      seen += chunk
+
+      if (seen.includes(text)) {
+        resolve()
+      }
+    })
+
+    child.on('close', resolve)
   })
 }
 
@@ -202,18 +241,47 @@ test('runAgent: a run killed by a signal names the signal', async () => {
   assert.equal(result.transient, false)
 })
 
-test('runAgent: stderr from before a timeout still classifies the run', async () => {
+test('runAgent: stderr from before a timeout still classifies the run', async (t) => {
   const M = loadManifest(makeRollout())
+  const { timers, timeouts } = manualTimers()
 
-  M.policy.timeouts.implement = 0.01
   // exec, so SIGTERM reaches sleep and the pipes close with it.
   fakeClaude(M, "echo 'API Error: 429 rate limit exceeded' >&2\nexec sleep 30")
 
-  const result = await run(M, 'A1-01-timeout')
+  const running = run(M, 'A1-01-timeout', { timers })
+
+  assert.equal(children.size, 1)
+
+  const [child] = children
+
+  t.after(() => child.kill('SIGKILL'))
+
+  await stderrSeen(child, 'rate limit exceeded')
+
+  assert.equal(timeouts.length, 1)
+  assert.equal(timeouts[0].ms, 240 * 60_000)
+
+  timeouts[0].callback()
+
+  const result = await running
+
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'timeout after 240 min')
+  assert.equal(result.transient, true)
+})
+
+test('runAgent: the deadline kills a run that outlives its timeout', async () => {
+  const M = loadManifest(makeRollout())
+
+  M.policy.timeouts.implement = 0.01
+  // No race: the run fails the same way whenever the deadline fires.
+  fakeClaude(M, 'exec sleep 30')
+
+  const result = await run(M, 'A1-01-deadline')
 
   assert.equal(result.ok, false)
   assert.equal(result.error, 'timeout after 0.01 min')
-  assert.equal(result.transient, true)
+  assert.equal(result.transient, false)
 })
 
 test('runAgent: a billing error in the stream is an account problem', async () => {
