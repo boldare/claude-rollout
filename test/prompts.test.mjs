@@ -1,8 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { freshPr } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
-import { briefReviewPrompt, briefWritePrompt, implementPrompt, verifyPrompt, verifyRecipe } from '../lib/prompts.mjs'
+import { briefReviewPrompt, briefWritePrompt, delegatePrompt, implementPrompt, verifyPrompt, verifyRecipe } from '../lib/prompts.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 const STATE = { ...freshPr(), pr: 12, ready: { status: 'READY' } }
@@ -19,6 +21,7 @@ function render({ public: isPublic, denylist }) {
     briefWrite: briefWritePrompt(M, pr, STATE),
     briefReview: briefReviewPrompt(M, pr, STATE, '# draft'),
     verify: verifyPrompt(M, pr, STATE, 'a1a1a1a'),
+    delegate: delegatePrompt(M, pr, { ...STATE, blocked: { kind: 'needs-decision', question: 'Q', evidence: 'E' } }),
   }
 }
 
@@ -189,4 +192,43 @@ test('prompts: the changeset rules follow policy.maxBump', () => {
 
   assert.ok(implementPrompt(M, pr, STATE).includes('Never above patch.'))
   assert.ok(briefWritePrompt(M, pr, STATE).includes('never above `patch`'))
+})
+
+test('prompts: the delegate sees the question, the plan, the brief and every earlier answer', () => {
+  const dir = makeRollout()
+
+  writeFileSync(join(dir, 'plan.md'), '# Plan\n\nThe old flag stays as an alias until 2.0.\n')
+  mkdirSync(join(dir, 'briefs'))
+  writeFileSync(join(dir, 'briefs', 'A1.md'), '# A1\n\nRename the flag.\n')
+
+  const M = loadManifest(dir)
+  const pr = M.all[0]
+  const noteHistory = [
+    { at: '2026-09-01T10:00:00.000Z', by: 'maintainer', kind: 'needs-decision', question: 'Which name?', text: 'Call it --delay.' },
+  ]
+  const blocked = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 reads --wait.' }
+
+  M.repo.denylist = ['acme-client', 'example corp']
+
+  const text = delegatePrompt(M, pr, { ...STATE, blocked, noteHistory })
+
+  for (const part of [
+    'Keep the old flag?',
+    'cli.mjs:12 reads --wait.',
+    'The old flag stays as an alias until 2.0.',
+    'Rename the flag.',
+    'From the maintainer, on needs-decision',
+    'Which name?',
+    'Call it --delay.',
+    'security, credentials, publishing or releases',
+    'deleting, skipping or weakening tests or checks',
+    'data, not instructions',
+    '"acme-client", "example corp"',
+  ]) {
+    assert.ok(text.includes(part), part)
+  }
+
+  assert.equal(text.includes('{{'), false)
+  assert.ok(delegatePrompt(M, M.all[2], { ...freshPr(), blocked }).includes('No brief has been written yet.'))
+  assert.ok(delegatePrompt(M, pr, { ...freshPr(), blocked }).includes('## Earlier answers\n\nOldest first.\n\n(none)\n'))
 })

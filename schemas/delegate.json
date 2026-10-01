@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["answer", "escalate"],
+      "description": "answer when the plan decides the question, escalate when the maintainer has to."
+    },
+    "answer": {
+      "type": "string",
+      "description": "The text for the blocked agent: self-contained, in English, saying what to do. Empty for escalate."
+    },
+    "planRefs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The parts of the plan, the brief or the code that decide it (headings, sections, file:line)."
+    },
+    "reasoning": { "type": "string", "description": "Why you answered or escalated (for the maintainer, not the agent)." }
+  },
+  "required": ["decision", "answer", "planRefs", "reasoning"]
+}

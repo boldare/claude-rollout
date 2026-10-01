@@ -809,6 +809,47 @@ test('cli: card and approve follow policy.merge', () => {
   assert.ok(card.stdout.includes('Approve with: rollout.mjs approve A1'), card.stdout)
 })
 
+test('cli: card lists the delegate runs and answers with their plan references', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+  const answer = {
+    at: '2026-09-01T12:00:00.000Z',
+    kind: 'needs-decision',
+    question: 'Keep the old flag?',
+    decision: 'answer',
+    answer: 'Keep it as an alias.',
+    planRefs: ['Decisions: flags', 'cli.mjs:12'],
+    reasoning: 'The plan keeps it.',
+    run: 'A1-01-delegate',
+  }
+  const escalation = { ...answer, decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent.', run: 'A1-02-delegate' }
+  const delegate = { runs: 1, lastQuestion: 'abc', limitNotified: false, answers: [answer] }
+  const card = cli('card', 'A1', '--dir', makeRollout({ policy: { delegate: {} }, prs: { A1: { state: 'needs_fix', delegate } } }))
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.ok(
+    card.stdout.includes(
+      '\ndelegate: 1 of 2 runs\n  answer on needs-decision at 2026-09-01T12:00:00.000Z (A1-01-delegate): Keep it as an alias.\n    plan: Decisions: flags, cli.mjs:12\n',
+    ),
+    card.stdout,
+  )
+
+  const off = cli(
+    'card',
+    'A1',
+    '--dir',
+    makeRollout({ prs: { A1: { state: 'blocked', delegate: { ...delegate, runs: 2, answers: [escalation] } } } }),
+  )
+
+  assert.ok(
+    off.stdout.includes(
+      '\ndelegate: off, 2 runs\n  escalate on needs-decision at 2026-09-01T12:00:00.000Z (A1-02-delegate): The plan is silent.\n',
+    ),
+    off.stdout,
+  )
+  assert.doesNotMatch(off.stdout, /plan: /)
+  assert.doesNotMatch(cli('card', 'A1', '--dir', makeRollout()).stdout, /delegate/)
+})
+
 // Never run stop on a default fixture: its lock names this test process.
 test('cli: stop without a driver signals nothing', async () => {
   const result = await runCli(['stop', '--dir', makeRollout({ lock: false })])

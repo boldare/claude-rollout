@@ -101,6 +101,37 @@ function blockedFields(blocked) {
   ]
 }
 
+function delegateRuns(delegate) {
+  if (delegate.maxPerPr === null) {
+    return `off, ${delegate.runs} runs`
+  }
+
+  return `${delegate.runs} of ${delegate.maxPerPr} runs`
+}
+
+function delegateAnswer(entry) {
+  const text = ['answer', 'dropped'].includes(entry.decision) ? entry.answer : entry.reasoning
+  const refs = entry.planRefs?.length > 0 ? [list(entry.planRefs.map((ref) => `plan: ${ref}`))] : []
+
+  return field(
+    entry.run ?? 'delegate',
+    wrap('div', badge(entry.decision, 'role-delegate'), element('span', ` ${entry.kind} at ${clock(entry.at)}`, 'muted')),
+    element('div', entry.question ?? '', 'text'),
+    element('div', text ?? '', 'text'),
+    ...refs,
+  )
+}
+
+function delegateFields(pr) {
+  const delegate = pr.delegate
+
+  if (!delegate || (delegate.maxPerPr === null && delegate.answers.length === 0)) {
+    return []
+  }
+
+  return [field('delegate', delegateRuns(delegate)), ...delegate.answers.map(delegateAnswer)]
+}
+
 function approvalField(pr) {
   if (pr.approval === 'github') {
     return field('approval', 'a GitHub review on ', prLink(pr))
@@ -126,6 +157,7 @@ function renderOverview(pr, ctx) {
     field('info', element('span', pr.info || '-', 'text')),
     gateFields(pr.gate),
     blockedFields(pr.blocked),
+    delegateFields(pr),
     heldField,
     approvalField(pr),
     field('verified', stamp(pr.verified)),

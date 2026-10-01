@@ -199,13 +199,42 @@ test('costs: PR totals from the ledger, roles and a cumulative line from runs', 
   assert.deepEqual(costs(M, { prs: { A1: { costUsd: 4.25 }, A2: { costUsd: 0.3 } } }, runs), {
     totalUsd: 4.55,
     byPr: { A1: 4.25, A2: 0.3, A3: 0 },
-    byRole: { brief: 0.3, implement: 4.25, fix: 0, verify: 0 },
+    byRole: { brief: 0.3, implement: 4.25, fix: 0, verify: 0, delegate: 0 },
     overTime: [
       { at: at(20), totalUsd: 0.1 },
       { at: at(30), totalUsd: 0.3 },
       { at: at(60), totalUsd: 4.55 },
     ],
   })
+})
+
+test('delegate runs: start and done pair into one run, its cost goes to the delegate, and prDetail reads its answers', () => {
+  const M = loadManifest(makeRollout({ policy: { delegate: {} } }))
+  const runs = runsFromEvents([
+    start('A1', 'delegate', 'A1-01-delegate', 0, { blocked: 'needs-decision' }),
+    done('A1', 'delegate', 'A1-01-delegate', 5, { cost: 0.75, result: 'ANSWER' }),
+  ])
+  const answers = [
+    {
+      at: at(5),
+      kind: 'needs-decision',
+      question: 'Keep the old flag?',
+      decision: 'answer',
+      answer: 'Keep it as an alias.',
+      planRefs: ['Decisions'],
+      reasoning: 'The plan keeps it.',
+      run: 'A1-01-delegate',
+    },
+  ]
+  const ledger = { prs: { A1: { costUsd: 0.75, delegate: { runs: 1, lastQuestion: 'abc', limitNotified: false, answers } } } }
+
+  assert.deepEqual(
+    runs.map((run) => [run.run, run.role, run.startedAt, run.endedAt, run.status, run.result, run.costUsd]),
+    [['A1-01-delegate', 'delegate', at(0), at(5), 'ok', 'ANSWER', 0.75]],
+  )
+  assert.equal(costs(M, ledger, runs).byRole.delegate, 0.75)
+  assert.deepEqual(prDetail(M, ledger, [], runs, 'A1').delegate, { maxPerPr: 2, runs: 1, answers })
+  assert.deepEqual(prDetail(loadManifest(makeRollout()), { prs: {} }, [], [], 'A1').delegate, { maxPerPr: null, runs: 0, answers: [] })
 })
 
 test('prRows: held goes outside approved, and a PR missing from the ledger is fresh', () => {
@@ -422,7 +451,7 @@ test('rolloutView: null without a ledger, the whole model with one', () => {
   assert.equal(view.events.length, 9)
   assert.deepEqual(statuses(view.runs), ['A2-01-brief-write:ok', 'A1-01-implement:ok', 'A1-02-verify:ok', 'A2-01-implement:running'])
   assert.equal(view.costs.totalUsd, 7.75)
-  assert.deepEqual(view.costs.byRole, { brief: 1.5, implement: 4.25, fix: 0, verify: 2 })
+  assert.deepEqual(view.costs.byRole, { brief: 1.5, implement: 4.25, fix: 0, verify: 2, delegate: 0 })
 })
 
 function cli(...args) {

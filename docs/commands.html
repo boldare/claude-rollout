@@ -244,6 +244,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li>The gate's last action and its reasons.</li>
           <li>The brief's path, and the reviewer's notes when the driver wrote it.</li>
           <li>For a blocked PR, the agent's question and evidence.</li>
+          <li>
+            With <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, or after it answered, the delegate's runs and
+            every answer or escalation with its plan references.
+          </li>
           <li>The implementer's summary, its deviations, and expected against observed results.</li>
           <li>Changed CI and workflow files, to review before approving, and files outside the scope.</li>
           <li>The verifier's verdict, checklist, blocking and non-blocking findings.</li>
@@ -335,7 +339,9 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 </td>
               </tr>
               <tr>
-                <td class="nowrap"><span class="badge state state-pending">pending</span>, or an agent is running</td>
+                <td class="nowrap">
+                  <span class="badge state state-pending">pending</span>, or an agent other than the delegate is running
+                </td>
                 <td>Queued. The next brief, implement or fix prompt gets it.</td>
               </tr>
               <tr>
@@ -377,14 +383,20 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <a href="ui.html#control-note">Note</a>.
         </p>
 
+        <p>
+          A note always wins over <a href="how-it-works.html#delegate">the delegate</a>. Sent while the delegate runs, it applies at once,
+          and the delegate's result is dropped (<code>delegate-dropped</code>). Sent after a delegate answer, it still reaches the agent,
+          queued or as a new fix reason.
+        </p>
+
         <h3 id="cmd-retry">retry <a class="anchor" href="#cmd-retry" aria-label="Link to this command">#</a></h3>
 
         <pre><code>node $R retry P1 --dir D</code></pre>
 
         <ul>
           <li>
-            Resets all four attempt counters (implement, fix, verify and brief), the error count, the backoff, the refund count and the
-            failure streak.
+            Resets all four attempt counters (implement, fix, verify and brief), the error count, the backoff, the refund count, the failure
+            streak and the delegate's run count.
           </li>
           <li>
             A PR with a GitHub PR or an agent session becomes <a href="how-it-works.html#state-interrupted">interrupted</a>, and the next
@@ -654,8 +666,9 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>ROLLOUT_ID, ROLLOUT_BRANCH, ROLLOUT_NAME, ROLLOUT_HOME</td>
                 <td>the driver, for agents</td>
                 <td>
-                  The PR, its branch (empty for the verifier and brief roles), the rollout and the skill's directory. The Bash guard reads
-                  them. Agents also get <code>ROLLOUT_DIR</code>, so <code>status</code> and <code>card</code> work for them without flags.
+                  The PR, its branch (empty for the verifier, brief and delegate roles), the rollout and the skill's directory. The Bash
+                  guard reads them. Agents also get <code>ROLLOUT_DIR</code>, so <code>status</code> and <code>card</code> work for them
+                  without flags.
                 </td>
               </tr>
               <tr>

@@ -79,3 +79,56 @@ test('validateManifest: an empty or comment-only manifest.yaml is an invalid man
     )
   }
 })
+
+test('loadManifest: the delegate is off by default, has its timeout, and {} turns it on with the defaults', () => {
+  const off = loadManifest(makeRollout())
+
+  assert.equal(off.policy.delegate, null)
+  assert.equal(off.policy.timeouts.delegate, 30)
+  assert.equal(loadManifest(makeRollout({ policy: { delegate: null } })).policy.delegate, null)
+  assert.deepEqual(loadManifest(makeRollout({ policy: { delegate: {} } })).policy.delegate, {
+    kinds: ['brief-questions', 'needs-decision'],
+    maxPerPr: 2,
+    effort: 'high',
+  })
+  assert.deepEqual(loadManifest(makeRollout({ policy: { delegate: { kinds: ['stuck'], maxPerPr: 0 } } })).policy.delegate, {
+    kinds: ['stuck'],
+    maxPerPr: 0,
+    effort: 'high',
+  })
+})
+
+test('validateManifest: policy.delegate errors', () => {
+  const errors = (delegate) => validateManifest({ ...structuredClone(base), policy: { delegate } })
+  const cases = [
+    ['on', 'policy.delegate must be a mapping, or null to turn it off'],
+    [[], 'policy.delegate must be a mapping, or null to turn it off'],
+    [false, 'policy.delegate must be a mapping, or null to turn it off'],
+    [{ kinds: 'stuck' }, 'policy.delegate.kinds must be a list'],
+    [{ kinds: null }, 'policy.delegate.kinds must be a list'],
+    [{ kinds: ['ci'] }, 'policy.delegate.kinds: ci is never delegated'],
+    [{ kinds: ['environment'] }, 'policy.delegate.kinds: environment is never delegated'],
+    [{ kinds: ['closed'] }, 'policy.delegate.kinds: closed is never delegated'],
+    [{ kinds: ['gate'] }, 'policy.delegate.kinds: gate is never delegated'],
+    [{ kinds: ['needs-decision', 'other'] }, 'policy.delegate.kinds: unknown kind other'],
+    [{ maxPerPr: -1 }, 'policy.delegate.maxPerPr must be an integer of 0 or more'],
+    [{ maxPerPr: 1.5 }, 'policy.delegate.maxPerPr must be an integer of 0 or more'],
+    [{ maxPerPr: '2' }, 'policy.delegate.maxPerPr must be an integer of 0 or more'],
+    [{ maxPerPr: null }, 'policy.delegate.maxPerPr must be an integer of 0 or more'],
+    [{ effort: 'ultra' }, 'policy.delegate.effort must be one of low, medium, high, xhigh, max'],
+    [{ effort: null }, 'policy.delegate.effort must be one of low, medium, high, xhigh, max'],
+  ]
+
+  for (const [delegate, error] of cases) {
+    assert.deepEqual(errors(delegate), [error], JSON.stringify(delegate))
+  }
+
+  for (const delegate of [
+    undefined,
+    null,
+    {},
+    { kinds: ['brief-questions', 'needs-decision', 'brief-contradiction', 'stuck'], maxPerPr: 0, effort: 'max' },
+  ]) {
+    assert.deepEqual(errors(delegate), [], JSON.stringify(delegate))
+  }
+})

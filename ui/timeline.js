@@ -3,7 +3,7 @@ import { clock, duration, money } from './format.js'
 import { timelineLayout } from './timeline-layout.js'
 
 const TICKS = 4
-const ROLES = ['brief', 'implement', 'fix', 'verify']
+const ROLES = ['brief', 'implement', 'fix', 'verify', 'delegate']
 const STATUSES = ['failed', 'interrupted', 'running']
 const MARKER_TYPES = ['ready', 'rebase', 'feedback', 'merge']
 

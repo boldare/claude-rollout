@@ -523,7 +523,9 @@ prs:
               <tr id="policy-timeouts">
                 <td>timeouts</td>
                 <td>object, minutes</td>
-                <td>implement <code>240</code>, fix <code>90</code>, verify <code>60</code>, brief <code>60</code></td>
+                <td>
+                  implement <code>240</code>, fix <code>90</code>, verify <code>60</code>, brief <code>60</code>, delegate <code>30</code>
+                </td>
                 <td>The hard limit of one run of that role. For a brief, the writer and the reviewer each get it.</td>
               </tr>
               <tr id="policy-stallMinutes">
@@ -572,6 +574,19 @@ prs:
                 <td>
                   How long a maintainer's last review comment must be quiet before the driver starts a fix run for it, so a review made of
                   several comments becomes one fix run.
+                </td>
+              </tr>
+              <tr id="policy-delegate">
+                <td>delegate</td>
+                <td>mapping or null</td>
+                <td>off</td>
+                <td>
+                  Turns on <a href="how-it-works.html#delegate">the delegate</a>, a read-only agent that answers a blocked PR from the plan
+                  or passes the question to you. <code>{}</code> turns it on with the defaults. <code>kinds</code> lists the questions it
+                  may answer (<code>[brief-questions, needs-decision]</code>), out of <code>brief-questions</code>,
+                  <code>needs-decision</code>, <code>brief-contradiction</code> and <code>stuck</code>. <code>ci</code>,
+                  <code>environment</code>, <code>closed</code> and <code>gate</code> are never delegated. <code>maxPerPr</code> caps its
+                  runs for one PR (<code>2</code>), and <code>effort</code> sets its effort (<code>high</code>).
                 </td>
               </tr>
             </tbody>

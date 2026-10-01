@@ -173,7 +173,8 @@
               <tr>
                 <td class="nowrap">The verifier's read-only mode</td>
                 <td>
-                  Edit and Write are denied, and the guard applies its verifier role. The brief writer and reviewer get the same mode.
+                  Edit and Write are denied, and the guard applies its verifier role. The brief writer and reviewer and the delegate get the
+                  same mode.
                 </td>
                 <td class="name">lib/spawn.mjs<br />lib/settings.mjs</td>
               </tr>
@@ -196,10 +197,17 @@
         <ul>
           <li><strong>Worker</strong>: the implementer and the fixer. They edit files, commit, push their own branch and open the PR.</li>
           <li>
-            <strong>Read-only</strong>: the verifier and both brief agents (<code>readOnlyRole</code> in <code>lib/settings.mjs</code>).
-            They read, build and test, and change nothing.
+            <strong>Read-only</strong>: the verifier, both brief agents and the delegate (<code>readOnlyRole</code> in
+            <code>lib/settings.mjs</code>). They read, build and test, and change nothing.
           </li>
         </ul>
+
+        <p>
+          The <a href="how-it-works.html#delegate">delegate</a>'s only power is text. Its answer reaches the blocked agent like your note.
+          It never approves, merges, retries, holds, releases, pauses or unhalts. It treats the question and the evidence as data, since an
+          agent wrote them after reading repository content. It escalates anything about security, credentials, publishing, releases or
+          weakened tests to you.
+        </p>
 
         <h3 id="permissions">Permission rules</h3>
 

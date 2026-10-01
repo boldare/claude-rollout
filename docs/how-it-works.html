@@ -335,8 +335,8 @@
             skipped while the rollout is paused, halted or stopping, and in a tick whose fetch failed.
           </li>
           <li>
-            <strong>Advance every PR</strong> in priority order, unless the rollout is paused. Briefs, implementers, fixers and verifiers
-            start while slots are free, and READY claims are checked.
+            <strong>Advance every PR</strong> in priority order, unless the rollout is paused. Briefs, implementers, fixers, verifiers and
+            delegates start while slots are free, and READY claims are checked.
           </li>
           <li><strong>Save</strong> the ledger.</li>
         </ol>
@@ -580,7 +580,9 @@
                 </td>
                 <td>
                   <a href="commands.html#cmd-note"><code>rollout note</code></a> answers it. An answer to brief questions gives the brief
-                  attempt back. <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts.
+                  attempt back. <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts. With
+                  <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, <a href="#delegate">the delegate</a> may
+                  answer first.
                 </td>
               </tr>
               <tr id="state-escalated">
@@ -692,6 +694,13 @@
                 <td>Read, build and test. No edits, commits, pushes or GitHub writes.</td>
                 <td class="name">verdict.json</td>
               </tr>
+              <tr>
+                <td class="nowrap"><span class="badge role-delegate">delegate</span></td>
+                <td><code>delegate.md</code>: the question and evidence, the sources, the brief and earlier answers</td>
+                <td>new, every time</td>
+                <td>The same as the verifier.</td>
+                <td class="name">delegate.json</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -713,6 +722,27 @@
             >, <code>opus</code> by default.
           </li>
         </ul>
+
+        <h3 id="delegate">The delegate</h3>
+
+        <p>
+          The delegate is off unless <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> is set. When a PR blocks on a
+          question of an allowed kind, brief questions and <code>needs-decision</code> by default, the driver starts it in a free slot. The
+          PR stays <code>blocked</code> while it runs.
+        </p>
+
+        <p>
+          It reads the question and the evidence, the plan and design notes, the brief, every earlier answer and the code. It answers only
+          what the plan decides, and escalates the rest: a silent or ambiguous plan, security, credentials, publishing, releases, weakened
+          tests, a wider scope. An answer reaches the agent the same way your note does, prefixed as the delegate's. An escalation leaves
+          the PR blocked for you. Both notify you.
+        </p>
+
+        <p>
+          Each question gets one run, also when that run fails, and a PR at most
+          <a href="manifest.html#policy-delegate"><code>maxPerPr</code></a> runs. A note of yours always wins. It applies at once, also
+          while the delegate runs, and the delegate's late answer is dropped.
+        </p>
 
         <h2 id="run">One agent run <a class="anchor" href="#run" aria-label="Link to this section">#</a></h2>
 
@@ -832,11 +862,11 @@
 
         <pre><code>claude -p --model &lt;model&gt; --effort &lt;effort&gt; \
   --output-format stream-json --verbose \
-  --json-schema &lt;schemas/ready|verdict|brief.json&gt; \
+  --json-schema &lt;schemas/ready|verdict|brief|delegate.json&gt; \
   --permission-mode auto --permission-prompts none \
   --settings &lt;deny and allow rules, the guard hook&gt; \
   --max-budget-usd &lt;policy.budgetUsd[effort]&gt; \
-  [--disallowedTools Edit Write NotebookEdit] <span class="dim"># verifier and brief roles</span>
+  [--disallowedTools Edit Write NotebookEdit] <span class="dim"># verifier, brief and delegate roles</span>
   --session-id &lt;new uuid&gt; | --resume &lt;the PR's session&gt;</code></pre>
 
         <dl class="kv">
@@ -916,6 +946,14 @@
                 <td>
                   <code>brief</code> (markdown), <code>expectedFiles</code>, <code>changesetBump</code>, <code>questions</code>,
                   <code>notes</code>. All required. The expected files become the PR's scope when the manifest has none.
+                </td>
+              </tr>
+              <tr>
+                <td>delegate.json</td>
+                <td class="nowrap">delegate</td>
+                <td>
+                  <code>decision</code> (answer or escalate), <code>answer</code> (empty for escalate), <code>planRefs</code> and
+                  <code>reasoning</code>. All required. The answer goes to the agent, the rest to the card.
                 </td>
               </tr>
             </tbody>
@@ -1177,11 +1215,11 @@
         <ul>
           <li>
             <strong>Waiting for you:</strong> verified (with the next step), blocked, escalated, ready to merge in manual mode, brief
-            questions.
+            questions, a question the delegate passes to you, the delegate's run limit for a PR.
           </li>
           <li>
             <strong>Decisions:</strong> approval accepted or rejected, a GitHub approval the driver has seen, merged, would merge in a dry
-            run.
+            run, an answer from the delegate.
           </li>
           <li>
             <strong>Trouble:</strong> halted, paused by an account limit, merge refused or blocked by GitHub, the head moved after
