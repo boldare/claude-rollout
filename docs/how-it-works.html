@@ -79,7 +79,8 @@
           </li>
           <li>
             <strong>A live manifest.</strong> A changed <code>manifest.yaml</code> is loaded again on the next tick, without a restart. An
-            invalid edit is rejected with a <code>manifest-rejected</code> event, and the previous manifest stays.
+            invalid edit is rejected with a <code>manifest-rejected</code> event, and the previous manifest stays. A missing
+            <code>manifest.yaml</code> is rejected the same way, once, and loads again when it is back.
           </li>
           <li>
             <strong>Stop and resume.</strong> The first Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents (SIGTERM, then
@@ -309,15 +310,20 @@
             pause, resume and unhalt. Each command applies on its own, and a rejected one never stops the rest. A command that cannot apply
             is logged as <code>command-rejected</code>, a refused approval as <code>approval-rejected</code>.
           </li>
-          <li><strong>Fetch.</strong> <code>git fetch --prune origin</code> in the repository.</li>
+          <li>
+            <strong>Fetch.</strong> <code>git fetch --prune origin</code> in the repository. A failed fetch logs <code>fetch-failed</code>,
+            and the gate step is skipped for that tick, because a stale base would mislead it.
+          </li>
           <li>
             <strong>Check outside dependencies.</strong> With <a href="commands.html#flag-only"><code>--only</code></a
             >, a dependency that is not in the run counts as merged once GitHub shows its branch merged into the base with the rollout
-            label.
+            label. One already merged is not looked up again. A failed lookup does not stop the others, and the driver logs
+            <code>outside-deps-failed</code> with each dependency it could not check.
           </li>
           <li>
             <strong>Watch the base.</strong> After a rollout PR merges, by the driver or on GitHub, read the check runs on its merge commit.
-            Red halts the rollout, green clears the watch.
+            Red halts the rollout, green clears the watch. A failed read logs <code>watch-base-failed</code> and is tried again on the next
+            tick.
           </li>
           <li>
             <strong>Sync every PR with GitHub.</strong> A merge or a close made on GitHub wins. A head that moved after verification is
@@ -326,7 +332,7 @@
           <li>
             <strong>Run the gate.</strong> Verified PRs go through the gate in priority order, then manifest order. PRs with an agent
             running or feedback waiting are skipped. The first merge or rebase ends this step, so there is at most one per tick. The step is
-            skipped while the rollout is paused, halted or stopping.
+            skipped while the rollout is paused, halted or stopping, and in a tick whose fetch failed.
           </li>
           <li>
             <strong>Advance every PR</strong> in priority order, unless the rollout is paused. Briefs, implementers, fixers and verifiers
@@ -352,9 +358,14 @@
             in the same tick, ahead of new briefs for lower-priority PRs.
           </li>
           <li>
+            <strong>The fetch, the dependency check and the base watch belong to no PR.</strong> A failure logs its event, and the rest of
+            the tick runs. None of them count against a PR, and five failures in a row of one step notify you.
+          </li>
+          <li>
             <strong>Errors belong to one PR.</strong> Every per-PR step runs inside <code>guarded()</code>. An error becomes an
-            <code>error</code> event for that PR and the tick goes on. Five in a row, with no agent running, escalate that PR alone. An
-            error outside those steps is a <code>tick-error</code> event, and the next tick starts as usual.
+            <code>error</code> event for that PR and the tick goes on. A PR counts one error per tick, and the count resets after a tick
+            without one. Five erroring ticks in a row, with no agent running, escalate that PR alone, once. Any other error is a
+            <code>tick-error</code> event, and the next tick starts as usual. Five failed ticks in a row notify you once.
           </li>
         </ul>
 
@@ -517,7 +528,8 @@
                 <td>The implementer codes in the PR's worktree, pushes, opens the PR and waits for CI.</td>
                 <td>
                   A READY report that names an open PR from the branch into the base: <code>ready_claimed</code>. A READY report that does
-                  not match GitHub: <code>needs_fix</code>. BLOCKED: <code>blocked</code>. No report: <code>interrupted</code>.
+                  not match GitHub: <code>needs_fix</code>. A READY report GitHub could not read: <code>interrupted</code>, checked again on
+                  a later tick (<code>report-unchecked</code>). BLOCKED: <code>blocked</code>. No report: <code>interrupted</code>.
                 </td>
               </tr>
               <tr id="state-ready_claimed">
@@ -573,7 +585,7 @@
               </tr>
               <tr id="state-escalated">
                 <td class="nowrap"><span class="badge state state-escalated">escalated</span></td>
-                <td>The attempts of a role ran out, or five errors came in a row.</td>
+                <td>The attempts of a role ran out, or the PR had an error in five ticks in a row.</td>
                 <td>
                   <code>rollout retry</code> resets the attempts. <code>rollout note</code> sends an answer to a fix run. On a PR with no
                   brief and no GitHub PR, the note goes to the brief writer instead.
@@ -581,11 +593,14 @@
               </tr>
               <tr id="state-interrupted">
                 <td class="nowrap"><span class="badge state state-interrupted">interrupted</span></td>
-                <td>A run ended without a report: a crash, a stop, a stall, a timeout or an outage.</td>
                 <td>
-                  A later tick resumes it. An interrupted verifier re-checks the claim, an implementer with no session starts again, and
-                  anything else continues as a fix run. A PR with no brief file and no GitHub PR goes back to <code>pending</code> instead,
-                  so the brief writer runs first.
+                  A run ended without a report: a crash, a stop, a stall, a timeout or an outage. A READY report also waits here when GitHub
+                  could not be read to check it.
+                </td>
+                <td>
+                  A later tick resumes it. A parked READY report is checked again, with no agent run. An interrupted verifier re-checks the
+                  claim, an implementer with no session starts again, and anything else continues as a fix run. A PR with no brief file and
+                  no GitHub PR goes back to <code>pending</code> instead, so the brief writer runs first.
                 </td>
               </tr>
               <tr id="state-merged">
@@ -927,10 +942,11 @@
         <ol>
           <li><strong>Wait</strong> while the rollout is halted or the PR is held.</li>
           <li>
-            <strong>Block</strong> when there is no PR for the branch, the PR is not open, it is the release PR (<a
+            <strong>Block</strong> when there is no PR for the branch, the PR is closed, it is the release PR (<a
               href="manifest.html#repo-neverMerge"
               ><code>repo.neverMerge</code></a
-            >), it is a draft, its base or head branch is wrong, or the rollout label is missing.
+            >), it is a draft, its base or head branch is wrong, or the rollout label is missing. A PR merged on GitHub while the gate reads
+            it waits instead, and the next sync records the merge.
           </li>
           <li><strong>Wait</strong> for dependencies, and for a verification of the current patch id.</li>
           <li>
@@ -977,6 +993,11 @@
           </li>
           <li>
             <strong>GitHub refusing the merge</strong> is a state to wait in, not an error. The gate records it and you get a notification.
+          </li>
+          <li>
+            <strong>A merge GitHub has not confirmed</strong>, accepted but with no merge commit to read yet (a merge queue, for example),
+            logs <code>merge-unconfirmed</code>. The PR stays verified until the next sync sees it merged. Then the driver records the
+            merge, notifies you and cleans up. Nothing is removed before that.
           </li>
           <li>
             <strong>Rebases</strong> are the driver's own work. It rebases the judged head onto the base in the worktree and pushes with
@@ -1026,8 +1047,42 @@
                 </td>
               </tr>
               <tr>
-                <td>Five errors in a row</td>
-                <td><code>guarded()</code> escalates that PR, once no agent runs for it. The other PRs go on.</td>
+                <td>Errors in five ticks in a row</td>
+                <td>
+                  A PR counts one error per tick, and a tick without one starts the count over. After the fifth erroring tick in a row,
+                  <code>guarded()</code> escalates that PR as soon as no agent runs for it. An escalated PR is not escalated again. The
+                  other PRs go on.
+                </td>
+              </tr>
+              <tr>
+                <td>A driver-wide step failed</td>
+                <td>
+                  A failed fetch, outside-dependency check or base watch logs <code>fetch-failed</code>, <code>outside-deps-failed</code> or
+                  <code>watch-base-failed</code> and counts against no PR. The rest of the tick runs, except the gate after a failed fetch.
+                  Five failures in a row of one step notify you.
+                </td>
+              </tr>
+              <tr>
+                <td>Five failed ticks</td>
+                <td>
+                  Each failed tick is a <code>tick-error</code> event with the number of failed ticks in a row, and the next tick starts as
+                  usual. The fifth in a row notifies you.
+                </td>
+              </tr>
+              <tr>
+                <td>A READY report GitHub could not read</td>
+                <td>
+                  The PR becomes <code>interrupted</code> with a <code>report-unchecked</code> event, and the report waits. A later tick
+                  checks it again with no agent run and no attempt spent. A report that names a PR GitHub does not know still goes back to
+                  the implementer.
+                </td>
+              </tr>
+              <tr>
+                <td>A merge GitHub has not confirmed</td>
+                <td>
+                  Logged as <code>merge-unconfirmed</code>. The PR stays verified and nothing is cleaned up until the next sync sees it
+                  merged.
+                </td>
               </tr>
               <tr>
                 <td>A run ended without a report</td>
@@ -1068,7 +1123,9 @@
               </tr>
               <tr>
                 <td>A broken manifest edit</td>
-                <td>Rejected with a notification. The previous manifest stays in use.</td>
+                <td>
+                  Rejected with a notification. The previous manifest stays in use. A missing manifest is rejected the same way, once.
+                </td>
               </tr>
               <tr>
                 <td>GitHub refused the merge</td>
@@ -1128,7 +1185,8 @@
           </li>
           <li>
             <strong>Trouble:</strong> halted, paused by an account limit, merge refused or blocked by GitHub, the head moved after
-            verification, the verifier changed the tree, a dependency outside the run, a rejected manifest.
+            verification, the verifier changed the tree, a dependency outside the run, a rejected manifest, five failed ticks in a row, five
+            failures in a row of a driver-wide step.
           </li>
           <li><strong>The end:</strong> all PRs merged, with the release PR to merge.</li>
         </ul>
