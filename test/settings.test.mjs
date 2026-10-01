@@ -77,5 +77,20 @@ test('the delegate is read-only: the verifier guard and no file edits', () => {
   }
 
   assert.deepEqual(allow, agentSettings(M, 'verify').permissions.allow)
-  assert.ok(guardCommand(M, 'delegate').endsWith(' verifier'))
+  assert.ok(guardCommand(M, 'delegate').endsWith(' verifier || exit 2'))
+})
+
+test('agentSettings: every role gets the guard with a finite timeout and the exit 2 fallback', () => {
+  const M = loadManifest(makeRollout())
+
+  for (const role of ['brief', 'implement', 'fix', 'verify', 'delegate']) {
+    const hooks = agentSettings(M, role).hooks.PreToolUse.flatMap((entry) => entry.hooks)
+
+    assert.ok(hooks.length > 0, role)
+
+    for (const hook of hooks) {
+      assert.equal(hook.timeout, 30, role)
+      assert.ok(hook.command.endsWith(' || exit 2'), `${role}: ${hook.command}`)
+    }
+  }
 })

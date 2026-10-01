@@ -27,11 +27,11 @@ import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { agentGitHubEnv } from '../lib/identity.mjs'
 import { ghEnv } from '../lib/github.mjs'
-import { originCheck, probeTools, sshHostname } from '../lib/preflight.mjs'
-import { agentSettings, guardCommand } from '../lib/settings.mjs'
+import { guardSelfTest, originCheck, probeTools, sshHostname } from '../lib/preflight.mjs'
+import { agentSettings } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
-import { execFile, spawnSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 
 const CLI_OPTIONS = {
   allowPositionals: true,
@@ -378,7 +378,13 @@ async function preflight(M) {
     warnings.push('policy.merge is auto: the driver merges without asking')
   }
 
-  hookSelfTest(M, problems)
+  const guard = guardSelfTest(M)
+
+  for (const line of guard.lines) {
+    console.log(line)
+  }
+
+  problems.push(...guard.problems)
 
   if (values.live) {
     await liveGuardTest(M, problems)
@@ -394,33 +400,6 @@ async function preflight(M) {
   }
 
   console.log('\npreflight ok')
-}
-
-// Feeds the guard command a payload the way an agent's Bash call does. A
-// forbidden command must exit 2 and an allowed one must exit 0, so a guard
-// that refuses everything fails too.
-function hookSelfTest(M, problems) {
-  const denied = runGuard(M, 'gh pr merge 1 --admin')
-  const deniedOk = denied.status === 2 && /rollout guard/.test(denied.stderr)
-  console.log(`${deniedOk ? 'ok  ' : 'FAIL'} guard hook command exits 2 on a forbidden command`)
-
-  if (!deniedOk) {
-    problems.push(`guard hook self-test failed (exit ${denied.status}): ${denied.stderr.slice(0, 200)}`)
-  }
-
-  const allowed = runGuard(M, 'echo allowed')
-  const allowedOk = allowed.status === 0
-  console.log(`${allowedOk ? 'ok  ' : 'FAIL'} guard hook command exits 0 on an allowed command`)
-
-  if (!allowedOk) {
-    problems.push(`guard hook self-test failed: an allowed command exited ${allowed.status}: ${allowed.stderr.slice(0, 200)}`)
-  }
-}
-
-function runGuard(M, command) {
-  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command } })
-
-  return spawnSync('sh', ['-c', guardCommand(M, 'implement')], { input: payload, encoding: 'utf8' })
 }
 
 // Starts a cheap headless agent with the worker settings in a scratch
