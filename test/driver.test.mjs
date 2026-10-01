@@ -6,7 +6,7 @@ import { createDriver, doneDetail } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { makeRollout } from './fixtures.mjs'
+import { makeRollout, samplePrs } from './fixtures.mjs'
 
 function agentResult(overrides = {}) {
   return { ok: true, output: null, costUsd: 1.25, seconds: 60, denials: [], error: null, stopped: false, ...overrides }
@@ -16,11 +16,12 @@ function headline(role, output) {
   return doneDetail(role, 'A1-01-run', agentResult({ output })).result
 }
 
-// A driver on a fixture rollout. Only commands that never notify are posted.
+// A driver on a fixture rollout. It never sends a desktop notification: a
+// test that checks them passes its own notify.
 function driverFor(prs, options) {
   const M = loadManifest(makeRollout({ prs, events: [] }))
 
-  return { M, driver: createDriver(M, options) }
+  return { M, driver: createDriver(M, { notify: () => {}, ...options }) }
 }
 
 // Posts the commands, applies them and returns the events they caused.
@@ -416,4 +417,129 @@ test('onDone: a PR merged during the run stays merged and is cleaned up after th
       ['verify-done'],
     )
   }
+})
+
+test('approve is refused under manual and auto, and accepted under human', () => {
+  const { sha, patchId } = samplePrs().A1.verified
+  const ledger = { A1: { ...samplePrs().A1, held: null, approved: null } }
+  const refusals = {
+    manual: 'policy.merge is manual: no approval is needed. Merge the PR on GitHub once the driver says it is ready',
+    auto: 'policy.merge is auto: no approval is needed. The driver merges once the gate passes, and rollout hold stops it',
+  }
+
+  for (const [merge, reason] of Object.entries(refusals)) {
+    const notices = []
+    const { M, driver } = driverFor(ledger, { notify: (_, message) => notices.push(message) })
+    M.policy.merge = merge
+
+    assert.deepEqual(apply(M, driver, { cmd: 'approve', id: 'A1', sha, patchId }), [{ id: 'A1', kind: 'approval-rejected', reason }])
+    assert.equal(driver.L.prs.A1.approved, null)
+    assert.equal(notices.length, 1, merge)
+    assert.ok(notices[0].startsWith('A1: approval rejected: '), notices[0])
+  }
+
+  const notices = []
+  const { M, driver } = driverFor(ledger, { notify: (_, message) => notices.push(message) })
+
+  assert.deepEqual(apply(M, driver, { cmd: 'approve', id: 'A1', sha, patchId }), [
+    { id: 'A1', kind: 'approved', sha: sha.slice(0, 7), channel: 'inbox' },
+  ])
+  assert.equal(driver.L.prs.A1.approved.channel, 'inbox')
+  assert.deepEqual(notices, ['A1: approved PR #11; merging in 120s unless you pause'])
+})
+
+test('a GitHub approval is noticed once, and the merge delay counts from when the driver first saw it', async () => {
+  const { sha, patchId } = samplePrs().A1.verified
+  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
+  const green = { state: 'green', missing: [], pending: [], failing: [] }
+  const reviews = [{ user: 'maint', state: 'APPROVED', commit: sha, at: minutesAgo(60) }]
+  const notices = []
+  const ledger = {
+    A1: { ...samplePrs().A1, held: null, approved: null, patchSince: minutesAgo(120), verified: { sha, patchId, at: minutesAgo(120) } },
+  }
+  const { M, driver } = driverFor(ledger, {
+    notify: (_, message) => notices.push(message),
+    collectFacts: async () => ({
+      halted: null,
+      depsPending: [],
+      files: [],
+      addedLines: [],
+      commits: [],
+      changesets: [],
+      baseIsAncestor: true,
+      patchId,
+      pr: {
+        number: 11,
+        state: 'OPEN',
+        isDraft: false,
+        title: 'feat: A1',
+        body: '',
+        author: 'demo-bot',
+        headRefName: 'feat/a1',
+        headRefOid: sha,
+        baseRefName: 'main',
+        labels: [M.label],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+      },
+      checks: green,
+      mainChecks: green,
+      reviews: [...reviews],
+    }),
+  })
+  const pr = M.prs.find((item) => item.id === 'A1')
+  const s = driver.L.prs.A1
+
+  // Without a token the manifest refuses approval: github, so the test sets it here.
+  M.policy.approval = 'github'
+  M.repo.maintainers = ['maint']
+  M.dryRun = true
+
+  async function pass() {
+    const before = readEvents(M).length
+    const sent = notices.length
+
+    await driver.mergeCandidate(pr)
+
+    return {
+      kinds: readEvents(M)
+        .slice(before)
+        .map((event) => event.kind),
+      sent: notices.slice(sent),
+    }
+  }
+
+  s.held = { at: minutesAgo(1) }
+
+  const held = await pass()
+  assert.equal(s.approved, null)
+  assert.deepEqual(held.sent, [])
+  assert.ok(!held.kinds.includes('approved'), held.kinds)
+
+  s.held = null
+
+  const first = await pass()
+  assert.deepEqual({ ...s.approved, at: null }, { patchId, sha, at: null, by: 'maint', channel: 'github' })
+  assert.ok(Date.now() - Date.parse(s.approved.at) < 60_000, s.approved.at)
+  assert.deepEqual(first.sent, ['A1: PR #11 approved on GitHub by maint; merging in 120s unless you pause'])
+  assert.ok(!first.kinds.includes('would-merge'), first.kinds)
+
+  const second = await pass()
+  assert.deepEqual(second.sent, [])
+  assert.ok(!second.kinds.includes('would-merge'), second.kinds)
+
+  s.approved.at = new Date(Date.parse(s.approved.at) - 121_000).toISOString()
+
+  assert.ok((await pass()).kinds.includes('would-merge'))
+
+  reviews.push({ user: 'maint', state: 'CHANGES_REQUESTED', commit: sha, at: minutesAgo(30) })
+
+  await pass()
+  assert.equal(s.approved, null)
+
+  reviews.push({ user: 'maint', state: 'APPROVED', commit: sha, at: minutesAgo(10) })
+
+  const again = await pass()
+  assert.equal(s.approved.channel, 'github')
+  assert.deepEqual(again.sent, ['A1: PR #11 approved on GitHub by maint; merging in 120s unless you pause'])
 })

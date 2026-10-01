@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadManifest } from '../lib/manifest.mjs'
+import { approveRefusal } from '../lib/judge.mjs'
 import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
 import { stopDriver } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
@@ -134,6 +135,30 @@ function status(M) {
   }
 }
 
+function approvalLine(M, s) {
+  if (s.approval === 'github') {
+    return `a maintainer review on GitHub (${s.maintainers.join(', ')})`
+  }
+
+  if (s.approval === 'inbox') {
+    return 'rollout approve'
+  }
+
+  return `none under policy.merge ${M.policy.merge}`
+}
+
+function approveHint(M, s, id) {
+  if (s.approval === 'github') {
+    return `Approve with a review on GitHub: https://github.com/${M.repo.github}/pull/${s.pr}/files`
+  }
+
+  if (s.approval === 'inbox') {
+    return `Approve with: rollout.mjs approve ${id} --dir ${M.dir}`
+  }
+
+  return approveRefusal(M, s)
+}
+
 function card(M, id) {
   const ledger = readLedger(M)
 
@@ -157,10 +182,7 @@ function card(M, id) {
     `verified: ${s.verified ? `${s.verified.sha} (patch ${s.verified.patchId?.slice(0, 10)})` : 'no'}   approved: ${s.approved ? s.approved.sha : 'no'}`,
   )
 
-  const onGitHub = s.approval === 'github'
-  console.log(
-    `author: ${s.author ?? '?'}   approval: ${onGitHub ? `a maintainer review on GitHub (${s.maintainers.join(', ')})` : 'rollout approve'}`,
-  )
+  console.log(`author: ${s.author ?? '?'}   approval: ${approvalLine(M, s)}`)
 
   if (s.gate) {
     console.log(`gate: ${s.gate.action}${s.gate.reasons.length ? ` — ${s.gate.reasons.join('; ')}` : ''}`)
@@ -210,11 +232,7 @@ function card(M, id) {
   }
 
   if (s.state === 'verified') {
-    console.log(
-      onGitHub
-        ? `\nApprove with a review on GitHub: https://github.com/${M.repo.github}/pull/${s.pr}/files`
-        : `\nApprove with: rollout.mjs approve ${id} --dir ${M.dir}`,
-    )
+    console.log(`\n${approveHint(M, s, id)}`)
   }
 }
 
@@ -543,6 +561,12 @@ async function main() {
     case 'approve': {
       const id = requireId(M)
       const s = readLedger(M)?.prs[id]
+      const refusal = approveRefusal(M, s ?? {})
+
+      if (refusal) {
+        console.error(`${id}: ${refusal}`)
+        process.exit(1)
+      }
 
       if (s?.state !== 'verified' || !s.verified) {
         console.error(`${id} is ${s?.state ?? 'unknown'}, not verified; nothing to approve`)

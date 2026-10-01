@@ -779,6 +779,36 @@ test('cli: an unknown flag or a missing value prints the error and the usage, wi
   }
 })
 
+test('cli: card and approve follow policy.merge', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+  const refusals = {
+    manual: 'policy.merge is manual: no approval is needed. Merge the PR on GitHub once the driver says it is ready',
+    auto: 'policy.merge is auto: no approval is needed. The driver merges once the gate passes, and rollout hold stops it',
+  }
+
+  for (const [merge, refusal] of Object.entries(refusals)) {
+    const dir = makeRollout({ policy: { merge } })
+    const card = cli('card', 'A1', '--dir', dir)
+
+    assert.equal(card.status, 0, card.stderr)
+    assert.doesNotMatch(card.stdout, /Approve with/)
+    assert.ok(card.stdout.includes(`approval: none under policy.merge ${merge}`), card.stdout)
+    assert.ok(card.stdout.includes(`policy.merge is ${merge}`), card.stdout)
+
+    const approve = cli('approve', 'A1', '--dir', dir)
+
+    assert.equal(approve.status, 1, approve.stdout)
+    assert.equal(approve.stderr, `A1: ${refusal}\n`)
+    assert.deepEqual(inboxFiles(dir), [])
+  }
+
+  const dir = makeRollout()
+  const card = cli('card', 'A1', '--dir', dir)
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.ok(card.stdout.includes('Approve with: rollout.mjs approve A1'), card.stdout)
+})
+
 // Never run stop on a default fixture: its lock names this test process.
 test('cli: stop without a driver signals nothing', async () => {
   const result = await runCli(['stop', '--dir', makeRollout({ lock: false })])
