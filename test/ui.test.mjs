@@ -152,13 +152,23 @@ test('model: the states and error kinds', () => {
     'interrupted',
     'merged',
   ])
-  assert.deepEqual(ERROR_KINDS, ['tick-error', 'error', 'on-done-error', 'reply-failed', 'manifest-rejected'])
+  assert.deepEqual(ERROR_KINDS, [
+    'tick-error',
+    'error',
+    'on-done-error',
+    'reply-failed',
+    'manifest-rejected',
+    'fetch-failed',
+    'outside-deps-failed',
+    'watch-base-failed',
+    'report-unchecked',
+  ])
 })
 
 test('errorCount: counts only error kinds', () => {
-  const events = [...ERROR_KINDS, 'merged', 'tick', 'errors'].map((kind) => ({ id: '-', kind }))
+  const events = [...ERROR_KINDS, 'merged', 'tick', 'errors', 'merge-unconfirmed'].map((kind) => ({ id: '-', kind }))
 
-  assert.equal(errorCount(events), 5)
+  assert.equal(errorCount(events), 9)
   assert.equal(errorCount([]), 0)
 })
 

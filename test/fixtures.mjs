@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { stringify } from 'yaml'
+import { parse, stringify } from 'yaml'
 import { freshPr } from '../lib/ledger.mjs'
 
 // A synthetic rollout directory, in a fresh temp dir unless `dir` names one.
@@ -279,6 +279,77 @@ export function makeRollout(overrides = {}) {
   }
 
   return dir
+}
+
+// The script never reads stdin: sh() leaves it open when it has no input,
+// so a read would hang.
+function fakeTool(tool) {
+  return `#!/usr/bin/env node
+const { appendFileSync, readFileSync } = require('node:fs')
+const { join } = require('node:path')
+const tool = ${JSON.stringify(tool)}
+const args = process.argv.slice(2)
+const line = args.join(' ')
+appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ tool, args }) + '\\n')
+
+const rules = JSON.parse(readFileSync(join(__dirname, 'rules.json'), 'utf8'))
+const rule = rules.find((item) => item.tool === tool && line.includes(item.args ?? ''))
+
+if (!rule) {
+  process.stderr.write('fake ' + tool + ': no rule for ' + line + '\\n')
+  process.exitCode = 1
+} else {
+  if (rule.stdout !== undefined) {
+    process.stdout.write(typeof rule.stdout === 'string' ? rule.stdout : JSON.stringify(rule.stdout))
+  }
+
+  if (rule.stderr !== undefined) {
+    process.stderr.write(rule.stderr)
+  }
+
+  process.exitCode = rule.code ?? 0
+}
+`
+}
+
+// A fake gh and git for a rollout made by makeRollout, first on the PATH of
+// every manifest load, so a test never reaches the real tools or GitHub.
+// Call it before loadManifest. A rule is { tool, args, stdout, stderr, code }:
+// the first whose args the call's arguments contain answers it, and a call
+// no rule matches fails.
+export function fakeTools(dir, rules = []) {
+  const bin = join(dir, 'fake-bin')
+  const file = join(dir, 'manifest.yaml')
+  const manifest = parse(readFileSync(file, 'utf8'))
+
+  mkdirSync(bin, { recursive: true })
+
+  for (const tool of ['gh', 'git']) {
+    writeFileSync(join(bin, tool), fakeTool(tool), { mode: 0o755 })
+  }
+
+  writeFileSync(file, stringify({ ...manifest, repo: { ...manifest.repo, pathPrepend: [bin] } }))
+
+  function answer(next) {
+    writeFileSync(join(bin, 'rules.json'), JSON.stringify(next))
+  }
+
+  function calls() {
+    const log = join(bin, 'calls.jsonl')
+
+    if (!existsSync(log)) {
+      return []
+    }
+
+    return readFileSync(log, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+  }
+
+  answer(rules)
+
+  return { answer, calls }
 }
 
 // A root like ~/.rollouts: demo with a ledger and a brief, fresh without a
