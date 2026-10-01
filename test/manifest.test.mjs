@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { parse, stringify } from 'yaml'
 import { loadManifest, validateManifest } from '../lib/manifest.mjs'
 import { makeRollout } from './fixtures.mjs'
 
@@ -110,6 +111,7 @@ test('validateManifest: policy.delegate errors', () => {
     [{ kinds: ['environment'] }, 'policy.delegate.kinds: environment is never delegated'],
     [{ kinds: ['closed'] }, 'policy.delegate.kinds: closed is never delegated'],
     [{ kinds: ['gate'] }, 'policy.delegate.kinds: gate is never delegated'],
+    [{ kinds: ['code-scanning'] }, 'policy.delegate.kinds: code-scanning is never delegated'],
     [{ kinds: ['needs-decision', 'other'] }, 'policy.delegate.kinds: unknown kind other'],
     [{ maxPerPr: -1 }, 'policy.delegate.maxPerPr must be an integer of 0 or more'],
     [{ maxPerPr: 1.5 }, 'policy.delegate.maxPerPr must be an integer of 0 or more'],
@@ -130,5 +132,41 @@ test('validateManifest: policy.delegate errors', () => {
     { kinds: ['brief-questions', 'needs-decision', 'brief-contradiction', 'stuck'], maxPerPr: 0, effort: 'max' },
   ]) {
     assert.deepEqual(errors(delegate), [], JSON.stringify(delegate))
+  }
+})
+
+// The manifest option of makeRollout replaces repo as a whole.
+function withRepo(extra) {
+  const dir = makeRollout()
+  const file = join(dir, 'manifest.yaml')
+  const raw = parse(readFileSync(file, 'utf8'))
+
+  writeFileSync(file, stringify({ ...raw, repo: { ...raw.repo, ...extra } }))
+
+  return dir
+}
+
+test('loadManifest: repo.codeScanning defaults to fix at medium, and a partial value keeps the rest', () => {
+  assert.deepEqual(loadManifest(makeRollout()).repo.codeScanning, { action: 'fix', minSeverity: 'medium' })
+  assert.deepEqual(loadManifest(withRepo({ codeScanning: { action: 'block' } })).repo.codeScanning, {
+    action: 'block',
+    minSeverity: 'medium',
+  })
+})
+
+test('validateManifest: repo.codeScanning, when set, is a mapping of a known action and severity', () => {
+  const cases = [
+    [{ action: 'warn' }, ['repo.codeScanning.action must be fix, block or ignore']],
+    [{ minSeverity: 'error' }, ['repo.codeScanning.minSeverity must be low, medium, high or critical']],
+    ['fix', ['repo.codeScanning must be a mapping with action and minSeverity']],
+    [null, ['repo.codeScanning must be a mapping with action and minSeverity']],
+    [{ action: 'ignore', minSeverity: 'critical' }, []],
+  ]
+
+  for (const [codeScanning, errors] of cases) {
+    const raw = structuredClone(base)
+
+    raw.repo.codeScanning = codeScanning
+    assert.deepEqual(validateManifest(raw), errors, JSON.stringify(codeScanning))
   }
 })

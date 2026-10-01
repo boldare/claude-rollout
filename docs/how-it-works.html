@@ -536,12 +536,15 @@
                 <td class="nowrap"><span class="badge state state-ready_claimed">ready_claimed</span></td>
                 <td>
                   The driver checks the claim itself. It re-reads the PR head, waits for CI on that exact SHA, then applies the rollout
-                  policy to the diff.
+                  policy to the diff. Then it reads the new code scanning alerts on the head.
                 </td>
                 <td>
-                  CI green, no policy violation and a free slot: <code>verifying</code>. CI red, CI still unsettled after
+                  CI green, no policy violation, no new alert and a free slot: <code>verifying</code>. CI red, CI still unsettled after
                   <a href="manifest.html#policy-ciStallMinutes"><code>ciStallMinutes</code></a
-                  >, or a violation: <code>needs_fix</code>.
+                  >, a violation or a new alert: <code>needs_fix</code>. A new alert under
+                  <a href="manifest.html#repo-codeScanning"><code>codeScanning.action: block</code></a
+                  >: <code>blocked</code>. An alert from an analysis of an older commit: it stays here and waits for the analysis of the
+                  head.
                 </td>
               </tr>
               <tr id="state-verifying">
@@ -576,13 +579,14 @@
                 <td class="nowrap"><span class="badge state state-blocked">blocked</span></td>
                 <td>
                   Waits for you: a question from the agent, open questions about the brief, a gate block (for example the release PR or a
-                  draft), or a PR closed on GitHub.
+                  draft), a code scanning block, or a PR closed on GitHub.
                 </td>
                 <td>
                   <a href="commands.html#cmd-note"><code>rollout note</code></a> answers it. An answer to brief questions gives the brief
                   attempt back. <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts. With
                   <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, <a href="#delegate">the delegate</a> may
-                  answer first.
+                  answer first. After a code scanning block, dismiss a false positive on GitHub. Then <code>rollout retry</code> checks the
+                  claim again with no fix run.
                 </td>
               </tr>
               <tr id="state-escalated">
@@ -1004,6 +1008,11 @@
           <li>
             <strong>Fix</strong> when CI is red on the head. <strong>Wait</strong> while it is pending or a required check has not appeared.
           </li>
+          <li>
+            <strong>Fix</strong> or <strong>block</strong> on new code scanning alerts at or above
+            <a href="manifest.html#repo-codeScanning"><code>repo.codeScanning.minSeverity</code></a
+            >, as its <code>action</code> says. <strong>Wait</strong> while an alert comes from an analysis of an older commit.
+          </li>
           <li><strong>Wait</strong> while the base branch is not green.</li>
           <li>
             <strong>Wait</strong> for GitHub's own merge state, unless the merge uses <code>--admin</code> or the mode is manual. It must be
@@ -1169,6 +1178,13 @@
                 <td>GitHub refused the merge</td>
                 <td>The gate waits and notifies. Nothing counts as a failure.</td>
               </tr>
+              <tr>
+                <td>Code scanning could not be read</td>
+                <td>
+                  A repo without code scanning answers 404 or 403. The driver logs <code>code-scanning-unavailable</code> once per PR and
+                  goes on without it. Any other error, a rate limit included, counts as an error of that PR.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -1183,6 +1199,10 @@
             comments, review bodies (commented or changes requested) and conversation comments. With no maintainers set, it reads none.
             Comments that end with the driver's <code>&lt;!-- rollout-driver --&gt;</code> line never count, even under a maintainer's login
             (<code>maintainerFeedback</code> in <code>lib/github.mjs</code>).
+          </li>
+          <li>
+            Bot comments, such as code scanning or Copilot reviews, never count. Code scanning alerts reach the
+            <a href="#gate">gate</a> as data from the API instead.
           </li>
           <li>
             It looks at PRs that are <code>ready_claimed</code>, <code>verified</code> or <code>needs_fix</code>, while no agent runs for

@@ -4,6 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  alertsFrom,
+  codeScanningFor,
+  codeScanningUnavailable,
+  collectFacts,
   commentAsAgents,
   deleteRemoteBranch,
   ensureLabel,
@@ -14,6 +18,8 @@ import {
   remoteRepo,
   replyAsAgents,
 } from '../lib/github.mjs'
+import { loadManifest } from '../lib/manifest.mjs'
+import { fakeTools, makeRollout } from './fixtures.mjs'
 
 test('name-status with renames and deletions', () => {
   const files = parseNameStatus('M\tREADME.md\nA\t.changeset/a.md\nD\tpackages/core/src/quick-hash.ts\nR087\told/x.ts\tnew/x.ts\n')
@@ -267,4 +273,198 @@ test('remote URLs that are not SSH or HTTPS owner/name give null', () => {
 
   assert.equal(remoteRepo(null), null)
   assert.equal(remoteRepo(42), null)
+})
+
+const HEAD = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+
+// One alert as the code scanning API returns it, trimmed.
+function alertJson(number, overrides = {}) {
+  return {
+    number,
+    state: 'open',
+    html_url: `https://github.com/example/demo/security/code-scanning/${number}`,
+    rule: { id: 'js/shell-command-injection-from-environment', severity: 'warning', security_severity_level: 'medium' },
+    tool: { name: 'CodeQL' },
+    most_recent_instance: {
+      ref: 'refs/pull/11/head',
+      commit_sha: HEAD,
+      state: 'open',
+      location: { path: 'bin/rollout.mjs', start_line: 357 },
+      message: { text: 'This shell command depends on an uncontrolled absolute path.' },
+    },
+    ...overrides,
+  }
+}
+
+function mappedAlert(number) {
+  return {
+    number,
+    rule: 'js/shell-command-injection-from-environment',
+    securitySeverity: 'medium',
+    severity: 'warning',
+    tool: 'CodeQL',
+    path: 'bin/rollout.mjs',
+    line: 357,
+    message: 'This shell command depends on an uncontrolled absolute path.',
+    url: `https://github.com/example/demo/security/code-scanning/${number}`,
+    sha: HEAD,
+  }
+}
+
+test('alertsFrom keeps open alerts, the first line of each message and null for what is missing', () => {
+  const repeated = alertJson(4)
+  repeated.most_recent_instance.message.text =
+    '\n  This shell command depends on an uncontrolled absolute path.  \nThis shell command depends on an uncontrolled absolute path.\n'
+  const plain = alertJson(5, {
+    rule: { id: 'js/redundant-operation', severity: 'error' },
+    most_recent_instance: { commit_sha: HEAD, message: { text: 'Both operands are identical.' } },
+  })
+  const bare = { number: 6, state: 'open' }
+  const fixed = alertJson(7, { state: 'fixed' })
+
+  assert.deepEqual(alertsFrom([repeated, plain, bare, fixed, null]), [
+    mappedAlert(4),
+    {
+      number: 5,
+      rule: 'js/redundant-operation',
+      securitySeverity: null,
+      severity: 'error',
+      tool: 'CodeQL',
+      path: null,
+      line: null,
+      message: 'Both operands are identical.',
+      url: 'https://github.com/example/demo/security/code-scanning/5',
+      sha: HEAD,
+    },
+    {
+      number: 6,
+      rule: null,
+      securitySeverity: null,
+      severity: null,
+      tool: null,
+      path: null,
+      line: null,
+      message: '',
+      url: null,
+      sha: null,
+    },
+  ])
+
+  for (const json of [null, undefined, { message: 'Not Found' }, 'alerts']) {
+    assert.deepEqual(alertsFrom(json), [], JSON.stringify(json))
+  }
+})
+
+test('codeScanningUnavailable: a 404 or a 403 means no code scanning, a rate limit or a 500 does not', () => {
+  const prefix = 'gh api -X GET repos/example/demo/code-scanning/alerts exited 1: '
+
+  for (const text of [
+    'gh: no analysis found (HTTP 404)',
+    'gh: Advanced Security must be enabled for this repository to use code scanning. (HTTP 403)',
+  ]) {
+    assert.equal(codeScanningUnavailable(text), true, text)
+    assert.equal(codeScanningUnavailable(new Error(`${prefix}${text}`)), true, text)
+  }
+
+  for (const text of ['gh: API rate limit exceeded for user ID 1. (HTTP 403)', 'gh: Server Error (HTTP 500)']) {
+    assert.equal(codeScanningUnavailable(text), false, text)
+    assert.equal(codeScanningUnavailable(new Error(`${prefix}${text}`)), false, text)
+  }
+})
+
+// A fixture rollout whose gh answers from the rules, as in test/driver.test.mjs.
+function scanningRollout(rules) {
+  const dir = makeRollout()
+  const tools = fakeTools(dir, rules)
+
+  return { M: loadManifest(dir), calls: () => tools.calls().map((call) => call.args.join(' ')) }
+}
+
+const PR_ALERTS = 'repos/example/demo/code-scanning/alerts -f ref=refs/pull/11/head -f state=open -f per_page=100'
+const BASE_ALERTS = 'repos/example/demo/code-scanning/alerts -f ref=refs/heads/main -f state=open -f per_page=100'
+
+test('codeScanningFor reads the PR head and then the base, one page each', async () => {
+  const { M, calls } = scanningRollout([
+    { tool: 'gh', args: PR_ALERTS, stdout: [alertJson(3), alertJson(4), alertJson(8, { state: 'dismissed' })] },
+    { tool: 'gh', args: BASE_ALERTS, stdout: [alertJson(3), alertJson(9)] },
+  ])
+
+  assert.deepEqual(await codeScanningFor(M, 11), { available: true, alerts: [mappedAlert(3), mappedAlert(4)], baseOpen: [3, 9] })
+  assert.deepEqual(calls(), [`api -X GET ${PR_ALERTS} -f page=1`, `api -X GET ${BASE_ALERTS} -f page=1`])
+})
+
+test('codeScanningFor skips the base when the PR head has no open alert', async () => {
+  const { M, calls } = scanningRollout([{ tool: 'gh', args: PR_ALERTS, stdout: [alertJson(8, { state: 'fixed' })] }])
+
+  assert.deepEqual(await codeScanningFor(M, 11), { available: true, alerts: [], baseOpen: [] })
+  assert.deepEqual(calls(), [`api -X GET ${PR_ALERTS} -f page=1`])
+})
+
+test('codeScanningFor reads the next page after a full one', async () => {
+  const full = Array.from({ length: 100 }, (_, i) => alertJson(i + 1, { state: i === 0 ? 'fixed' : 'open' }))
+  const { M, calls } = scanningRollout([
+    { tool: 'gh', args: `${PR_ALERTS} -f page=2`, stdout: [alertJson(101)] },
+    { tool: 'gh', args: PR_ALERTS, stdout: full },
+    { tool: 'gh', args: BASE_ALERTS, stdout: [] },
+  ])
+  const scan = await codeScanningFor(M, 11)
+
+  assert.equal(scan.alerts.length, 100)
+  assert.deepEqual(scan.alerts.at(-1), mappedAlert(101))
+  assert.deepEqual(scan.baseOpen, [])
+  assert.deepEqual(calls(), [
+    `api -X GET ${PR_ALERTS} -f page=1`,
+    `api -X GET ${PR_ALERTS} -f page=2`,
+    `api -X GET ${BASE_ALERTS} -f page=1`,
+  ])
+})
+
+test('codeScanningFor: a repo without code scanning is unavailable, a server error rejects', async () => {
+  const missing = scanningRollout([{ tool: 'gh', args: 'code-scanning/alerts', code: 1, stderr: 'gh: no analysis found (HTTP 404)' }])
+
+  assert.deepEqual(await codeScanningFor(missing.M, 11), {
+    available: false,
+    reason: 'gh: no analysis found (HTTP 404)',
+    alerts: [],
+    baseOpen: [],
+  })
+
+  const broken = scanningRollout([{ tool: 'gh', args: 'code-scanning/alerts', code: 1, stderr: 'gh: Server Error (HTTP 500)' }])
+
+  await assert.rejects(codeScanningFor(broken.M, 11), /exited 1: gh: Server Error \(HTTP 500\)/)
+})
+
+test('collectFacts reads code scanning for the PR, and not at all under ignore', async () => {
+  const view = { number: 11, state: 'OPEN', headRefOid: HEAD, labels: [], author: { login: 'demo-bot' } }
+  const rules = [
+    { tool: 'gh', args: 'pr view 11', stdout: view },
+    { tool: 'gh', args: 'pulls/11/reviews', stdout: [] },
+    { tool: 'gh', args: 'check-runs', stdout: { check_runs: [] } },
+    { tool: 'gh', args: PR_ALERTS, stdout: [] },
+    { tool: 'git', stdout: '' },
+  ]
+  const ledger = { data: { halted: null }, prs: {} }
+
+  const cases = [
+    ['fix', { available: true, alerts: [], baseOpen: [] }, [`api -X GET ${PR_ALERTS} -f page=1`]],
+    ['ignore', null, []],
+  ]
+
+  for (const [action, codeScanning, scanningCalls] of cases) {
+    const { M, calls } = scanningRollout(rules)
+    M.repo.codeScanning = { action, minSeverity: 'medium' }
+
+    const facts = await collectFacts(M, M.prs[0], { pr: 11 }, ledger)
+
+    assert.deepEqual(facts.codeScanning, codeScanning, action)
+    assert.deepEqual(
+      calls().filter((call) => call.includes('code-scanning')),
+      scanningCalls,
+      action,
+    )
+  }
+
+  const closed = scanningRollout([{ tool: 'gh', args: 'pr view 11', stdout: { ...view, state: 'CLOSED' } }])
+
+  assert.equal((await collectFacts(closed.M, closed.M.prs[0], { pr: 11 }, ledger)).codeScanning, null)
 })

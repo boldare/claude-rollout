@@ -372,6 +372,25 @@ prs:
                   and commit messages, case-insensitively. A hit is a policy violation. The prompts name the terms too.
                 </td>
               </tr>
+              <tr id="repo-codeScanning">
+                <td>codeScanning</td>
+                <td>object</td>
+                <td><code>{ action: fix, minSeverity: medium }</code></td>
+                <td>no</td>
+                <td>
+                  What new code scanning alerts on a PR do. The driver reads them from the code scanning API, before the verifier starts and
+                  again in the merge gate. An alert is new when it is open on the PR head and not open on the base.
+                  <ul>
+                    <li><code>action: fix</code> sends the PR back to the implementer with every alert.</li>
+                    <li><code>action: block</code> blocks the PR until you dismiss the alert or send a note.</li>
+                    <li><code>action: ignore</code> makes no code scanning calls at all.</li>
+                  </ul>
+                  <code>minSeverity</code> is <code>low</code>, <code>medium</code>, <code>high</code> or <code>critical</code>. An alert
+                  counts at or above it. Its level is the security severity, otherwise <code>error</code> counts as medium and
+                  <code>warning</code> as low, and <code>note</code> never counts. An alert from an analysis of an older commit makes the
+                  driver wait for the head. A repo without code scanning is logged once per PR and goes on.
+                </td>
+              </tr>
               <tr id="repo-verify">
                 <td>verify</td>
                 <td>object</td>
@@ -585,8 +604,9 @@ prs:
                   or passes the question to you. <code>{}</code> turns it on with the defaults. <code>kinds</code> lists the questions it
                   may answer (<code>[brief-questions, needs-decision]</code>), out of <code>brief-questions</code>,
                   <code>needs-decision</code>, <code>brief-contradiction</code> and <code>stuck</code>. <code>ci</code>,
-                  <code>environment</code>, <code>closed</code> and <code>gate</code> are never delegated. <code>maxPerPr</code> caps its
-                  runs for one PR (<code>2</code>), and <code>effort</code> sets its effort (<code>high</code>).
+                  <code>environment</code>, <code>closed</code>, <code>gate</code> and <code>code-scanning</code> are never delegated.
+                  <code>maxPerPr</code> caps its runs for one PR (<code>2</code>), and <code>effort</code> sets its effort
+                  (<code>high</code>).
                 </td>
               </tr>
             </tbody>

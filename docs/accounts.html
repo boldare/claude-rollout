@@ -239,6 +239,13 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           exist. The gate then waits with a reason, unless it merges with <code>--admin</code>.
         </p>
 
+        <p>
+          The driver also reads the open alerts itself, for <code>refs/pull/&lt;n&gt;/head</code> and for the base branch. That is where
+          default setup puts them. An alert open on the head and not on the base is new, and
+          <a href="manifest.html#repo-codeScanning"><code>repo.codeScanning</code></a> says what it does. An analysis of
+          <code>refs/pull/&lt;n&gt;/merge</code>, which some advanced setups run, is not read.
+        </p>
+
         <h2 id="npm">npm trusted publishing <a class="anchor" href="#npm" aria-label="Link to this section">#</a></h2>
 
         <p>Publish only from a GitHub Actions release workflow through OIDC, with no npm token anywhere.</p>

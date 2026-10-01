@@ -63,8 +63,12 @@
           <li>Agents run headless as the maintainer's OS user, with the settings from <code>lib/settings.mjs</code>.</li>
           <li>
             They read untrusted input: repo content, CI logs and PR comments. The driver passes on only comments by
-            <code>repo.maintainers</code> (<code>feedbackFor</code> in <code>lib/github.mjs</code>), but an agent can read the others with
-            <code>gh</code>.
+            <code>repo.maintainers</code> (<code>feedbackFor</code> in <code>lib/github.mjs</code>) and code scanning alerts. Bot comments
+            never reach an agent through the driver, but an agent can read them with <code>gh</code>.
+          </li>
+          <li>
+            Alerts arrive as structured fields from the code scanning API, never as comment text. Agents cannot dismiss an alert, because
+            <code>gh api</code> is GET only for them.
           </li>
           <li>
             The assets are the base branch, published packages, credentials, the rollout's control plane (manifest, inbox, ledger) and the

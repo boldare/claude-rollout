@@ -58,12 +58,15 @@ test('merging, publishing and repo admin are blocked for everyone', () => {
     assert.ok(blocked('pnpm changeset version', role))
     assert.ok(blocked('gh api -X PATCH repos/o/r -f allow_auto_merge=true', role))
     assert.ok(blocked('gh api repos/o/r/pulls/1/merge -f merge_method=squash', role))
+    assert.ok(blocked('gh api -X PATCH repos/o/r/code-scanning/alerts/3 -f state=dismissed', role))
+    assert.ok(blocked('gh api repos/o/r/code-scanning/alerts/3 -f state=dismissed', role))
   }
 })
 
 test('read-only gh api is allowed', () => {
   assert.ok(!blocked('gh api repos/o/r/commits/abc/check-runs'))
   assert.ok(!blocked('gh api -X GET repos/o/r/commits/abc/check-runs -f per_page=100'))
+  assert.ok(!blocked('gh api repos/o/r/code-scanning/alerts/3'))
 })
 
 test('hooks cannot be bypassed', () => {

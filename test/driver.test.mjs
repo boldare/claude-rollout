@@ -107,12 +107,12 @@ function gateFacts(M, pr = {}) {
 }
 
 // A driver whose gh and git are fakes, with no slot for an agent. Its gate
-// reads gateFacts with `gate.pr` on top, or throws `gate.error`.
+// reads gateFacts with `gate.pr` and `gate.facts` on top, or throws `gate.error`.
 function tickDriver(prs, { rules = [], only = null, policy = {} } = {}) {
   const dir = makeRollout({ prs, events: [], policy: { concurrency: 0, ...policy } })
   const tools = fakeTools(dir, rules)
   const M = loadManifest(dir, { only })
-  const gate = { calls: 0, error: null, pr: {} }
+  const gate = { calls: 0, error: null, pr: {}, facts: {} }
   const notices = []
   const cleaned = []
   const driver = createDriver(M, {
@@ -125,7 +125,7 @@ function tickDriver(prs, { rules = [], only = null, policy = {} } = {}) {
         throw gate.error
       }
 
-      return gateFacts(M, gate.pr)
+      return { ...gateFacts(M, gate.pr), ...gate.facts }
     },
   })
 
@@ -1281,4 +1281,160 @@ test('retry resets the delegate run count and keeps its answers, and waits while
   apply(M, driver, { cmd: 'retry', id: 'A1' })
 
   assert.deepEqual(s.delegate, { runs: 0, lastQuestion: 'abc', limitNotified: false, answers })
+})
+
+// A code scanning alert as alertsFrom maps it, on A1's head unless `sha` says otherwise.
+function scanAlert(overrides = {}) {
+  return {
+    number: 4,
+    rule: 'js/shell-command-injection-from-environment',
+    securitySeverity: 'medium',
+    severity: 'warning',
+    tool: 'CodeQL',
+    path: 'bin/rollout.mjs',
+    line: 357,
+    message: 'This shell command depends on an uncontrolled absolute path.',
+    url: 'https://github.com/example/demo/security/code-scanning/4',
+    sha: SHA,
+    ...overrides,
+  }
+}
+
+function scanned(alerts) {
+  return { codeScanning: { available: true, alerts, baseOpen: [] } }
+}
+
+const ALERT_REASON =
+  'CodeQL js/shell-command-injection-from-environment (medium) bin/rollout.mjs:357: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4'
+const CLAIMED = { state: 'ready_claimed', pr: 11, claimedSha: SHA, attempts: { implement: 1, fix: 0, verify: 0, brief: 0 } }
+
+// A claimed A1 with green CI on its head, and the given code scanning facts.
+function claimDriver(facts) {
+  const setup = tickDriver({ A1: CLAIMED }, { rules: [viewRule(), { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: GREEN_RUNS }] })
+  setup.gate.facts = facts
+
+  return { ...setup, pr: setup.M.prs.find((item) => item.id === 'A1'), entry: setup.driver.L.prs.A1 }
+}
+
+test('checkClaim: a new code scanning alert on the head goes back to the implementer before verification', async () => {
+  const { M, driver, pr, entry } = claimDriver(scanned([scanAlert()]))
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixReason, 'code scanning')
+  assert.ok(entry.fixNote.includes(`- ${ALERT_REASON}`))
+  assert.match(entry.fixNote, /Never silence the analyser/)
+  assert.match(entry.fixNote, /needs-decision/)
+  assert.match(entry.fixNote, /gh api repos\/example\/demo\/code-scanning\/alerts\/<number>/)
+  assert.equal(entry.claimPatchId, undefined)
+  assert.equal(entry.patchSince, undefined)
+  assert.deepEqual(eventsSince(M), [{ id: 'A1', kind: 'needs-fix', reason: 'code scanning' }])
+})
+
+test('checkClaim: with action block, a new alert blocks the PR for the maintainer', async () => {
+  const { M, driver, pr, entry, notices } = claimDriver(scanned([scanAlert()]))
+  M.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'blocked')
+  assert.equal(entry.blocked.kind, 'code-scanning')
+  assert.equal(entry.blocked.evidence, ALERT_REASON)
+  assert.match(entry.blocked.question, /^PR #11 has new code scanning alerts\. Dismiss a false positive on GitHub and run rollout retry/)
+  assert.equal(entry.verified, null)
+  assert.equal(entry.claimPatchId, undefined)
+  assert.deepEqual(eventsSince(M), [{ id: 'A1', kind: 'blocked', reason: 'code-scanning' }])
+  assert.deepEqual(notices, [`A1: blocked (code-scanning): ${ALERT_REASON.slice(0, 120)}`])
+})
+
+test('checkClaim: an alert from an older commit waits for the analysis of the head, logged once', async () => {
+  const { M, driver, pr, entry, notices } = claimDriver(scanned([scanAlert({ sha: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2' })]))
+
+  await driver.advance(pr)
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.claimPatchId, undefined)
+  assert.deepEqual(eventsSince(M), [
+    {
+      id: 'A1',
+      kind: 'code-scanning-wait',
+      sha: SHA.slice(0, 7),
+      reasons: [`code scanning has not analysed ${SHA.slice(0, 7)} yet (alert #4 is from b2b2b2b)`],
+    },
+  ])
+  assert.deepEqual(notices, [])
+})
+
+test('checkClaim: a repo without code scanning logs it once and goes on', async () => {
+  const unavailable = { codeScanning: { available: false, reason: 'gh: no analysis found (HTTP 404)', alerts: [], baseOpen: [] } }
+  const { M, driver, pr, entry, notices } = claimDriver(unavailable)
+
+  await driver.advance(pr)
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.claimPatchId, samplePrs().A1.verified.patchId)
+  assert.deepEqual(eventsSince(M), [{ id: 'A1', kind: 'code-scanning-unavailable', reason: 'gh: no analysis found (HTTP 404)' }])
+  assert.equal(entry.notified.codeScanningUnavailable, true)
+  assert.deepEqual(notices, [])
+})
+
+test('checkClaim: no new alert, or one below the threshold, goes on to verification', async () => {
+  for (const alerts of [[], [scanAlert({ securitySeverity: 'low' })]]) {
+    const { M, driver, pr, entry } = claimDriver(scanned(alerts))
+
+    await driver.advance(pr)
+
+    assert.equal(entry.state, 'ready_claimed', JSON.stringify(alerts))
+    assert.equal(entry.claimPatchId, samplePrs().A1.verified.patchId, JSON.stringify(alerts))
+    assert.deepEqual(kindsSince(M), [], JSON.stringify(alerts))
+  }
+})
+
+test('mergeCandidate: a new code scanning alert drops the verification and goes back to the implementer', async () => {
+  const { M, driver, gate } = tickDriver({ A1: { ...samplePrs().A1, held: null } })
+  const entry = driver.L.prs.A1
+  gate.facts = scanned([scanAlert()])
+
+  assert.equal(await driver.mergeCandidate(M.prs.find((item) => item.id === 'A1')), false)
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixReason, 'code scanning')
+  assert.equal(entry.verified, null)
+  assert.ok(entry.fixNote.includes(`- ${ALERT_REASON}`))
+  assert.match(entry.fixNote, /Never silence the analyser/)
+  assert.match(entry.fixNote, /needs-decision/)
+  assert.deepEqual(eventsSince(M), [
+    { id: 'A1', kind: 'gate-fix', reasons: [ALERT_REASON] },
+    { id: 'A1', kind: 'needs-fix', reason: 'code scanning' },
+  ])
+})
+
+test('mergeCandidate: with action block, a new code scanning alert blocks and drops the verification', async () => {
+  const { M, driver, gate, notices } = tickDriver({ A1: { ...samplePrs().A1, held: null } })
+  const entry = driver.L.prs.A1
+  M.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
+  gate.facts = scanned([scanAlert()])
+
+  assert.equal(await driver.mergeCandidate(M.prs.find((item) => item.id === 'A1')), false)
+  assert.equal(entry.state, 'blocked')
+  assert.equal(entry.blocked.kind, 'code-scanning')
+  assert.equal(entry.blocked.evidence, ALERT_REASON)
+  assert.equal(entry.verified, null)
+  assert.deepEqual(eventsSince(M), [
+    { id: 'A1', kind: 'gate-block', reasons: [ALERT_REASON] },
+    { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
+  ])
+  assert.deepEqual(notices, [`A1: blocked (code-scanning): ${ALERT_REASON.slice(0, 120)}`])
+})
+
+test('mergeCandidate: an analysis of an older commit waits with no notification', async () => {
+  const { M, driver, gate, notices } = tickDriver({ A1: { ...samplePrs().A1, held: null } })
+  gate.facts = scanned([scanAlert({ sha: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2' })])
+
+  assert.equal(await driver.mergeCandidate(M.prs.find((item) => item.id === 'A1')), false)
+  assert.equal(driver.L.prs.A1.state, 'verified')
+  assert.equal(driver.L.prs.A1.gate.kind, 'code-scanning')
+  assert.deepEqual(notices, [])
 })
