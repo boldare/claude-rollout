@@ -961,9 +961,9 @@
 
         <p>
           With <code>merge: human</code> the driver then waits
-          <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a> (120 s) after the approval, so a
-          <code>pause</code> can still stop it. A dry run logs <code>would-merge</code> and stops there. Otherwise it merges the exact head
-          it judged:
+          <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a> (120 s), counted from when it first
+          sees the approval, so a <code>pause</code> can still stop it. A dry run logs <code>would-merge</code> and stops there. Otherwise
+          it merges the exact head it judged:
         </p>
 
         <pre><code>gh pr merge &lt;n&gt; --&lt;method&gt; --match-head-commit &lt;sha&gt; \
@@ -1119,10 +1119,13 @@
 
         <ul>
           <li>
-            <strong>Waiting for you:</strong> verified (with how to approve), blocked, escalated, ready to merge in manual mode, brief
+            <strong>Waiting for you:</strong> verified (with the next step), blocked, escalated, ready to merge in manual mode, brief
             questions.
           </li>
-          <li><strong>Decisions:</strong> approval accepted or rejected, merged, would merge in a dry run.</li>
+          <li>
+            <strong>Decisions:</strong> approval accepted or rejected, a GitHub approval the driver has seen, merged, would merge in a dry
+            run.
+          </li>
           <li>
             <strong>Trouble:</strong> halted, paused by an account limit, merge refused or blocked by GitHub, the head moved after
             verification, the verifier changed the tree, a dependency outside the run, a rejected manifest.

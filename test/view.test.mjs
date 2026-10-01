@@ -297,8 +297,18 @@ test('prDetail: approval channel, brief paths, feedback and runs', () => {
     ['A1-01-implement'],
   )
   assert.equal(prDetail(onGitHub, ledger, [], runs, 'A2').approval, 'inbox')
-  assert.equal(prDetail(onGitHub, ledger, [], runs, 'A3').approval, 'inbox')
+  assert.equal(prDetail(onGitHub, ledger, [], runs, 'A3').approval, 'github')
   assert.equal(prDetail(M, ledger, [], runs, 'A1').approval, 'inbox')
+  assert.equal(prDetail(M, ledger, [], runs, 'A1').merge, 'human')
+
+  for (const merge of ['manual', 'auto']) {
+    for (const manifest of [M, onGitHub]) {
+      const detail = prDetail({ ...manifest, policy: { ...manifest.policy, merge } }, ledger, [], runs, 'A1')
+
+      assert.equal(detail.approval, null, merge)
+      assert.equal(detail.merge, merge)
+    }
+  }
 })
 
 test('parseTranscript: text, tool calls, results, refusals and the final report', () => {

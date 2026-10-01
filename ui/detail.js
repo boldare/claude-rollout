@@ -106,7 +106,11 @@ function approvalField(pr) {
     return field('approval', 'a GitHub review on ', prLink(pr))
   }
 
-  return field('approval', 'in the inbox: ', element('code', `rollout approve ${pr.id}`))
+  if (pr.approval === 'inbox') {
+    return field('approval', 'in the inbox: ', element('code', `rollout approve ${pr.id}`))
+  }
+
+  return field('approval', element('span', `not needed under policy.merge ${pr.merge}`, 'muted'))
 }
 
 function depsField(pr, ctx) {

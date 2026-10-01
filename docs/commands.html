@@ -247,7 +247,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li>The implementer's summary, its deviations, and expected against observed results.</li>
           <li>Changed CI and workflow files, to review before approving, and files outside the scope.</li>
           <li>The verifier's verdict, checklist, blocking and non-blocking findings.</li>
-          <li>For a verified PR, how to approve it: the GitHub link or the <code>approve</code> command.</li>
+          <li>
+            For a verified PR, how to approve it: the GitHub link or the <code>approve</code> command. Under <code>merge: manual</code> and
+            <code>merge: auto</code> the card says no approval is needed and what happens instead.
+          </li>
         </ul>
 
         <p>In the UI, the same facts are on the PR page, across its overview and verifier tabs.</p>
@@ -273,29 +276,34 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <pre><code>node $R approve P1 --dir D</code></pre>
 
+        <p>Approves the verified patch of a PR. The CLI refuses it before it posts anything when this command does not count for the PR:</p>
+
+        <ul>
+          <li>Under <code>merge: manual</code>. You merge on GitHub once the driver says the PR is ready.</li>
+          <li>Under <code>merge: auto</code>. The driver merges once the gate passes, and <a href="#cmd-hold">hold</a> stops it.</li>
+          <li>For a PR the bot opened under <code>approval: github</code>. A maintainer approves it with a normal review on GitHub.</li>
+        </ul>
+
         <p>
-          Approves the verified patch of a PR. The CLI refuses a PR that is not <a href="how-it-works.html#state-verified">verified</a>, and
-          otherwise posts the exact head and patch id from the ledger. The driver accepts the approval only when all of this still holds:
+          The refusal says what to do instead. The CLI also refuses a PR that is not
+          <a href="how-it-works.html#state-verified">verified</a>, and otherwise posts the exact head and patch id from the ledger. The
+          driver accepts the approval only when all of this still holds:
         </p>
 
         <ul>
+          <li>The policy and the PR's author still let this command count.</li>
           <li>The PR is still verified, with that same head and patch id.</li>
           <li>The approval was posted after the verification finished.</li>
           <li>No agent is working on the PR.</li>
-          <li>
-            The PR is not one the bot opened under <code>approval: github</code>. Those are approved with a normal review on GitHub, and the
-            driver rejects this command for them.
-          </li>
         </ul>
 
         <p>A rejected approval shows up as <code>approval-rejected</code> in the events, with a notification.</p>
 
         <div class="callout">
           <p>
-            <strong>The approval counts under <code>merge: human</code> only.</strong> The driver then merges
-            <code>policy.mergeDelaySeconds</code> (120 s) later, unless you <a href="#cmd-pause">pause</a> in that window. Under
-            <code>manual</code> you merge on GitHub yourself, and <code>auto</code> needs no approval. The CLI's reply mentions the delay in
-            every mode.
+            <strong>The approval counts under <code>merge: human</code> only.</strong> The driver merges
+            <code>policy.mergeDelaySeconds</code> (120 s) after it accepts the approval, unless you <a href="#cmd-pause">pause</a> in that
+            window. It notifies you when it accepts, and the CLI's reply names the delay.
           </p>
         </div>
 

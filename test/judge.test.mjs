@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { highestBump, judge, outOfScope, policyViolations } from '../lib/judge.mjs'
+import { approvalChannel, approveRefusal, highestBump, judge, outOfScope, policyViolations } from '../lib/judge.mjs'
 
 const M = {
   label: 'rollout:demo',
@@ -265,4 +265,41 @@ test('a held PR waits: no merge, no rebase, no ready notice in manual mode', () 
   assert.equal(judge(M, pr, held, facts({ baseIsAncestor: false })).action, 'wait')
   assert.equal(judge({ ...M, policy: { ...M.policy, merge: 'manual' } }, pr, held, facts()).action, 'wait')
   assert.equal(judge(M, pr, { ...held, held: null }, facts()).action, 'merge')
+})
+
+const withMerge = (manifest, merge) => ({ ...manifest, policy: { ...manifest.policy, merge } })
+
+test('approvalChannel: inbox or GitHub under human, none under manual and auto', () => {
+  assert.equal(approvalChannel(M, 'bot'), 'inbox')
+  assert.equal(approvalChannel(GM, 'bot'), 'github')
+  assert.equal(approvalChannel(GM, 'maint'), 'inbox')
+  assert.equal(approvalChannel(GM, undefined), 'github')
+
+  for (const merge of ['manual', 'auto']) {
+    assert.equal(approvalChannel(withMerge(M, merge), 'bot'), null, merge)
+    assert.equal(approvalChannel(withMerge(GM, merge), 'bot'), null, merge)
+  }
+})
+
+test('approveRefusal: manual and auto refuse, and so does a PR approved on GitHub', () => {
+  assert.equal(
+    approveRefusal(withMerge(M, 'manual'), { pr: 7, author: 'bot' }),
+    'policy.merge is manual: no approval is needed. Merge the PR on GitHub once the driver says it is ready',
+  )
+  assert.equal(
+    approveRefusal(withMerge(GM, 'auto'), { pr: 7, author: 'maint' }),
+    'policy.merge is auto: no approval is needed. The driver merges once the gate passes, and rollout hold stops it',
+  )
+  assert.equal(approveRefusal(GM, { pr: 7, author: 'bot' }), 'PR #7 is approved on GitHub: review it there')
+  assert.equal(approveRefusal(GM, { pr: 7, author: 'maint' }), null)
+  assert.equal(approveRefusal(GM, { pr: 7 }), null)
+  assert.equal(approveRefusal(M, { pr: 7, author: 'bot' }), null)
+})
+
+test('a record of a GitHub approval never passes for rollout approve', () => {
+  const verdict = judge(M, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'github' } }, facts())
+
+  assert.equal(verdict.action, 'wait')
+  assert.match(verdict.reasons.join(), /rollout approve/)
+  assert.equal(judge(M, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'inbox' } }, facts()).action, 'merge')
 })

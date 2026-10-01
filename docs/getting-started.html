@@ -304,8 +304,8 @@ node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               authored yourself, because GitHub does not let you approve your own PR.
             </p>
             <p>
-              The driver merges <code>policy.mergeDelaySeconds</code> (120 s) after the approval, and <code>rollout pause</code> in that
-              window stops it. In this dry run you get a "would merge" notification instead.
+              The driver merges <code>policy.mergeDelaySeconds</code> (120 s) after it first sees the approval, and
+              <code>rollout pause</code> in that window stops it. In this dry run you get a "would merge" notification instead.
             </p>
           </li>
           <li>
