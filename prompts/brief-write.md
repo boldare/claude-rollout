@@ -6,7 +6,7 @@ You are read-only. The current directory is that worktree, at `origin/{{base}}`,
 
 ## Sources
 
-The plan is authoritative for scope and decisions (its "Decyzje" section and defaults win over the design notes). The design notes add detail (files, signatures, edge cases, verification); use them where they still match the code. The plan is written in Polish; the brief is in English.
+The plan is authoritative for scope and decisions. Its decisions and defaults win over the design notes. The design notes add detail (files, signatures, edge cases, verification). Use them where they still match the code. The brief is always in English, whatever language the plan is written in.
 
 {{sources}}
 
@@ -20,7 +20,7 @@ The plan is authoritative for scope and decisions (its "Decyzje" section and def
 - **Writing.** Tell the implementer: comments only where they explain why or a non-obvious constraint (never restating code or narrating the change), short prose, no semicolons in comments, docs, the changeset or the PR text (a period and a new sentence instead). Follow the same rules in the brief itself: short sentences, no semicolons, no filler. Do not ask for doc comments beyond what STYLE.md requires.
 - **CI files.** {{workflows}}
 - **Verification** uses commands that exist on this worktree (package.json scripts, `scripts/`), or says "new in this PR". Every repo PR runs this recipe:
-{{verify}}
+  {{verify}}
 - **Acceptance checklist.** 5 to 12 items, each objectively checkable by the verifier with a command or a file:line.
 - If a real product decision is missing (not a detail you can decide from the plan's intent), put it in `questions` instead of guessing. Keep `questions` empty otherwise.
 
