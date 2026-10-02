@@ -103,6 +103,11 @@
             can read (your <code>gh</code> login, <code>~/.npmrc</code>, SSH keys) is within their reach. A boundary against a hostile agent
             needs another OS user, a VM or a container. This repo provides none.
           </p>
+          <p>
+            gh reads your keyring login whenever <code>GH_HOST</code> is set, even with the agents' empty <code>GH_CONFIG_DIR</code>. Agents
+            never get <code>GH_HOST</code>, and the <a href="#guard">guard</a> is what stands between an agent and that login. It refuses
+            setting <code>GH_HOST</code> and dropping the token, but it is a seatbelt: a command it does not model gets past it.
+          </p>
         </div>
 
         <h2 id="gate">The driver's gate <a class="anchor" href="#gate" aria-label="Link to this section">#</a></h2>
@@ -156,7 +161,8 @@
               <tr>
                 <td class="nowrap">The agent environment</td>
                 <td>
-                  The bot's <code>GH_TOKEN</code>, an empty <code>gh</code> config directory, an empty npmrc and empty npm tokens.
+                  The bot's <code>GH_TOKEN</code>, an empty <code>gh</code> config directory, <code>GH_REPO</code> pinned to
+                  <code>repo.github</code>, no <code>GH_HOST</code>, an empty npmrc and empty npm tokens.
                   <a href="#environment">Details</a>.
                 </td>
                 <td class="name">lib/identity.mjs<br />lib/spawn.mjs</td>
@@ -308,9 +314,24 @@
           </li>
           <li>
             <strong>The environment the guard relies on.</strong> Setting <code>GH_TOKEN</code>, <code>GH_CONFIG_DIR</code>,
-            <code>GITHUB_TOKEN</code>, <code>GH_HOST</code>, <code>GIT_SSH*</code>, <code>GIT_CONFIG_*</code>, <code>GIT_DIR</code>,
-            <code>GIT_WORK_TREE</code> or any <code>ROLLOUT_*</code> variable, unsetting a <code>ROLLOUT_*</code> variable, and the
-            <code>--git-dir</code>, <code>--work-tree</code> and <code>--config-env</code> switches.
+            <code>GITHUB_TOKEN</code>, <code>GH_HOST</code>, <code>GH_REPO</code>, <code>GIT_SSH*</code>, <code>GIT_CONFIG_*</code>,
+            <code>GIT_DIR</code>, <code>GIT_WORK_TREE</code> or any <code>ROLLOUT_*</code> variable, with <code>NAME=</code> or
+            <code>NAME+=</code>. Unsetting, emptying or un-exporting <code>GH_TOKEN</code>, <code>GITHUB_TOKEN</code>,
+            <code>GH_CONFIG_DIR</code>, <code>GH_REPO</code>, <code>GH_HOST</code> or a <code>ROLLOUT_*</code> variable in any form:
+            <code>unset</code>, <code>export</code>, <code>declare</code>, <code>typeset</code>, <code>local</code>, <code>readonly</code>,
+            <code>read</code>, <code>printf</code>, <code>mapfile</code>, <code>readarray</code>, <code>set</code>, csh's
+            <code>setenv</code> and <code>unsetenv</code>, zsh's <code>-m</code> patterns, and <code>env -u</code> or <code>--unset</code>.
+            <code>env -i</code>, a bare <code>env -</code> and <code>exec -c</code>, which start a command without the token.
+            <code>env -S</code>, which re-splits a string the guard does not read, and <code>env</code> options the guard does not know,
+            which could hide the rest. And the <code>--git-dir</code>, <code>--work-tree</code> and <code>--config-env</code> switches.
+          </li>
+          <li>
+            <strong>Other repositories.</strong> <code>--repo</code> or <code>-R</code> in any spelling, and
+            <code>gh api repos/&lt;owner&gt;/&lt;name&gt;</code>, naming anything but <code>ROLLOUT_REPO</code>. A lone
+            <code>{owner}</code> or <code>{repo}</code> placeholder, and a <code>repos/</code> path with <code>..</code>,
+            <code>%2e</code> or <code>%2f</code>. Without <code>ROLLOUT_REPO</code>, any named repository. gh calls that name no repository
+            stay allowed and go to the pinned <code>GH_REPO</code>. Quoted text counts, so a PR body that mentions <code>-R</code> goes in a
+            <code>--body-file</code>.
           </li>
           <li>
             <strong>Git settings that switch off hooks or reroute pushes.</strong> <code>hooksPath</code>, credentials, push URLs,
@@ -419,7 +440,7 @@
 
         <p>
           Each agent starts from the driver's environment, with <code>repo.pathPrepend</code> first on <code>PATH</code> and these changes
-          (<code>makeEnv</code>, <code>agentGitHubEnv</code>, <code>runAgent</code>).
+          (<code>agentEnv</code> in <code>lib/identity.mjs</code>, <code>runAgent</code>).
         </p>
 
         <div class="scroll">
@@ -445,7 +466,25 @@
               <tr>
                 <td>GH_CONFIG_DIR</td>
                 <td><code>&lt;rollout&gt;/.gh-agents</code>, empty</td>
-                <td><code>gh</code> cannot fall back to your stored login when the token is dropped.</td>
+                <td>
+                  <code>gh</code> finds no stored login in it. That alone does not stop the fallback to your keyring login, see
+                  <code>GH_HOST</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>GH_REPO</td>
+                <td><code>github.com/&lt;repo.github&gt;</code></td>
+                <td>
+                  Every gh call goes to the manifest's repository, whatever the clone's remotes or <code>gh repo set-default</code> say.
+                </td>
+              </tr>
+              <tr>
+                <td>GH_HOST, GH_ENTERPRISE_TOKEN, GITHUB_ENTERPRISE_TOKEN</td>
+                <td>removed</td>
+                <td>
+                  With <code>GH_HOST</code> set, gh reads your keyring login even from the empty config directory. The enterprise tokens are
+                  credentials of yours that agents have no use for.
+                </td>
               </tr>
               <tr>
                 <td>GIT_TERMINAL_PROMPT</td>
@@ -458,8 +497,8 @@
                 <td>The one branch the guard lets a worker push.</td>
               </tr>
               <tr>
-                <td>ROLLOUT_ROLE, _ID, _DIR, _HOME, _NAME</td>
-                <td>role, PR id, rollout directory, skill directory, rollout name</td>
+                <td>ROLLOUT_ROLE, _ID, _DIR, _HOME, _NAME, _REPO</td>
+                <td>role, PR id, rollout directory, skill directory, rollout name, <code>repo.github</code></td>
                 <td>The guard's context, and the CLI's refusal to take orders from an agent.</td>
               </tr>
               <tr>
@@ -483,8 +522,8 @@
 
         <p>
           Everything else passes through, <code>HOME</code> and your Claude login included. That is why the limit under
-          <a href="#boundaries">Hard boundaries</a> holds. Without <code>repo.agentToken</code> the GitHub variables are not set at all,
-          agents act on GitHub as you, and preflight warns about it.
+          <a href="#boundaries">Hard boundaries</a> holds. Without <code>repo.agentToken</code> the bot's variables are not set, agents act
+          on GitHub as you, and preflight warns about it. <code>GH_REPO</code> is still set and <code>GH_HOST</code> is still removed.
         </p>
 
         <h3 id="cli-role">The CLI refuses agents</h3>
