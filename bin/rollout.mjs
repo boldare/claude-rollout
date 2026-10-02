@@ -23,6 +23,7 @@ import { approveRefusal } from '../lib/judge.mjs'
 import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
 import { stopDriver } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
+import { batteryWarning } from '../lib/machine.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { agentGitHubEnv } from '../lib/identity.mjs'
@@ -378,6 +379,12 @@ async function preflight(M) {
     warnings.push('policy.merge is auto: the driver merges without asking')
   }
 
+  const battery = await batteryWarning()
+
+  if (battery) {
+    warnings.push(battery)
+  }
+
   const guard = guardSelfTest(M)
 
   for (const line of guard.lines) {
@@ -545,9 +552,16 @@ async function main() {
   const M = manifest()
 
   switch (command) {
-    case 'run':
+    case 'run': {
+      const warning = await batteryWarning()
+
+      if (warning) {
+        console.log(`warn ${warning}`)
+      }
+
       await runDriver(M)
       break
+    }
 
     case 'status':
       status(M)

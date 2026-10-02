@@ -9,6 +9,7 @@ import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createDriver } from '../lib/driver.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { BATTERY_WARNING } from '../lib/machine.mjs'
 import { startServer } from '../lib/server.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { alive, makeRollout, makeRolloutRoot, waitFor } from './fixtures.mjs'
@@ -17,9 +18,10 @@ const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
 const UI = fileURLToPath(new URL('../ui/', import.meta.url))
 const CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'"
 
+// No server test reads the power source of the machine it runs on.
 async function serve(t, options = {}) {
   const root = options.root ?? makeRolloutRoot()
-  const server = await startServer({ root, ...options })
+  const server = await startServer({ root, batteryWarning: async () => null, ...options })
 
   t.after(() => server.close())
 
@@ -1109,7 +1111,7 @@ test('commands: a default server sends readOnly false', async (t) => {
 })
 
 test('commands: start and stop a fake driver through the API', async (t) => {
-  const { server, root } = await serve(t, { driverCommand: fakeDriver() })
+  const { server, root } = await serve(t, { driverCommand: fakeDriver(), batteryWarning: async () => BATTERY_WARNING })
   const dir = join(root, 'fresh')
   const log = join(dir, 'driver.log')
   let pid = null
@@ -1124,7 +1126,7 @@ test('commands: start and stop a fake driver through the API', async (t) => {
   pid = started.json.pid
 
   assert.equal(started.status, 202)
-  assert.deepEqual(started.json, { cmd: 'start', pid, dryRun: true, log })
+  assert.deepEqual(started.json, { cmd: 'start', pid, dryRun: true, log, warning: BATTERY_WARNING })
 
   await waitFor(() => existsSync(join(dir, 'driver.lock')), 'the driver lock')
 

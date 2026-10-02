@@ -459,6 +459,28 @@ test('githubUnavailable: an AggregateError is an outage only when every error in
   assert.equal(githubUnavailable(new AggregateError([], 'HTTP 502: Bad Gateway')), false)
 })
 
+test('githubUnavailable: right after a sleep, every failed gh or git command is an outage', () => {
+  const afterSleep = { afterSleep: true }
+  const view = failedView('fatal: unable to access the remote')
+  const fetch = new Error('git -C repo fetch --quiet --prune origin exited 128: fatal: unable to access the remote')
+
+  assert.equal(githubUnavailable(view, afterSleep), true)
+  assert.equal(githubUnavailable(fetch, afterSleep), true)
+  assert.equal(githubUnavailable(new AggregateError([view, fetch], 'two lookups failed'), afterSleep), true)
+
+  assert.equal(githubUnavailable(view), false)
+  assert.equal(githubUnavailable(fetch), false)
+})
+
+test('githubUnavailable: right after a sleep, an error that is no gh or git command still counts', () => {
+  const afterSleep = { afterSleep: true }
+  const gateDown = new Error('gate down')
+
+  assert.equal(githubUnavailable(gateDown, afterSleep), false)
+  assert.equal(githubUnavailable('fatal: unable to access the remote', afterSleep), false)
+  assert.equal(githubUnavailable(new AggregateError([failedView('HTTP 401: Bad credentials'), gateDown], 'two failed'), afterSleep), false)
+})
+
 test('refreshOutsideDeps throws every failed lookup, so one that is not an outage still counts', async () => {
   const dir = makeRollout()
   fakeTools(dir, [

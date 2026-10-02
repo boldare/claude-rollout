@@ -108,7 +108,7 @@ function gateFacts(M, pr = {}) {
 
 // A driver whose gh and git are fakes, with no slot for an agent. Its gate
 // reads gateFacts with `gate.pr` and `gate.facts` on top, or throws `gate.error`.
-function tickDriver(prs, { rules = [], only = null, policy = {} } = {}) {
+function tickDriver(prs, { rules = [], only = null, policy = {}, clock } = {}) {
   const dir = makeRollout({ prs, events: [], policy: { concurrency: 0, ...policy } })
   const tools = fakeTools(dir, rules)
   const M = loadManifest(dir, { only })
@@ -127,6 +127,7 @@ function tickDriver(prs, { rules = [], only = null, policy = {} } = {}) {
 
       return { ...gateFacts(M, gate.pr), ...gate.facts }
     },
+    clock,
   })
 
   return { M, driver, tools, gate, notices, cleaned }
@@ -157,7 +158,7 @@ test('doneDetail: no headline when not ok, stopped as a boolean, denials as a co
   const failed = doneDetail(
     'verify',
     'A1-02-verify',
-    agentResult({ ok: false, costUsd: 0, seconds: 3, denials: [{}, {}], error: 'x'.repeat(300), stopped: undefined }),
+    agentResult({ ok: false, costUsd: 0, seconds: 3, awakeSeconds: 2, denials: [{}, {}], error: 'x'.repeat(300), stopped: undefined }),
   )
 
   assert.deepEqual(failed, {
@@ -166,6 +167,7 @@ test('doneDetail: no headline when not ok, stopped as a boolean, denials as a co
     result: null,
     cost: 0,
     seconds: 3,
+    awakeSeconds: 2,
     denials: 2,
     stopped: false,
     error: 'x'.repeat(200),
@@ -173,6 +175,7 @@ test('doneDetail: no headline when not ok, stopped as a boolean, denials as a co
   assert.equal(doneDetail('fix', 'A1-03-fix', { ok: false, stopped: true }).stopped, true)
   assert.equal(doneDetail('fix', 'A1-03-fix', { ok: false }).denials, 0)
   assert.equal(doneDetail('fix', 'A1-03-fix', { ok: false }).error, null)
+  assert.equal(doneDetail('fix', 'A1-03-fix', { ok: false }).awakeSeconds, null)
 })
 
 test('doneDetail never overwrites the event envelope', () => {
@@ -954,6 +957,93 @@ test('tick: a fetch lost to an outage skips the gate, logs no fetch-failed and l
     [1, 2],
   )
   assert.equal(gate.calls, 0)
+  assert.deepEqual(notices, [])
+})
+
+const HOUR = 60 * 60_000
+const VIEW_401 = { tool: 'gh', args: 'pr view 11', code: 1, stderr: 'HTTP 401: Bad credentials' }
+
+// A wall clock the test moves by hand.
+function fakeClock() {
+  let time = Date.parse('2026-01-01T00:00:00Z')
+
+  return {
+    clock: () => time,
+    move: (ms) => {
+      time += ms
+    },
+  }
+}
+
+test('tick: for two minutes after a sleep, failed gh and git calls are an outage', async () => {
+  const time = fakeClock()
+  const { M, driver, tools, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewRule()], clock: time.clock })
+  const entry = driver.L.prs.A1
+
+  await driver.tick()
+  time.move(90_000)
+  await driver.tick()
+
+  assert.deepEqual(kindsSince(M), [])
+
+  tools.answer([FETCH_FAILS, VIEW_401])
+  time.move(2 * HOUR)
+  const woke = readEvents(M).length
+  await driver.tick()
+
+  const wake = eventsSince(M, woke)
+
+  assert.deepEqual(wake[0], { id: '-', kind: 'machine-slept', minutes: 119 })
+  assert.deepEqual(
+    wake.map((event) => [event.kind, event.source]),
+    [
+      ['machine-slept', undefined],
+      ['github-unavailable', 'fetch'],
+    ],
+  )
+  assert.equal(entry.tickErrors ?? 0, 0)
+
+  time.move(60_000)
+  const inside = readEvents(M).length
+  await driver.tick()
+
+  assert.deepEqual(kindsSince(M, inside), ['github-unavailable'])
+  assert.equal(entry.tickErrors ?? 0, 0)
+
+  time.move(61_000)
+  const after = readEvents(M).length
+  await driver.tick()
+
+  assert.deepEqual(
+    eventsSince(M, after).map((event) => [event.id, event.kind, event.count]),
+    [
+      ['-', 'fetch-failed', 1],
+      ['A1', 'error', 1],
+      ['-', 'github-back', undefined],
+    ],
+  )
+  assert.equal(entry.tickErrors, 1)
+  assert.deepEqual(notices, [])
+})
+
+test('tick: after a sleep, an error that is no failed gh or git call still counts', async () => {
+  const time = fakeClock()
+  const { M, driver, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewRule()], clock: time.clock })
+
+  await driver.tick()
+  time.move(2 * HOUR)
+  gate.error = new Error('gate down')
+  const woke = readEvents(M).length
+  await driver.tick()
+
+  assert.deepEqual(
+    eventsSince(M, woke).map((event) => [event.id, event.kind, event.count]),
+    [
+      ['-', 'machine-slept', undefined],
+      ['A1', 'error', 1],
+    ],
+  )
+  assert.equal(driver.L.prs.A1.tickErrors, 1)
   assert.deepEqual(notices, [])
 })
 

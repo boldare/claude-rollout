@@ -195,21 +195,47 @@ function run(M, logName, seams) {
   )
 }
 
-// Records the deadline instead of arming it, so the test decides when it fires.
-function manualTimers() {
-  const timeouts = []
-  const timers = {
-    setTimeout: (callback, ms) => {
-      timeouts.push({ callback, ms })
+const MINUTE = 60_000
+const HOUR = 60 * MINUTE
 
-      return timeouts.length
+// Records the ticker instead of arming it. tick() moves a fake clock and
+// fires the ticker, so the test decides how much time passes between checks.
+function manualTimers() {
+  const intervals = []
+  let time = Date.parse('2026-01-01T00:00:00Z')
+  const timers = {
+    setInterval: (callback, ms) => {
+      intervals.push({ callback, ms })
+
+      return intervals.length
     },
-    clearTimeout: () => {},
-    setInterval: () => 0,
     clearInterval: () => {},
   }
 
-  return { timers, timeouts }
+  function tick(ms = MINUTE) {
+    time += ms
+    intervals[0].callback()
+  }
+
+  function ticks(count) {
+    for (let i = 0; i < count; i += 1) {
+      tick()
+    }
+  }
+
+  return { seams: { timers, clock: () => time }, intervals, tick, ticks }
+}
+
+// A fake claude that prints nothing and lives until it is killed.
+function silentRun(t, M, logName, seams) {
+  fakeClaude(M, 'exec sleep 30')
+
+  const running = run(M, logName, seams)
+  const [child] = children
+
+  t.after(() => child.kill('SIGKILL'))
+
+  return { running, child }
 }
 
 // Resolves on close too, so a broken fake fails the test instead of hanging it.
@@ -243,12 +269,13 @@ test('runAgent: a run killed by a signal names the signal', async () => {
 
 test('runAgent: stderr from before a timeout still classifies the run', async (t) => {
   const M = loadManifest(makeRollout())
-  const { timers, timeouts } = manualTimers()
+  const { seams, intervals, tick } = manualTimers()
 
+  M.policy.timeouts.implement = 1
   // exec, so SIGTERM reaches sleep and the pipes close with it.
   fakeClaude(M, "echo 'API Error: 429 rate limit exceeded' >&2\nexec sleep 30")
 
-  const running = run(M, 'A1-01-timeout', { timers })
+  const running = run(M, 'A1-01-timeout', seams)
 
   assert.equal(children.size, 1)
 
@@ -258,30 +285,103 @@ test('runAgent: stderr from before a timeout still classifies the run', async (t
 
   await stderrSeen(child, 'rate limit exceeded')
 
-  assert.equal(timeouts.length, 1)
-  assert.equal(timeouts[0].ms, 240 * 60_000)
+  assert.deepEqual(
+    intervals.map((interval) => interval.ms),
+    [MINUTE],
+  )
 
-  timeouts[0].callback()
+  tick()
 
   const result = await running
 
   assert.equal(result.ok, false)
-  assert.equal(result.error, 'timeout after 240 min')
+  assert.equal(result.error, 'timeout after 1 min')
   assert.equal(result.transient, true)
 })
 
-test('runAgent: the deadline kills a run that outlives its timeout', async () => {
+test('runAgent: a 2-hour sleep counts toward the wall clock and not toward the timeout', async (t) => {
   const M = loadManifest(makeRollout())
+  const { seams, intervals, tick, ticks } = manualTimers()
 
-  M.policy.timeouts.implement = 0.01
-  // No race: the run fails the same way whenever the deadline fires.
-  fakeClaude(M, 'exec sleep 30')
+  M.policy.timeouts.implement = 60
+  M.policy.stallMinutes = 600
 
-  const result = await run(M, 'A1-01-deadline')
+  const { running, child } = silentRun(t, M, 'A1-01-sleep', seams)
 
+  ticks(30)
+  tick(2 * HOUR)
+  ticks(20)
+
+  assert.equal(child.killed, false)
+
+  child.kill('SIGTERM')
+
+  const result = await running
+
+  assert.deepEqual(
+    intervals.map((interval) => interval.ms),
+    [MINUTE],
+  )
+  assert.equal(result.seconds, 10200)
+  assert.equal(result.awakeSeconds, 3060)
+  assert.equal(result.error, 'killed by SIGTERM')
+})
+
+test('runAgent: the timeout kills a run on its last awake minute', async (t) => {
+  const M = loadManifest(makeRollout())
+  const { seams, intervals, tick, ticks } = manualTimers()
+
+  M.policy.timeouts.implement = 60
+  M.policy.stallMinutes = 600
+
+  const { running, child } = silentRun(t, M, 'A1-01-deadline', seams)
+
+  ticks(59)
+
+  assert.equal(child.killed, false)
+
+  tick()
+
+  assert.equal(child.killed, true)
+
+  const result = await running
+
+  assert.deepEqual(
+    intervals.map((interval) => interval.ms),
+    [MINUTE],
+  )
   assert.equal(result.ok, false)
-  assert.equal(result.error, 'timeout after 0.01 min')
+  assert.equal(result.error, 'timeout after 60 min')
   assert.equal(result.transient, false)
+})
+
+test('runAgent: the stall watchdog counts quiet awake minutes and skips a sleep', async (t) => {
+  const M = loadManifest(makeRollout())
+  const { seams, intervals, tick, ticks } = manualTimers()
+  const { running, child } = silentRun(t, M, 'A1-01-stall', seams)
+
+  ticks(5)
+  tick(2 * HOUR)
+  ticks(5)
+
+  assert.equal(child.killed, false)
+
+  ticks(9)
+
+  assert.equal(child.killed, false)
+
+  tick()
+
+  assert.equal(child.killed, true)
+
+  const result = await running
+
+  assert.deepEqual(
+    intervals.map((interval) => interval.ms),
+    [MINUTE],
+  )
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'no output for 20 min')
 })
 
 test('runAgent: a billing error in the stream is an account problem', async () => {
