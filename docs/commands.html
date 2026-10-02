@@ -732,9 +732,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li>A running driver watches the inbox and applies a command within about a second. A burst of commands becomes one tick.</li>
           <li>Without a driver, the files wait and apply when the next <code>run</code> starts.</li>
           <li>
-            Each command applies on its own. One that is not a JSON object, names no PR or a PR the manifest no longer has, or fails while
-            it applies shows up as <code>command-rejected</code> in <code>events.jsonl</code>, with the reason. A refused approval shows up
-            as <code>approval-rejected</code>. The rest of the batch still applies.
+            Each command applies on its own. One that is not a JSON object, names no PR or a PR the manifest no longer has, is an
+            <code>approve</code> without a valid <code>at</code> time, or fails while it applies shows up as
+            <code>command-rejected</code> in <code>events.jsonl</code>, with the reason. A refused approval shows up as
+            <code>approval-rejected</code>. The rest of the batch still applies.
           </li>
           <li>
             Entries that are not files are skipped. A file the driver cannot delete is rejected instead of applied, on every tick until

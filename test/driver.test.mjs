@@ -543,6 +543,24 @@ test('approve is refused under manual and auto, and accepted under human', () =>
   assert.deepEqual(notices, ['A1: approved PR #11; merging in 120s unless you pause'])
 })
 
+test('an inbox approve without a valid at is rejected, and one posted before the verification is refused', () => {
+  const { sha, patchId } = samplePrs().A1.verified
+  const { M, driver } = driverFor({ A1: { ...samplePrs().A1, held: null, approved: null } })
+  const noValidAt = { id: '-', kind: 'command-rejected', command: 'approve', reason: 'needs a valid at' }
+  const approve = { cmd: 'approve', id: 'A1', sha, patchId }
+
+  writeBatch(M, [approve, { ...approve, at: 'not a time' }, { ...approve, at: 42 }, { ...approve, at: at(79) }])
+
+  assert.deepEqual(apply(M, driver), [
+    noValidAt,
+    noValidAt,
+    noValidAt,
+    { id: 'A1', kind: 'approval-rejected', reason: 'it was posted before the verification finished' },
+  ])
+  assert.equal(driver.L.prs.A1.approved, null)
+  assert.deepEqual(apply(M, driver, approve), [{ id: 'A1', kind: 'approved', sha: sha.slice(0, 7), channel: 'inbox' }])
+})
+
 test('a GitHub approval is noticed once, and the merge delay counts from when the driver first saw it', async () => {
   const { sha, patchId } = samplePrs().A1.verified
   const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
