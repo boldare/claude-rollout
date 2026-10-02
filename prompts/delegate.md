@@ -15,6 +15,7 @@ Escalate, and leave the decision to the maintainer, when:
 - the plan is silent or ambiguous on the question
 - the question touches security, credentials, publishing or releases
 - the question is about deleting, skipping or weakening tests or checks
+- the question is about code scanning alerts, their dismissal or the analyser's configuration
 - an answer would widen the scope beyond the brief, change public API beyond the plan or spend money
 - you are unsure
 

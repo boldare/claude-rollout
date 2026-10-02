@@ -597,9 +597,10 @@
                   <a href="commands.html#cmd-note"><code>rollout note</code></a> answers it. An answer to brief questions gives the brief
                   attempt back. <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts. With
                   <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, <a href="#delegate">the delegate</a> may
-                  answer first. After a code scanning block, dismiss a false positive on GitHub. Then <code>rollout retry</code> checks the
-                  claim again with no fix run. After a gate block or a reopened PR, <code>rollout retry</code> keeps a verification that
-                  still holds, and the gate looks again.
+                  answer first. An agent sure that a code scanning alert is a false positive blocks with kind <code>code-scanning</code>,
+                  which never goes to the delegate. After a code scanning block or that report, dismiss a false positive on GitHub. Then
+                  <code>rollout retry</code> checks the claim again with no fix run. After a gate block or a reopened PR,
+                  <code>rollout retry</code> keeps a verification that still holds, and the gate looks again.
                 </td>
               </tr>
               <tr id="state-escalated">
@@ -756,8 +757,9 @@
         <p>
           It reads the question and the evidence, the plan and design notes, the brief, every earlier answer and the code. It answers only
           what the plan decides, and escalates the rest: a silent or ambiguous plan, security, credentials, publishing, releases, weakened
-          tests, a wider scope. An answer reaches the agent the same way your note does, prefixed as the delegate's. An escalation leaves
-          the PR blocked for you. Both notify you.
+          tests, code scanning, a wider scope. An answer reaches the agent the same way your note does, prefixed as the delegate's. An
+          escalation leaves the PR blocked for you. When the delegate takes a question, the blocked notice is skipped and its answer or
+          escalation is the one notification. It comes after the run, so it also waits for a free slot.
         </p>
 
         <p>
@@ -1030,7 +1032,8 @@
           <li>
             <strong>Fix</strong> or <strong>block</strong> on new code scanning alerts at or above
             <a href="manifest.html#repo-codeScanning"><code>repo.codeScanning.minSeverity</code></a
-            >, as its <code>action</code> says. <strong>Wait</strong> while an alert comes from an analysis of an older commit.
+            >, as its <code>action</code> says. <strong>Wait</strong> while an alert comes from an analysis of an older commit. A fix run
+            sure of a false positive reports BLOCKED with kind <code>code-scanning</code>, which only you answer.
           </li>
           <li><strong>Wait</strong> while the base branch is not green.</li>
           <li>
@@ -1277,8 +1280,8 @@
 
         <ul>
           <li>
-            <strong>Waiting for you:</strong> verified (with the next step), blocked, escalated, ready to merge in manual mode, brief
-            questions, a question the delegate passes to you, the delegate's run limit for a PR.
+            <strong>Waiting for you:</strong> verified (with the next step), blocked and brief questions unless the delegate takes them,
+            escalated, ready to merge in manual mode, a question the delegate passes to you, the delegate's run limit for a PR.
           </li>
           <li>
             <strong>Decisions:</strong> approval accepted or rejected, a GitHub approval the driver has seen, merged, would merge in a dry

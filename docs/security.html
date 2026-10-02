@@ -68,7 +68,8 @@
           </li>
           <li>
             Alerts arrive as structured fields from the code scanning API, never as comment text. Agents cannot dismiss an alert, because
-            <code>gh api</code> is GET only for them.
+            <code>gh api</code> is GET only for them. An agent sure of a false positive reports BLOCKED with kind
+            <code>code-scanning</code>, which never goes to the delegate.
           </li>
           <li>
             The assets are the base branch, published packages, credentials, the rollout's control plane (manifest, inbox, ledger) and the
@@ -215,8 +216,8 @@
         <p>
           The <a href="how-it-works.html#delegate">delegate</a>'s only power is text. Its answer reaches the blocked agent like your note.
           It never approves, merges, retries, holds, releases, pauses or unhalts. It treats the question and the evidence as data, since an
-          agent wrote them after reading repository content. It escalates anything about security, credentials, publishing, releases or
-          weakened tests to you.
+          agent wrote them after reading repository content. It escalates anything about security, credentials, publishing, releases,
+          weakened tests or code scanning to you.
         </p>
 
         <h3 id="permissions">Permission rules</h3>

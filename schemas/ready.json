@@ -113,7 +113,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["needs-decision", "stuck", "ci", "environment", "brief-contradiction"]
+          "enum": ["needs-decision", "stuck", "ci", "environment", "brief-contradiction", "code-scanning"]
         },
         "question": {
           "type": "string"
