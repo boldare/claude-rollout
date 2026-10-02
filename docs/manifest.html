@@ -914,7 +914,10 @@ prs:
               <tr>
                 <td>.gh-agents/</td>
                 <td>driver, preflight</td>
-                <td>An empty gh config directory, so agents cannot fall back to your stored gh login.</td>
+                <td>
+                  An empty gh config directory for the agents, so gh finds no stored login in it. Agents never get <code>GH_HOST</code>,
+                  which would make gh read your keyring login anyway.
+                </td>
               </tr>
               <tr>
                 <td>.npmrc-agents</td>

@@ -13,7 +13,8 @@ import { makeRollout } from './fixtures.mjs'
 
 const BRANCH = 'fix/thing'
 const LIVE_X = { dir: '/Users/u/_Code/.rollouts/x', home: '/Users/u/.claude/skills/rollout', name: 'x' }
-const blocked = (command, role = 'worker') => check(command, role, BRANCH) !== null
+const REPO = { repo: 'o/r' }
+const blocked = (command, role = 'worker') => check(command, role, BRANCH, REPO) !== null
 const REAL_GUARD = fileURLToPath(new URL('../hooks/guard-bash.mjs', import.meta.url))
 const MERGE_PAYLOAD = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --admin' } })
 const LS_PAYLOAD = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
@@ -579,4 +580,326 @@ test('the preflight guard self-test passes with this checkout and fails without 
     missing.lines.every((line) => line.startsWith('FAIL')),
     missing.lines.join('\n'),
   )
+})
+
+const ROLES = Object.values(HOOK_ROLES)
+
+function assertRefused(forms, context = REPO) {
+  for (const role of ROLES) {
+    for (const command of forms) {
+      assert.notEqual(check(command, role, BRANCH, context), null, `${role}: ${command}`)
+    }
+  }
+}
+
+function assertAllowed(forms, context = REPO) {
+  for (const role of ROLES) {
+    for (const command of forms) {
+      assert.equal(check(command, role, BRANCH, context), null, `${role}: ${command}`)
+    }
+  }
+}
+
+// The test process may itself run inside an agent, so its ROLLOUT_* never reach the hook.
+function hookEnv(extra = {}) {
+  const env = { ...process.env }
+
+  for (const name of Object.keys(env)) {
+    if (name.startsWith('ROLLOUT_')) {
+      delete env[name]
+    }
+  }
+
+  return { ...env, ...extra }
+}
+
+test('agent env: dropping the token or the gh config is refused in every form, for both roles', () => {
+  assertRefused([
+    'GH_REPO=o/x gh pr list',
+    'GH_HOST+=github.com gh api user',
+    'GH_TOKEN+=x gh api user',
+    'GITHUB_TOKEN+=x gh api user',
+    'GH_CONFIG_DIR+=/tmp/gh gh api user',
+    'ROLLOUT_ROLE+=x node bin/rollout.mjs pause',
+    'GIT_DIR+=/tmp/x git push -u origin fix/thing',
+    'unset GH_TOKEN',
+    'unset -v GITHUB_TOKEN',
+    'unset FOO GH_CONFIG_DIR',
+    'unset GH_REPO',
+    'unset "GH_TOKEN"',
+    'un""set GH_TOK\\EN',
+    'export -n GH_TOKEN',
+    'export GH_REPO',
+    'export GH_HOST',
+    'export GH_REPO"="other/x',
+    'export GH_HOST"+="github.com',
+    'declare +x GH_TOKEN',
+    'declare -n ref=GH_TOKEN',
+    'typeset +x GH_TOKEN',
+    'local GH_TOKEN',
+    'readonly GH_CONFIG_DIR',
+    'read GH_TOKEN < /dev/null',
+    'read GH_TOKEN</dev/null',
+    'read</dev/null GH_TOKEN',
+    'read -aGH_TOKEN < /dev/null',
+    'printf -v GH_TOKEN x',
+    'printf -vGH_TOKEN x',
+    'mapfile GH_TOKEN < /dev/null',
+    'readarray GH_TOKEN < /dev/null',
+    'set GH_TOKEN',
+    'setenv GH_HOST github.com',
+    'unsetenv GH_TOKEN',
+    'csh -c "unsetenv GH_TOKEN"',
+    'zsh -c "unset -m GH_TOK*"',
+    'unset -m "GH_*"',
+    'unset 2>/dev/null -m "GH_*"',
+    'typeset -gm "GH_*"',
+    'export +m "GH_*"',
+    'local -m "ROLLOUT_*"',
+    'readonly -m x',
+    'declare -fm x',
+    'export -n ROLLOUT_ROLE',
+    'declare +x ROLLOUT_ROLE',
+    'typeset +x ROLLOUT_ROLE',
+    'read ROLLOUT_ROLE < /dev/null',
+    'unset "ROLLOUT_ROLE"',
+    'env -u GH_TOKEN gh api user',
+    'env -uGH_TOKEN gh api user',
+    'env -vu GH_TOKEN gh api user',
+    'env -vuGH_TOKEN gh api user',
+    'env --unset GH_TOKEN gh api user',
+    'env --unset=GH_TOKEN gh api user',
+    'env -u "GH_TOKEN" gh api user',
+    "env -u 'GH_REPO' gh pr list",
+    'env --unset="GH_CONFIG_DIR" gh api user',
+    'env --unset "GITHUB_TOKEN" gh api user',
+    'env -0 -u GH_HOST gh api user',
+    'env -C /tmp -u GH_TOKEN gh api user',
+    'env FOO=1 -u GH_TOKEN gh api user',
+    'env >/dev/null -u GH_TOKEN gh api user',
+    'env 2> /tmp/log -u GH_TOKEN gh api user',
+    'env GH_REPO"="other/x gh pr list',
+    '/usr/bin/env -u GH_TOKEN gh api user',
+    'sh -c "env -u GH_TOKEN gh api user"',
+    'env env -u GH_TOKEN gh api user',
+    'env -u "ROLLOUT_ROLE" node bin/rollout.mjs pause',
+    'env --unset=ROLLOUT_ROLE node bin/rollout.mjs pause',
+    'env -vu ROLLOUT_ROLE node bin/rollout.mjs pause',
+    'env -uROLLOUT_DIR node bin/rollout.mjs pause',
+  ])
+
+  assert.match(check('unset GH_TOKEN', 'worker', BRANCH, REPO), /^unset with GH_TOKEN is not allowed: /)
+  assert.match(check('env -u GH_REPO gh pr list', 'worker', BRANCH, REPO), /^unsetting GH_REPO with env is not allowed: /)
+  assert.match(check('read ROLLOUT_ROLE < /dev/null', 'worker', BRANCH, REPO), /the guard's context/)
+})
+
+test('agent env: env -i, env -S, unknown env options and exec -c are refused, for both roles', () => {
+  assertRefused([
+    'env -i PATH=/usr/bin gh api user',
+    'env -i gh api user',
+    'env -iv gh api user',
+    'env - gh api user',
+    'env -- - gh api user',
+    'env -vi gh api user',
+    'env -0i gh api user',
+    'env --ignore-environment gh api user',
+    'env -S "-u GH_TOKEN" gh api user',
+    'env -vS "-i" gh api user',
+    'env --split-string="-u GH_TOKEN" gh api user',
+    'env --split-string "-i" gh api user',
+    'env --ign gh api user',
+    'env --uns=GH_TOKEN gh api user',
+    'env --ch /tmp -u GH_TOKEN gh api user',
+    'env --null=1 gh api user',
+    'env -L x gh api user',
+    'env -x gh api user',
+    'env >/dev/null -i gh api user',
+    'env</dev/null -i gh api user',
+    '/usr/bin/env -i gh api user',
+    'sh -c "env -i gh api user"',
+    'nice env -i gh api user',
+    'exec -c gh api user',
+    'exec -a x -c gh api user',
+    'exec -lc gh api user',
+    'exec -cl gh api user',
+    'exec 2>/dev/null -c gh api user',
+    'exec</dev/null -c gh api user',
+    'bash -c "exec -c gh api user"',
+  ])
+
+  assert.match(check('env -i gh api user', 'worker', BRANCH, REPO), /without the agents' GitHub token and gh config/)
+  assert.match(check('env -S x', 'worker', BRANCH, REPO), /re-splits a string/)
+  assert.match(check('env --ign gh api user', 'worker', BRANCH, REPO), /does not know/)
+  assert.match(check('exec -c gh api user', 'worker', BRANCH, REPO), /empty environment/)
+})
+
+test('agent env: everyday export, unset, read, env and exec stay allowed', () => {
+  assertAllowed([
+    'export CI=1 && npm test',
+    'export PATH="$PATH:/tmp/bin"',
+    'export FOO=$GH_REPO',
+    'export -p',
+    'unset CI',
+    'echo $GH_REPO',
+    'read -r line < notes.txt',
+    'set -euo pipefail',
+    'set -m',
+    'printf \'%s\\n\' "$GH_REPO"',
+    'local -r count=1',
+    'git log --grep "unset the cache"',
+    'env',
+    'env | grep GH_',
+    'env FOO=1 npm test',
+    'env LC_ALL=C grep -i x README.md',
+    'env -u FOO npm test',
+    'env -0',
+    'env -C /tmp npm test',
+    'env --chdir=/tmp npm test',
+    'env --block-signal=INT npm test',
+    'env -- FOO=1 npm test',
+    '/usr/bin/env node x.mjs',
+    'exec node x.mjs',
+    'exec sh -c "npm test"',
+    'exec -a name node x.mjs',
+  ])
+})
+
+test('agent repo: --repo and -R name only the manifest repo, for both roles', () => {
+  assertAllowed([
+    'gh pr view 1 --repo o/r',
+    'gh pr view 1 --repo github.com/o/r',
+    'gh pr view 1 --repo GitHub.com/O/R',
+    'gh pr view 1 --repo=o/r',
+    'gh pr view 1 -R o/r',
+    'gh pr view 1 -Ro/r',
+    'gh pr view 1 -R=o/r',
+    'gh -R o/r pr view 1',
+    'gh pr list -dR o/r',
+    'gh pr view 1 --repo "o/r"',
+  ])
+
+  assertRefused([
+    'gh pr view 1 --repo other/x',
+    'gh pr view 1 -R other/x',
+    'gh -R other/x pr view 1',
+    'gh --repo other/x pr view 1',
+    'gh pr view 1 --repo=other/x',
+    'gh pr view 1 -Rother/x',
+    'gh pr view 1 -R=other/x',
+    'gh pr list -dR other/x',
+    'gh pr list -dRother/x',
+    'gh pr view 1 --repo o/r-fork',
+    'gh pr view 1 --repo o/x',
+    'gh pr view 1 --repo other/r',
+    'gh pr view 1 --repo ghe.example.com/o/r',
+    'gh pr view 1 --repo https://github.com/o/r',
+    'gh pr view 1 --repo o/r.git',
+    'gh pr view 1 --repo "other/x"',
+    'gh pr view 1 "--repo=other/x"',
+    'gh pr view 1 --repo o/r --repo other/x',
+    'gh gh gh -R other/x pr view 1',
+    'gh search prs --repo other/x',
+    'gh pr view 1 --repo',
+    'gh pr view 1 --repo=',
+    'gh pr view 1 -R',
+    'gh pr view 1 -R=',
+    'gh pr create --title t --body "grep -R x"',
+  ])
+
+  assert.match(check('gh pr create --title t --body "grep -R x"', 'worker', BRANCH, REPO), /--body-file/)
+  assert.match(check('gh pr view 1 --repo', 'worker', BRANCH, REPO), /--repo has no value/)
+  assert.match(check('gh -R other/x pr merge 1', 'worker', BRANCH, REPO), /merging, reviewing and closing PRs belongs to the driver/)
+})
+
+test('agent repo: gh api paths name only the manifest repo, for both roles', () => {
+  assertAllowed([
+    'gh api repos/o/r/pulls',
+    'gh api /repos/O/R/commits/abc/check-runs',
+    'gh api repos/{owner}/{repo}/pulls',
+    'gh api "repos/{owner}/{repo}/pulls?per_page=1"',
+    'gh api "repos/o/r/pulls?per_page=1"',
+    'gh api repos/o/r',
+    'gh api user',
+    'gh pr view 1 repos/other/x',
+  ])
+
+  assertRefused([
+    'gh api repos/other/x/pulls',
+    'gh api /repos/other/x',
+    'gh api repos/o/r-fork/pulls',
+    'gh api "repos/other/x/commits?per_page=1"',
+    'gh api repos/{owner}/other/pulls',
+    'gh api repos/other/{repo}/pulls',
+    'gh api "repos/{owner}"/other/pulls',
+    'gh api repos/o/r/../../other/x/pulls',
+    'gh api repos/{owner}/{repo}/../../other/x',
+    'gh api repos/o/r/%2E%2E/x',
+    'gh api repos/o/r/..%2fother',
+    'gh api repos/o/r%2F..%2F..%2Fother/x',
+    'gh api //repos/other/x',
+    'gh api ./repos/other/x',
+    'gh api REPOS/other/x',
+    'gh api repos/:owner/other/pulls',
+    'gh api repos/o',
+    'gh api "repos/other/x/pulls"',
+    'gh -R o/r api repos/other/x',
+    'gh api --paginate repos/other/x/pulls --jq .[].number',
+  ])
+
+  assert.match(check('gh api repos/other/x/pulls', 'worker', BRANCH, REPO), /another repository than o\/r/)
+  assert.match(check('gh api repos/o/r/%2E%2E/x', 'worker', BRANCH, REPO), /climb out/)
+  assert.match(check('gh api repos/{owner}/other/pulls', 'worker', BRANCH, REPO), /only together as \{owner\}\/\{repo\}/)
+  assert.match(check('gh api -X PUT repos/other/x/pulls/1/merge', 'worker', BRANCH, REPO), /gh api is read-only/)
+})
+
+test('agent repo: without ROLLOUT_REPO any named repo is refused', () => {
+  for (const context of [{}, { repo: '' }]) {
+    assertRefused(['gh pr view 1 --repo o/r', 'gh -R o/r pr view 1', 'gh api repos/o/r/pulls', 'gh api /repos/o/r'], context)
+    assertAllowed(['gh pr view 12', 'gh api repos/{owner}/{repo}/pulls', 'gh api user'], context)
+  }
+
+  assert.match(check('gh pr view 1 --repo o/r', 'worker', BRANCH, {}), /^ROLLOUT_REPO is not set/)
+  assert.match(check('gh api repos/o/r/pulls', 'worker', BRANCH, {}), /^ROLLOUT_REPO is not set/)
+})
+
+test('agent repo: the hook command reads ROLLOUT_REPO from its environment', () => {
+  const M = loadManifest(makeRollout())
+  const pinned = hookEnv({ ROLLOUT_REPO: 'o/r' })
+  const unpinned = hookEnv()
+
+  assert.equal(unpinned.ROLLOUT_REPO, undefined)
+
+  for (const role of Object.keys(HOOK_ROLES)) {
+    const own = runHook(M, role, payload('gh pr view 1 --repo o/r'), { env: pinned })
+    const other = runHook(M, role, payload('gh pr view 1 --repo other/x'), { env: pinned })
+    const unset = runHook(M, role, payload('gh pr view 1 --repo o/r'), { env: unpinned })
+
+    assert.equal(own.status, 0, `${role}: ${own.stderr}`)
+    assert.equal(other.status, 2, `${role}: ${other.stderr}`)
+    assert.match(other.stderr, /another repository than o\/r/, role)
+    assert.equal(unset.status, 2, `${role}: ${unset.stderr}`)
+    assert.match(unset.stderr, /ROLLOUT_REPO is not set/, role)
+  }
+})
+
+test('agent repo: padded lines are decided', () => {
+  const M = loadManifest(makeRollout())
+  const env = hookEnv({ ROLLOUT_REPO: 'o/r' })
+  const lines = {
+    'repeated gh': ['gh '.repeat(5_000) + '--repo other/x pr view 1', /another repository than o\/r/],
+    'repeated env -u': ['env -u '.repeat(2_000) + 'GH_TOKEN gh api user', /unsetting GH_TOKEN with env/],
+  }
+
+  for (const [name, [line, reason]] of Object.entries(lines)) {
+    assert.ok(line.length > 13_000 && line.length < 16_384, `${name}: ${line.length}`)
+
+    for (const role of Object.keys(HOOK_ROLES)) {
+      const result = runHook(M, role, payload(line), { env })
+
+      assert.equal(result.status, 2, `${name}, ${role}: ${result.stderr}`)
+      assert.equal(result.signal, null, `${name}, ${role}`)
+      assert.doesNotMatch(result.stderr, /16384/, `${name}, ${role}`)
+      assert.match(result.stderr, reason, `${name}, ${role}`)
+    }
+  }
 })

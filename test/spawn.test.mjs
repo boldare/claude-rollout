@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { agentEnv } from '../lib/identity.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { children, failureReason, failureSignals, runAgent, streamError } from '../lib/spawn.mjs'
 import { jsonLines, makeRollout, sampleTranscript } from './fixtures.mjs'
@@ -435,4 +436,88 @@ test('runAgent: the delegate runs read-only, with no branch and its own schema',
   assert.deepEqual(args.slice(disallowed, disallowed + 4), ['--disallowedTools', 'Edit', 'Write', 'NotebookEdit'])
   assert.equal(readFileSync(branchFile, 'utf8'), '')
   assert.deepEqual(JSON.parse(args[args.indexOf('--json-schema') + 1]), schema)
+})
+
+// What a maintainer's shell may export. With GH_HOST set, gh reads the keyring login.
+const SHELL_GITHUB_ENV = {
+  GH_HOST: 'ghe.example.com',
+  GH_ENTERPRISE_TOKEN: 'synthetic-enterprise-token',
+  GITHUB_ENTERPRISE_TOKEN: 'synthetic-enterprise-token',
+}
+
+async function withProcessEnv(values, callback) {
+  const saved = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]))
+
+  Object.assign(process.env, values)
+
+  try {
+    return await callback()
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[name]
+      } else {
+        process.env[name] = value
+      }
+    }
+  }
+}
+
+function withAgentToken(M) {
+  M.repo.agentToken = join(M.dir, 'agent-token')
+  writeFileSync(M.repo.agentToken, 'synthetic-agent-token\n')
+}
+
+test('runAgent: agents get GH_REPO and ROLLOUT_REPO and never GH_HOST', async () => {
+  const M = loadManifest(makeRollout())
+  const envFile = join(M.dir, 'agent-env.txt')
+
+  withAgentToken(M)
+  fakeClaude(M, `env > '${envFile}'\nexit 1`)
+
+  const result = await withProcessEnv(SHELL_GITHUB_ENV, () => run(M, 'A1-01-env'))
+  const lines = readFileSync(envFile, 'utf8').split('\n')
+  const env = Object.fromEntries(
+    lines.filter((line) => line.includes('=')).map((line) => [line.split('=')[0], line.slice(line.indexOf('=') + 1)]),
+  )
+
+  assert.equal(result.ok, false)
+  assert.equal(env.GH_REPO, 'github.com/example/demo')
+  assert.equal(env.ROLLOUT_REPO, 'example/demo')
+  assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
+  assert.equal(env.GH_CONFIG_DIR, join(M.dir, '.gh-agents'))
+
+  for (const name of Object.keys(SHELL_GITHUB_ENV)) {
+    assert.equal(name in env, false, name)
+  }
+})
+
+test('agentEnv: extra never brings back GH_HOST or moves GH_REPO', () => {
+  const M = loadManifest(makeRollout())
+
+  withAgentToken(M)
+
+  const env = agentEnv(M, {
+    ...SHELL_GITHUB_ENV,
+    GH_REPO: 'other/x',
+    GH_TOKEN: 'another-token',
+    GH_CONFIG_DIR: '/tmp/gh',
+    ROLLOUT_ROLE: 'implement',
+  })
+
+  assert.equal(env.GH_REPO, 'github.com/example/demo')
+  assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
+  assert.equal(env.GH_CONFIG_DIR, join(M.dir, '.gh-agents'))
+  assert.equal(env.ROLLOUT_ROLE, 'implement')
+
+  for (const name of Object.keys(SHELL_GITHUB_ENV)) {
+    assert.equal(name in env, false, name)
+  }
+
+  M.repo.agentToken = null
+
+  const unpinned = agentEnv(M, { GH_HOST: 'github.com' })
+
+  assert.equal(unpinned.GH_REPO, 'github.com/example/demo')
+  assert.equal('GH_HOST' in unpinned, false)
 })

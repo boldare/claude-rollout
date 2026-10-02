@@ -2,11 +2,12 @@
 // PreToolUse guard for rollout agents. Reads the hook payload on stdin and
 // exits 2 (blocked, stderr goes back to the agent) when a Bash command could
 // merge, publish, rewrite shared history, push anywhere but the PR branch,
-// switch off the guard rails or drive the rollout itself. A payload the guard
-// cannot read, a command too long to check and an error of its own also exit
-// 2 with a reason. A PreToolUse hook blocks only with that code, so the hook
-// command (lib/settings.mjs) turns any other exit, such as a crash or running
-// out of memory, into 2 as well.
+// switch off the guard rails, drop or redirect the agents' GitHub identity,
+// leave the manifest's repository or drive the rollout itself. A payload the
+// guard cannot read, a command too long to check and an error of its own also
+// exit 2 with a reason. A PreToolUse hook blocks only with that code, so the
+// hook command (lib/settings.mjs) turns any other exit, such as a crash or
+// running out of memory, into 2 as well.
 //
 // A regex guard is a seatbelt, not a sandbox. The guarantees that matter are
 // also enforced elsewhere: the pre-push hook, no npm credentials in the agent
@@ -95,10 +96,10 @@ const ALWAYS = [
   /\.claude\/skills\/rollout(?![\w.-])/,
   /GIT_CONFIG_/,
   /--config-env/,
-  /GIT_DIR=|GIT_WORK_TREE=/,
+  /(GIT_DIR|GIT_WORK_TREE)\+?=/,
   /--git-dir|--work-tree/,
-  /GIT_SSH|GH_TOKEN=|GH_CONFIG_DIR=|GITHUB_TOKEN=|GH_HOST=/,
-  /ROLLOUT_[A-Z_]*=/,
+  /GIT_SSH|(GH_TOKEN|GH_CONFIG_DIR|GITHUB_TOKEN|GH_HOST|GH_REPO)\+?=/,
+  /ROLLOUT_[A-Z_]*\+?=/,
   /\bunset\s+[^\n]*ROLLOUT_/,
   /\benv\b[^\n]*\s-u\s*ROLLOUT_/,
   /(\.git|\/worktrees\/[^/\s]+)\/rollout-(branch|pushurl|ready)/,
@@ -182,7 +183,9 @@ const GH_FORBIDDEN = [
   'attestation',
 ]
 
-function checkGh(words) {
+function checkGh(words, { repo, placeholders }) {
+  let api = false
+
   for (const start of invocations(words, 'gh', ['-R', '--repo', '--hostname'])) {
     const args = words.slice(start)
     const [sub, action] = positionals(args, GH_VALUE_FLAGS)
@@ -200,6 +203,8 @@ function checkGh(words) {
     }
 
     if (sub === 'api') {
+      api = true
+
       if (action === 'graphql' || args.includes('graphql')) {
         return 'gh api graphql is not allowed for rollout agents (use gh pr / gh run subcommands)'
       }
@@ -212,6 +217,418 @@ function checkGh(words) {
         return 'gh api is read-only for rollout agents (GET only)'
       }
     }
+  }
+
+  const first = words.findIndex((word) => isTool(word, 'gh'))
+
+  if (first === -1) {
+    return null
+  }
+
+  return checkGhRepo(words, first + 1, repo, api) ?? (api ? placeholders : null)
+}
+
+// gh takes the repository with or without its host.
+function normalizeRepo(text) {
+  return text.toLowerCase().replace(/^github\.com\//, '')
+}
+
+// --repo X, --repo=X, -R X, -RX, -R=X and clusters such as -dR X.
+function repoFlag(word) {
+  if (word === '--repo') {
+    return { next: true }
+  }
+
+  if (word.startsWith('--repo=')) {
+    return { next: false, value: word.slice('--repo='.length) }
+  }
+
+  const short = word.match(/^-(?!-)[A-Za-z]*?R(.*)$/)
+
+  if (!short) {
+    return null
+  }
+
+  if (short[1] === '') {
+    return { next: true }
+  }
+
+  return { next: false, value: short[1].replace(/^=/, '') }
+}
+
+function climbs(path) {
+  return path.split('/').includes('..') || /%2e|%2f/i.test(path)
+}
+
+// segments() splits `repos/{owner}/{repo}/pulls` on the braces and leaves a
+// bare `repos/`. gh fills the placeholders from the pinned GH_REPO.
+const REPOS_PATH = /^[./]*repos\//i
+
+function apiPathProblem(word, repo) {
+  const prefix = word.match(REPOS_PATH)?.[0]
+
+  if (!prefix || prefix.length === word.length) {
+    return null
+  }
+
+  if (climbs(word)) {
+    return `gh api ${word} could climb out of the repository with .. or an encoded dot or slash, so it is refused`
+  }
+
+  if (!repo) {
+    return `ROLLOUT_REPO is not set, so gh api ${word} is refused. Use repos/{owner}/{repo}/… instead`
+  }
+
+  const [owner, name] = word.slice(prefix.length).split(/[?#]/)[0].split('/')
+
+  if (`${owner}/${name}`.toLowerCase() !== normalizeRepo(repo)) {
+    return `gh api ${word} names another repository than ${repo}, and agents stay on the manifest's repository`
+  }
+
+  return null
+}
+
+// The arguments of every gh call in a segment run to its end, so one scan
+// from the first call reads the flags and paths of all of them.
+function checkGhRepo(words, start, repo, api) {
+  for (let i = start; i < words.length; i += 1) {
+    const word = words[i]
+    const flag = repoFlag(word)
+
+    if (flag) {
+      const value = (flag.next ? words[i + 1] : flag.value) ?? ''
+      const shown = flag.next && value ? `${word} ${value}` : word
+      const hint = 'Put text that contains -R or --repo in a file and pass --body-file'
+
+      if (flag.next) {
+        i += 1
+      }
+
+      if (!repo) {
+        return `ROLLOUT_REPO is not set, so gh ${shown} is refused. ${hint}`
+      }
+
+      if (!value) {
+        return `gh ${word} has no value, and agents may name only the manifest's repository ${repo}. ${hint}`
+      }
+
+      if (normalizeRepo(value) !== normalizeRepo(repo)) {
+        return `gh ${shown} names another repository than ${repo}, and agents stay on the manifest's repository. ${hint}`
+      }
+
+      continue
+    }
+
+    const problem = api ? apiPathProblem(word, repo) : null
+
+    if (problem) {
+      return problem
+    }
+  }
+
+  return null
+}
+
+// segments() drops braces, so the placeholders and the path after them are
+// read on the whole command. Alone, {owner} or {repo} could name another
+// repository of the same owner or another owner's repository of that name.
+function placeholderProblem(command) {
+  const text = command.replace(/["'\\]/g, '')
+
+  for (const match of text.matchAll(/\{owner\}\/\{repo\}(\S*)/g)) {
+    if (climbs(match[1])) {
+      return `gh api {owner}/{repo}${match[1]} could climb out of the repository with .. or an encoded dot or slash, so it is refused`
+    }
+  }
+
+  if (/\{(owner|repo)\}/.test(text.replaceAll('{owner}/{repo}', ''))) {
+    return 'gh api placeholders {owner} and {repo} are allowed only together as {owner}/{repo}, because alone they could reach another repository'
+  }
+
+  return null
+}
+
+// The agents' GitHub identity and repository, and the guard's own context.
+const PROTECTED = 'GH_TOKEN|GITHUB_TOKEN|GH_CONFIG_DIR|GH_REPO|GH_HOST|ROLLOUT_\\w*'
+
+// A protected name as an argument: bare, assigned (`=`, `+=`, `[0]=`),
+// attached to an option (`read -aNAME`) or as a nameref target (`x=NAME`).
+const PROTECTED_ARGUMENT = new RegExp(`^(?:[-+][A-Za-z]*)?(${PROTECTED})(?!\\w)|=(${PROTECTED})(?!\\w)`)
+const PROTECTED_NAME = new RegExp(`^(${PROTECTED})$`)
+
+function protectedReason(name) {
+  if (name.startsWith('ROLLOUT_')) {
+    return `${name} is the guard's context and keeps the CLI from taking orders from agents`
+  }
+
+  return `${name} keeps agents on their own GitHub login and the manifest's repository`
+}
+
+// Shell builtins that set, unset or un-export variables, csh's included.
+const ENV_BUILTINS = new Set([
+  'unset',
+  'export',
+  'declare',
+  'typeset',
+  'local',
+  'readonly',
+  'read',
+  'printf',
+  'mapfile',
+  'readarray',
+  'set',
+  'setenv',
+  'unsetenv',
+])
+
+// zsh reads their names as patterns with -m: `unset -m 'GH_*'`.
+const PATTERN_BUILTINS = new Set(['unset', 'export', 'declare', 'typeset', 'local', 'readonly'])
+
+// A redirect is no argument, so `env >/dev/null -i` still gives env its -i.
+// An operator without its target takes the next word too.
+function redirectWidth(words, index) {
+  const word = words[index]
+
+  if (!/^\d*[<>]/.test(word)) {
+    return 0
+  }
+
+  return /^\d*[<>]+$/.test(word) ? 2 : 1
+}
+
+function checkBuiltins(words) {
+  let builtin = null
+  let ownOptions = false
+
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i]
+    const redirect = redirectWidth(words, i)
+
+    if (redirect > 0) {
+      i += redirect - 1
+      continue
+    }
+
+    if (ownOptions && /^[-+]/.test(word)) {
+      if (PATTERN_BUILTINS.has(builtin) && /^[-+][A-Za-z]*m/.test(word)) {
+        return `${builtin} ${word} reads names as patterns that could match the agents' GitHub variables, so it is not allowed`
+      }
+    } else {
+      const name = word.split(/[<>]/)[0]
+
+      ownOptions = ENV_BUILTINS.has(name)
+
+      if (ownOptions) {
+        builtin = name
+        continue
+      }
+    }
+
+    const hit = builtin ? word.match(PROTECTED_ARGUMENT) : null
+
+    if (hit) {
+      const target = hit[1] ?? hit[2]
+
+      return `${builtin} with ${target} is not allowed: ${protectedReason(target)}`
+    }
+  }
+
+  return null
+}
+
+const ENV_FLAGS = ['-0', '-v', '--null', '--debug', '--list-signal-handling', '--help', '--version']
+const ENV_SIGNAL_OPTIONS = ['--block-signal', '--default-signal', '--ignore-signal']
+
+function envDrop(word) {
+  return `env ${word} starts the command without the agents' GitHub token and gh config, so it is not allowed`
+}
+
+function envUnset(name) {
+  return PROTECTED_NAME.test(name) ? `unsetting ${name} with env is not allowed: ${protectedReason(name)}` : null
+}
+
+// env's own options, from words[start] on. Returns the reason to refuse, or
+// the index where the command env runs starts.
+function readEnvOptions(words, start) {
+  let operands = false
+  let i = start
+
+  while (i < words.length) {
+    const word = words[i]
+    const redirect = redirectWidth(words, i)
+
+    if (redirect > 0) {
+      i += redirect
+      continue
+    }
+
+    if (word === '-') {
+      return { problem: envDrop(word) }
+    }
+
+    if (!word.startsWith('-') || operands) {
+      if (!word.includes('=')) {
+        break
+      }
+
+      const name = word.slice(0, word.indexOf('='))
+
+      if (PROTECTED_NAME.test(name)) {
+        return { problem: `setting ${name} with env is not allowed: ${protectedReason(name)}` }
+      }
+
+      i += 1
+      continue
+    }
+
+    i += 1
+
+    if (word === '--') {
+      operands = true
+      continue
+    }
+
+    if (word.startsWith('--')) {
+      const name = word.split('=')[0]
+
+      if (name === '--ignore-environment') {
+        return { problem: envDrop(word) }
+      }
+
+      if (name === '--split-string') {
+        return { problem: `env ${word} re-splits a string the guard does not read, so it is not allowed. Write the command out` }
+      }
+
+      if (name === '--unset' || name === '--chdir') {
+        const value = word.includes('=') ? word.slice(name.length + 1) : (words[i] ?? '')
+
+        if (!word.includes('=')) {
+          i += 1
+        }
+
+        const problem = name === '--unset' ? envUnset(value) : null
+
+        if (problem) {
+          return { problem }
+        }
+
+        continue
+      }
+
+      if (ENV_SIGNAL_OPTIONS.includes(name) || ENV_FLAGS.includes(word)) {
+        continue
+      }
+
+      return { problem: `env ${word} is an option the guard does not know, so it is refused` }
+    }
+
+    for (let j = 1; j < word.length; j += 1) {
+      const letter = word[j]
+
+      if (letter === 'i') {
+        return { problem: envDrop(word) }
+      }
+
+      if (letter === 'S') {
+        return { problem: `env ${word} re-splits a string the guard does not read, so it is not allowed. Write the command out` }
+      }
+
+      if ('uCP'.includes(letter)) {
+        let value = word.slice(j + 1)
+
+        if (value === '') {
+          value = words[i] ?? ''
+          i += 1
+        }
+
+        const problem = letter === 'u' ? envUnset(value) : null
+
+        if (problem) {
+          return { problem }
+        }
+
+        break
+      }
+
+      if (!ENV_FLAGS.includes(`-${letter}`)) {
+        return { problem: `env -${letter} is an option the guard does not know, so it is refused` }
+      }
+    }
+  }
+
+  return { problem: null, end: i }
+}
+
+// exec [-cl] [-a name]: -c starts the command with an empty environment.
+function readExecOptions(words, start) {
+  let i = start
+
+  while (i < words.length) {
+    const word = words[i]
+    const redirect = redirectWidth(words, i)
+
+    if (redirect > 0) {
+      i += redirect
+      continue
+    }
+
+    if (!word.startsWith('-')) {
+      break
+    }
+
+    i += 1
+
+    if (word === '--') {
+      break
+    }
+
+    for (let j = 1; j < word.length; j += 1) {
+      if (word[j] === 'c') {
+        return {
+          problem: `exec ${word} starts the command with an empty environment, without the agents' GitHub token and gh config, so it is not allowed`,
+        }
+      }
+
+      if (word[j] === 'a') {
+        if (j === word.length - 1) {
+          i += 1
+        }
+
+        break
+      }
+    }
+  }
+
+  return { problem: null, end: i }
+}
+
+// The outer scan resumes where env's or exec's options end, so a long run of
+// `env -u env -u …` is read once.
+function checkEnvCommands(words) {
+  let i = 0
+
+  while (i < words.length) {
+    const name = words[i].split(/[<>]/)[0]
+    let reader = null
+
+    if (isTool(name, 'env')) {
+      reader = readEnvOptions
+    } else if (name === 'exec') {
+      reader = readExecOptions
+    }
+
+    if (!reader) {
+      i += 1
+      continue
+    }
+
+    const { problem, end } = reader(words, i + 1)
+
+    if (problem) {
+      return problem
+    }
+
+    i = end
   }
 
   return null
@@ -435,6 +852,8 @@ export function check(command, role, branch, context = {}) {
     return 'overriding git settings for hooks, credentials or remotes is not allowed'
   }
 
+  const gh = { repo: context.repo, placeholders: placeholderProblem(command) }
+
   for (const segment of segments(command)) {
     const words = tokens(segment)
     const line = words.join(' ')
@@ -446,7 +865,13 @@ export function check(command, role, branch, context = {}) {
       return 'talk to GitHub through gh (read-only gh api), not raw HTTP; npm registry writes are not allowed'
     }
 
-    const problem = checkGh(words) ?? checkChangesets(words) ?? checkPackageManagers(words) ?? checkGit(words, role, branch)
+    const problem =
+      checkGh(words, gh) ??
+      checkChangesets(words) ??
+      checkPackageManagers(words) ??
+      checkGit(words, role, branch) ??
+      checkBuiltins(words) ??
+      checkEnvCommands(words)
 
     if (problem) {
       return problem
@@ -479,7 +904,12 @@ export function decide(input, role, env, inspect = check) {
   }
 
   try {
-    return inspect(command, role, env.ROLLOUT_BRANCH, { dir: env.ROLLOUT_DIR, home: env.ROLLOUT_HOME, name: env.ROLLOUT_NAME })
+    return inspect(command, role, env.ROLLOUT_BRANCH, {
+      dir: env.ROLLOUT_DIR,
+      home: env.ROLLOUT_HOME,
+      name: env.ROLLOUT_NAME,
+      repo: env.ROLLOUT_REPO,
+    })
   } catch (error) {
     return `the guard failed (${errorText(error)}), command refused`
   }

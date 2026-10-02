@@ -26,9 +26,9 @@ import { runDriver } from '../lib/driver.mjs'
 import { batteryWarning } from '../lib/machine.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
-import { agentGitHubEnv } from '../lib/identity.mjs'
+import { agentEnv } from '../lib/identity.mjs'
 import { ghEnv } from '../lib/github.mjs'
-import { guardSelfTest, originCheck, probeTools, sshHostname } from '../lib/preflight.mjs'
+import { guardSelfTest, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
 import { agentSettings } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
@@ -336,28 +336,29 @@ async function preflight(M) {
 
   if (M.repo.agentToken) {
     try {
-      const agentEnv = ghEnv(M, agentGitHubEnv(M))
-      const who = await sh('gh', ['api', 'user', '--jq', '.login'], { env: agentEnv })
+      const botEnv = agentEnv(M)
+      const who = await sh('gh', ['api', 'user', '--jq', '.login'], { env: botEnv })
       const login = who.stdout.trim()
       const permission = await sh('gh', ['api', `repos/${M.repo.github}/collaborators/${login}/permission`, '--jq', '.permission'], {
         env: ghEnv(M),
       })
-      const scopes =
-        (await sh('gh', ['api', '-i', 'user'], { env: agentEnv })).stdout.match(/^x-oauth-scopes:\s*(.*)$/im)?.[1]?.trim() ?? '?'
-      const fallback = await sh('gh', ['auth', 'status'], { env: { ...agentEnv, GH_TOKEN: '' } })
+      const scopes = (await sh('gh', ['api', '-i', 'user'], { env: botEnv })).stdout.match(/^x-oauth-scopes:\s*(.*)$/im)?.[1]?.trim() ?? '?'
       const ok = who.code === 0 && !M.repo.maintainers.includes(login) && permission.stdout.trim() === 'write'
       console.log(
         `${ok ? 'ok  ' : 'FAIL'} agent identity: ${login || '?'} (permission ${permission.stdout.trim() || '?'}, scopes ${scopes})`,
       )
-      console.log(`${fallback.code !== 0 ? 'ok  ' : 'FAIL'} without GH_TOKEN, agents' gh has no stored login to fall back to`)
 
       if (!ok) {
         problems.push('agent token must belong to a non-maintainer account with write (not admin) permission')
       }
 
-      if (fallback.code === 0) {
-        problems.push('agents could fall back to a stored gh login')
+      const stored = await storedLoginCheck(M)
+
+      for (const line of stored.lines) {
+        console.log(line)
       }
+
+      problems.push(...stored.problems)
 
       if (!/\bworkflow\b/.test(scopes)) {
         warnings.push('agent token lacks the workflow scope: PRs that change .github/workflows cannot be pushed')

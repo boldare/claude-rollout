@@ -97,7 +97,7 @@
               <tr>
                 <td>Push the PR branch, open and edit the PR</td>
                 <td class="nowrap">bot</td>
-                <td class="name">runAgent, agentGitHubEnv</td>
+                <td class="name">runAgent, agentEnv</td>
               </tr>
               <tr>
                 <td>The driver's own rebase push</td>
@@ -158,7 +158,7 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
 
         <h3 id="agent-env">What the agents get</h3>
 
-        <p><code>agentGitHubEnv</code> in <code>lib/identity.mjs</code> sets this for every agent run:</p>
+        <p><code>agentEnv</code> in <code>lib/identity.mjs</code> sets this for every agent run:</p>
 
         <dl class="kv">
           <dt><code>GH_TOKEN</code></dt>
@@ -166,10 +166,23 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           <dt><code>GITHUB_TOKEN</code></dt>
           <dd>empty</dd>
           <dt><code>GH_CONFIG_DIR</code></dt>
-          <dd>an empty <code>.gh-agents/</code> in the rollout directory, so gh cannot fall back to your stored login</dd>
+          <dd>an empty <code>.gh-agents/</code> in the rollout directory, so gh finds no stored login in it</dd>
+          <dt><code>GH_REPO</code></dt>
+          <dd>
+            <code>github.com/&lt;github&gt;</code>, so every gh call goes to the manifest's repository, whatever the clone's remotes or
+            <code>gh repo set-default</code> say
+          </dd>
           <dt><code>GIT_TERMINAL_PROMPT</code></dt>
           <dd><code>0</code>, so git never waits for a password</dd>
         </dl>
+
+        <p>
+          It removes <code>GH_HOST</code>, <code>GH_ENTERPRISE_TOKEN</code> and <code>GITHUB_ENTERPRISE_TOKEN</code>. With
+          <code>GH_HOST</code> set, gh reads your keyring login even from the empty config directory. The guard refuses agent commands that
+          set <code>GH_HOST</code> or drop the token (<a href="security.html#guard">The Bash guard</a>). Without
+          <code>repo.agentToken</code>, agents get none of the variables above except <code>GH_REPO</code>, and <code>GH_HOST</code> is
+          still removed.
+        </p>
 
         <p>
           Worktrees push over HTTPS to <a href="manifest.html#repo-pushUrl"><code>repo.pushUrl</code></a
@@ -422,9 +435,10 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
         </ul>
 
         <p>
-          On top of that, <code>runAgent</code> in <code>lib/spawn.mjs</code> adds only the bot's GitHub variables, the
-          <code>ROLLOUT_*</code> variables and the empty npm credentials. A driver started from the UI inherits the environment of the
-          <code>rollout ui</code> process, so start the UI from a shell where <code>claude</code> works.
+          On top of that, <code>runAgent</code> in <code>lib/spawn.mjs</code> adds only the bot's GitHub variables, the pinned
+          <code>GH_REPO</code>, the <code>ROLLOUT_*</code> variables and the empty npm credentials, and removes <code>GH_HOST</code>. A
+          driver started from the UI inherits the environment of the <code>rollout ui</code> process, so start the UI from a shell where
+          <code>claude</code> works.
         </p>
 
         <div class="callout">
@@ -548,7 +562,9 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
                 <td class="nowrap">The bot</td>
                 <td>
                   That the token file exists, that its login has exactly the <code>write</code> permission and is not a maintainer, that
-                  agents' gh has no stored login to fall back to, and a warning without the <code>workflow</code> scope. Without
+                  agents' gh has no stored login to fall back to in the environment agents get, and a warning without the
+                  <code>workflow</code> scope. An <code>info</code> line says when gh would fall back to your keyring login with
+                  <code>GH_HOST</code> set. It is never a problem, because agents never get <code>GH_HOST</code>. Without
                   <code>repo.agentToken</code>, one warning, plus a second one when <code>repo.maintainers</code> is set.
                 </td>
               </tr>
