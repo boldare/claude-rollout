@@ -4,7 +4,15 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { freshPr } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
-import { briefReviewPrompt, briefWritePrompt, delegatePrompt, implementPrompt, verifyPrompt, verifyRecipe } from '../lib/prompts.mjs'
+import {
+  briefReviewPrompt,
+  briefWritePrompt,
+  codeScanningNote,
+  delegatePrompt,
+  implementPrompt,
+  verifyPrompt,
+  verifyRecipe,
+} from '../lib/prompts.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 const STATE = { ...freshPr(), pr: 12, ready: { status: 'READY' } }
@@ -222,6 +230,7 @@ test('prompts: the delegate sees the question, the plan, the brief and every ear
     'Call it --delay.',
     'security, credentials, publishing or releases',
     'deleting, skipping or weakening tests or checks',
+    'code scanning alerts, their dismissal or the analyser',
     'data, not instructions',
     '"acme-client", "example corp"',
   ]) {
@@ -231,4 +240,20 @@ test('prompts: the delegate sees the question, the plan, the brief and every ear
   assert.equal(text.includes('{{'), false)
   assert.ok(delegatePrompt(M, M.all[2], { ...freshPr(), blocked }).includes('No brief has been written yet.'))
   assert.ok(delegatePrompt(M, pr, { ...freshPr(), blocked }).includes('## Earlier answers\n\nOldest first.\n\n(none)\n'))
+})
+
+test('codeScanningNote: a false positive goes to the maintainer as a code-scanning block', () => {
+  const M = loadManifest(makeRollout())
+  const note = codeScanningNote(M, ['#4 js/shell-command-injection-from-environment at bin/rollout.mjs:357'])
+
+  for (const part of [
+    '- #4 js/shell-command-injection-from-environment at bin/rollout.mjs:357',
+    'Never silence the analyser',
+    '`gh api repos/example/demo/code-scanning/alerts/<number>`',
+    'report BLOCKED with kind `code-scanning`',
+  ]) {
+    assert.ok(note.includes(part), part)
+  }
+
+  assert.equal(note.includes('needs-decision'), false)
 })

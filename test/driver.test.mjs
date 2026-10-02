@@ -1530,6 +1530,95 @@ test('delegate: at maxPerPr it starts nothing and notifies once', async () => {
   assert.equal(s.delegate.limitNotified, true)
 })
 
+function blockedReport(blocked) {
+  return agentResult({ output: { status: 'BLOCKED', summary: 'Blocked on a question.', blocked } })
+}
+
+test('delegate: a BLOCKED code-scanning report never starts the delegate and notifies once', async () => {
+  const { M, driver, pr, s, notices, calls } = delegateDriver(
+    { state: 'fixing', pr: 11, blocked: null },
+    { policy: { delegate: { kinds: ['brief-questions', 'needs-decision', 'brief-contradiction', 'stuck'] } } },
+  )
+  const blocked = { kind: 'code-scanning', question: 'Alert 4 is a false positive.', evidence: 'The path is a constant.' }
+
+  await driver.onDone(pr, 'fix', blockedReport(blocked), { run: 'A1-02-fix' })
+  await advanced(driver, pr)
+  await advanced(driver, pr)
+
+  assert.deepEqual(calls, [])
+  assert.deepEqual(kindsSince(M), ['fix-done', 'blocked'])
+  assert.equal(notices.length, 1)
+  assert.ok(notices[0].startsWith('A1: blocked (code-scanning): '), notices[0])
+  assert.equal(s.state, 'blocked')
+  assert.equal(s.delegate.runs, 0)
+})
+
+test('delegate: a question it takes notifies once, through its answer or escalation', async () => {
+  const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent.' })
+  const reports = [
+    { results: [], expected: 'Override with rollout note A1' },
+    { results: [escalate], expected: 'passes this to you (needs-decision)' },
+  ]
+
+  for (const { results, expected } of reports) {
+    const { M, driver, pr, notices } = delegateDriver({ state: 'fixing', pr: 11, blocked: null }, { results })
+
+    await driver.onDone(pr, 'fix', blockedReport(DECISION), { run: 'A1-02-fix' })
+
+    assert.deepEqual(kindsSince(M), ['fix-done', 'blocked'])
+    assert.deepEqual(notices, [])
+
+    await advanced(driver, pr)
+
+    assert.equal(notices.length, 1)
+    assert.ok(notices[0].includes(expected), notices[0])
+  }
+
+  const { M, driver, pr, notices } = delegateDriver({ state: 'briefing', blocked: null }, { brief: false })
+  const questions = { brief: '', questions: ['Which API?'], notes: 'The plan names two.', expectedFiles: [], changesetBump: 'none' }
+
+  driver.onBriefDone(pr, agentResult({ output: questions }))
+
+  assert.deepEqual(kindsSince(M), ['blocked'])
+  assert.deepEqual(notices, [])
+
+  await advanced(driver, pr)
+
+  assert.equal(notices.length, 1)
+  assert.ok(notices[0].includes('Override with rollout note A1'), notices[0])
+})
+
+test('delegate: blocked still notifies when the delegate will not take the question', async () => {
+  const notice = 'A1: blocked (needs-decision): Keep the old flag?'
+  const cases = [
+    { state: {}, policy: {} },
+    { state: { pendingNote: 'Wait for me.' } },
+    { state: { delegate: { runs: 2, lastQuestion: null, limitNotified: false, answers: [] } } },
+  ]
+
+  for (const { state, policy } of cases) {
+    const { driver, pr, notices, calls } = delegateDriver({ state: 'fixing', pr: 11, blocked: null, ...state }, { policy })
+
+    await driver.onDone(pr, 'fix', blockedReport(DECISION), { run: 'A1-02-fix' })
+
+    assert.deepEqual(notices, [notice])
+    assert.deepEqual(calls, [])
+  }
+
+  const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent.' })
+  const { driver, pr, notices, calls } = delegateDriver({ state: 'fixing', pr: 11, blocked: null }, { results: [escalate] })
+
+  await driver.onDone(pr, 'fix', blockedReport(DECISION), { run: 'A1-02-fix' })
+  await advanced(driver, pr)
+  await driver.onDone(pr, 'fix', blockedReport(DECISION), { run: 'A1-03-fix' })
+  await advanced(driver, pr)
+
+  assert.equal(notices.length, 2)
+  assert.ok(notices[0].includes('passes this to you (needs-decision)'), notices[0])
+  assert.equal(notices[1], notice)
+  assert.equal(calls.length, 1)
+})
+
 test('delegate: a maintainer note while it runs applies at once, and the late answer is dropped', async () => {
   let finish
   const late = new Promise((resolve) => {
@@ -1663,7 +1752,7 @@ test('checkClaim: a new code scanning alert on the head goes back to the impleme
   assert.equal(entry.fixReason, 'code scanning')
   assert.ok(entry.fixNote.includes(`- ${ALERT_REASON}`))
   assert.match(entry.fixNote, /Never silence the analyser/)
-  assert.match(entry.fixNote, /needs-decision/)
+  assert.match(entry.fixNote, /kind `code-scanning`/)
   assert.match(entry.fixNote, /gh api repos\/example\/demo\/code-scanning\/alerts\/<number>/)
   assert.equal(entry.claimPatchId, undefined)
   assert.equal(entry.patchSince, undefined)
@@ -1742,7 +1831,7 @@ test('mergeCandidate: a new code scanning alert drops the verification and goes 
   assert.equal(entry.verified, null)
   assert.ok(entry.fixNote.includes(`- ${ALERT_REASON}`))
   assert.match(entry.fixNote, /Never silence the analyser/)
-  assert.match(entry.fixNote, /needs-decision/)
+  assert.match(entry.fixNote, /kind `code-scanning`/)
   assert.deepEqual(eventsSince(M), [
     { id: 'A1', kind: 'gate-fix', reasons: [ALERT_REASON] },
     { id: 'A1', kind: 'needs-fix', reason: 'code scanning' },
