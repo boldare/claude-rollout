@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { notify, notifyCommand } from '../lib/notify.mjs'
+import { notify, notifyCommand, sentences } from '../lib/notify.mjs'
 
 function spy() {
   const calls = []
@@ -41,4 +41,20 @@ test('notify: runs nothing on an unsupported platform', () => {
   notify('rollout', 'A1 verified', { platform: 'win32', run })
 
   assert.deepEqual(calls, [])
+})
+
+test('sentences: a part that already ends a sentence gets no second mark', () => {
+  assert.equal(sentences('a: Keep it as an alias.', 'Next'), 'a: Keep it as an alias. Next')
+  assert.equal(sentences('a: Keep it as an alias', 'Next'), 'a: Keep it as an alias. Next')
+  assert.equal(sentences('Keep the old flag?', 'Reason: silent.', 'Next'), 'Keep the old flag? Reason: silent. Next')
+  assert.equal(sentences('Use "the alias."', '(see the plan!)', 'Next'), 'Use "the alias." (see the plan!) Next')
+})
+
+test('sentences: trailing punctuation that ends no sentence becomes a period', () => {
+  assert.equal(sentences('Do this:', 'Next'), 'Do this. Next')
+})
+
+test('sentences: parts are trimmed, empty ones dropped, and the last one kept as it is', () => {
+  assert.equal(sentences('  x  ', '', '   ', 'Next'), 'x. Next')
+  assert.equal(sentences('First', 'Last.'), 'First. Last.')
 })
