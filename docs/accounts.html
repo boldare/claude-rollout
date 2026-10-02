@@ -553,9 +553,11 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
               <tr>
                 <td class="nowrap">Your gh login</td>
                 <td>
-                  <code>gh auth status</code>, <code>git fetch origin</code>, that the origin URL matches <code>repo.github</code>, that
+                  <code>gh auth status</code>, <code>git fetch origin</code>, that origin is <code>repo.github</code> on github.com, that
                   squash merges are enabled, that you are an admin when <code>merge.admin</code> is set, and that
-                  <code>repo.public</code> matches the repository's visibility.
+                  <code>repo.public</code> matches the repository's visibility. Origin's owner and name must equal <code>repo.github</code>,
+                  case aside. An SSH host alias passes when <code>ssh -G</code> resolves it to github.com. An HTTPS origin must be on
+                  github.com itself. See <a href="commands.html#cmd-preflight">preflight</a>.
                 </td>
               </tr>
               <tr>
