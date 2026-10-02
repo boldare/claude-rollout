@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
 import { COMMANDS } from '../lib/control.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { ROLES } from '../lib/view.mjs'
 import { STATES } from '../ui/model.js'
 import { makeRollout } from './fixtures.mjs'
 
@@ -215,6 +216,18 @@ test('docs: every PR state has its row on the how it works page', () => {
 
   for (const state of STATES) {
     assert.ok(pageIds.includes(`state-${state}`), `how-it-works.html has no #state-${state}`)
+  }
+})
+
+test('docs: every run role has its colour class in the UI and the docs', () => {
+  assert.ok(ROLES.length >= 5, 'lib/view.mjs exports the run roles')
+
+  for (const file of ['ui/style.css', 'docs/docs.css']) {
+    const css = readFileSync(join(ROOT, file), 'utf8')
+
+    for (const role of ROLES) {
+      assert.match(css, new RegExp(`^\\.role-${role} \\{`, 'm'), `${file} has no .role-${role} rule`)
+    }
   }
 })
 

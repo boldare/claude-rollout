@@ -543,6 +543,24 @@ test('approve is refused under manual and auto, and accepted under human', () =>
   assert.deepEqual(notices, ['A1: approved PR #11; merging in 120s unless you pause'])
 })
 
+test('an inbox approve without a valid at is rejected, and one posted before the verification is refused', () => {
+  const { sha, patchId } = samplePrs().A1.verified
+  const { M, driver } = driverFor({ A1: { ...samplePrs().A1, held: null, approved: null } })
+  const noValidAt = { id: '-', kind: 'command-rejected', command: 'approve', reason: 'needs a valid at' }
+  const approve = { cmd: 'approve', id: 'A1', sha, patchId }
+
+  writeBatch(M, [approve, { ...approve, at: 'not a time' }, { ...approve, at: 42 }, { ...approve, at: at(79) }])
+
+  assert.deepEqual(apply(M, driver), [
+    noValidAt,
+    noValidAt,
+    noValidAt,
+    { id: 'A1', kind: 'approval-rejected', reason: 'it was posted before the verification finished' },
+  ])
+  assert.equal(driver.L.prs.A1.approved, null)
+  assert.deepEqual(apply(M, driver, approve), [{ id: 'A1', kind: 'approved', sha: sha.slice(0, 7), channel: 'inbox' }])
+})
+
 test('a GitHub approval is noticed once, and the merge delay counts from when the driver first saw it', async () => {
   const { sha, patchId } = samplePrs().A1.verified
   const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
@@ -1355,6 +1373,7 @@ test('checkClaim: a claimed PR merged or closed since sync is left to the next s
 const PREFIX = "Answer from the delegate, on the maintainer's behalf, from the plan:\n\n"
 const DECISION = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 still reads it.' }
 const BRIEF_QUESTIONS = { kind: 'brief-questions', question: 'Which API?', evidence: 'The plan names two.' }
+const ANSWERED = 'A1: delegate answered: Keep it as an alias. Override with rollout note A1'
 
 function delegateReport(overrides = {}) {
   return agentResult({
@@ -1441,8 +1460,7 @@ test('delegate: an answer to brief questions gives the brief attempt back and no
     effort: 'high',
     blocked: 'brief-questions',
   })
-  assert.equal(notices.length, 1)
-  assert.ok(notices[0].includes('Override with rollout note A1'), notices[0])
+  assert.deepEqual(notices, [ANSWERED])
 
   assert.equal(calls.length, 1)
   assert.equal(calls[0].role, 'delegate')
@@ -1480,8 +1498,15 @@ test('delegate: an answer to needs-decision sends the PR to a fix run with the a
     blocked: 'needs-decision',
     planRefs: ['Decisions: flags'],
   })
-  assert.equal(notices.length, 1)
-  assert.ok(notices[0].includes('Override with rollout note A1'), notices[0])
+  assert.deepEqual(notices, [ANSWERED])
+})
+
+test('delegate: an answer without a final period notifies the same sentence', async () => {
+  const { driver, pr, notices } = delegateDriver({ pr: 11 }, { results: [delegateReport({ answer: 'Keep it as an alias' })] })
+
+  await advanced(driver, pr)
+
+  assert.deepEqual(notices, [ANSWERED])
 })
 
 test('delegate: an escalation keeps the PR blocked, notifies once, and the same question starts no second run', async () => {
@@ -1496,13 +1521,22 @@ test('delegate: an escalation keeps the PR blocked, notifies once, and the same 
   assert.deepEqual(eventsSince(M).slice(2), [
     { id: 'A1', kind: 'delegate-escalated', run: 'A1-01-delegate', blocked: 'needs-decision', reason: 'The plan is silent on the flag.' },
   ])
-  assert.equal(notices.length, 1)
-  assert.ok(notices[0].includes('passes this to you (needs-decision): Keep the old flag?'), notices[0])
-  assert.ok(notices[0].includes('Reason: The plan is silent on the flag.'), notices[0])
+  assert.deepEqual(notices, [
+    'A1: the delegate passes this to you (needs-decision): Keep the old flag? Reason: The plan is silent on the flag. Answer with rollout note A1',
+  ])
   assert.deepEqual(
     s.delegate.answers.map((entry) => entry.decision),
     ['escalate'],
   )
+})
+
+test('delegate: an escalation with an empty reason notifies no Reason part', async () => {
+  const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: '' })
+  const { driver, pr, notices } = delegateDriver({ pr: 11 }, { results: [escalate] })
+
+  await advanced(driver, pr)
+
+  assert.deepEqual(notices, ['A1: the delegate passes this to you (needs-decision): Keep the old flag? Answer with rollout note A1'])
 })
 
 test('delegate: an empty answer is an escalation', async () => {
@@ -1556,8 +1590,12 @@ test('delegate: a BLOCKED code-scanning report never starts the delegate and not
 test('delegate: a question it takes notifies once, through its answer or escalation', async () => {
   const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent.' })
   const reports = [
-    { results: [], expected: 'Override with rollout note A1' },
-    { results: [escalate], expected: 'passes this to you (needs-decision)' },
+    { results: [], expected: ANSWERED },
+    {
+      results: [escalate],
+      expected:
+        'A1: the delegate passes this to you (needs-decision): Keep the old flag? Reason: The plan is silent. Answer with rollout note A1',
+    },
   ]
 
   for (const { results, expected } of reports) {
@@ -1570,8 +1608,7 @@ test('delegate: a question it takes notifies once, through its answer or escalat
 
     await advanced(driver, pr)
 
-    assert.equal(notices.length, 1)
-    assert.ok(notices[0].includes(expected), notices[0])
+    assert.deepEqual(notices, [expected])
   }
 
   const { M, driver, pr, notices } = delegateDriver({ state: 'briefing', blocked: null }, { brief: false })
@@ -1584,8 +1621,7 @@ test('delegate: a question it takes notifies once, through its answer or escalat
 
   await advanced(driver, pr)
 
-  assert.equal(notices.length, 1)
-  assert.ok(notices[0].includes('Override with rollout note A1'), notices[0])
+  assert.deepEqual(notices, [ANSWERED])
 })
 
 test('delegate: blocked still notifies when the delegate will not take the question', async () => {
