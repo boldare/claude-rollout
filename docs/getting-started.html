@@ -106,7 +106,7 @@
               </tr>
               <tr>
                 <td class="nowrap">caffeinate</td>
-                <td>Optional, macOS only. Keeps the machine awake during a long run.</td>
+                <td>Optional, macOS only. Keeps a Mac awake during a long run, but only on AC power with the lid open.</td>
                 <td>not checked</td>
               </tr>
             </tbody>
@@ -277,7 +277,8 @@ node $R preflight --dir ~/.rollouts/my-lib-1.2.0 --live</code></pre>
             <pre><code>caffeinate -is node $R run --dir ~/.rollouts/my-lib-1.2.0 --only P1 --dry-run</code></pre>
             <p>
               The driver runs for hours in the foreground, so start it in a terminal of your own, never inside a Claude Code session's Bash.
-              <code>caffeinate -is</code> is optional and macOS only. <kbd>Ctrl</kbd> <kbd>C</kbd> stops the driver and its agents, and the
+              <code>caffeinate -is</code> is optional and macOS only, and it keeps a Mac awake only on AC power with the lid open. See
+              <a href="#laptop">Running for hours on a laptop</a>. <kbd>Ctrl</kbd> <kbd>C</kbd> stops the driver and its agents, and the
               same command resumes them.
             </p>
           </li>
@@ -324,6 +325,25 @@ node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             </p>
           </li>
         </ol>
+
+        <h2 id="laptop">Running for hours on a laptop <a class="anchor" href="#laptop" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          Plug in and keep the lid open. On battery a Mac sleeps even under <code>caffeinate -is</code>, and a sleeping Mac runs the driver
+          only in short dark wakes, so the rollout barely moves. <code>run</code>, <code>preflight</code> and Start in the UI warn when the
+          Mac is on battery. Other platforms get no warning.
+        </p>
+
+        <ul>
+          <li>
+            Agent timeouts and the stall watchdog count only awake time, so a sleep kills no run. The <code>*-done</code> events carry
+            <code>seconds</code> (wall clock) and <code>awakeSeconds</code>.
+          </li>
+          <li>
+            After a wake the driver logs <code>machine-slept</code>. For two minutes it counts failed gh and git calls as an
+            <a href="how-it-works.html#outage">outage</a>, because the network comes back a little after the machine does.
+          </li>
+        </ul>
 
         <h2 id="dry-run">What a dry run does <a class="anchor" href="#dry-run" aria-label="Link to this section">#</a></h2>
 
@@ -401,6 +421,7 @@ node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li><a href="#requirements">Requirements</a></li>
           <li><a href="#install">Install</a></li>
           <li><a href="#first-rollout">Your first rollout</a></li>
+          <li><a href="#laptop">Running for hours on a laptop</a></li>
           <li><a href="#dry-run">What a dry run does</a></li>
           <li><a href="#claude-code">From Claude Code</a></li>
           <li><a href="#next">Next steps</a></li>

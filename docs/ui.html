@@ -322,14 +322,16 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <strong>Start.</strong> Refused while a driver holds the lock. Otherwise the server spawns
             <code>node bin/rollout.mjs run --dir &lt;dir&gt;</code>, with <code>--dry-run</code> when you tick the box. It runs detached,
             under <code>/usr/bin/caffeinate -is</code> on macOS when that exists, and its output is appended to <code>driver.log</code> in
-            the rollout directory. It uses the copy of the skill that serves the UI.
+            the rollout directory. It uses the copy of the skill that serves the UI. caffeinate keeps a Mac awake only on AC power with the
+            lid open, so on battery the answer carries a warning.
           </li>
         </ul>
 
         <p>
           The answer shows as a notice under the header for 15&nbsp;s: <q>hold P2 queued.</q>, with
           <q>It applies when the driver starts.</q> when no driver runs, <q>Stopping the driver (pid 48213).</q> or
-          <q>Starting the driver. Its output goes to …/driver.log.</q>
+          <q>Starting the driver. Its output goes to …/driver.log.</q> On battery the start notice ends with
+          <q>On battery: caffeinate cannot keep this Mac awake, keep the lid open or plug in.</q>
         </p>
 
         <h2 id="views">The views <a class="anchor" href="#views" aria-label="Link to this section">#</a></h2>
@@ -630,7 +632,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">12:25</td>
                     <td class="name">P2</td>
                     <td class="name">verify-done</td>
-                    <td class="detail">run=P2-02-verify ok=true result=PASS cost=1.84 seconds=1262 denials=0 stopped=false</td>
+                    <td class="detail">
+                      run=P2-02-verify ok=true result=PASS cost=1.84 seconds=1262 awakeSeconds=1262 denials=0 stopped=false
+                    </td>
                   </tr>
                   <tr class="error-event">
                     <td class="name">11:47</td>

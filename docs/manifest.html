@@ -545,13 +545,16 @@ prs:
                 <td>
                   implement <code>240</code>, fix <code>90</code>, verify <code>60</code>, brief <code>60</code>, delegate <code>30</code>
                 </td>
-                <td>The hard limit of one run of that role. For a brief, the writer and the reviewer each get it.</td>
+                <td>
+                  The hard limit of one run of that role, in awake minutes: time the machine slept does not count. For a brief, the writer
+                  and the reviewer each get it.
+                </td>
               </tr>
               <tr id="policy-stallMinutes">
                 <td>stallMinutes</td>
                 <td>number</td>
                 <td><code>20</code></td>
-                <td>An agent that prints nothing for this long is stopped.</td>
+                <td>An agent that prints nothing for this many awake minutes is stopped.</td>
               </tr>
               <tr id="policy-ciStallMinutes">
                 <td>ciStallMinutes</td>
@@ -575,7 +578,10 @@ prs:
                 <td>tickSeconds</td>
                 <td>number</td>
                 <td><code>60</code></td>
-                <td>The pause between ticks. A new command in the inbox wakes the driver sooner.</td>
+                <td>
+                  The pause between ticks. A new command in the inbox wakes the driver sooner. A gap more than a minute longer counts as
+                  <a href="how-it-works.html#sleep">sleep</a>.
+                </td>
               </tr>
               <tr id="policy-mergeDelaySeconds">
                 <td>mergeDelaySeconds</td>

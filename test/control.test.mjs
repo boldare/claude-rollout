@@ -186,12 +186,12 @@ test('startDriver: spawns the command detached with its output in driver.log', a
     return { command: process.execPath, args: ['-e', "console.log('fake out'); console.error('fake err', process.cwd())"] }
   }
 
-  const started = await startDriver(M, { dryRun: true, command })
+  const started = await startDriver(M, { dryRun: true, command, batteryWarning: async () => null })
   const log = join(M.dir, 'driver.log')
 
   assert.equal(started.status, 202)
   assert.ok(Number.isInteger(started.body.pid) && started.body.pid > 1)
-  assert.deepEqual(started.body, { cmd: 'start', pid: started.body.pid, dryRun: true, log })
+  assert.deepEqual(started.body, { cmd: 'start', pid: started.body.pid, dryRun: true, log, warning: null })
   assert.deepEqual(calls, [[M.dir, { dryRun: true }]])
 
   await waitFor(() => existsSync(log) && /fake err/.test(readFileSync(log, 'utf8')), 'the fake driver output')
@@ -204,19 +204,27 @@ test('startDriver: spawns the command detached with its output in driver.log', a
 test('startDriver: 409 while a driver holds the lock, 500 for a command that does not exist', async () => {
   const locked = demo()
   let called = false
+  let warned = 0
+  const batteryWarning = async () => {
+    warned += 1
+
+    return null
+  }
   const refused = await startDriver(locked, {
     command: () => {
       called = true
       return { command: process.execPath, args: ['-e', ''] }
     },
+    batteryWarning,
   })
 
   assert.deepEqual(refused, { status: 409, body: { error: `a driver is already running (pid ${process.pid})` } })
   assert.equal(called, false)
 
   const M = demo({ lock: false })
-  const missing = await startDriver(M, { command: () => ({ command: join(M.dir, 'no-such-driver'), args: [] }) })
+  const missing = await startDriver(M, { command: () => ({ command: join(M.dir, 'no-such-driver'), args: [] }), batteryWarning })
 
   assert.equal(missing.status, 500)
   assert.match(missing.body.error, /^cannot start the driver: .*ENOENT/)
+  assert.equal(warned, 0)
 })

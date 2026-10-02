@@ -151,7 +151,9 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <p>
           Starts the driver in the foreground. It runs for hours, so start it in a terminal of your own, never inside a Claude session's
-          Bash. On macOS, <code>caffeinate -is node $R run …</code> keeps the machine awake.
+          Bash. On macOS, <code>caffeinate -is node $R run …</code> keeps the machine awake, but only on AC power with the lid open.
+          <code>run</code> warns when the Mac is on battery. <a href="getting-started.html#laptop">Running for hours on a laptop</a> has
+          more.
         </p>
 
         <ul>
@@ -193,7 +195,7 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <p>
           In the UI, the <a href="ui.html#control-start">Start</a> button starts the driver detached, with its output in
           <code>driver.log</code>, under <code>caffeinate -is</code> on macOS when it exists. It offers a dry run but not
-          <code>--only</code>.
+          <code>--only</code>. On battery its notice warns that caffeinate cannot keep the Mac awake.
         </p>
 
         <h3 id="cmd-stop">stop <a class="anchor" href="#cmd-stop" aria-label="Link to this command">#</a></h3>
@@ -539,6 +541,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td class="name">policy.merge</td>
                 <td>Warns for <code>auto</code>: the driver merges without asking.</td>
+              </tr>
+              <tr>
+                <td>power</td>
+                <td>macOS only. Warns on battery, because caffeinate cannot keep the Mac awake then. Never fails.</td>
               </tr>
               <tr>
                 <td>guard hook</td>

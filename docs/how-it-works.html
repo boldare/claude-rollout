@@ -304,6 +304,12 @@
 
         <ol class="steps">
           <li><strong>Beat.</strong> Write the heartbeat.</li>
+          <li>
+            <strong>Notice a sleep.</strong> A gap since the end of the last tick that is more than a minute longer than
+            <a href="manifest.html#policy-tickSeconds"><code>policy.tickSeconds</code></a> is sleep. The driver logs
+            <code>machine-slept</code> with its minutes and opens a two-minute <a href="#sleep">window</a> in which a failed gh or git call
+            is an outage.
+          </li>
           <li><strong>Reload the manifest</strong> if the file changed.</li>
           <li>
             <strong>Apply the inbox.</strong> Every command file is read and deleted, then applied: approve, note, retry, hold, release,
@@ -903,7 +909,8 @@
           <dd>
             No output for <a href="manifest.html#policy-stallMinutes"><code>policy.stallMinutes</code></a> (20) ends the run, and so does
             the role's <a href="manifest.html#policy-timeouts"><code>policy.timeouts</code></a
-            >. SIGTERM first, SIGKILL 10 s later.
+            >. Both count awake time, checked once a minute. A check that comes more than a minute late counts the gap as sleep, so a
+            sleeping machine kills no run. SIGTERM first, SIGKILL 10 s later.
           </dd>
           <dt>Transcript</dt>
           <dd>
@@ -1133,6 +1140,14 @@
                   you got that notice. A 401, a 403 that is no rate limit, a 404 or a 422 is no outage, and counts as an error.
                 </td>
               </tr>
+              <tr id="sleep">
+                <td>The machine slept</td>
+                <td>
+                  The first tick after a wake logs <code>machine-slept</code> with the minutes slept. For two minutes, every failed gh or
+                  git call is an <a href="#outage">outage</a>, because the network comes back a little after the machine does. Any other
+                  error still counts. Agent runs count only awake time, so the sleep runs down no timeout.
+                </td>
+              </tr>
               <tr>
                 <td>Five failed ticks</td>
                 <td>
@@ -1171,8 +1186,8 @@
               <tr>
                 <td>No output, or too long</td>
                 <td>
-                  The stall watchdog and the role's timeout kill the run. It ends as failed and the PR becomes <code>interrupted</code>.
-                  Stderr from before the kill still counts, so a rate limit there gives the attempt back.
+                  The stall watchdog and the role's timeout, both in awake time, kill the run. It ends as failed and the PR becomes
+                  <code>interrupted</code>. Stderr from before the kill still counts, so a rate limit there gives the attempt back.
                 </td>
               </tr>
               <tr>

@@ -99,9 +99,17 @@ export function commandBody(command, pr, answer) {
 }
 
 function startNotice(body) {
-  const text = `Starting the driver. Its output goes to ${body.log}.`
+  const parts = [`Starting the driver. Its output goes to ${body.log}.`]
 
-  return body.dryRun ? `${text} Dry run.` : text
+  if (body.dryRun) {
+    parts.push('Dry run.')
+  }
+
+  if (body.warning) {
+    parts.push(`${body.warning[0].toUpperCase()}${body.warning.slice(1)}.`)
+  }
+
+  return parts.join(' ')
 }
 
 function queuedNotice(command, driver) {

@@ -580,6 +580,17 @@ test('commandNotice: queued, stopping, starting and the errors', () => {
     error: false,
   })
 
+  const warning = 'on battery: caffeinate cannot keep this Mac awake, keep the lid open or plug in'
+  const onBattery = (dryRun) => ({ status: 202, body: { ...start(dryRun).body, warning } })
+  assert.deepEqual(commandNotice({ cmd: 'start', dryRun: false }, onBattery(false), stopped), {
+    text: 'Starting the driver. Its output goes to rollouts/demo/driver.log. On battery: caffeinate cannot keep this Mac awake, keep the lid open or plug in.',
+    error: false,
+  })
+  assert.deepEqual(commandNotice({ cmd: 'start', dryRun: true }, onBattery(true), stopped), {
+    text: 'Starting the driver. Its output goes to rollouts/demo/driver.log. Dry run. On battery: caffeinate cannot keep this Mac awake, keep the lid open or plug in.',
+    error: false,
+  })
+
   assert.deepEqual(commandNotice({ cmd: 'stop' }, { status: 409, body: { error: 'no driver is running' } }, running), {
     text: 'no driver is running',
     error: true,
