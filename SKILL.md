@@ -19,7 +19,7 @@ Everything lives in two places:
 The repository is the skill: `SKILL.md` sits at its root. Clone it into the skills directory and install its one dependency:
 
 ```sh
-git clone https://github.com/grzehub/claude-rollout ~/.claude/skills/rollout
+git clone https://github.com/boldare/claude-rollout ~/.claude/skills/rollout
 cd ~/.claude/skills/rollout && npm ci
 ```
 

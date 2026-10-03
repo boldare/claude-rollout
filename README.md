@@ -6,16 +6,16 @@ The orchestrator is a process, not a model. `rollout run` ticks every minute, re
 
 Status: internal alpha. It shipped describe-me 0.5.0 (13 PRs) end to end.
 
-**Docs: [grzehub.github.io/claude-rollout](https://grzehub.github.io/claude-rollout/).** The same pages live in `docs/`, so `open docs/index.html` works offline.
+**Docs: [boldare.github.io/claude-rollout](https://boldare.github.io/claude-rollout/).** The same pages live in `docs/`, so `open docs/index.html` works offline.
 
 ## Install
 
 ```sh
-git clone https://github.com/grzehub/claude-rollout ~/.claude/skills/rollout
+git clone https://github.com/boldare/claude-rollout ~/.claude/skills/rollout
 cd ~/.claude/skills/rollout && npm ci
 ```
 
-The repository is also a Claude Code skill (`SKILL.md`), so this makes `/rollout` available too. Requirements: Node 20+, git, gh, the repo's package manager and `claude` on PATH. [Getting started](https://grzehub.github.io/claude-rollout/getting-started.html) explains the other ways to install and why the installed copy stays apart from a checkout you develop in.
+The repository is also a Claude Code skill (`SKILL.md`), so this makes `/rollout` available too. Requirements: Node 20+, git, gh, the repo's package manager and `claude` on PATH. [Getting started](https://boldare.github.io/claude-rollout/getting-started.html) explains the other ways to install and why the installed copy stays apart from a checkout you develop in.
 
 ## Quick start
 
@@ -26,15 +26,15 @@ node $R run --dir ~/.rollouts/<name> --only P1 --dry-run
 node $R ui
 ```
 
-A rollout directory holds `manifest.yaml` (see `examples/manifest.yaml`), optional `briefs/<id>.md` and the state the driver writes. Before a first run, set up the accounts and the repository as [Accounts](https://grzehub.github.io/claude-rollout/accounts.html) describes.
+A rollout directory holds `manifest.yaml` (see `examples/manifest.yaml`), optional `briefs/<id>.md` and the state the driver writes. Before a first run, set up the accounts and the repository as [Accounts](https://boldare.github.io/claude-rollout/accounts.html) describes.
 
-- [Getting started](https://grzehub.github.io/claude-rollout/getting-started.html): install and a first dry run.
-- [Accounts](https://grzehub.github.io/claude-rollout/accounts.html): your GitHub login, the bot account, the Claude login.
-- [Manifest](https://grzehub.github.io/claude-rollout/manifest.html): every field and its default.
-- [Commands](https://grzehub.github.io/claude-rollout/commands.html): every command and flag, and what the UI offers.
-- [Web UI](https://grzehub.github.io/claude-rollout/ui.html): what it shows and how it stays live.
-- [How it works](https://grzehub.github.io/claude-rollout/how-it-works.html): the tick, the PR lifecycle, the agents, the gate.
-- [Security](https://grzehub.github.io/claude-rollout/security.html): what protects what, and what does not.
+- [Getting started](https://boldare.github.io/claude-rollout/getting-started.html): install and a first dry run.
+- [Accounts](https://boldare.github.io/claude-rollout/accounts.html): your GitHub login, the bot account, the Claude login.
+- [Manifest](https://boldare.github.io/claude-rollout/manifest.html): every field and its default.
+- [Commands](https://boldare.github.io/claude-rollout/commands.html): every command and flag, and what the UI offers.
+- [Web UI](https://boldare.github.io/claude-rollout/ui.html): what it shows and how it stays live.
+- [How it works](https://boldare.github.io/claude-rollout/how-it-works.html): the tick, the PR lifecycle, the agents, the gate.
+- [Security](https://boldare.github.io/claude-rollout/security.html): what protects what, and what does not.
 
 ## Development
 
