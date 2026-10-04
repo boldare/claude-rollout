@@ -1901,3 +1901,59 @@ test('mergeCandidate: an analysis of an older commit waits with no notification'
   assert.equal(driver.L.prs.A1.gate.kind, 'code-scanning')
   assert.deepEqual(notices, [])
 })
+
+const REJECTED = { ...samplePrs().A1, state: 'needs_fix', fixReason: 'verifier findings', verified: null, approved: null }
+const LABELS_OK = [
+  { tool: 'gh', args: 'label create', stdout: '' },
+  { tool: 'gh', args: 'pr edit 11', stdout: '' },
+]
+
+function labelEdits(tools) {
+  return tools
+    .calls()
+    .filter((call) => call.tool === 'gh' && call.args[0] === 'pr' && call.args[1] === 'edit')
+    .map((call) => call.args.slice(2).join(' '))
+}
+
+test('tick: a PR sent back by the verifier gets its stage and reason as labels, once', async () => {
+  const { M, driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), ...LABELS_OK] })
+
+  await driver.tick()
+  await driver.tick()
+
+  assert.deepEqual(labelEdits(tools), ['11 --add-label rollout-stage:needs-fix --add-label rollout-reason:verifier-findings'])
+  assert.ok(tools.calls().some((call) => call.args.join(' ').startsWith('label create rollout-reason:verifier-findings --color d93f0b')))
+  assert.deepEqual(driver.L.prs.A1.stageLabels, ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings'])
+  assert.equal(M.label.startsWith('rollout:'), true)
+})
+
+test('tick: when the PR moves on, the old stage and reason come off', async () => {
+  const { driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), ...LABELS_OK] })
+
+  await driver.tick()
+  driver.L.prs.A1.state = 'verifying'
+  await driver.tick()
+
+  assert.deepEqual(
+    labelEdits(tools).at(-1),
+    '11 --add-label rollout-stage:verifying --remove-label rollout-stage:needs-fix --remove-label rollout-reason:verifier-findings',
+  )
+})
+
+test('tick: a label GitHub refuses is kept on the PR row, counts no error and is tried again', async () => {
+  const refused = { tool: 'gh', args: 'pr edit 11', code: 1, stderr: 'HTTP 403: Resource not accessible' }
+  const { M, driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), LABELS_OK[0], refused] })
+  const before = readEvents(M).length
+
+  await driver.tick()
+
+  assert.match(driver.L.prs.A1.stageLabelError, /HTTP 403/)
+  assert.deepEqual(driver.L.prs.A1.stageLabels, [])
+  assert.ok(!eventsSince(M, before).some((event) => event.kind === 'error' && /pr edit/.test(event.error ?? '')))
+
+  tools.answer([FETCH, viewRule(), ...LABELS_OK])
+  await driver.tick()
+
+  assert.equal(driver.L.prs.A1.stageLabelError, null)
+  assert.equal(labelEdits(tools).length, 2)
+})
