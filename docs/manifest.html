@@ -163,8 +163,8 @@ prs:
                   the gate requires. Next to it the driver keeps one <code>rollout-stage:&lt;state&gt;</code> label with the PR's ledger
                   state (for example <code>needs-fix</code>, <code>verifying</code>, <code>verified</code>) and, while the PR is sent back
                   or blocked, one <code>rollout-reason:&lt;why&gt;</code> label (for example <code>verifier-findings</code>,
-                  <code>ci-is-red</code>, <code>brief-questions</code>, or <code>after-pr-12</code> for a verified PR that waits
-                  for another one to merge under <code>merge: manual</code>). They only inform: a label GitHub refuses never stops the rollout.
+                  <code>ci-is-red</code>, <code>brief-questions</code>, or <code>after-pr-12</code> for a verified PR that waits for another
+                  one to merge under <code>merge: manual</code>). They only inform: a label GitHub refuses never stops the rollout.
                 </td>
               </tr>
               <tr id="manifest-model">
@@ -508,11 +508,11 @@ prs:
                     <li><code>human</code>: the driver merges after your approval and <code>mergeDelaySeconds</code>.</li>
                     <li>
                       <code>manual</code>: the driver verifies, gates and rebases, then notifies "ready to merge". You merge on GitHub and
-                      it carries on from there. One PR is ready at a time: when several pass the gate, the first in manifest order is
-                      ready and the others wait for it with <code>rollout-reason:after-pr-&lt;n&gt;</code>. Two PRs merged back to back
-                      were each checked on a base without the other, so a conflict git does not see (one changes a file the other
-                      copies or calls) would first show on the base branch. After the merge the next PR is rebased, CI runs on the
-                      combined code, and only then it is ready.
+                      it carries on from there. One PR is ready at a time: when several pass the gate, the first in manifest order is ready
+                      and the others wait for it with <code>rollout-reason:after-pr-&lt;n&gt;</code>. Two PRs merged back to back were each
+                      checked on a base without the other, so a conflict git does not see (one changes a file the other copies or calls)
+                      would first show on the base branch. After the merge the next PR is rebased, CI runs on the combined code, and only
+                      then it is ready.
                     </li>
                     <li><code>auto</code>: the driver merges without an approval. Preflight warns.</li>
                   </ul>

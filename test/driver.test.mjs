@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { createDriver, doneDetail } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { stageLabels } from '../lib/stage.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
 import { at, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
@@ -108,6 +109,7 @@ function gateFacts(M, pr = {}) {
 
 // A driver whose gh and git are fakes, with no slot for an agent. Its gate
 // reads gateFacts with `gate.pr` and `gate.facts` on top, or throws `gate.error`.
+// `gate.pr` may be a function of the manifest PR and its ledger entry.
 function tickDriver(prs, { rules = [], only = null, policy = {}, clock } = {}) {
   const dir = makeRollout({ prs, events: [], policy: { concurrency: 0, ...policy } })
   const tools = fakeTools(dir, rules)
@@ -118,14 +120,14 @@ function tickDriver(prs, { rules = [], only = null, policy = {}, clock } = {}) {
   const driver = createDriver(M, {
     notify: (_, message) => notices.push(message),
     cleanup: async (pr) => cleaned.push(pr.id),
-    collectFacts: async () => {
+    collectFacts: async (_, pr, s) => {
       gate.calls += 1
 
       if (gate.error) {
         throw gate.error
       }
 
-      return { ...gateFacts(M, gate.pr), ...gate.facts }
+      return { ...gateFacts(M, typeof gate.pr === 'function' ? gate.pr(pr, s) : gate.pr), ...gate.facts }
     },
     clock,
   })
@@ -1339,6 +1341,81 @@ test('mergeCandidate: a PR merged on GitHub while the gate reads it waits for sy
   assert.equal(driver.L.prs.A1.state, 'verified')
   assert.deepEqual(eventsSince(M), [{ id: 'A1', kind: 'gate-wait', reasons: ['merged on GitHub (the next sync records it)'] }])
   assert.deepEqual(notices, [])
+})
+
+// Two verified PRs under merge: manual, both passing the gate on the same facts.
+function twoReady(states = {}) {
+  const verified = { ...samplePrs().A1, held: null, notified: {} }
+
+  const rollout = tickDriver(
+    { A1: { ...verified, ...states.A1 }, A3: { ...verified, pr: 13, ...states.A3 } },
+    { policy: { merge: 'manual' } },
+  )
+  rollout.gate.pr = (pr, entry) => ({ number: entry.pr, headRefName: pr.branch })
+
+  return rollout
+}
+
+test('mergeNext: under manual merge one PR is ready at a time, the next waits for it with a reason label', async () => {
+  const { M, driver } = twoReady()
+
+  await driver.mergeNext()
+
+  assert.equal(driver.L.prs.A1.gate.action, 'ready')
+  assert.equal(driver.L.prs.A3.gate.action, 'wait')
+  assert.equal(driver.L.prs.A3.gate.after, 11)
+  assert.match(driver.L.prs.A3.gate.reasons[0], /^after PR #11/)
+  assert.deepEqual(
+    eventsSince(M)
+      .filter((event) => event.kind === 'ready-to-merge')
+      .map((event) => event.id),
+    ['A1'],
+  )
+  assert.deepEqual(stageLabels(driver.L.prs.A3), ['rollout-stage:verified', 'rollout-reason:after-pr-11'])
+  assert.deepEqual(stageLabels(driver.L.prs.A1), ['rollout-stage:verified'])
+})
+
+test('mergeNext: the PR already announced ready keeps the slot when an earlier one in the manifest becomes verified', async () => {
+  const { driver } = twoReady({ A3: { gate: { action: 'ready', reasons: ['ready'], sha: SHA, at: at(83) } } })
+
+  await driver.mergeNext()
+
+  assert.equal(driver.L.prs.A3.gate.action, 'ready')
+  assert.equal(driver.L.prs.A1.gate.action, 'wait')
+  assert.equal(driver.L.prs.A1.gate.after, 13)
+})
+
+test('mergeNext: once the ready PR is merged, the one that waited is announced ready again', async () => {
+  const { M, driver } = twoReady()
+
+  await driver.mergeNext()
+  driver.L.prs.A1.state = 'merged'
+  const before = readEvents(M).length
+  await driver.mergeNext()
+
+  assert.equal(driver.L.prs.A3.gate.action, 'ready')
+  assert.equal(driver.L.prs.A3.gate.after, undefined)
+  assert.deepEqual(stageLabels(driver.L.prs.A3), ['rollout-stage:verified'])
+  assert.deepEqual(
+    eventsSince(M, before)
+      .filter((event) => event.kind === 'ready-to-merge')
+      .map((event) => event.id),
+    ['A3'],
+  )
+})
+
+test('mergeNext: under human merge nothing waits for another PR', async () => {
+  const verified = { ...samplePrs().A1, held: null, notified: {} }
+  const { driver, gate } = tickDriver(
+    { A1: { ...verified }, A3: { ...verified, pr: 13 } },
+    { policy: { merge: 'human', mergeDelaySeconds: 3600 } },
+  )
+  gate.pr = (pr, entry) => ({ number: entry.pr, headRefName: pr.branch })
+
+  await driver.mergeNext()
+
+  assert.equal(driver.L.prs.A3.gate.after, undefined)
+  assert.notEqual(driver.L.prs.A3.gate.action, 'wait')
 })
 
 test('checkClaim: a claimed PR merged or closed since sync is left to the next sync', async () => {
