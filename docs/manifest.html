@@ -291,7 +291,8 @@ prs:
                 <td>yes, not empty</td>
                 <td>
                   Check run names a PR needs. Every glob must match a run that succeeded, and every run on the commit must finish as
-                  success, skipped or neutral. Only the latest run of each name counts.
+                  success, skipped or neutral. Only the latest run of each name counts, and a cancelled run only when the name has no other
+                  run.
                 </td>
               </tr>
               <tr id="repo-agentToken">
