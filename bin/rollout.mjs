@@ -168,12 +168,12 @@ function printDelegate(delegate) {
   const runs = delegate.maxPerPr === null ? `off, ${delegate.runs} runs` : `${delegate.runs} of ${delegate.maxPerPr} runs`
   console.log(`\ndelegate: ${runs}`)
 
-  for (const entry of delegate.answers) {
-    const text = ['answer', 'dropped'].includes(entry.decision) ? entry.answer : entry.reasoning
-    console.log(`  ${entry.decision} on ${entry.kind} at ${entry.at} (${entry.run}): ${(text ?? '').slice(0, 300)}`)
+  for (const answer of delegate.answers) {
+    const text = ['answer', 'dropped'].includes(answer.decision) ? answer.answer : answer.reasoning
+    console.log(`  ${answer.decision} on ${answer.kind} at ${answer.at} (${answer.run}): ${(text ?? '').slice(0, 300)}`)
 
-    if (entry.planRefs?.length > 0) {
-      console.log(`    plan: ${entry.planRefs.join(', ')}`)
+    if (answer.planRefs?.length > 0) {
+      console.log(`    plan: ${answer.planRefs.join(', ')}`)
     }
   }
 }

@@ -180,8 +180,8 @@ test('stopDriver: a lock naming this process or no lock signals nothing', () => 
 test('startDriver: spawns the command detached with its output in driver.log', async () => {
   const manifest = demo({ lock: false })
   const calls = []
-  const command = (manifest, options) => {
-    calls.push([manifest.dir, options])
+  const command = (commandManifest, options) => {
+    calls.push([commandManifest.dir, options])
 
     return { command: process.execPath, args: ['-e', "console.log('fake out'); console.error('fake err', process.cwd())"] }
   }

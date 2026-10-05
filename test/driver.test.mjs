@@ -1611,11 +1611,11 @@ test('delegate: an answer to brief questions gives the brief attempt back and no
   assert.equal(entry.delegate.runs, 1)
   assert.equal(entry.costUsd, 1.25)
   assert.deepEqual(
-    entry.delegate.answers.map((entry) => [entry.decision, entry.kind, entry.question, entry.answer, entry.run]),
+    entry.delegate.answers.map((answer) => [answer.decision, answer.kind, answer.question, answer.answer, answer.run]),
     [['answer', 'brief-questions', 'Which API?', '  Keep it as an alias.  ', 'A1-01-delegate']],
   )
   assert.deepEqual(
-    entry.noteHistory.map((entry) => [entry.by, entry.kind, entry.question]),
+    entry.noteHistory.map((note) => [note.by, note.kind, note.question]),
     [['delegate', 'brief-questions', 'Which API?']],
   )
 })
@@ -1663,7 +1663,7 @@ test('delegate: an escalation keeps the PR blocked, notifies once, and the same 
     'A1: the delegate passes this to you (needs-decision): Keep the old flag? Reason: The plan is silent on the flag. Answer with rollout note A1',
   ])
   assert.deepEqual(
-    entry.delegate.answers.map((entry) => entry.decision),
+    entry.delegate.answers.map((answer) => answer.decision),
     ['escalate'],
   )
 })
@@ -1819,7 +1819,7 @@ test('delegate: a maintainer note while it runs applies at once, and the late an
   assert.equal(entry.fixNote, 'Drop the old flag.')
   assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'delegate-dropped', run: 'A1-01-delegate', state: 'needs_fix' })
   assert.deepEqual(
-    entry.delegate.answers.map((entry) => entry.decision),
+    entry.delegate.answers.map((answer) => answer.decision),
     ['dropped'],
   )
   assert.deepEqual(notices, [])
@@ -1839,7 +1839,7 @@ test('delegate: a failed run escalates, backs off, and the same question starts 
   assert.equal(eventsSince(manifest).at(-1).reason, 'the run failed: killed by SIGKILL')
   assert.equal(notices.length, 1)
   assert.deepEqual(
-    entry.delegate.answers.map((entry) => [entry.decision, entry.reasoning]),
+    entry.delegate.answers.map((answer) => [answer.decision, answer.reasoning]),
     [['failed', 'killed by SIGKILL']],
   )
 
