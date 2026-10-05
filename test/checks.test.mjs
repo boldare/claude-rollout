@@ -66,6 +66,56 @@ test('a commit speaks for itself when it has a run, two parents, a loud file or 
   assert.equal(inheritsParent(quiet({ globs: [] })), false)
 })
 
+test('a cancelled run does not replace a completed run of the same check', () => {
+  const cancelled = run(5, 'check', 'completed', 'cancelled')
+  const succeeded = run(1, 'check', 'completed', 'success')
+  const smoke = run(2, 'smoke', 'completed', 'success')
+
+  assert.equal(summarizeChecks([succeeded, cancelled, smoke], ['check', 'smoke*']).state, 'green')
+  assert.equal(summarizeChecks([cancelled, succeeded, smoke], ['check', 'smoke*']).state, 'green')
+})
+
+test('a check with only cancelled runs is red and counts as not run', () => {
+  const runs = [run(5, 'check', 'completed', 'cancelled'), run(2, 'smoke', 'completed', 'success')]
+  const summary = summarizeChecks(runs, ['check', 'smoke*'])
+  assert.equal(summary.state, 'red')
+  assert.match(summary.failing.join(), /required check check did not run/)
+})
+
+test('a later failure still replaces an earlier success of the same check', () => {
+  const runs = [run(1, 'check', 'completed', 'success'), run(5, 'check', 'completed', 'failure'), run(2, 'smoke', 'completed', 'success')]
+  assert.equal(summarizeChecks(runs, ['check', 'smoke*']).state, 'red')
+})
+
+test('a cancelled run does not hide the failure of the same check', () => {
+  const runs = [run(1, 'check', 'completed', 'failure'), run(5, 'check', 'completed', 'cancelled'), run(2, 'smoke', 'completed', 'success')]
+  const summary = summarizeChecks(runs, ['check', 'smoke*'])
+  assert.equal(summary.state, 'red')
+  assert.match(summary.failing.join(), /check: failure/)
+})
+
+test('a later in-progress run still replaces a success of the same check', () => {
+  const runs = [run(1, 'check', 'completed', 'success'), run(5, 'check', 'in_progress'), run(2, 'smoke', 'completed', 'success')]
+  assert.equal(summarizeChecks(runs, ['check', 'smoke*']).state, 'pending')
+})
+
+// Every order of the given items.
+function permutations(items) {
+  if (items.length <= 1) {
+    return [items]
+  }
+
+  return items.flatMap((item, index) => permutations(items.toSpliced(index, 1)).map((rest) => [item, ...rest]))
+}
+
+test('the order the API lists the runs in never changes the summary', () => {
+  const runs = [run(1, 'check', 'completed', 'success'), run(5, 'check', 'in_progress'), run(7, 'check', 'completed', 'cancelled')]
+  const states = permutations(runs).map((order) => summarizeChecks(order, ['check']).state)
+
+  assert.equal(states.length, 6)
+  assert.deepEqual(new Set(states), new Set(['pending']))
+})
+
 test('manifest needs required checks', () => {
   const broken = structuredClone(base)
   delete broken.repo.requiredChecks
