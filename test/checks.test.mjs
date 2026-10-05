@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { summarizeChecks } from '../lib/checks.mjs'
+import { inheritsParent, summarizeChecks } from '../lib/checks.mjs'
 import { globToRegExp, matchesAny } from '../lib/glob.mjs'
 import { raiseEffort, validateManifest } from '../lib/manifest.mjs'
 
@@ -47,6 +47,23 @@ test('a required check that was only skipped is red', () => {
   const summary = summarizeChecks(runs, ['check', 'smoke*'])
   assert.equal(summary.state, 'red')
   assert.match(summary.failing.join(), /required check check did not run/)
+})
+
+const quiet = (overrides = {}) => ({ runs: 0, parents: 1, files: ['docs/journal/2026-10.md'], globs: ['docs/journal/**'], ...overrides })
+
+test('a commit with no runs, one parent and only quiet files inherits its parent', () => {
+  assert.equal(inheritsParent(quiet()), true)
+  assert.equal(inheritsParent(quiet({ files: [] })), true)
+  assert.equal(inheritsParent(quiet({ files: ['docs/journal/a.md', 'docs/journal/sub/b.md'] })), true)
+})
+
+test('a commit speaks for itself when it has a run, two parents, a loud file or no globs', () => {
+  assert.equal(inheritsParent(quiet({ files: ['lib/driver.mjs'] })), false)
+  assert.equal(inheritsParent(quiet({ files: ['docs/journal/a.md', 'lib/driver.mjs'] })), false)
+  assert.equal(inheritsParent(quiet({ parents: 2 })), false)
+  assert.equal(inheritsParent(quiet({ parents: 0 })), false)
+  assert.equal(inheritsParent(quiet({ runs: 1 })), false)
+  assert.equal(inheritsParent(quiet({ globs: [] })), false)
 })
 
 test('manifest needs required checks', () => {

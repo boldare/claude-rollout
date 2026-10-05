@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   alertsFrom,
+  baseChecks,
   codeScanningFor,
   codeScanningUnavailable,
   collectFacts,
@@ -609,4 +610,90 @@ test('collectFacts reads code scanning for the PR, and not at all under ignore',
   const closed = scanningRollout([{ tool: 'gh', args: 'pr view 11', stdout: { ...view, state: 'CLOSED' } }])
 
   assert.equal((await collectFacts(closed.manifest, closed.manifest.prs[0], { pr: 11 }, ledger)).codeScanning, null)
+})
+
+// Fake commits all have a name of the same length, so no sha is a prefix of
+// another and every rule matches the call it was written for.
+const GREEN_RUN = { id: 1, name: 'test', status: 'completed', conclusion: 'success' }
+const NO_RUNS = { check_runs: [] }
+
+function runsRule(sha, runs) {
+  return { tool: 'gh', args: `commits/${sha}/check-runs`, stdout: { check_runs: runs } }
+}
+
+function historyRules(sha, parent, files) {
+  return [
+    { tool: 'git', args: `log -1 --format=%P ${sha}`, stdout: `${parent}\n` },
+    { tool: 'git', args: `diff --no-renames --name-only ${parent} ${sha}`, stdout: files.map((file) => `${file}\n`).join('') },
+  ]
+}
+
+function quietRollout(rules, globs = ['docs/journal/**']) {
+  const rollout = scanningRollout(rules)
+
+  rollout.manifest.repo.baseQuietPaths = globs
+
+  return rollout
+}
+
+test('baseChecks takes the state of the parent when the tip has no runs and only touches the quiet paths', async () => {
+  const { manifest, calls } = quietRollout([
+    runsRule('quiet00', []),
+    runsRule('quiet01', [GREEN_RUN]),
+    ...historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']),
+  ])
+
+  assert.deepEqual(await baseChecks(manifest, 'quiet00'), {
+    state: 'green',
+    missing: [],
+    pending: [],
+    failing: [],
+    runs: [{ name: 'test', status: 'completed', conclusion: 'success' }],
+    sha: 'quiet01',
+    skipped: 1,
+  })
+
+  assert.equal(calls().filter((call) => call.includes('--name-only')).length, 1)
+})
+
+test('baseChecks stays on the tip when it changes a file outside the quiet paths', async () => {
+  const { manifest } = quietRollout([runsRule('quiet00', []), ...historyRules('quiet00', 'quiet01', ['lib/driver.mjs'])])
+  const checks = await baseChecks(manifest, 'quiet00')
+
+  assert.equal(checks.state, 'pending')
+  assert.equal(checks.sha, 'quiet00')
+  assert.equal(checks.skipped, 0)
+})
+
+test('baseChecks reads no history without quiet paths, and none when the tip has a run', async () => {
+  const off = quietRollout([runsRule('quiet00', [])], [])
+
+  assert.equal((await baseChecks(off.manifest, 'quiet00')).skipped, 0)
+  assert.deepEqual(
+    off.calls().filter((call) => call.startsWith('-C')),
+    [],
+  )
+
+  const tested = quietRollout([runsRule('quiet00', [GREEN_RUN])])
+
+  assert.equal((await baseChecks(tested.manifest, 'quiet00')).state, 'green')
+  assert.deepEqual(
+    tested.calls().filter((call) => call.startsWith('-C')),
+    [],
+  )
+})
+
+test('baseChecks skips at most 20 quiet commits in a row', async () => {
+  const names = Array.from({ length: 22 }, (_, i) => `quiet${String(i).padStart(2, '0')}`)
+  const rules = [
+    { tool: 'gh', args: 'check-runs', stdout: NO_RUNS },
+    ...names.slice(0, -1).flatMap((name, i) => historyRules(name, names[i + 1], ['docs/journal/2026-10.md'])),
+  ]
+
+  const { manifest } = quietRollout(rules)
+  const checks = await baseChecks(manifest, names[0])
+
+  assert.equal(checks.state, 'pending')
+  assert.equal(checks.skipped, 20)
+  assert.equal(checks.sha, 'quiet20')
 })

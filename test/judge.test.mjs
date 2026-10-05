@@ -124,6 +124,23 @@ test('does not merge onto a red base branch', () => {
   assert.equal(verdict.action, 'wait')
 })
 
+test('the wait on a base that is not green names the commit it was read from', () => {
+  const pending = { state: 'pending', missing: [], pending: [], failing: [], sha: 'abc1234def5678', skipped: 1 }
+  const one = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: pending }))
+
+  assert.equal(one.action, 'wait')
+  assert.match(one.reasons.join(), /main is not green \(pending at abc1234, 1 quiet commit skipped\)/)
+
+  const three = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { ...pending, skipped: 3 } }))
+
+  assert.match(three.reasons.join(), /pending at abc1234, 3 quiet commits skipped/)
+
+  const tip = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { ...pending, skipped: 0 } }))
+
+  assert.match(tip.reasons.join(), /main is not green \(pending\)/)
+  assert.match(judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { state: 'pending' } })).reasons.join(), /\(pending\)/)
+})
+
 test('a halted rollout waits instead of blocking verified PRs', () => {
   assert.equal(judge(manifest, pr, verifiedAndApproved, facts({ halted: 'main red' })).action, 'wait')
 })
