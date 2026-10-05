@@ -164,7 +164,11 @@ test('docs: every CLI command and flag has its place on the commands page', () =
   const cli = readFileSync(join(ROOT, 'bin', 'rollout.mjs'), 'utf8')
   const commands = new Set([...cli.matchAll(/case '([a-z-]+)':/g)].map((match) => match[1]))
   const options = cli.match(/options: \{([\s\S]*?)\n {2}\},/)[1]
-  const flags = [...options.matchAll(/^\s+'?([a-z-]+)'?: \{ type:/gm)].map((match) => match[1])
+  // A boolean that is on by default is used, and documented, as its --no- form.
+  const flags = [...options.matchAll(/^\s+'?([a-z-]+)'?: \{ type: '\w+'(, default: true)?/gm)].map((match) =>
+    match[2] ? `no-${match[1]}` : match[1],
+  )
+
   const html = read('commands.html')
   const pageIds = ids(html)
 
