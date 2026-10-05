@@ -36,6 +36,7 @@ test('stageLabels: an escalated PR says what escalated it, never a block answere
     'rollout-stage:escalated',
     'rollout-reason:fix-attempts-exhausted',
   ])
+
   assert.deepEqual(stageLabels({ ...escalated, escalation: 'repeated errors' })[1], 'rollout-reason:repeated-errors')
   assert.deepEqual(stageLabels(escalated), ['rollout-stage:escalated'])
 })
@@ -62,5 +63,6 @@ test('labelChanges: adds the missing, removes only our stale labels', () => {
     add: ['rollout-stage:verifying'],
     remove: ['rollout-stage:needs-fix', 'rollout-reason:ci-is-red'],
   })
+
   assert.deepEqual(labelChanges(['rollout-stage:verified'], ['rollout-stage:verified']), { add: [], remove: [] })
 })

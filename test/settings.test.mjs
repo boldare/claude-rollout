@@ -14,12 +14,12 @@ function pushRules(branch) {
 }
 
 test('agentSettings: both roles deny pushes to main and to repo.base', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
-  M.repo.base = 'develop'
+  manifest.repo.base = 'develop'
 
   for (const role of ['implement', 'verify']) {
-    const { deny } = agentSettings(M, role).permissions
+    const { deny } = agentSettings(manifest, role).permissions
 
     for (const rule of [...pushRules('main'), ...pushRules('develop')]) {
       assert.ok(deny.includes(rule), `${role}: ${rule}`)
@@ -28,12 +28,12 @@ test('agentSettings: both roles deny pushes to main and to repo.base', () => {
 })
 
 test('agentSettings: a main base denies each main push once', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
-  assert.equal(M.repo.base, 'main')
+  assert.equal(manifest.repo.base, 'main')
 
   for (const role of ['implement', 'verify']) {
-    const { deny } = agentSettings(M, role).permissions
+    const { deny } = agentSettings(manifest, role).permissions
 
     for (const rule of pushRules('main')) {
       assert.equal(deny.filter((entry) => entry === rule).length, 1, `${role}: ${rule}`)
@@ -43,16 +43,16 @@ test('agentSettings: a main base denies each main push once', () => {
 
 test('guardCommand: the shell expands nothing in the skill path', () => {
   const root = mkdtempSync(join(tmpdir(), 'rollout-quote-'))
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
   // Markers are relative because a directory name cannot hold a slash. The
   // command runs in root, so any expansion would create them there.
-  M.home = join(root, "it's a `touch tick` $(touch pwned)")
-  mkdirSync(join(M.home, 'hooks'), { recursive: true })
-  copyFileSync(fileURLToPath(new URL('../hooks/guard-bash.mjs', import.meta.url)), join(M.home, 'hooks', 'guard-bash.mjs'))
+  manifest.home = join(root, "it's a `touch tick` $(touch pwned)")
+  mkdirSync(join(manifest.home, 'hooks'), { recursive: true })
+  copyFileSync(fileURLToPath(new URL('../hooks/guard-bash.mjs', import.meta.url)), join(manifest.home, 'hooks', 'guard-bash.mjs'))
 
   for (const role of ['implement', 'verify']) {
-    const result = spawnSync('sh', ['-c', guardCommand(M, role)], {
+    const result = spawnSync('sh', ['-c', guardCommand(manifest, role)], {
       cwd: root,
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --admin' } }),
       encoding: 'utf8',
@@ -67,8 +67,8 @@ test('guardCommand: the shell expands nothing in the skill path', () => {
 })
 
 test('the delegate is read-only: the verifier guard and no file edits', () => {
-  const M = loadManifest(makeRollout())
-  const { deny, allow } = agentSettings(M, 'delegate').permissions
+  const manifest = loadManifest(makeRollout())
+  const { deny, allow } = agentSettings(manifest, 'delegate').permissions
 
   assert.equal(readOnlyRole('delegate'), true)
 
@@ -76,15 +76,15 @@ test('the delegate is read-only: the verifier guard and no file edits', () => {
     assert.ok(deny.includes(tool), tool)
   }
 
-  assert.deepEqual(allow, agentSettings(M, 'verify').permissions.allow)
-  assert.ok(guardCommand(M, 'delegate').endsWith(' verifier || exit 2'))
+  assert.deepEqual(allow, agentSettings(manifest, 'verify').permissions.allow)
+  assert.ok(guardCommand(manifest, 'delegate').endsWith(' verifier || exit 2'))
 })
 
 test('agentSettings: every role gets the guard with a finite timeout and the exit 2 fallback', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
   for (const role of ['brief', 'implement', 'fix', 'verify', 'delegate']) {
-    const hooks = agentSettings(M, role).hooks.PreToolUse.flatMap((entry) => entry.hooks)
+    const hooks = agentSettings(manifest, role).hooks.PreToolUse.flatMap((entry) => entry.hooks)
 
     assert.ok(hooks.length > 0, role)
 

@@ -58,7 +58,7 @@ test('commits split on record separators and keep bodies', () => {
   ])
 })
 
-const M = { repo: { maintainers: ['maint'] } }
+const maintained = { repo: { maintainers: ['maint'] } }
 
 function inlineComment(id, login, createdAt, body) {
   return { id, user: { login }, created_at: createdAt, body, path: 'lib/a.mjs', line: 3, diff_hunk: '@@ -1 +1 @@', in_reply_to_id: null }
@@ -87,18 +87,20 @@ test('maintainer feedback keeps maintainer items in time order', () => {
     },
     inlineComment(12, 'someone', '2026-01-01T00:00:00Z', 'Nice'),
   ]
+
   const reviews = [
     review(21, 'maint', '2026-01-01T00:01:00Z', 'COMMENTED', 'Split the module'),
     review(22, 'maint', '2026-01-01T00:02:00Z', 'APPROVED', 'LGTM'),
     review(23, 'maint', '2026-01-01T00:04:00Z', 'CHANGES_REQUESTED', '  \n'),
     review(24, 'someone', '2026-01-01T00:00:00Z', 'CHANGES_REQUESTED', 'No'),
   ]
+
   const conversation = [
     conversationComment(31, 'maint', '2026-01-01T00:02:30Z', 'Also update the docs'),
     conversationComment(32, 'someone', '2026-01-01T00:00:00Z', 'Me too'),
   ]
 
-  assert.deepEqual(maintainerFeedback(M, { inline, reviews, conversation }), [
+  assert.deepEqual(maintainerFeedback(maintained, { inline, reviews, conversation }), [
     { id: 'review-21', at: '2026-01-01T00:01:00Z', body: 'Split the module' },
     { id: 'conversation-31', at: '2026-01-01T00:02:30Z', body: 'Also update the docs' },
     {
@@ -115,7 +117,7 @@ test('maintainer feedback keeps maintainer items in time order', () => {
 })
 
 test('maintainer feedback skips bodies whose last line is the driver marker', () => {
-  const feedback = maintainerFeedback(M, {
+  const feedback = maintainerFeedback(maintained, {
     inline: [inlineComment(11, 'maint', '2026-01-01T00:00:00Z', 'Renamed (abc1234)\r\n\r\n<!-- rollout-driver -->')],
     reviews: [review(21, 'maint', '2026-01-01T00:01:00Z', 'COMMENTED', 'Done\n\n<!-- rollout-driver -->\n')],
     conversation: [conversationComment(31, 'maint', '2026-01-01T00:02:00Z', 'Review comments addressed:\n\n<!-- rollout-driver -->')],
@@ -125,7 +127,7 @@ test('maintainer feedback skips bodies whose last line is the driver marker', ()
 })
 
 test('maintainer feedback still counts a marker that is not the last line', () => {
-  const feedback = maintainerFeedback(M, {
+  const feedback = maintainerFeedback(maintained, {
     inline: [],
     reviews: [review(21, 'maint', '2026-01-01T00:00:00Z', 'COMMENTED', null)],
     conversation: [
@@ -157,15 +159,16 @@ test('the driver marks what it posts and never reads it back as feedback', async
 
   try {
     writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 })
-    const M = { repo: { path: dir, github: 'example/demo', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] } }
+    const manifest = { repo: { path: dir, github: 'example/demo', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] } }
 
-    await replyAsAgents(M, 7, 101, 'Renamed the helper (abc1234)')
-    await commentAsAgents(M, 7, 'Review comments addressed:\n\n- "x": done (abc1234)')
+    await replyAsAgents(manifest, 7, 101, 'Renamed the helper (abc1234)')
+    await commentAsAgents(manifest, 7, 'Review comments addressed:\n\n- "x": done (abc1234)')
 
     const [reply, comment] = readFileSync(join(dir, 'calls.jsonl'), 'utf8')
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))
+
     const replyBody = reply.args.at(-1).replace(/^body=/, '')
 
     assert.equal(reply.args.at(-2), '-f')
@@ -175,7 +178,7 @@ test('the driver marks what it posts and never reads it back as feedback', async
     assert.ok(comment.stdin.startsWith('Review comments addressed:\n\n- "x": done (abc1234)'))
     assert.ok(comment.stdin.endsWith('\n\n<!-- rollout-driver -->'))
 
-    const feedback = maintainerFeedback(M, {
+    const feedback = maintainerFeedback(manifest, {
       inline: [{ ...inlineComment(12, 'maint', '2026-01-01T00:00:00Z', replyBody), in_reply_to_id: 101 }],
       reviews: [],
       conversation: [conversationComment(31, 'maint', '2026-01-01T00:01:00Z', comment.stdin)],
@@ -195,15 +198,15 @@ test('the driver pins every gh call to the manifest repo on github.com', async (
 
   try {
     writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 })
-    const M = {
+    const manifest = {
       label: 'rollout:demo',
       repo: { path: dir, github: 'example/demo', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] },
     }
 
-    await ensureLabel(M)
-    await deleteRemoteBranch(M, 'feat/x')
-    await replyAsAgents(M, 7, 101, 'Done')
-    await commentAsAgents(M, 7, 'Done')
+    await ensureLabel(manifest)
+    await deleteRemoteBranch(manifest, 'feat/x')
+    await replyAsAgents(manifest, 7, 101, 'Done')
+    await commentAsAgents(manifest, 7, 'Done')
 
     const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8')
       .trim()
@@ -317,10 +320,12 @@ test('alertsFrom keeps open alerts, the first line of each message and null for 
   const repeated = alertJson(4)
   repeated.most_recent_instance.message.text =
     '\n  This shell command depends on an uncontrolled absolute path.  \nThis shell command depends on an uncontrolled absolute path.\n'
+
   const plain = alertJson(5, {
     rule: { id: 'js/redundant-operation', severity: 'error' },
     most_recent_instance: { commit_sha: HEAD, message: { text: 'Both operands are identical.' } },
   })
+
   const bare = { number: 6, state: 'open' }
   const fixed = alertJson(7, { state: 'fixed' })
 
@@ -487,17 +492,19 @@ test('refreshOutsideDeps throws every failed lookup, so one that is not an outag
     { tool: 'gh', args: 'pr list --head feat/a1', code: 1, stderr: 'HTTP 502: Bad Gateway' },
     { tool: 'gh', args: 'pr list --head feat/a2', code: 1, stderr: 'HTTP 401: Bad credentials' },
   ])
-  const M = loadManifest(dir, { only: ['A3'] })
-  const ledger = { prs: { A1: { state: 'pending' }, A2: { state: 'pending' } }, event: () => {} }
-  M.prs[0].deps = ['A1', 'A2']
 
-  await assert.rejects(refreshOutsideDeps(M, ledger), (error) => {
+  const manifest = loadManifest(dir, { only: ['A3'] })
+  const ledger = { prs: { A1: { state: 'pending' }, A2: { state: 'pending' } }, event: () => {} }
+  manifest.prs[0].deps = ['A1', 'A2']
+
+  await assert.rejects(refreshOutsideDeps(manifest, ledger), (error) => {
     assert.ok(error instanceof AggregateError)
     assert.equal(error.errors.length, 2)
     assert.match(
       error.message,
       /^A1: gh pr list --head feat\/a1 .*HTTP 502: Bad Gateway\nA2: gh pr list --head feat\/a2 .*HTTP 401: Bad credentials$/,
     )
+
     assert.equal(githubUnavailable(error), false)
     assert.equal(githubUnavailable(error.errors[0]), true)
 
@@ -510,37 +517,38 @@ function scanningRollout(rules) {
   const dir = makeRollout()
   const tools = fakeTools(dir, rules)
 
-  return { M: loadManifest(dir), calls: () => tools.calls().map((call) => call.args.join(' ')) }
+  return { manifest: loadManifest(dir), calls: () => tools.calls().map((call) => call.args.join(' ')) }
 }
 
 const PR_ALERTS = 'repos/example/demo/code-scanning/alerts -f ref=refs/pull/11/head -f state=open -f per_page=100'
 const BASE_ALERTS = 'repos/example/demo/code-scanning/alerts -f ref=refs/heads/main -f state=open -f per_page=100'
 
 test('codeScanningFor reads the PR head and then the base, one page each', async () => {
-  const { M, calls } = scanningRollout([
+  const { manifest, calls } = scanningRollout([
     { tool: 'gh', args: PR_ALERTS, stdout: [alertJson(3), alertJson(4), alertJson(8, { state: 'dismissed' })] },
     { tool: 'gh', args: BASE_ALERTS, stdout: [alertJson(3), alertJson(9)] },
   ])
 
-  assert.deepEqual(await codeScanningFor(M, 11), { available: true, alerts: [mappedAlert(3), mappedAlert(4)], baseOpen: [3, 9] })
+  assert.deepEqual(await codeScanningFor(manifest, 11), { available: true, alerts: [mappedAlert(3), mappedAlert(4)], baseOpen: [3, 9] })
   assert.deepEqual(calls(), [`api -X GET ${PR_ALERTS} -f page=1`, `api -X GET ${BASE_ALERTS} -f page=1`])
 })
 
 test('codeScanningFor skips the base when the PR head has no open alert', async () => {
-  const { M, calls } = scanningRollout([{ tool: 'gh', args: PR_ALERTS, stdout: [alertJson(8, { state: 'fixed' })] }])
+  const { manifest, calls } = scanningRollout([{ tool: 'gh', args: PR_ALERTS, stdout: [alertJson(8, { state: 'fixed' })] }])
 
-  assert.deepEqual(await codeScanningFor(M, 11), { available: true, alerts: [], baseOpen: [] })
+  assert.deepEqual(await codeScanningFor(manifest, 11), { available: true, alerts: [], baseOpen: [] })
   assert.deepEqual(calls(), [`api -X GET ${PR_ALERTS} -f page=1`])
 })
 
 test('codeScanningFor reads the next page after a full one', async () => {
   const full = Array.from({ length: 100 }, (_, i) => alertJson(i + 1, { state: i === 0 ? 'fixed' : 'open' }))
-  const { M, calls } = scanningRollout([
+  const { manifest, calls } = scanningRollout([
     { tool: 'gh', args: `${PR_ALERTS} -f page=2`, stdout: [alertJson(101)] },
     { tool: 'gh', args: PR_ALERTS, stdout: full },
     { tool: 'gh', args: BASE_ALERTS, stdout: [] },
   ])
-  const scan = await codeScanningFor(M, 11)
+
+  const scan = await codeScanningFor(manifest, 11)
 
   assert.equal(scan.alerts.length, 100)
   assert.deepEqual(scan.alerts.at(-1), mappedAlert(101))
@@ -555,7 +563,7 @@ test('codeScanningFor reads the next page after a full one', async () => {
 test('codeScanningFor: a repo without code scanning is unavailable, a server error rejects', async () => {
   const missing = scanningRollout([{ tool: 'gh', args: 'code-scanning/alerts', code: 1, stderr: 'gh: no analysis found (HTTP 404)' }])
 
-  assert.deepEqual(await codeScanningFor(missing.M, 11), {
+  assert.deepEqual(await codeScanningFor(missing.manifest, 11), {
     available: false,
     reason: 'gh: no analysis found (HTTP 404)',
     alerts: [],
@@ -564,7 +572,7 @@ test('codeScanningFor: a repo without code scanning is unavailable, a server err
 
   const broken = scanningRollout([{ tool: 'gh', args: 'code-scanning/alerts', code: 1, stderr: 'gh: Server Error (HTTP 500)' }])
 
-  await assert.rejects(codeScanningFor(broken.M, 11), /exited 1: gh: Server Error \(HTTP 500\)/)
+  await assert.rejects(codeScanningFor(broken.manifest, 11), /exited 1: gh: Server Error \(HTTP 500\)/)
 })
 
 test('collectFacts reads code scanning for the PR, and not at all under ignore', async () => {
@@ -576,6 +584,7 @@ test('collectFacts reads code scanning for the PR, and not at all under ignore',
     { tool: 'gh', args: PR_ALERTS, stdout: [] },
     { tool: 'git', stdout: '' },
   ]
+
   const ledger = { data: { halted: null }, prs: {} }
 
   const cases = [
@@ -584,10 +593,10 @@ test('collectFacts reads code scanning for the PR, and not at all under ignore',
   ]
 
   for (const [action, codeScanning, scanningCalls] of cases) {
-    const { M, calls } = scanningRollout(rules)
-    M.repo.codeScanning = { action, minSeverity: 'medium' }
+    const { manifest, calls } = scanningRollout(rules)
+    manifest.repo.codeScanning = { action, minSeverity: 'medium' }
 
-    const facts = await collectFacts(M, M.prs[0], { pr: 11 }, ledger)
+    const facts = await collectFacts(manifest, manifest.prs[0], { pr: 11 }, ledger)
 
     assert.deepEqual(facts.codeScanning, codeScanning, action)
     assert.deepEqual(
@@ -599,5 +608,5 @@ test('collectFacts reads code scanning for the PR, and not at all under ignore',
 
   const closed = scanningRollout([{ tool: 'gh', args: 'pr view 11', stdout: { ...view, state: 'CLOSED' } }])
 
-  assert.equal((await collectFacts(closed.M, closed.M.prs[0], { pr: 11 }, ledger)).codeScanning, null)
+  assert.equal((await collectFacts(closed.manifest, closed.manifest.prs[0], { pr: 11 }, ledger)).codeScanning, null)
 })

@@ -11,7 +11,7 @@ import {
   policyViolations,
 } from '../lib/judge.mjs'
 
-const M = {
+const manifest = {
   label: 'rollout:demo',
   policy: { merge: 'human', maxBump: 'minor' },
   repo: {
@@ -61,65 +61,71 @@ function facts(overrides = {}) {
 const verifiedAndApproved = { verified: { sha: 'abc1234def', patchId: PATCH }, approved: { patchId: PATCH } }
 
 test('merges when everything holds', () => {
-  assert.equal(judge(M, pr, verifiedAndApproved, facts()).action, 'merge')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, facts()).action, 'merge')
 })
 
 test('waits for approval bound to the current patch', () => {
   const stale = { verified: { patchId: PATCH }, approved: { patchId: 'older' } }
-  const verdict = judge(M, pr, stale, facts())
+  const verdict = judge(manifest, pr, stale, facts())
   assert.equal(verdict.action, 'wait')
   assert.match(verdict.reasons.join(), /approval/)
 })
 
 test('merges without approval when policy is auto', () => {
-  const auto = { ...M, policy: { ...M.policy, merge: 'auto' } }
+  const auto = { ...manifest, policy: { ...manifest.policy, merge: 'auto' } }
   assert.equal(judge(auto, pr, { verified: { patchId: PATCH } }, facts()).action, 'merge')
 })
 
 test('never merges the release PR', () => {
   const release = facts({ pr: { ...facts().pr, headRefName: 'changeset-release/main', title: 'chore: version packages' } })
-  assert.equal(judge(M, { ...pr, branch: 'changeset-release/main' }, verifiedAndApproved, release).action, 'block')
+  assert.equal(judge(manifest, { ...pr, branch: 'changeset-release/main' }, verifiedAndApproved, release).action, 'block')
 })
 
 test('waits when verification belongs to another patch', () => {
-  const verdict = judge(M, pr, { verified: { patchId: 'other' }, approved: { patchId: PATCH } }, facts())
+  const verdict = judge(manifest, pr, { verified: { patchId: 'other' }, approved: { patchId: PATCH } }, facts())
   assert.equal(verdict.action, 'wait')
   assert.match(verdict.reasons.join(), /not verified/)
 })
 
 test('rebases when the branch is behind the base', () => {
-  assert.equal(judge(M, pr, verifiedAndApproved, facts({ baseIsAncestor: false })).action, 'rebase')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, facts({ baseIsAncestor: false })).action, 'rebase')
 })
 
 test('rebases on conflicts', () => {
   const conflicting = facts({ pr: { ...facts().pr, mergeable: 'CONFLICTING' } })
-  assert.equal(judge(M, pr, verifiedAndApproved, conflicting).action, 'rebase')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, conflicting).action, 'rebase')
 })
 
 test('waits while mergeability is computed', () => {
   const unknown = facts({ pr: { ...facts().pr, mergeable: 'UNKNOWN' } })
-  assert.equal(judge(M, pr, verifiedAndApproved, unknown).action, 'wait')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, unknown).action, 'wait')
 })
 
 test('sends red CI back to the implementer', () => {
   const red = facts({ checks: { state: 'red', missing: [], pending: [], failing: ['smoke: failure'] } })
-  const verdict = judge(M, pr, verifiedAndApproved, red)
+  const verdict = judge(manifest, pr, verifiedAndApproved, red)
   assert.equal(verdict.action, 'fix')
   assert.match(verdict.reasons.join(), /smoke: failure/)
 })
 
 test('waits for missing required checks', () => {
   const missing = facts({ checks: { state: 'pending', missing: ['smoke*'], pending: [], failing: [] } })
-  assert.equal(judge(M, pr, verifiedAndApproved, missing).action, 'wait')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, missing).action, 'wait')
 })
 
 test('does not merge onto a red base branch', () => {
-  const verdict = judge(M, pr, verifiedAndApproved, facts({ mainChecks: { state: 'red', missing: [], pending: [], failing: ['check'] } }))
+  const verdict = judge(
+    manifest,
+    pr,
+    verifiedAndApproved,
+    facts({ mainChecks: { state: 'red', missing: [], pending: [], failing: ['check'] } }),
+  )
+
   assert.equal(verdict.action, 'wait')
 })
 
 test('a halted rollout waits instead of blocking verified PRs', () => {
-  assert.equal(judge(M, pr, verifiedAndApproved, facts({ halted: 'main red' })).action, 'wait')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, facts({ halted: 'main red' })).action, 'wait')
 })
 
 test('changeset parsing follows @changesets/parse: comments, CRLF, flow style; unknown means violation', () => {
@@ -128,27 +134,27 @@ test('changeset parsing follows @changesets/parse: comments, CRLF, flow style; u
   assert.equal(highestBump('\n---\n{ "@demo/core": major }\n---\n'), 'major')
   assert.equal(highestBump('---\n"@demo/core": huge\n---\n'), null)
   const odd = facts({ changesets: [{ path: '.changeset/odd.md', text: 'no frontmatter' }] })
-  assert.match(policyViolations(M, pr, odd).join(), /cannot determine the bump/)
+  assert.match(policyViolations(manifest, pr, odd).join(), /cannot determine the bump/)
 })
 
 test('the denylist covers file paths', () => {
   const named = facts({ files: [...facts().files, { status: 'added', path: 'examples/acme corp/Form.tsx' }] })
-  assert.match(policyViolations(M, pr, named).join(), /file path/)
+  assert.match(policyViolations(manifest, pr, named).join(), /file path/)
 })
 
 test('workflow files need allowWorkflows', () => {
   const ci = facts({ files: [...facts().files, { status: 'modified', path: '.github/workflows/ci.yml' }] })
-  assert.match(policyViolations(M, pr, ci).join(), /allowWorkflows/)
-  assert.deepEqual(policyViolations(M, { ...pr, allowWorkflows: true }, ci), [])
+  assert.match(policyViolations(manifest, pr, ci).join(), /allowWorkflows/)
+  assert.deepEqual(policyViolations(manifest, { ...pr, allowWorkflows: true }, ci), [])
 })
 
 test('dependencies must be merged first', () => {
-  assert.equal(judge(M, pr, verifiedAndApproved, facts({ depsPending: ['A6'] })).action, 'wait')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, facts({ depsPending: ['A6'] })).action, 'wait')
 })
 
 test('draft, wrong base, wrong branch and missing label block', () => {
   for (const change of [{ isDraft: true }, { baseRefName: 'develop' }, { headRefName: 'other' }, { labels: [] }]) {
-    const verdict = judge(M, pr, verifiedAndApproved, facts({ pr: { ...facts().pr, ...change } }))
+    const verdict = judge(manifest, pr, verifiedAndApproved, facts({ pr: { ...facts().pr, ...change } }))
     assert.equal(verdict.action, 'block', JSON.stringify(change))
   }
 })
@@ -165,14 +171,14 @@ test('a PR merged on GitHub waits for sync whatever else is off, and a closed on
   ]
 
   for (const change of changes) {
-    const verdict = judge(M, pr, verifiedAndApproved, facts({ pr: { ...merged, ...change } }))
+    const verdict = judge(manifest, pr, verifiedAndApproved, facts({ pr: { ...merged, ...change } }))
 
     assert.equal(verdict.action, 'wait', JSON.stringify(change))
     assert.deepEqual(verdict.reasons, ['merged on GitHub (the next sync records it)'])
     assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve PR|GitHub still blocks/)
   }
 
-  const closed = judge(M, pr, verifiedAndApproved, facts({ pr: { ...facts().pr, state: 'CLOSED' } }))
+  const closed = judge(manifest, pr, verifiedAndApproved, facts({ pr: { ...facts().pr, state: 'CLOSED' } }))
 
   assert.equal(closed.action, 'block')
   assert.deepEqual(closed.reasons, ['PR is CLOSED'])
@@ -192,7 +198,8 @@ test('policy: forbidden paths, versions, changesets, denylist, multi-line commit
     commits: [{ sha: 'abc1234def', message: 'fix: thing\n\nCo-Authored-By: someone' }],
     changesets: [{ path: '.changeset/big.md', text: '---\n"@demo/core": major\n---\n' }],
   })
-  const violations = policyViolations(M, pr, bad).join('\n')
+
+  const violations = policyViolations(manifest, pr, bad).join('\n')
 
   assert.match(violations, /forbidden path packages\/core\/CHANGELOG\.md/)
   assert.match(violations, /package version/)
@@ -201,16 +208,16 @@ test('policy: forbidden paths, versions, changesets, denylist, multi-line commit
   assert.match(violations, /major bump/)
   assert.match(violations, /denylisted term in README\.md/)
   assert.match(violations, /more than one line/)
-  assert.equal(judge(M, pr, verifiedAndApproved, bad).action, 'fix')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, bad).action, 'fix')
 })
 
 test('policy: the denylist also covers the PR body', () => {
   const leaky = facts({ pr: { ...facts().pr, body: 'see /Users/someone/project' } })
-  assert.match(policyViolations(M, pr, leaky).join(), /PR body/)
+  assert.match(policyViolations(manifest, pr, leaky).join(), /PR body/)
 })
 
 test('a clean PR has no violations', () => {
-  assert.deepEqual(policyViolations(M, pr, facts()), [])
+  assert.deepEqual(policyViolations(manifest, pr, facts()), [])
 })
 
 test('changeset bump parsing', () => {
@@ -222,10 +229,10 @@ test('changeset bump parsing', () => {
 
 test('out-of-scope files are reported, changesets are always allowed', () => {
   const extra = facts({ files: [...facts().files, { status: 'modified', path: 'README.md' }] })
-  assert.deepEqual(outOfScope(M, pr, extra), ['README.md'])
+  assert.deepEqual(outOfScope(manifest, pr, extra), ['README.md'])
 })
 
-const GM = { ...M, policy: { ...M.policy, approval: 'github' }, repo: { ...M.repo, maintainers: ['maint'] } }
+const GM = { ...manifest, policy: { ...manifest.policy, approval: 'github' }, repo: { ...manifest.repo, maintainers: ['maint'] } }
 const botFacts = (reviews, overrides = {}) => facts({ pr: { ...facts().pr, author: 'bot' }, reviews, ...overrides })
 const onVerified = { verified: { sha: 'abc1234def', patchId: PATCH, at: '2026-09-27T09:00:00Z' }, patchSince: '2026-09-27T09:00:00Z' }
 
@@ -286,60 +293,65 @@ test('manual mode: the gate says merge without any approval; the maintainer merg
 
 test('a PR in a repo without changesets needs none', () => {
   const plain = facts({ files: [{ status: 'modified', path: 'packages/core/src/recorder.ts' }], changesets: [] })
-  assert.deepEqual(policyViolations(M, { ...pr, changeset: 'none' }, plain), [])
-  assert.match(policyViolations(M, pr, plain).join(), /no new changeset/)
+  assert.deepEqual(policyViolations(manifest, { ...pr, changeset: 'none' }, plain), [])
+  assert.match(policyViolations(manifest, pr, plain).join(), /no new changeset/)
 })
 
 test('a held PR waits: no merge, no rebase, no ready notice in manual mode', () => {
   const held = { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z' } }
-  const verdict = judge(M, pr, held, facts())
+  const verdict = judge(manifest, pr, held, facts())
 
   assert.equal(verdict.action, 'wait')
   assert.match(verdict.reasons.join(), /held/)
   assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve PR|GitHub still blocks/)
-  assert.equal(judge(M, pr, held, facts({ baseIsAncestor: false })).action, 'wait')
-  assert.equal(judge({ ...M, policy: { ...M.policy, merge: 'manual' } }, pr, held, facts()).action, 'wait')
-  assert.equal(judge(M, pr, { ...held, held: null }, facts()).action, 'merge')
+  assert.equal(judge(manifest, pr, held, facts({ baseIsAncestor: false })).action, 'wait')
+  assert.equal(judge({ ...manifest, policy: { ...manifest.policy, merge: 'manual' } }, pr, held, facts()).action, 'wait')
+  assert.equal(judge(manifest, pr, { ...held, held: null }, facts()).action, 'merge')
 })
 
-const withMerge = (manifest, merge) => ({ ...manifest, policy: { ...manifest.policy, merge } })
+const withMerge = (base, merge) => ({ ...base, policy: { ...base.policy, merge } })
 
 test('approvalChannel: inbox or GitHub under human, none under manual and auto', () => {
-  assert.equal(approvalChannel(M, 'bot'), 'inbox')
+  assert.equal(approvalChannel(manifest, 'bot'), 'inbox')
   assert.equal(approvalChannel(GM, 'bot'), 'github')
   assert.equal(approvalChannel(GM, 'maint'), 'inbox')
   assert.equal(approvalChannel(GM, undefined), 'github')
 
   for (const merge of ['manual', 'auto']) {
-    assert.equal(approvalChannel(withMerge(M, merge), 'bot'), null, merge)
+    assert.equal(approvalChannel(withMerge(manifest, merge), 'bot'), null, merge)
     assert.equal(approvalChannel(withMerge(GM, merge), 'bot'), null, merge)
   }
 })
 
 test('approveRefusal: manual and auto refuse, and so does a PR approved on GitHub', () => {
   assert.equal(
-    approveRefusal(withMerge(M, 'manual'), { pr: 7, author: 'bot' }),
+    approveRefusal(withMerge(manifest, 'manual'), { pr: 7, author: 'bot' }),
     'policy.merge is manual: no approval is needed. Merge the PR on GitHub once the driver says it is ready',
   )
+
   assert.equal(
     approveRefusal(withMerge(GM, 'auto'), { pr: 7, author: 'maint' }),
     'policy.merge is auto: no approval is needed. The driver merges once the gate passes, and rollout hold stops it',
   )
+
   assert.equal(approveRefusal(GM, { pr: 7, author: 'bot' }), 'PR #7 is approved on GitHub: review it there')
   assert.equal(approveRefusal(GM, { pr: 7, author: 'maint' }), null)
   assert.equal(approveRefusal(GM, { pr: 7 }), null)
-  assert.equal(approveRefusal(M, { pr: 7, author: 'bot' }), null)
+  assert.equal(approveRefusal(manifest, { pr: 7, author: 'bot' }), null)
 })
 
 test('a record of a GitHub approval never passes for rollout approve', () => {
-  const verdict = judge(M, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'github' } }, facts())
+  const verdict = judge(manifest, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'github' } }, facts())
 
   assert.equal(verdict.action, 'wait')
   assert.match(verdict.reasons.join(), /rollout approve/)
-  assert.equal(judge(M, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'inbox' } }, facts()).action, 'merge')
+  assert.equal(judge(manifest, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'inbox' } }, facts()).action, 'merge')
 })
 
-const withScanning = (codeScanning) => ({ ...M, repo: { ...M.repo, codeScanning: { ...M.repo.codeScanning, ...codeScanning } } })
+const withScanning = (codeScanning) => ({
+  ...manifest,
+  repo: { ...manifest.repo, codeScanning: { ...manifest.repo.codeScanning, ...codeScanning } },
+})
 
 function alert(overrides = {}) {
   return {
@@ -363,22 +375,23 @@ function scanned(alerts, baseOpen = [], overrides = {}) {
 
 const ALERT_REASON =
   'CodeQL js/shell-command-injection-from-environment (medium) bin/rollout.mjs:357: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4'
+
 const NONE = { action: 'none', reasons: [] }
 
 test('codeScanningFindings: a new security alert at the threshold sends the PR back', () => {
-  assert.deepEqual(codeScanningFindings(M, scanned([alert()])), { action: 'fix', reasons: [ALERT_REASON] })
+  assert.deepEqual(codeScanningFindings(manifest, scanned([alert()])), { action: 'fix', reasons: [ALERT_REASON] })
 })
 
 test('codeScanningFindings: an alert also open on the base is not new', () => {
-  assert.deepEqual(codeScanningFindings(M, scanned([alert()], [4])), NONE)
-  assert.deepEqual(codeScanningFindings(M, scanned([alert()], [3])), { action: 'fix', reasons: [ALERT_REASON] })
+  assert.deepEqual(codeScanningFindings(manifest, scanned([alert()], [4])), NONE)
+  assert.deepEqual(codeScanningFindings(manifest, scanned([alert()], [3])), { action: 'fix', reasons: [ALERT_REASON] })
 })
 
 test('codeScanningFindings: alerts below the threshold do not count', () => {
   const low = alert({ securitySeverity: 'low', severity: 'error' })
   const warning = alert({ securitySeverity: null, severity: 'warning' })
 
-  assert.deepEqual(codeScanningFindings(M, scanned([low, warning])), NONE)
+  assert.deepEqual(codeScanningFindings(manifest, scanned([low, warning])), NONE)
   assert.equal(codeScanningFindings(withScanning({ minSeverity: 'low' }), scanned([low, warning])).action, 'fix')
 })
 
@@ -386,12 +399,13 @@ test('codeScanningFindings: without a security level, error ranks as medium and 
   const error = alert({ securitySeverity: null, severity: 'error', path: null, line: null })
   const note = alert({ securitySeverity: null, severity: 'note' })
 
-  assert.deepEqual(codeScanningFindings(M, scanned([error])), {
+  assert.deepEqual(codeScanningFindings(manifest, scanned([error])), {
     action: 'fix',
     reasons: [
       'CodeQL js/shell-command-injection-from-environment (medium) ?:?: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4',
     ],
   })
+
   assert.deepEqual(codeScanningFindings(withScanning({ minSeverity: 'high' }), scanned([error])), NONE)
 
   for (const severity of ['note', 'none', null]) {
@@ -402,7 +416,7 @@ test('codeScanningFindings: without a security level, error ranks as medium and 
 test('codeScanningFindings: an alert from an older commit waits for the analysis of the head', () => {
   const stale = alert({ sha: 'def5678abc' })
   const unknown = alert({ number: 5, sha: null })
-  const verdict = codeScanningFindings(M, scanned([stale, unknown, alert({ number: 6 })]))
+  const verdict = codeScanningFindings(manifest, scanned([stale, unknown, alert({ number: 6 })]))
 
   assert.deepEqual(verdict, {
     action: 'wait',
@@ -411,15 +425,16 @@ test('codeScanningFindings: an alert from an older commit waits for the analysis
       'code scanning has not analysed abc1234 yet (alert #5 is from unknown)',
     ],
   })
+
   assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve/)
 })
 
 test('codeScanningFindings: no code scanning, or none available, finds nothing', () => {
-  assert.deepEqual(codeScanningFindings(M, facts()), NONE)
-  assert.deepEqual(codeScanningFindings(M, facts({ codeScanning: null })), NONE)
+  assert.deepEqual(codeScanningFindings(manifest, facts()), NONE)
+  assert.deepEqual(codeScanningFindings(manifest, facts({ codeScanning: null })), NONE)
   assert.deepEqual(
     codeScanningFindings(
-      M,
+      manifest,
       facts({ codeScanning: { available: false, reason: 'no analysis found (HTTP 404)', alerts: [alert()], baseOpen: [] } }),
     ),
     NONE,
@@ -449,18 +464,20 @@ test('judge: code scanning comes after red and pending CI, and before the base a
   const redBase = { state: 'red', missing: [], pending: [], failing: ['check'] }
   const flagged = { action: 'fix', reasons: [ALERT_REASON], kind: 'code-scanning' }
 
-  assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()], [], { checks: red })), {
+  assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { checks: red })), {
     action: 'fix',
     reasons: ['smoke: failure', 'CI is red on the PR head'],
   })
-  assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()], [], { checks: pending })), {
+
+  assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { checks: pending })), {
     action: 'wait',
     reasons: ['CI pending (missing: -; running: test)'],
   })
-  assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()])), flagged)
-  assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()], [], { mainChecks: redBase })), flagged)
+
+  assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()])), flagged)
+  assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { mainChecks: redBase })), flagged)
   assert.deepEqual(judge(withScanning({ action: 'block' }), pr, verifiedAndApproved, scanned([alert()])), { ...flagged, action: 'block' })
-  assert.equal(judge(M, pr, verifiedAndApproved, scanned([alert()], [4])).action, 'merge')
+  assert.equal(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [4])).action, 'merge')
 })
 
 test('currentGate: the verdict counts only while the PR is verified and the gate ran since', () => {

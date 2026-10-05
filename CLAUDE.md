@@ -1,6 +1,6 @@
 # claude-rollout: notes for AI assistants
 
-This repo is the rollout driver itself: a Node 20+ ESM CLI (`bin/rollout.mjs`) with its modules in `lib/`, agent prompts in `prompts/`, report schemas in `schemas/`, the PreToolUse guard in `hooks/guard-bash.mjs` and git hooks in `git-hooks/`. `SKILL.md` is the user-facing manual and is loaded as a Claude Code skill.
+This repo is the rollout driver itself: a Node 24+ ESM CLI (`bin/rollout.mjs`) with its modules in `lib/`, agent prompts in `prompts/`, report schemas in `schemas/`, the PreToolUse guard in `hooks/guard-bash.mjs` and git hooks in `git-hooks/`. `SKILL.md` is the user-facing manual and is loaded as a Claude Code skill.
 
 Follow `STYLE.md`.
 
@@ -10,6 +10,7 @@ Follow `STYLE.md`.
 npm ci
 npm test               # all suites, must stay green
 npm run format:check   # prettier, run `npm run format` to fix
+npm run lint           # eslint with the STYLE.md rules, run `npm run lint:fix` to fix
 ```
 
 ## Rules

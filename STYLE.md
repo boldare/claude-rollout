@@ -11,6 +11,7 @@ Code here is written for people first. Machines read anything. Humans need light
 - **Short functions, flat bodies.** Prefer an early `return` over nesting.
 - **Names over comments.** A good name beats a comment that explains a bad one.
 - Prettier: no semicolons, single quotes, 140 columns, trailing commas.
+- `npm run lint` checks the rules above that Prettier cannot (ESLint, `eslint.config.js`), plus `no-shadow`.
 
 ## Prose
 

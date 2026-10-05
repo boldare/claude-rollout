@@ -17,16 +17,16 @@ const base = {
 }
 
 test('loadManifest: claude from PATH and a public repo by default', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
-  assert.equal(M.claudeBin, 'claude')
-  assert.equal(M.repo.public, true)
+  assert.equal(manifest.claudeBin, 'claude')
+  assert.equal(manifest.repo.public, true)
 })
 
 test('loadManifest: an explicit claudeBin still expands ~/', () => {
-  const M = loadManifest(makeRollout({ manifest: { claudeBin: '~/tools/claude' } }))
+  const manifest = loadManifest(makeRollout({ manifest: { claudeBin: '~/tools/claude' } }))
 
-  assert.equal(M.claudeBin, `${homedir()}/tools/claude`)
+  assert.equal(manifest.claudeBin, `${homedir()}/tools/claude`)
 })
 
 test('validateManifest: a manifest that is not a mapping gets one error', () => {
@@ -92,6 +92,7 @@ test('loadManifest: the delegate is off by default, has its timeout, and {} turn
     maxPerPr: 2,
     effort: 'high',
   })
+
   assert.deepEqual(loadManifest(makeRollout({ policy: { delegate: { kinds: ['stuck'], maxPerPr: 0 } } })).policy.delegate, {
     kinds: ['stuck'],
     maxPerPr: 0,

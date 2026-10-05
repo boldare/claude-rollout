@@ -167,6 +167,7 @@ const GH_VALUE_FLAGS = [
   '--interval',
   '--head',
 ]
+
 const GH_FORBIDDEN = [
   'repo',
   'release',

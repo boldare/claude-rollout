@@ -78,6 +78,7 @@ test('parseSse: two messages in one chunk', () => {
     { event: 'state', data: { a: 1 } },
     { event: 'events', data: { from: 0 } },
   ])
+
   assert.equal(rest, '')
 })
 
@@ -126,14 +127,17 @@ test('mergeEvents: appends, replaces and truncates without touching the input', 
     mergeEvents(current, { from: 3, events: [{ kind: 'd' }] }).map((event) => event.kind),
     ['a', 'b', 'c', 'd'],
   )
+
   assert.deepEqual(
     mergeEvents(current, { from: 0, events: [{ kind: 'x' }] }).map((event) => event.kind),
     ['x'],
   )
+
   assert.deepEqual(
     mergeEvents(current, { from: 1, events: [{ kind: 'y' }] }).map((event) => event.kind),
     ['a', 'y'],
   )
+
   assert.deepEqual(current, copy)
 })
 
@@ -152,6 +156,7 @@ test('model: the states and error kinds', () => {
     'interrupted',
     'merged',
   ])
+
   assert.deepEqual(ERROR_KINDS, [
     'tick-error',
     'error',
@@ -191,6 +196,7 @@ test('stateCounts: known states in lifecycle order, then unknown ones sorted', (
     { state: 'alpha', count: 1 },
     { state: 'zeta', count: 1 },
   ])
+
   assert.deepEqual(stateCounts([]), [])
 })
 
@@ -202,6 +208,7 @@ test('filterEvents: by PR, driver events and error kinds, newest first', () => {
     { at: at(3), id: 'A1', kind: 'error' },
     { at: at(4), id: 'A2', kind: 'implement-start' },
   ]
+
   const copy = structuredClone(events)
   const minutes = (list) => list.map((event) => event.at)
 
@@ -233,6 +240,7 @@ test('timelineLayout: the demo rollout', () => {
     layout.lanes.map((lane) => lane.id),
     ['A1', 'A2', 'A3'],
   )
+
   assert.equal(layout.start, START)
   assert.equal(layout.end, START + 100 * 60_000)
 
@@ -263,16 +271,19 @@ test('timelineLayout: rebase and merge markers', () => {
     { at: at(96), id: 'Z9', kind: 'merged', pr: 12 },
     { id: 'A1', kind: 'ready-claimed' },
   ])
+
   const markers = laneOf(layout, 'A1').markers
 
   assert.deepEqual(
     markers.map((marker) => marker.type),
     ['rebase', 'merge'],
   )
+
   assert.deepEqual(
     markers.map((marker) => marker.at),
     [at(90), at(95)],
   )
+
   near(markers[0].left, 0.9, 'rebase left')
   near(markers[1].left, 0.95, 'merge left')
   assert.deepEqual(laneOf(layout, 'A2').markers, [])
@@ -298,6 +309,7 @@ test('timelineLayout: an interrupted run ends at the next driver start', () => {
     { at: at(31), id: 'A1', kind: 'fix-start', run: 'A1-02-fix' },
     { at: at(40), id: 'A1', kind: 'fix-done', run: 'A1-02-fix', ok: true },
   ]
+
   const runs = runsFromEvents(events, { driverRunning: false })
   const layout = timelineLayout({ rows: [{ id: 'A1' }], runs, events, now: Date.parse(at(100)), live: false })
   const [interrupted, fix] = layout.lanes[0].bars
@@ -323,6 +335,7 @@ test('timelineLayout: an interrupted run without a later driver start ends at th
     { at: at(10), id: 'A1', kind: 'implement-start', run: 'A1-01-implement' },
     { at: at(20), id: 'A1', kind: 'note' },
   ]
+
   const runs = runsFromEvents(events, { driverRunning: false })
   const layout = timelineLayout({ rows: [{ id: 'A1' }], runs, events, now: Date.parse(at(100)), live: false })
   const [bar] = layout.lanes[0].bars
@@ -338,6 +351,7 @@ test('timelineLayout: a delegate run gets its own bar', () => {
     { at: at(10), id: 'A1', kind: 'delegate-start', run: 'A1-01-delegate', blocked: 'needs-decision' },
     { at: at(20), id: 'A1', kind: 'delegate-done', run: 'A1-01-delegate', ok: true, result: 'ANSWER', cost: 0.5 },
   ]
+
   const runs = runsFromEvents(events, { driverRunning: true })
   const layout = timelineLayout({ rows: [{ id: 'A1' }], runs, events, now: Date.parse(at(20)), live: false })
   const [bar] = layout.lanes[0].bars
@@ -355,6 +369,7 @@ test('timelineLayout: no times at all gives one empty lane per row', () => {
     { id: 'A1', kind: 'merged' },
     { id: '-', kind: 'driver-start', at: 'not a time' },
   ]
+
   const runs = [{ run: 'A1-01-implement', id: 'A1', role: 'implement', step: null, startedAt: null, endedAt: null, status: 'ok' }]
   const layout = timelineLayout({ rows: [{ id: 'A1' }, { id: 'A2' }], runs, events, now: START, live: true })
 
@@ -510,18 +525,21 @@ test('dialogFor: confirmations for stop, start, retry and unhalt, a text for not
     text: 'Its agents stop too. The next start resumes their sessions.',
     confirmLabel: 'Stop',
   })
+
   assert.deepEqual(dialogFor('start', { rollout: 'demo', driver: null, pr: null }), {
     title: 'Start the driver for demo?',
     text: 'It runs detached. Its output goes to driver.log.',
     confirmLabel: 'Start',
     withDryRun: true,
   })
+
   assert.deepEqual(dialogFor('retry', context), { title: 'Retry A2?', text: 'Its attempts start from zero.', confirmLabel: 'Retry' })
   assert.deepEqual(dialogFor('unhalt', context), {
     title: 'Unhalt demo?',
     text: 'Halted: main is red. Unhalt lets the driver merge again.',
     confirmLabel: 'Unhalt',
   })
+
   assert.deepEqual(dialogFor('note', context), { title: 'Note for A2', confirmLabel: 'Send', withText: true })
 
   for (const state of ['verified', 'ready_claimed']) {
@@ -575,6 +593,7 @@ test('commandNotice: queued, stopping, starting and the errors', () => {
     text: 'Starting the driver. Its output goes to rollouts/demo/driver.log.',
     error: false,
   })
+
   assert.deepEqual(commandNotice({ cmd: 'start', dryRun: true }, start(true), stopped), {
     text: 'Starting the driver. Its output goes to rollouts/demo/driver.log. Dry run.',
     error: false,
@@ -586,6 +605,7 @@ test('commandNotice: queued, stopping, starting and the errors', () => {
     text: 'Starting the driver. Its output goes to rollouts/demo/driver.log. On battery: caffeinate cannot keep this Mac awake, keep the lid open or plug in.',
     error: false,
   })
+
   assert.deepEqual(commandNotice({ cmd: 'start', dryRun: true }, onBattery(true), stopped), {
     text: 'Starting the driver. Its output goes to rollouts/demo/driver.log. Dry run. On battery: caffeinate cannot keep this Mac awake, keep the lid open or plug in.',
     error: false,
@@ -595,6 +615,7 @@ test('commandNotice: queued, stopping, starting and the errors', () => {
     text: 'no driver is running',
     error: true,
   })
+
   assert.deepEqual(commandNotice({ cmd: 'pause' }, { status: 502, body: null }, running), { text: 'The server answered 502.', error: true })
 })
 

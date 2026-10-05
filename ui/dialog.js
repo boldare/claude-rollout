@@ -30,6 +30,7 @@ function theDialog() {
       finish(null)
     }
   })
+
   document.body.append(dialog)
 
   return dialog
@@ -70,6 +71,7 @@ export function ask({ title, text, confirmLabel, withText = false, withDryRun = 
     textArea.addEventListener('input', () => {
       accept.disabled = textArea.value.trim() === ''
     })
+
     parts.push(textArea)
   }
 

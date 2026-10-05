@@ -44,8 +44,8 @@ function spawnGuard(file, args, input, options) {
   }
 }
 
-function runHook(M, role, input, options = {}) {
-  return spawnGuard('sh', ['-c', guardCommand(M, role)], input, options)
+function runHook(manifest, role, input, options = {}) {
+  return spawnGuard('sh', ['-c', guardCommand(manifest, role)], input, options)
 }
 
 function runScript(role, input) {
@@ -270,17 +270,17 @@ test('isEntry resolves both paths and fails closed', () => {
 })
 
 test('decide refuses when the check itself throws', () => {
-  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
+  const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
   const explode = () => {
     throw new Error('boom')
   }
 
-  assert.match(decide(payload, 'worker', {}, explode), /boom/)
-  assert.equal(decide(payload, 'worker', {}), null)
+  assert.match(decide(input, 'worker', {}, explode), /boom/)
+  assert.equal(decide(input, 'worker', {}), null)
 })
 
 test('decide refuses even when the thrown value cannot be printed', () => {
-  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
+  const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
   const unprintable = [
     Object.create(null),
     {
@@ -301,7 +301,7 @@ test('decide refuses even when the thrown value cannot be printed', () => {
       throw value
     }
 
-    assert.match(decide(payload, 'worker', {}, explode), /^the guard failed \(.+\), command refused$/)
+    assert.match(decide(input, 'worker', {}, explode), /^the guard failed \(.+\), command refused$/)
   }
 })
 
@@ -455,6 +455,7 @@ test('pre-push hook refuses URLs other than the push URL marker', () => {
   sh(
     `cd work && git config core.hooksPath ${hooks} && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m "fix: one" && git remote add origin ../remote.git`,
   )
+
   writeFileSync(join(dir, 'work', '.git', 'rollout-branch'), BRANCH)
   writeFileSync(join(dir, 'work', '.git', 'rollout-pushurl'), '../remote.git')
 
@@ -463,12 +464,12 @@ test('pre-push hook refuses URLs other than the push URL marker', () => {
 })
 
 test('one padded line is refused by the hook command and the bare script, in both roles', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const input = payload('git '.repeat(50_000) + '; gh api -X PUT repos/o/r/pulls/1/merge')
 
   for (const [role, guardRole] of Object.entries(HOOK_ROLES)) {
     for (const [how, result] of [
-      [`hook ${role}`, runHook(M, role, input)],
+      [`hook ${role}`, runHook(manifest, role, input)],
       [`script ${guardRole}`, runScript(guardRole, input)],
     ]) {
       assert.equal(result.status, 2, `${how}: ${result.stderr}`)
@@ -479,11 +480,11 @@ test('one padded line is refused by the hook command and the bare script, in bot
 })
 
 test('padding over many lines does not hide the command after it', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const command = ('git '.repeat(1_000) + '\n').repeat(50) + 'gh api -X PUT repos/o/r/pulls/1/merge'
 
   for (const role of Object.keys(HOOK_ROLES)) {
-    const result = runHook(M, role, payload(command))
+    const result = runHook(manifest, role, payload(command))
 
     assert.equal(result.status, 2, `${role}: ${result.stderr}`)
     assert.match(result.stderr, /gh api is read-only/, role)
@@ -491,11 +492,11 @@ test('padding over many lines does not hide the command after it', () => {
 })
 
 test('a long run of spaces after unset is refused before the regex rules', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const command = 'unset' + ' '.repeat(250_000) + 'x\n' + 'gh api -X PUT repos/o/r/pulls/1/merge'
 
   for (const role of Object.keys(HOOK_ROLES)) {
-    const result = runHook(M, role, payload(command))
+    const result = runHook(manifest, role, payload(command))
 
     assert.equal(result.status, 2, `${role}: ${result.stderr}`)
     assert.equal(result.signal, null, role)
@@ -531,39 +532,39 @@ test('the hook command exits 2 when the guard cannot run', () => {
   }
 
   for (const [name, source] of Object.entries(broken)) {
-    const M = loadManifest(makeRollout())
+    const manifest = loadManifest(makeRollout())
 
-    M.home = mkdtempSync(join(tmpdir(), 'rollout-broken-'))
+    manifest.home = mkdtempSync(join(tmpdir(), 'rollout-broken-'))
 
     if (source !== null) {
-      mkdirSync(join(M.home, 'hooks'))
-      writeFileSync(join(M.home, 'hooks', 'guard-bash.mjs'), source)
+      mkdirSync(join(manifest.home, 'hooks'))
+      writeFileSync(join(manifest.home, 'hooks', 'guard-bash.mjs'), source)
     }
 
     for (const role of Object.keys(HOOK_ROLES)) {
-      const result = runHook(M, role, LS_PAYLOAD, { cwd: M.home })
+      const result = runHook(manifest, role, LS_PAYLOAD, { cwd: manifest.home })
 
       assert.equal(result.status, 2, `${name}, ${role}: ${result.stderr}`)
     }
   }
 
-  // Node 20 and 22 cannot load a path with a backslash. A Node that can still refuses the merge.
-  const M = loadManifest(makeRollout())
+  // Node cannot load a path with a backslash (24 and 26 at least). A Node that can still refuses the merge.
+  const manifest = loadManifest(makeRollout())
 
-  M.home = join(mkdtempSync(join(tmpdir(), 'rollout-backslash-')), 'sk\\ill')
-  mkdirSync(join(M.home, 'hooks'), { recursive: true })
-  copyFileSync(REAL_GUARD, join(M.home, 'hooks', 'guard-bash.mjs'))
+  manifest.home = join(mkdtempSync(join(tmpdir(), 'rollout-backslash-')), 'sk\\ill')
+  mkdirSync(join(manifest.home, 'hooks'), { recursive: true })
+  copyFileSync(REAL_GUARD, join(manifest.home, 'hooks', 'guard-bash.mjs'))
 
   for (const role of Object.keys(HOOK_ROLES)) {
-    const result = runHook(M, role, MERGE_PAYLOAD, { cwd: M.home })
+    const result = runHook(manifest, role, MERGE_PAYLOAD, { cwd: manifest.home })
 
     assert.equal(result.status, 2, `backslash, ${role}: ${result.stderr}`)
   }
 })
 
 test('the preflight guard self-test passes with this checkout and fails without a guard', () => {
-  const M = loadManifest(makeRollout())
-  const working = guardSelfTest(M)
+  const manifest = loadManifest(makeRollout())
+  const working = guardSelfTest(manifest)
 
   assert.deepEqual(working.problems, [])
   assert.deepEqual(working.lines, [
@@ -571,9 +572,9 @@ test('the preflight guard self-test passes with this checkout and fails without 
     'ok   guard hook command exits 0 on an allowed command',
   ])
 
-  M.home = mkdtempSync(join(tmpdir(), 'rollout-no-guard-'))
+  manifest.home = mkdtempSync(join(tmpdir(), 'rollout-no-guard-'))
 
-  const missing = guardSelfTest(M)
+  const missing = guardSelfTest(manifest)
 
   assert.equal(missing.problems.length, 2, missing.problems.join('\n'))
   assert.ok(
@@ -863,16 +864,16 @@ test('agent repo: without ROLLOUT_REPO any named repo is refused', () => {
 })
 
 test('agent repo: the hook command reads ROLLOUT_REPO from its environment', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const pinned = hookEnv({ ROLLOUT_REPO: 'o/r' })
   const unpinned = hookEnv()
 
   assert.equal(unpinned.ROLLOUT_REPO, undefined)
 
   for (const role of Object.keys(HOOK_ROLES)) {
-    const own = runHook(M, role, payload('gh pr view 1 --repo o/r'), { env: pinned })
-    const other = runHook(M, role, payload('gh pr view 1 --repo other/x'), { env: pinned })
-    const unset = runHook(M, role, payload('gh pr view 1 --repo o/r'), { env: unpinned })
+    const own = runHook(manifest, role, payload('gh pr view 1 --repo o/r'), { env: pinned })
+    const other = runHook(manifest, role, payload('gh pr view 1 --repo other/x'), { env: pinned })
+    const unset = runHook(manifest, role, payload('gh pr view 1 --repo o/r'), { env: unpinned })
 
     assert.equal(own.status, 0, `${role}: ${own.stderr}`)
     assert.equal(other.status, 2, `${role}: ${other.stderr}`)
@@ -883,7 +884,7 @@ test('agent repo: the hook command reads ROLLOUT_REPO from its environment', () 
 })
 
 test('agent repo: padded lines are decided', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const env = hookEnv({ ROLLOUT_REPO: 'o/r' })
   const lines = {
     'repeated gh': ['gh '.repeat(5_000) + '--repo other/x pr view 1', /another repository than o\/r/],
@@ -894,7 +895,7 @@ test('agent repo: padded lines are decided', () => {
     assert.ok(line.length > 13_000 && line.length < 16_384, `${name}: ${line.length}`)
 
     for (const role of Object.keys(HOOK_ROLES)) {
-      const result = runHook(M, role, payload(line), { env })
+      const result = runHook(manifest, role, payload(line), { env })
 
       assert.equal(result.status, 2, `${name}, ${role}: ${result.stderr}`)
       assert.equal(result.signal, null, `${name}, ${role}`)

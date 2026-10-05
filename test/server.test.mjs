@@ -19,11 +19,11 @@ const UI = fileURLToPath(new URL('../ui/', import.meta.url))
 const CSP = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'"
 
 // No server test reads the power source of the machine it runs on.
-async function serve(t, options = {}) {
+async function serve(context, options = {}) {
   const root = options.root ?? makeRolloutRoot()
   const server = await startServer({ root, batteryWarning: async () => null, ...options })
 
-  t.after(() => server.close())
+  context.after(() => server.close())
 
   return { server, root }
 }
@@ -37,11 +37,11 @@ function bearer(server) {
 function raw(port, path, { method = 'GET', host = `127.0.0.1:${port}`, headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const outgoing = request({ host: '127.0.0.1', port, method, path, agent: false, headers: { host, ...headers } }, (response) => {
-      let body = ''
+      let received = ''
 
       response.setEncoding('utf8')
-      response.on('data', (chunk) => (body += chunk))
-      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body }))
+      response.on('data', (chunk) => (received += chunk))
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body: received }))
     })
 
     outgoing.on('error', reject)
@@ -95,7 +95,7 @@ function parseMessage(block) {
 
 // Reads the stream with fetch like the page does. Every wait has its own
 // timeout, so a broken watcher fails the test instead of hanging it.
-async function openStream(t, server, name) {
+async function openStream(context, server, name) {
   const controller = new AbortController()
   const response = await fetch(`${server.origin}/api/rollouts/${name}/stream`, { headers: bearer(server), signal: controller.signal })
   const reader = response.body.getReader()
@@ -103,7 +103,7 @@ async function openStream(t, server, name) {
   let buffer = ''
   let pending = null
 
-  t.after(() => controller.abort())
+  context.after(() => controller.abort())
 
   async function read(timeoutMs) {
     if (!pending) {
@@ -295,8 +295,8 @@ function firstLine(stream, timeoutMs = 5000) {
   })
 }
 
-test('startServer binds 127.0.0.1 on a random port and builds the URL from a 43-character token', async (t) => {
-  const { server } = await serve(t)
+test('startServer binds 127.0.0.1 on a random port and builds the URL from a 43-character token', async (context) => {
+  const { server } = await serve(context)
 
   assert.ok(server.origin.startsWith('http://127.0.0.1:'), server.origin)
   assert.equal(server.origin, `http://127.0.0.1:${server.port}`)
@@ -305,14 +305,14 @@ test('startServer binds 127.0.0.1 on a random port and builds the URL from a 43-
   assert.equal(server.url, `${server.origin}/#t=${server.token}`)
 })
 
-test('startServer rejects when the port is taken', async (t) => {
-  const { server, root } = await serve(t)
+test('startServer rejects when the port is taken', async (context) => {
+  const { server, root } = await serve(context)
 
   await assert.rejects(startServer({ root, port: server.port }), { code: 'EADDRINUSE' })
 })
 
-test('/ is the page, with the security headers and no CORS', async (t) => {
-  const { server } = await serve(t)
+test('/ is the page, with the security headers and no CORS', async (context) => {
+  const { server } = await serve(context)
   const page = await raw(server.port, '/')
 
   assert.equal(page.status, 200)
@@ -325,8 +325,8 @@ test('/ is the page, with the security headers and no CORS', async (t) => {
   assert.match(page.body, /<title>rollout<\/title>/)
 })
 
-test('static: traversal, escapes and malformed escapes never leave ui/', async (t) => {
-  const { server } = await serve(t)
+test('static: traversal, escapes and malformed escapes never leave ui/', async (context) => {
+  const { server } = await serve(context)
 
   for (const path of ['/../package.json', '/%2e%2e/package.json', '/..%2fpackage.json', '/%2e%2e%2fpackage.json', '/..%5cpackage.json']) {
     const response = await raw(server.port, path)
@@ -339,7 +339,7 @@ test('static: traversal, escapes and malformed escapes never leave ui/', async (
   assert.deepEqual(JSON.parse(malformed.body), { error: 'bad path' })
 })
 
-test('static: nested files, but no dotfiles, unknown types or directories', async (t) => {
+test('static: nested files, but no dotfiles, unknown types or directories', async (context) => {
   const uiDir = mkdtempSync(join(tmpdir(), 'rollout-ui-'))
 
   mkdirSync(join(uiDir, 'sub'))
@@ -349,7 +349,7 @@ test('static: nested files, but no dotfiles, unknown types or directories', asyn
   writeFileSync(join(uiDir, '.secret.js'), 'export const secret = 1\n')
   writeFileSync(join(uiDir, 'notes.txt'), 'notes\n')
 
-  const { server } = await serve(t, { uiDir })
+  const { server } = await serve(context, { uiDir })
   const nested = await raw(server.port, '/sub/x.js')
 
   assert.equal(nested.status, 200)
@@ -365,8 +365,8 @@ test('static: nested files, but no dotfiles, unknown types or directories', asyn
   assert.equal((await raw(server.port, '/sub/x.js')).body, 'export const x = 2\n')
 })
 
-test('api: only the Bearer token opens it, and /%61pi is the same path', async (t) => {
-  const { server } = await serve(t)
+test('api: only the Bearer token opens it, and /%61pi is the same path', async (context) => {
+  const { server } = await serve(context)
   const wrongOfSameLength = `Bearer ${'x'.repeat(server.token.length)}`
 
   for (const headers of [{}, { authorization: 'Bearer wrong' }, { authorization: wrongOfSameLength }, { authorization: server.token }]) {
@@ -383,8 +383,8 @@ test('api: only the Bearer token opens it, and /%61pi is the same path', async (
   assert.equal((await raw(server.port, '/%61pi/rollouts', { headers: bearer(server) })).status, 200)
 })
 
-test('Host: only 127.0.0.1 and localhost on this port, on static and API paths alike', async (t) => {
-  const { server } = await serve(t)
+test('Host: only 127.0.0.1 and localhost on this port, on static and API paths alike', async (context) => {
+  const { server } = await serve(context)
   const { port } = server
 
   for (const host of [`evil.example:${port}`, `127.0.0.1:${port + 1}`, '127.0.0.1', `localhost.evil.example:${port}`]) {
@@ -401,8 +401,8 @@ test('Host: only 127.0.0.1 and localhost on this port, on static and API paths a
   }
 })
 
-test('Origin: every non-GET needs this origin, then gets 405, and nothing carries CORS headers', async (t) => {
-  const { server } = await serve(t)
+test('Origin: every non-GET needs this origin, then gets 405, and nothing carries CORS headers', async (context) => {
+  const { server } = await serve(context)
   const { port } = server
   const responses = []
 
@@ -439,8 +439,8 @@ test('Origin: every non-GET needs this origin, then gets 405, and nothing carrie
   }
 })
 
-test('api: the list, a rollout state, events after N, a PR, and the errors', async (t) => {
-  const { server, root } = await serve(t)
+test('api: the list, a rollout state, events after N, a PR, and the errors', async (context) => {
+  const { server, root } = await serve(context)
   const list = (await get(server, '/api/rollouts')).json()
 
   assert.equal(list.root, root)
@@ -510,8 +510,8 @@ test('api: the list, a rollout state, events after N, a PR, and the errors', asy
   assert.equal((await get(server, '/api/rollouts')).status, 200)
 })
 
-test('api: a page of a run transcript, and the errors', async (t) => {
-  const { server } = await serve(t)
+test('api: a page of a run transcript, and the errors', async (context) => {
+  const { server } = await serve(context)
   const path = '/api/rollouts/demo/runs/A1-01-implement'
   const last = await get(server, `${path}?from=end&limit=3`)
   const page = last.json()
@@ -549,10 +549,10 @@ test('api: a page of a run transcript, and the errors', async (t) => {
   assert.deepEqual(refused.json(), { error: 'unauthorized' })
 })
 
-test('stream: state and every event on connect, then appended events and a renamed ledger', async (t) => {
-  const { server, root } = await serve(t, { pollMs: 60_000 })
+test('stream: state and every event on connect, then appended events and a renamed ledger', async (context) => {
+  const { server, root } = await serve(context, { pollMs: 60_000 })
   const dir = join(root, 'demo')
-  const stream = await openStream(t, server, 'demo')
+  const stream = await openStream(context, server, 'demo')
 
   assert.equal(stream.response.status, 200)
   assert.equal(stream.response.headers.get('content-type'), 'text/event-stream; charset=utf-8')
@@ -584,17 +584,17 @@ test('stream: state and every event on connect, then appended events and a renam
   assert.equal(renamed.data.view.eventCount, 10)
 })
 
-test('stream: subscribers share a hub but each gets its own tail', async (t) => {
-  const { server, root } = await serve(t, { pollMs: 60_000 })
+test('stream: subscribers share a hub but each gets its own tail', async (context) => {
+  const { server, root } = await serve(context, { pollMs: 60_000 })
   const file = join(root, 'demo', 'events.jsonl')
-  const early = await openStream(t, server, 'demo')
+  const early = await openStream(context, server, 'demo')
 
   await early.next((message) => message.event === 'events')
   await watcherLive(early, join(root, 'demo'))
   appendFileSync(file, '\n{"id":"A3","kind":"first"}\n')
   assert.equal((await early.next((message) => message.event === 'events')).data.from, 9)
 
-  const late = await openStream(t, server, 'demo')
+  const late = await openStream(context, server, 'demo')
   assert.equal((await late.next((message) => message.event === 'events')).data.events.length, 10)
 
   appendFileSync(file, '{"id":"A3","kind":"second"}\n')
@@ -609,11 +609,11 @@ test('stream: subscribers share a hub but each gets its own tail', async (t) => 
   }
 })
 
-test('stream: an unreadable ledger or a vanished rollout is a problem, and the stream stays open', async (t) => {
-  const { server, root } = await serve(t, { pollMs: 60_000 })
+test('stream: an unreadable ledger or a vanished rollout is a problem, and the stream stays open', async (context) => {
+  const { server, root } = await serve(context, { pollMs: 60_000 })
   const dir = join(root, 'demo')
   const good = readFileSync(join(dir, 'ledger.json'), 'utf8')
-  const stream = await openStream(t, server, 'demo')
+  const stream = await openStream(context, server, 'demo')
 
   await stream.next((message) => message.event === 'events')
   await watcherLive(stream, dir)
@@ -632,14 +632,14 @@ test('stream: an unreadable ledger or a vanished rollout is a problem, and the s
   assert.equal((await stream.next((message) => message.event === 'state')).data.name, 'demo')
 })
 
-test('stream: a driver that dies without touching a file shows as stopped', async (t) => {
-  const { server, root } = await serve(t, { pollMs: 200 })
+test('stream: a driver that dies without touching a file shows as stopped', async (context) => {
+  const { server, root } = await serve(context, { pollMs: 200 })
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
 
-  t.after(() => child.kill())
+  context.after(() => child.kill())
   await once(child, 'spawn')
 
-  const stream = await openStream(t, server, 'demo')
+  const stream = await openStream(context, server, 'demo')
   writeFileSync(join(root, 'demo', 'driver.lock'), JSON.stringify({ pid: child.pid, at: new Date().toISOString() }))
   await stream.next((message) => message.event === 'state' && message.data.view.driver.pid === child.pid)
 
@@ -651,18 +651,18 @@ test('stream: a driver that dies without touching a file shows as stopped', asyn
   assert.equal(stopped.data.view.driver.pid, null)
 })
 
-test('stream: needs the token, and close() ends open streams', async (t) => {
+test('stream: needs the token, and close() ends open streams', async (context) => {
   const root = makeRolloutRoot()
   const server = await startServer({ root })
 
-  t.after(() => server.close())
+  context.after(() => server.close())
 
   const refused = await get(server, '/api/rollouts/demo/stream', {})
   assert.equal(refused.status, 401)
   assert.deepEqual(refused.json(), { error: 'unauthorized' })
   assert.equal((await get(server, '/api/rollouts/nope/stream')).status, 404)
 
-  const stream = await openStream(t, server, 'demo')
+  const stream = await openStream(context, server, 'demo')
   await stream.next((message) => message.event === 'events')
 
   let timer
@@ -675,11 +675,12 @@ test('stream: needs the token, and close() ends open streams', async (t) => {
     stream.next(() => true),
     /stream ended|terminated|aborted/,
   )
+
   await server.close()
 })
 
-test('page: every asset and module of ui/index.html is served, and every ui script parses', async (t) => {
-  const { server } = await serve(t)
+test('page: every asset and module of ui/index.html is served, and every ui script parses', async (context) => {
+  const { server } = await serve(context)
   const html = readFileSync(join(UI, 'index.html'), 'utf8')
   const queue = [...html.matchAll(/\b(?:src|href)="([^"]+)"/g)].map((match) => match[1])
   const seen = new Set()
@@ -733,16 +734,17 @@ test('cli: help lists ui', () => {
   assert.ok(result.stdout.includes('default $ROLLOUT_ROOT or ~/.rollouts'), result.stdout)
 })
 
-test('cli: ui prints a URL with the token, never writes it, and exits 0 on SIGTERM', async (t) => {
+test('cli: ui prints a URL with the token, never writes it, and exits 0 on SIGTERM', async (context) => {
   const root = makeRolloutRoot()
   const child = spawn(process.execPath, [BIN, 'ui', '--root', root, '--port', '0', '--no-open'], {
     env: cliEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+
   let stderr = ''
 
   child.stderr.on('data', (chunk) => (stderr += chunk))
-  t.after(() => child.kill())
+  context.after(() => child.kill())
 
   const line = await firstLine(child.stdout)
   const match = /^rollout ui: (http:\/\/127\.0\.0\.1:\d+)\/#t=([^ ]+) \(Ctrl-C stops it\)$/.exec(line)
@@ -823,6 +825,7 @@ test('cli: card lists the delegate runs and answers with their plan references',
     reasoning: 'The plan keeps it.',
     run: 'A1-01-delegate',
   }
+
   const escalation = { ...answer, decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent.', run: 'A1-02-delegate' }
   const delegate = { runs: 1, lastQuestion: 'abc', limitNotified: false, answers: [answer] }
   const card = cli('card', 'A1', '--dir', makeRollout({ policy: { delegate: {} }, prs: { A1: { state: 'needs_fix', delegate } } }))
@@ -848,6 +851,7 @@ test('cli: card lists the delegate runs and answers with their plan references',
     ),
     off.stdout,
   )
+
   assert.doesNotMatch(off.stdout, /plan: /)
   assert.doesNotMatch(cli('card', 'A1', '--dir', makeRollout()).stdout, /delegate/)
 })
@@ -860,11 +864,11 @@ test('cli: stop without a driver signals nothing', async () => {
   assert.equal(result.stdout, 'no driver is running\n')
 })
 
-test('cli: stop sends SIGTERM to the driver in driver.lock and waits for it', async (t) => {
+test('cli: stop sends SIGTERM to the driver in driver.lock and waits for it', async (context) => {
   const dir = makeRollout({ lock: false })
   const driver = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
 
-  t.after(() => driver.kill())
+  context.after(() => driver.kill())
   await once(driver, 'spawn')
   writeFileSync(join(dir, 'driver.lock'), JSON.stringify({ pid: driver.pid, at: new Date().toISOString() }))
 
@@ -880,13 +884,13 @@ test('cli: stop signals only through stopDriver', () => {
   assert.doesNotMatch(readFileSync(BIN, 'utf8'), /process\.kill\(/)
 })
 
-async function servedRoot(t, args, env) {
+async function servedRoot(context, args, env) {
   const child = spawn(process.execPath, [BIN, 'ui', '--port', '0', '--no-open', ...args], {
     env: { ...cliEnv(), ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
-  t.after(() => child.kill())
+  context.after(() => child.kill())
 
   const line = await firstLine(child.stdout)
   const match = /^rollout ui: (http:\/\/127\.0\.0\.1:\d+)\/#t=([^ ]+) /.exec(line)
@@ -905,17 +909,17 @@ async function servedRoot(t, args, env) {
 }
 
 // Every run sets --root or ROLLOUT_ROOT, so none reads the real ~/.rollouts.
-test('cli: ui serves ROLLOUT_ROOT without --root', async (t) => {
+test('cli: ui serves ROLLOUT_ROOT without --root', async (context) => {
   const root = makeRolloutRoot()
 
-  assert.equal(await servedRoot(t, [], { ROLLOUT_ROOT: root }), root)
+  assert.equal(await servedRoot(context, [], { ROLLOUT_ROOT: root }), root)
 })
 
-test('cli: ui prefers --root over ROLLOUT_ROOT', async (t) => {
+test('cli: ui prefers --root over ROLLOUT_ROOT', async (context) => {
   const flagRoot = makeRolloutRoot()
   const envRoot = makeRolloutRoot()
 
-  assert.equal(await servedRoot(t, ['--root', flagRoot], { ROLLOUT_ROOT: envRoot }), flagRoot)
+  assert.equal(await servedRoot(context, ['--root', flagRoot], { ROLLOUT_ROOT: envRoot }), flagRoot)
 })
 
 test('cli: ui is refused to agents and rejects a bad port', () => {
@@ -934,8 +938,8 @@ test('cli: ui is refused to agents and rejects a bad port', () => {
   }
 })
 
-test('commands: each inbox command becomes one inbox file with only its own fields', async (t) => {
-  const { server, root } = await serve(t, { driverCommand: refusedDriver([]) })
+test('commands: each inbox command becomes one inbox file with only its own fields', async (context) => {
+  const { server, root } = await serve(context, { driverCommand: refusedDriver([]) })
   const dir = join(root, 'demo')
   const cases = [
     [{ cmd: 'pause', id: 'A1' }, { cmd: 'pause' }],
@@ -977,13 +981,13 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
   assert.equal(mixedCase.status, 202)
 })
 
-test('commands: a hold posted through the API becomes a held event in the driver', async (t) => {
+test('commands: a hold posted through the API becomes a held event in the driver', async (context) => {
   const root = mkdtempSync(join(tmpdir(), 'rollout-root-'))
   const dir = join(root, 'demo')
 
   makeRollout({ dir, events: [] })
 
-  const { server } = await serve(t, { root, driverCommand: refusedDriver([]) })
+  const { server } = await serve(context, { root, driverCommand: refusedDriver([]) })
 
   assert.equal((await post(server, 'demo', { cmd: 'hold', id: 'A3' })).status, 202)
   createDriver(loadManifest(dir)).applyCommands()
@@ -993,12 +997,13 @@ test('commands: a hold posted through the API becomes a held event in the driver
     held.map((event) => event.id),
     ['A3'],
   )
+
   assert.deepEqual(inboxFiles(dir), [])
 })
 
-test('commands: the error answers leave no inbox file', async (t) => {
+test('commands: the error answers leave no inbox file', async (context) => {
   const calls = []
-  const { server, root } = await serve(t, { driverCommand: refusedDriver(calls) })
+  const { server, root } = await serve(context, { driverCommand: refusedDriver(calls) })
   const dir = join(root, 'demo')
   const pause = { cmd: 'pause' }
   const cases = [
@@ -1049,15 +1054,16 @@ test('commands: the error answers leave no inbox file', async (t) => {
     headers: { ...bearer(server), origin: server.origin, 'content-type': 'application/json' },
     body: JSON.stringify(pause),
   })
+
   assert.equal(put.status, 405)
 
   assert.deepEqual(inboxFiles(dir), [])
   assert.deepEqual(calls, [])
 })
 
-test('commands: read-only refuses all nine and says so in every state', async (t) => {
+test('commands: read-only refuses all nine and says so in every state', async (context) => {
   const calls = []
-  const { server, root } = await serve(t, { readOnly: true, driverCommand: refusedDriver(calls), pollMs: 60_000 })
+  const { server, root } = await serve(context, { readOnly: true, driverCommand: refusedDriver(calls), pollMs: 60_000 })
   const dir = join(root, 'demo')
   const bodies = [
     { cmd: 'pause' },
@@ -1088,7 +1094,7 @@ test('commands: read-only refuses all nine and says so in every state', async (t
   assert.equal(state.readOnly, true)
   assert.equal((await get(server, '/api/rollouts/fresh')).json().readOnly, true)
 
-  const stream = await openStream(t, server, 'demo')
+  const stream = await openStream(context, server, 'demo')
   const first = await stream.next((message) => message.event === 'state')
   assert.equal(first.data.readOnly, true)
 
@@ -1099,24 +1105,24 @@ test('commands: read-only refuses all nine and says so in every state', async (t
   assert.equal(pushed.data.readOnly, true)
 })
 
-test('commands: a default server sends readOnly false', async (t) => {
-  const { server } = await serve(t, { driverCommand: refusedDriver([]) })
+test('commands: a default server sends readOnly false', async (context) => {
+  const { server } = await serve(context, { driverCommand: refusedDriver([]) })
   const state = (await get(server, '/api/rollouts/demo')).json()
 
   assert.equal(state.readOnly, false)
   assert.deepEqual(Object.keys(state).slice(0, 3), ['name', 'at', 'view'])
 
-  const stream = await openStream(t, server, 'demo')
+  const stream = await openStream(context, server, 'demo')
   assert.equal((await stream.next((message) => message.event === 'state')).data.readOnly, false)
 })
 
-test('commands: start and stop a fake driver through the API', async (t) => {
-  const { server, root } = await serve(t, { driverCommand: fakeDriver(), batteryWarning: async () => BATTERY_WARNING })
+test('commands: start and stop a fake driver through the API', async (context) => {
+  const { server, root } = await serve(context, { driverCommand: fakeDriver(), batteryWarning: async () => BATTERY_WARNING })
   const dir = join(root, 'fresh')
   const log = join(dir, 'driver.log')
   let pid = null
 
-  t.after(() => {
+  context.after(() => {
     if (pid && alive(pid)) {
       process.kill(pid, 'SIGKILL')
     }
@@ -1150,8 +1156,8 @@ test('commands: start and stop a fake driver through the API', async (t) => {
   assert.deepEqual(gone.json, { error: 'no driver is running' })
 })
 
-test('commands: the fixture lock names the test process, so stop signals nothing', async (t) => {
-  const { server } = await serve(t, { driverCommand: refusedDriver([]) })
+test('commands: the fixture lock names the test process, so stop signals nothing', async (context) => {
+  const { server } = await serve(context, { driverCommand: refusedDriver([]) })
   const response = await post(server, 'demo', { cmd: 'stop' })
 
   assert.equal(response.status, 409)
@@ -1159,14 +1165,14 @@ test('commands: the fixture lock names the test process, so stop signals nothing
 })
 
 // Never post stop here: the fixture lock names this test process.
-test('cli: ui --read-only says so, sends readOnly true and refuses a pause', async (t) => {
+test('cli: ui --read-only says so, sends readOnly true and refuses a pause', async (context) => {
   const root = makeRolloutRoot()
   const child = spawn(process.execPath, [BIN, 'ui', '--root', root, '--port', '0', '--no-open', '--read-only'], {
     env: cliEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
-  t.after(() => child.kill())
+  context.after(() => child.kill())
 
   const [first, second] = await lines(child.stdout, 2)
   const match = /^rollout ui: (http:\/\/127\.0\.0\.1:(\d+))\/#t=([^ ]+) \(Ctrl-C stops it\)$/.exec(first)

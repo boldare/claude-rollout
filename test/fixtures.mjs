@@ -178,6 +178,7 @@ export function interruptedTranscript() {
     cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 200000 },
     output_tokens: 3,
   }
+
   const opus = (content) => ({ type: 'assistant', message: { id: 'msg-1', model: 'claude-opus-5-5', content, usage } })
 
   return [
@@ -214,7 +215,7 @@ export function jsonLines(lines) {
   return lines.map((line) => (typeof line === 'string' ? line : JSON.stringify(line))).join('\n')
 }
 
-function manifest(dir, policy) {
+function sampleManifest(dir, policy) {
   const effort = { implement: 'high', verify: 'high' }
   const pr = (id, extra = {}) => ({
     id,
@@ -249,13 +250,14 @@ export function makeRollout(overrides = {}) {
     dir: null,
     ...overrides,
   }
+
   const dir = options.dir ?? mkdtempSync(join(tmpdir(), 'rollout-'))
 
   mkdirSync(dir, { recursive: true })
   mkdirSync(join(dir, 'repo'))
   mkdirSync(join(dir, 'logs'))
   writeFileSync(join(dir, 'plan.md'), '# Plan\n')
-  writeFileSync(join(dir, 'manifest.yaml'), stringify({ ...manifest(dir, options.policy), ...options.manifest }))
+  writeFileSync(join(dir, 'manifest.yaml'), stringify({ ...sampleManifest(dir, options.policy), ...options.manifest }))
 
   if (options.prs) {
     const prs = Object.fromEntries(Object.entries(options.prs).map(([id, state]) => [id, { ...freshPr(), ...state }]))
