@@ -13,7 +13,8 @@ repo:
   pathPrepend: []
   install: pnpm install --frozen-lockfile
   requiredChecks: ['test*', 'lint']
-  # A base commit with no checks that changes only these paths takes its state from its parent.
+  # A base commit with no required check run that changes only these paths takes its state from its parent.
+  # List only paths your required checks never run on.
   # baseQuietPaths: ['docs/journal/**']
   # Agents act as a separate non-admin account (see docs/accounts.html).
   agentToken: ~/.config/rollout/agent-gh-token

@@ -697,3 +697,44 @@ test('baseChecks skips at most 20 quiet commits in a row', async () => {
   assert.equal(checks.skipped, 20)
   assert.equal(checks.sha, 'quiet20')
 })
+
+const DOCS_RUN = { id: 2, name: 'docs deploy', status: 'completed', conclusion: 'success' }
+
+test('baseChecks skips a quiet tip whose only runs are not required checks', async () => {
+  const { manifest } = quietRollout([
+    runsRule('quiet00', [DOCS_RUN]),
+    runsRule('quiet01', [GREEN_RUN]),
+    ...historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']),
+  ])
+
+  const checks = await baseChecks(manifest, 'quiet00')
+
+  assert.equal(checks.state, 'green')
+  assert.equal(checks.sha, 'quiet01')
+  assert.equal(checks.skipped, 1)
+})
+
+test('baseChecks reads a tip once per map of reads, and a commit shape once at all', async () => {
+  const { manifest, calls } = quietRollout([
+    runsRule('quiet00', []),
+    runsRule('quiet01', [GREEN_RUN]),
+    ...historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']),
+  ])
+
+  const reads = new Map()
+  const runsCalls = () => calls().filter((call) => call.includes('/check-runs')).length
+  const historyCalls = () => calls().filter((call) => call.includes('--format=%P') || call.includes('--name-only')).length
+
+  const first = await baseChecks(manifest, 'quiet00', { reads })
+  const second = await baseChecks(manifest, 'quiet00', { reads })
+
+  assert.equal(second, first)
+  assert.equal(runsCalls(), 2)
+  assert.equal(historyCalls(), 2)
+
+  // A new tick reads the runs again, which can change, but not the history.
+  await baseChecks(manifest, 'quiet00', { reads: new Map() })
+
+  assert.equal(runsCalls(), 4)
+  assert.equal(historyCalls(), 2)
+})

@@ -800,6 +800,30 @@ test('tick: a failed base watch halts nothing and is tried again on the next tic
   assert.equal(eventsSince(manifest).filter((event) => event.kind === 'watch-base-failed').length, 1)
 })
 
+test('tick: the base watch reads only the merge commit, never a quiet ancestor', async () => {
+  const red = { check_runs: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }] }
+  const { manifest, driver, tools } = tickDriver(
+    { ...samplePrs(), A3: { state: 'merged', pr: 13, mergeSha: MERGE_SHA } },
+    { rules: [FETCH, viewRule(), { tool: 'gh', args: `commits/${MERGE_SHA}/check-runs`, stdout: { check_runs: [] } }] },
+  )
+
+  // A quiet merge commit with a red parent: a walk would halt, or go green from a green one.
+  manifest.repo.baseQuietPaths = ['**']
+  driver.ledger.data.lastMerge = { id: 'A3', sha: MERGE_SHA, at: at(90) }
+  tools.answer([
+    FETCH,
+    viewRule(),
+    { tool: 'gh', args: `commits/${MERGE_SHA}/check-runs`, stdout: { check_runs: [] } },
+    { tool: 'gh', args: 'check-runs', stdout: red },
+  ])
+
+  await driver.tick()
+
+  assert.equal(driver.ledger.data.halted, null)
+  assert.equal(driver.ledger.data.lastMerge.checked, undefined)
+  assert.ok(!tools.calls().some((call) => call.tool === 'git' && call.args.includes('--format=%P')))
+})
+
 test('tick: a deleted manifest.yaml is rejected once, and loads again when it is back', async () => {
   const { manifest, driver, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewRule()] })
   const file = join(manifest.dir, 'manifest.yaml')
