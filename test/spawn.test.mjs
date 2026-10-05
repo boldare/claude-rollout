@@ -38,18 +38,18 @@ test('failureSignals: the agent answer never counts, only stderr', () => {
 })
 
 test('runAgent: a missing claude binary fails the run instead of throwing', async () => {
-  const M = loadManifest(makeRollout())
-  const pr = M.all[0]
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
 
-  M.claudeBin = join(M.dir, 'no-such-claude')
+  manifest.claudeBin = join(manifest.dir, 'no-such-claude')
 
-  const result = await runAgent(M, pr, {
+  const result = await runAgent(manifest, pr, {
     role: 'implement',
     prompt: 'unused',
     effort: 'high',
     sessionId: '00000000-0000-4000-8000-000000000000',
     resume: false,
-    cwd: M.repo.path,
+    cwd: manifest.repo.path,
     logName: 'A1-01-implement',
   })
 
@@ -165,31 +165,31 @@ test('failureReason: signals, stderr and exit codes', () => {
 })
 
 // A fake claude inside the temp rollout. Stream lines go through a file, so the script needs no JSON quoting.
-function fakeClaude(M, script, lines = null) {
-  const bin = join(M.dir, 'fake-claude')
+function fakeClaude(manifest, script, lines = null) {
+  const bin = join(manifest.dir, 'fake-claude')
   let body = script
 
   if (lines) {
-    const stream = join(M.dir, 'fake-stream.jsonl')
+    const stream = join(manifest.dir, 'fake-stream.jsonl')
     writeFileSync(stream, jsonLines(lines) + '\n')
     body = `cat '${stream}'\n${script}`
   }
 
   writeFileSync(bin, `#!/bin/sh\n${body}\n`, { mode: 0o755 })
-  M.claudeBin = bin
+  manifest.claudeBin = bin
 }
 
-function run(M, logName, seams) {
+function run(manifest, logName, seams) {
   return runAgent(
-    M,
-    M.all[0],
+    manifest,
+    manifest.all[0],
     {
       role: 'implement',
       prompt: 'unused',
       effort: 'high',
       sessionId: '00000000-0000-4000-8000-000000000000',
       resume: false,
-      cwd: M.repo.path,
+      cwd: manifest.repo.path,
       logName,
     },
     seams,
@@ -228,13 +228,13 @@ function manualTimers() {
 }
 
 // A fake claude that prints nothing and lives until it is killed.
-function silentRun(t, M, logName, seams) {
-  fakeClaude(M, 'exec sleep 30')
+function silentRun(context, manifest, logName, seams) {
+  fakeClaude(manifest, 'exec sleep 30')
 
-  const running = run(M, logName, seams)
+  const running = run(manifest, logName, seams)
   const [child] = children
 
-  t.after(() => child.kill('SIGKILL'))
+  context.after(() => child.kill('SIGKILL'))
 
   return { running, child }
 }
@@ -257,32 +257,32 @@ function stderrSeen(child, text) {
 }
 
 test('runAgent: a run killed by a signal names the signal', async () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
-  fakeClaude(M, 'kill -9 $$')
+  fakeClaude(manifest, 'kill -9 $$')
 
-  const result = await run(M, 'A1-01-sigkill')
+  const result = await run(manifest, 'A1-01-sigkill')
 
   assert.equal(result.ok, false)
   assert.equal(result.error, 'killed by SIGKILL')
   assert.equal(result.transient, false)
 })
 
-test('runAgent: stderr from before a timeout still classifies the run', async (t) => {
-  const M = loadManifest(makeRollout())
+test('runAgent: stderr from before a timeout still classifies the run', async (context) => {
+  const manifest = loadManifest(makeRollout())
   const { seams, intervals, tick } = manualTimers()
 
-  M.policy.timeouts.implement = 1
+  manifest.policy.timeouts.implement = 1
   // exec, so SIGTERM reaches sleep and the pipes close with it.
-  fakeClaude(M, "echo 'API Error: 429 rate limit exceeded' >&2\nexec sleep 30")
+  fakeClaude(manifest, "echo 'API Error: 429 rate limit exceeded' >&2\nexec sleep 30")
 
-  const running = run(M, 'A1-01-timeout', seams)
+  const running = run(manifest, 'A1-01-timeout', seams)
 
   assert.equal(children.size, 1)
 
   const [child] = children
 
-  t.after(() => child.kill('SIGKILL'))
+  context.after(() => child.kill('SIGKILL'))
 
   await stderrSeen(child, 'rate limit exceeded')
 
@@ -300,14 +300,14 @@ test('runAgent: stderr from before a timeout still classifies the run', async (t
   assert.equal(result.transient, true)
 })
 
-test('runAgent: a 2-hour sleep counts toward the wall clock and not toward the timeout', async (t) => {
-  const M = loadManifest(makeRollout())
+test('runAgent: a 2-hour sleep counts toward the wall clock and not toward the timeout', async (context) => {
+  const manifest = loadManifest(makeRollout())
   const { seams, intervals, tick, ticks } = manualTimers()
 
-  M.policy.timeouts.implement = 60
-  M.policy.stallMinutes = 600
+  manifest.policy.timeouts.implement = 60
+  manifest.policy.stallMinutes = 600
 
-  const { running, child } = silentRun(t, M, 'A1-01-sleep', seams)
+  const { running, child } = silentRun(context, manifest, 'A1-01-sleep', seams)
 
   ticks(30)
   tick(2 * HOUR)
@@ -328,14 +328,14 @@ test('runAgent: a 2-hour sleep counts toward the wall clock and not toward the t
   assert.equal(result.error, 'killed by SIGTERM')
 })
 
-test('runAgent: the timeout kills a run on its last awake minute', async (t) => {
-  const M = loadManifest(makeRollout())
+test('runAgent: the timeout kills a run on its last awake minute', async (context) => {
+  const manifest = loadManifest(makeRollout())
   const { seams, intervals, tick, ticks } = manualTimers()
 
-  M.policy.timeouts.implement = 60
-  M.policy.stallMinutes = 600
+  manifest.policy.timeouts.implement = 60
+  manifest.policy.stallMinutes = 600
 
-  const { running, child } = silentRun(t, M, 'A1-01-deadline', seams)
+  const { running, child } = silentRun(context, manifest, 'A1-01-deadline', seams)
 
   ticks(59)
 
@@ -356,10 +356,10 @@ test('runAgent: the timeout kills a run on its last awake minute', async (t) => 
   assert.equal(result.transient, false)
 })
 
-test('runAgent: the stall watchdog counts quiet awake minutes and skips a sleep', async (t) => {
-  const M = loadManifest(makeRollout())
+test('runAgent: the stall watchdog counts quiet awake minutes and skips a sleep', async (context) => {
+  const manifest = loadManifest(makeRollout())
   const { seams, intervals, tick, ticks } = manualTimers()
-  const { running, child } = silentRun(t, M, 'A1-01-stall', seams)
+  const { running, child } = silentRun(context, manifest, 'A1-01-stall', seams)
 
   ticks(5)
   tick(2 * HOUR)
@@ -386,12 +386,12 @@ test('runAgent: the stall watchdog counts quiet awake minutes and skips a sleep'
 })
 
 test('runAgent: a billing error in the stream is an account problem', async () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const failure = { type: 'result', subtype: 'success', is_error: true, total_cost_usd: 0, result: 'API Error: Credit balance is too low' }
 
-  fakeClaude(M, 'exit 1', [apiErrorLine('billing_error'), failure])
+  fakeClaude(manifest, 'exit 1', [apiErrorLine('billing_error'), failure])
 
-  const result = await run(M, 'A1-01-billing')
+  const result = await run(manifest, 'A1-01-billing')
 
   assert.equal(result.ok, false)
   assert.equal(result.account, true)
@@ -399,11 +399,11 @@ test('runAgent: a billing error in the stream is an account problem', async () =
 })
 
 test('runAgent: a run that hits its budget cap fails as a normal attempt', async () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
-  fakeClaude(M, 'exit 1', [BUDGET_RESULT])
+  fakeClaude(manifest, 'exit 1', [BUDGET_RESULT])
 
-  const result = await run(M, 'A1-01-budget')
+  const result = await run(manifest, 'A1-01-budget')
 
   assert.equal(result.ok, false)
   assert.equal(result.error, 'hit its budget cap ($20): Reached maximum budget ($20)')
@@ -413,19 +413,19 @@ test('runAgent: a run that hits its budget cap fails as a normal attempt', async
 })
 
 test('runAgent: the delegate runs read-only, with no branch and its own schema', async () => {
-  const M = loadManifest(makeRollout())
-  const argsFile = join(M.dir, 'args.bin')
-  const branchFile = join(M.dir, 'branch.txt')
+  const manifest = loadManifest(makeRollout())
+  const argsFile = join(manifest.dir, 'args.bin')
+  const branchFile = join(manifest.dir, 'branch.txt')
 
-  fakeClaude(M, `printf '%s\\0' "$@" > '${argsFile}'\nprintf '%s' "\${ROLLOUT_BRANCH-unset}" > '${branchFile}'\nexit 1`)
+  fakeClaude(manifest, `printf '%s\\0' "$@" > '${argsFile}'\nprintf '%s' "\${ROLLOUT_BRANCH-unset}" > '${branchFile}'\nexit 1`)
 
-  const result = await runAgent(M, M.all[0], {
+  const result = await runAgent(manifest, manifest.all[0], {
     role: 'delegate',
     prompt: 'unused',
     effort: 'high',
     sessionId: '00000000-0000-4000-8000-000000000000',
     resume: false,
-    cwd: M.repo.path,
+    cwd: manifest.repo.path,
     logName: 'A1-01-delegate',
   })
   const args = readFileSync(argsFile, 'utf8').split('\0').slice(0, -1)
@@ -463,19 +463,19 @@ async function withProcessEnv(values, callback) {
   }
 }
 
-function withAgentToken(M) {
-  M.repo.agentToken = join(M.dir, 'agent-token')
-  writeFileSync(M.repo.agentToken, 'synthetic-agent-token\n')
+function withAgentToken(manifest) {
+  manifest.repo.agentToken = join(manifest.dir, 'agent-token')
+  writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
 }
 
 test('runAgent: agents get GH_REPO and ROLLOUT_REPO and never GH_HOST', async () => {
-  const M = loadManifest(makeRollout())
-  const envFile = join(M.dir, 'agent-env.txt')
+  const manifest = loadManifest(makeRollout())
+  const envFile = join(manifest.dir, 'agent-env.txt')
 
-  withAgentToken(M)
-  fakeClaude(M, `env > '${envFile}'\nexit 1`)
+  withAgentToken(manifest)
+  fakeClaude(manifest, `env > '${envFile}'\nexit 1`)
 
-  const result = await withProcessEnv(SHELL_GITHUB_ENV, () => run(M, 'A1-01-env'))
+  const result = await withProcessEnv(SHELL_GITHUB_ENV, () => run(manifest, 'A1-01-env'))
   const lines = readFileSync(envFile, 'utf8').split('\n')
   const env = Object.fromEntries(
     lines.filter((line) => line.includes('=')).map((line) => [line.split('=')[0], line.slice(line.indexOf('=') + 1)]),
@@ -485,7 +485,7 @@ test('runAgent: agents get GH_REPO and ROLLOUT_REPO and never GH_HOST', async ()
   assert.equal(env.GH_REPO, 'github.com/example/demo')
   assert.equal(env.ROLLOUT_REPO, 'example/demo')
   assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
-  assert.equal(env.GH_CONFIG_DIR, join(M.dir, '.gh-agents'))
+  assert.equal(env.GH_CONFIG_DIR, join(manifest.dir, '.gh-agents'))
 
   for (const name of Object.keys(SHELL_GITHUB_ENV)) {
     assert.equal(name in env, false, name)
@@ -493,11 +493,11 @@ test('runAgent: agents get GH_REPO and ROLLOUT_REPO and never GH_HOST', async ()
 })
 
 test('agentEnv: extra never brings back GH_HOST or moves GH_REPO', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
-  withAgentToken(M)
+  withAgentToken(manifest)
 
-  const env = agentEnv(M, {
+  const env = agentEnv(manifest, {
     ...SHELL_GITHUB_ENV,
     GH_REPO: 'other/x',
     GH_TOKEN: 'another-token',
@@ -507,16 +507,16 @@ test('agentEnv: extra never brings back GH_HOST or moves GH_REPO', () => {
 
   assert.equal(env.GH_REPO, 'github.com/example/demo')
   assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
-  assert.equal(env.GH_CONFIG_DIR, join(M.dir, '.gh-agents'))
+  assert.equal(env.GH_CONFIG_DIR, join(manifest.dir, '.gh-agents'))
   assert.equal(env.ROLLOUT_ROLE, 'implement')
 
   for (const name of Object.keys(SHELL_GITHUB_ENV)) {
     assert.equal(name in env, false, name)
   }
 
-  M.repo.agentToken = null
+  manifest.repo.agentToken = null
 
-  const unpinned = agentEnv(M, { GH_HOST: 'github.com' })
+  const unpinned = agentEnv(manifest, { GH_HOST: 'github.com' })
 
   assert.equal(unpinned.GH_REPO, 'github.com/example/demo')
   assert.equal('GH_HOST' in unpinned, false)

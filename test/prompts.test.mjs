@@ -18,18 +18,18 @@ import { makeRollout } from './fixtures.mjs'
 const STATE = { ...freshPr(), pr: 12, ready: { status: 'READY' } }
 
 function render({ public: isPublic, denylist }) {
-  const M = loadManifest(makeRollout())
-  const pr = M.all[0]
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
 
-  M.repo.public = isPublic
-  M.repo.denylist = denylist
+  manifest.repo.public = isPublic
+  manifest.repo.denylist = denylist
 
   return {
-    implement: implementPrompt(M, pr, STATE),
-    briefWrite: briefWritePrompt(M, pr, STATE),
-    briefReview: briefReviewPrompt(M, pr, STATE, '# draft'),
-    verify: verifyPrompt(M, pr, STATE, 'a1a1a1a'),
-    delegate: delegatePrompt(M, pr, { ...STATE, blocked: { kind: 'needs-decision', question: 'Q', evidence: 'E' } }),
+    implement: implementPrompt(manifest, pr, STATE),
+    briefWrite: briefWritePrompt(manifest, pr, STATE),
+    briefReview: briefReviewPrompt(manifest, pr, STATE, '# draft'),
+    verify: verifyPrompt(manifest, pr, STATE, 'a1a1a1a'),
+    delegate: delegatePrompt(manifest, pr, { ...STATE, blocked: { kind: 'needs-decision', question: 'Q', evidence: 'E' } }),
   }
 }
 
@@ -84,14 +84,14 @@ test('prompts: a private repo without a denylist gets neither rule', () => {
 })
 
 test('prompts: the brief writer sees every earlier answer, oldest first, under one heading', () => {
-  const M = loadManifest(makeRollout())
-  const pr = M.all[0]
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
   const briefAnswers = [
     { question: 'Which default for the delay?', answer: '120 seconds.' },
     { question: 'Keep the old flag?', answer: 'Yes, as an alias.' },
     { question: null, answer: 'The plan moved to a new file.' },
   ]
-  const text = briefWritePrompt(M, pr, { ...STATE, briefAnswers })
+  const text = briefWritePrompt(manifest, pr, { ...STATE, briefAnswers })
   const order = [
     'Which default for the delay?',
     '120 seconds.',
@@ -104,11 +104,11 @@ test('prompts: the brief writer sees every earlier answer, oldest first, under o
   assert.ok(order.every((index) => index > -1))
   assert.deepEqual(
     order,
-    [...order].sort((a, b) => a - b),
+    [...order].sort((left, right) => left - right),
   )
   assert.ok(text.includes('A note from the maintainer:\n\nThe plan moved to a new file.'))
 
-  const fresh = briefWritePrompt(M, pr, freshPr())
+  const fresh = briefWritePrompt(manifest, pr, freshPr())
 
   assert.equal(fresh.includes('## Answers from the maintainer'), false)
   assert.equal(fresh.includes('{{'), false)
@@ -119,24 +119,24 @@ function stepNumbers(text) {
 }
 
 test('prompts: every step starts its own line and the recipe sits indented under its step', () => {
-  const M = loadManifest(makeRollout())
-  const pr = M.all[0]
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
 
-  M.repo.verify = { common: ['npm ci', 'npm test', 'npm run format:check'] }
+  manifest.repo.verify = { common: ['npm ci', 'npm test', 'npm run format:check'] }
 
-  const implement = implementPrompt(M, pr, STATE)
-  const verify = verifyPrompt(M, pr, STATE, 'a1a1a1a')
+  const implement = implementPrompt(manifest, pr, STATE)
+  const verify = verifyPrompt(manifest, pr, STATE, 'a1a1a1a')
 
   assert.deepEqual(stepNumbers(implement), [1, 2, 3, 4, 5, 6, 7, 8])
   assert.deepEqual(stepNumbers(verify), [1, 2, 3, 4, 5, 6, 7])
   assert.ok(implement.includes('\n   1. `npm ci`\n   2. `npm test`\n'))
   assert.ok(verify.includes('\n   1. `npm ci`\n   2. `npm test`\n'))
-  assert.ok(briefWritePrompt(M, pr, STATE).includes('\n  1. `npm ci`\n  2. `npm test`\n'))
+  assert.ok(briefWritePrompt(manifest, pr, STATE).includes('\n  1. `npm ci`\n  2. `npm test`\n'))
 })
 
 test('prompts: the brief writer assumes no plan language', () => {
-  const M = loadManifest(makeRollout())
-  const text = briefWritePrompt(M, M.all[0], STATE)
+  const manifest = loadManifest(makeRollout())
+  const text = briefWritePrompt(manifest, manifest.all[0], STATE)
 
   assert.doesNotMatch(text, /Decyzje/)
   assert.doesNotMatch(text, /Polish/)
@@ -144,8 +144,8 @@ test('prompts: the brief writer assumes no plan language', () => {
 })
 
 test('prompts: the verifier skips steps that rewrite files for npm, pnpm, yarn and bun', () => {
-  const M = loadManifest(makeRollout())
-  const pr = M.all[0]
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
   const kept = [
     'npm ci',
     'npm test',
@@ -179,27 +179,27 @@ test('prompts: the verifier skips steps that rewrite files for npm, pnpm, yarn a
     'bun i',
   ]
 
-  M.repo.verify = { common: [...kept, ...dropped] }
+  manifest.repo.verify = { common: [...kept, ...dropped] }
 
-  assert.deepEqual(verifyRecipe(M, pr, { forVerifier: true }), kept)
-  assert.deepEqual(verifyRecipe(M, pr), [...kept, ...dropped])
+  assert.deepEqual(verifyRecipe(manifest, pr, { forVerifier: true }), kept)
+  assert.deepEqual(verifyRecipe(manifest, pr), [...kept, ...dropped])
 })
 
 test('prompts: the changeset rules follow policy.maxBump', () => {
-  const M = loadManifest(makeRollout())
-  const pr = M.all[0]
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
 
   pr.changeset = 'major'
-  M.policy.maxBump = 'major'
+  manifest.policy.maxBump = 'major'
 
-  assert.doesNotMatch(implementPrompt(M, pr, STATE), /never major/i)
-  assert.doesNotMatch(briefWritePrompt(M, pr, STATE), /never major/i)
+  assert.doesNotMatch(implementPrompt(manifest, pr, STATE), /never major/i)
+  assert.doesNotMatch(briefWritePrompt(manifest, pr, STATE), /never major/i)
 
   pr.changeset = 'patch'
-  M.policy.maxBump = 'patch'
+  manifest.policy.maxBump = 'patch'
 
-  assert.ok(implementPrompt(M, pr, STATE).includes('Never above patch.'))
-  assert.ok(briefWritePrompt(M, pr, STATE).includes('never above `patch`'))
+  assert.ok(implementPrompt(manifest, pr, STATE).includes('Never above patch.'))
+  assert.ok(briefWritePrompt(manifest, pr, STATE).includes('never above `patch`'))
 })
 
 test('prompts: the delegate sees the question, the plan, the brief and every earlier answer', () => {
@@ -209,16 +209,16 @@ test('prompts: the delegate sees the question, the plan, the brief and every ear
   mkdirSync(join(dir, 'briefs'))
   writeFileSync(join(dir, 'briefs', 'A1.md'), '# A1\n\nRename the flag.\n')
 
-  const M = loadManifest(dir)
-  const pr = M.all[0]
+  const manifest = loadManifest(dir)
+  const pr = manifest.all[0]
   const noteHistory = [
     { at: '2026-09-01T10:00:00.000Z', by: 'maintainer', kind: 'needs-decision', question: 'Which name?', text: 'Call it --delay.' },
   ]
   const blocked = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 reads --wait.' }
 
-  M.repo.denylist = ['acme-client', 'example corp']
+  manifest.repo.denylist = ['acme-client', 'example corp']
 
-  const text = delegatePrompt(M, pr, { ...STATE, blocked, noteHistory })
+  const text = delegatePrompt(manifest, pr, { ...STATE, blocked, noteHistory })
 
   for (const part of [
     'Keep the old flag?',
@@ -238,13 +238,13 @@ test('prompts: the delegate sees the question, the plan, the brief and every ear
   }
 
   assert.equal(text.includes('{{'), false)
-  assert.ok(delegatePrompt(M, M.all[2], { ...freshPr(), blocked }).includes('No brief has been written yet.'))
-  assert.ok(delegatePrompt(M, pr, { ...freshPr(), blocked }).includes('## Earlier answers\n\nOldest first.\n\n(none)\n'))
+  assert.ok(delegatePrompt(manifest, manifest.all[2], { ...freshPr(), blocked }).includes('No brief has been written yet.'))
+  assert.ok(delegatePrompt(manifest, pr, { ...freshPr(), blocked }).includes('## Earlier answers\n\nOldest first.\n\n(none)\n'))
 })
 
 test('codeScanningNote: a false positive goes to the maintainer as a code-scanning block', () => {
-  const M = loadManifest(makeRollout())
-  const note = codeScanningNote(M, ['#4 js/shell-command-injection-from-environment at bin/rollout.mjs:357'])
+  const manifest = loadManifest(makeRollout())
+  const note = codeScanningNote(manifest, ['#4 js/shell-command-injection-from-environment at bin/rollout.mjs:357'])
 
   for (const part of [
     '- #4 js/shell-command-injection-from-environment at bin/rollout.mjs:357',

@@ -189,14 +189,14 @@ test('docs: every UI command has its place on the UI page', () => {
 })
 
 test('docs: every manifest field, from the defaults and the example, has its row', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const example = parse(readFileSync(join(ROOT, 'examples', 'manifest.yaml'), 'utf8'))
   const pageIds = ids(read('manifest.html'))
   const expected = [
     ...TOP_LEVEL_FIELDS.map((key) => `manifest-${key}`),
-    ...[...Object.keys(M.repo), ...Object.keys(example.repo)].map((key) => `repo-${key}`),
-    ...[...Object.keys(M.policy), ...Object.keys(example.policy)].map((key) => `policy-${key}`),
-    ...[...Object.keys(M.all[0]), ...example.prs.flatMap((pr) => Object.keys(pr))]
+    ...[...Object.keys(manifest.repo), ...Object.keys(example.repo)].map((key) => `repo-${key}`),
+    ...[...Object.keys(manifest.policy), ...Object.keys(example.policy)].map((key) => `policy-${key}`),
+    ...[...Object.keys(manifest.all[0]), ...example.prs.flatMap((pr) => Object.keys(pr))]
       .filter((key) => key !== 'order')
       .map((key) => `pr-${key}`),
     ...example.briefing.sources.flatMap((source) => Object.keys(source)).map((key) => `source-${key}`),

@@ -41,7 +41,7 @@ test('probe tools are only node without install or verify steps', () => {
   assert.deepEqual(tools(undefined, null), ['node'])
 })
 
-const M = { repo: { github: 'My-Org/my-lib' } }
+const manifest = { repo: { github: 'My-Org/my-lib' } }
 
 function resolverSpy(result) {
   const calls = []
@@ -63,7 +63,7 @@ test('origin on github.com passes without resolving', async () => {
   const spy = resolverSpy('github.com')
 
   for (const url of ['git@github.com:my-org/my-lib.git', 'https://github.com/my-org/my-lib.git', 'git@GitHub.com:MY-ORG/My-Lib.git']) {
-    const result = await originCheck(M, url, spy.resolve)
+    const result = await originCheck(manifest, url, spy.resolve)
 
     assert.deepEqual(result, { ok: true, text: 'my-org/my-lib on github.com' }, url)
   }
@@ -73,7 +73,7 @@ test('origin on github.com passes without resolving', async () => {
 
 test('origin through an SSH alias passes when it resolves to github.com', async () => {
   const spy = resolverSpy('GitHub.com')
-  const result = await originCheck(M, 'git@github-work:my-org/my-lib.git', spy.resolve)
+  const result = await originCheck(manifest, 'git@github-work:my-org/my-lib.git', spy.resolve)
 
   assert.deepEqual(result, { ok: true, text: 'my-org/my-lib on github.com through SSH host github-work' })
   assert.deepEqual(spy.calls, ['github-work'])
@@ -81,7 +81,7 @@ test('origin through an SSH alias passes when it resolves to github.com', async 
 
 test('origin through an SSH alias fails when it resolves elsewhere', async () => {
   const spy = resolverSpy('gitlab.example.com')
-  const result = await originCheck(M, 'git@github-work:my-org/my-lib.git', spy.resolve)
+  const result = await originCheck(manifest, 'git@github-work:my-org/my-lib.git', spy.resolve)
 
   assert.equal(result.ok, false)
   assert.match(result.text, /gitlab\.example\.com/)
@@ -89,7 +89,7 @@ test('origin through an SSH alias fails when it resolves elsewhere', async () =>
 
 test('origin through an SSH alias fails when ssh -G fails', async () => {
   const spy = resolverSpy(new Error('exited 255'))
-  const result = await originCheck(M, 'git@github-work:my-org/my-lib.git', spy.resolve)
+  const result = await originCheck(manifest, 'git@github-work:my-org/my-lib.git', spy.resolve)
 
   assert.equal(result.ok, false)
   assert.match(result.text, /github-work/)
@@ -98,8 +98,8 @@ test('origin through an SSH alias fails when ssh -G fails', async () => {
 
 test('origin with another repo name fails before resolving', async () => {
   const spy = resolverSpy('github.com')
-  const result = await originCheck(M, 'git@github.com:my-org/my-lib-next.git', spy.resolve)
-  const alias = await originCheck(M, 'git@github-work:my-org/my-lib-next.git', spy.resolve)
+  const result = await originCheck(manifest, 'git@github.com:my-org/my-lib-next.git', spy.resolve)
+  const alias = await originCheck(manifest, 'git@github-work:my-org/my-lib-next.git', spy.resolve)
 
   assert.equal(result.ok, false)
   assert.match(result.text, /my-org\/my-lib-next/)
@@ -111,7 +111,7 @@ test('origin over HTTPS on another host fails without resolving', async () => {
   const spy = resolverSpy('github.com')
 
   for (const url of ['https://gitlab.com/my-org/my-lib.git', 'https://github-work/my-org/my-lib.git']) {
-    const result = await originCheck(M, url, spy.resolve)
+    const result = await originCheck(manifest, url, spy.resolve)
 
     assert.equal(result.ok, false, url)
   }
@@ -123,7 +123,7 @@ test('origin texts never print credentials', async () => {
   const spy = resolverSpy('github.com')
 
   for (const url of ['https://x-access-token:secret@gitlab.com/my-org/my-lib.git', 'https://x:secret@example.com/a']) {
-    const result = await originCheck(M, url, spy.resolve)
+    const result = await originCheck(manifest, url, spy.resolve)
 
     assert.equal(result.ok, false, url)
     assert.doesNotMatch(result.text, /secret/, url)
@@ -132,8 +132,8 @@ test('origin texts never print credentials', async () => {
 
 test('a missing or local origin fails', async () => {
   const spy = resolverSpy('github.com')
-  const missing = await originCheck(M, '', spy.resolve)
-  const local = await originCheck(M, '/srv/git/my-lib.git', spy.resolve)
+  const missing = await originCheck(manifest, '', spy.resolve)
+  const local = await originCheck(manifest, '/srv/git/my-lib.git', spy.resolve)
 
   assert.equal(missing.ok, false)
   assert.match(missing.text, /\(none\)/)
@@ -199,15 +199,15 @@ if (finds !== 'always' && !GH_TOKEN && !(finds === 'keyring' && GH_HOST)) {
 
 async function withStoredLogin(finds, run) {
   const bin = mkdtempSync(join(tmpdir(), 'rollout-gh-'))
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
-  M.repo.pathPrepend = [bin]
-  M.repo.agentToken = join(M.dir, 'agent-token')
-  writeFileSync(M.repo.agentToken, 'synthetic-agent-token\n')
+  manifest.repo.pathPrepend = [bin]
+  manifest.repo.agentToken = join(manifest.dir, 'agent-token')
+  writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
   fakeGh(bin, finds)
 
   try {
-    await run(M, () =>
+    await run(manifest, () =>
       readFileSync(join(bin, 'calls.jsonl'), 'utf8')
         .trim()
         .split('\n')
@@ -227,8 +227,8 @@ test("stored login: the check uses the agents' env and passes when it finds no l
   process.env.GH_HOST = 'github.com'
 
   try {
-    await withStoredLogin('keyring', async (M, calls) => {
-      const result = await storedLoginCheck(M)
+    await withStoredLogin('keyring', async (manifest, calls) => {
+      const result = await storedLoginCheck(manifest)
       const [first] = calls()
 
       assert.equal(result.lines[0], STORED_OK)
@@ -236,7 +236,7 @@ test("stored login: the check uses the agents' env and passes when it finds no l
       assert.deepEqual(first.args, ['auth', 'status'])
       assert.equal(first.GH_TOKEN, undefined)
       assert.equal(first.GH_HOST, undefined)
-      assert.equal(first.GH_CONFIG_DIR, join(M.dir, '.gh-agents'))
+      assert.equal(first.GH_CONFIG_DIR, join(manifest.dir, '.gh-agents'))
       assert.equal(first.GH_REPO, 'github.com/example/demo')
     })
   } finally {
@@ -249,8 +249,8 @@ test("stored login: the check uses the agents' env and passes when it finds no l
 })
 
 test('stored login: a login found without GH_TOKEN is a problem', async () => {
-  await withStoredLogin('always', async (M) => {
-    const result = await storedLoginCheck(M)
+  await withStoredLogin('always', async (manifest) => {
+    const result = await storedLoginCheck(manifest)
 
     assert.equal(result.lines[0], STORED_FAIL)
     assert.deepEqual(result.problems, ['agents could fall back to a stored gh login'])
@@ -258,8 +258,8 @@ test('stored login: a login found without GH_TOKEN is a problem', async () => {
 })
 
 test('stored login: the GH_HOST fallback is an info line, never a problem', async () => {
-  await withStoredLogin('keyring', async (M, calls) => {
-    const result = await storedLoginCheck(M)
+  await withStoredLogin('keyring', async (manifest, calls) => {
+    const result = await storedLoginCheck(manifest)
     const [, probe] = calls()
 
     assert.equal(result.lines.length, 2)
@@ -271,8 +271,8 @@ test('stored login: the GH_HOST fallback is an info line, never a problem', asyn
     assert.equal(probe.GH_TOKEN, undefined)
   })
 
-  await withStoredLogin('token', async (M) => {
-    const result = await storedLoginCheck(M)
+  await withStoredLogin('token', async (manifest) => {
+    const result = await storedLoginCheck(manifest)
 
     assert.deepEqual(result.lines, [STORED_OK])
     assert.deepEqual(result.problems, [])

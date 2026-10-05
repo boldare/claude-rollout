@@ -160,27 +160,27 @@ test('rolloutPr: the detail with the brief and notes texts, with or without a le
 
 test('changeSignature changes on an event append and on a lock change', () => {
   const root = makeRolloutRoot()
-  const M = findRollout(root, 'demo')
-  const first = changeSignature(M)
+  const manifest = findRollout(root, 'demo')
+  const first = changeSignature(manifest)
 
-  assert.equal(changeSignature(M), first)
+  assert.equal(changeSignature(manifest), first)
 
-  appendFileSync(join(M.dir, 'events.jsonl'), '\n{"kind":"note"}')
-  const appended = changeSignature(M)
+  appendFileSync(join(manifest.dir, 'events.jsonl'), '\n{"kind":"note"}')
+  const appended = changeSignature(manifest)
   assert.notEqual(appended, first)
 
-  rmSync(join(M.dir, 'driver.lock'))
-  const unlocked = changeSignature(M)
+  rmSync(join(manifest.dir, 'driver.lock'))
+  const unlocked = changeSignature(manifest)
   assert.notEqual(unlocked, appended)
   assert.match(unlocked, /\|-\|false\|$/)
 })
 
-test('watchRollout: onChange after an append and a rename, never after close', async (t) => {
+test('watchRollout: onChange after an append and a rename, never after close', async (context) => {
   const dir = join(makeRolloutRoot(), 'demo')
   let calls = 0
   const watcher = watchRollout(dir, () => (calls += 1), { debounceMs: 50, pollMs: 60_000 })
 
-  t.after(() => watcher.close())
+  context.after(() => watcher.close())
 
   await changeUntil(
     () => appendFileSync(join(dir, 'events.jsonl'), '\n{"kind":"note"}'),
@@ -203,7 +203,7 @@ test('watchRollout: onChange after an append and a rename, never after close', a
   assert.equal(calls, afterClose)
 })
 
-test('watchRollout never throws: a missing directory and a throwing onChange leave the poll running', async (t) => {
+test('watchRollout never throws: a missing directory and a throwing onChange leave the poll running', async (context) => {
   let calls = 0
   const watcher = watchRollout(
     join(makeRolloutRoot(), 'missing'),
@@ -214,7 +214,7 @@ test('watchRollout never throws: a missing directory and a throwing onChange lea
     { pollMs: 20 },
   )
 
-  t.after(() => watcher.close())
+  context.after(() => watcher.close())
   await waitFor(() => calls >= 3)
 })
 
@@ -222,8 +222,8 @@ function demoRollout() {
   return findRollout(makeRolloutRoot(), 'demo')
 }
 
-function writeLog(M, run, lines) {
-  writeFileSync(join(M.dir, 'logs', `${run}.jsonl`), jsonLines(lines))
+function writeLog(manifest, run, lines) {
+  writeFileSync(join(manifest.dir, 'logs', `${run}.jsonl`), jsonLines(lines))
 }
 
 const RESULT_LINE = { type: 'result', subtype: 'success', is_error: false, total_cost_usd: 3, duration_ms: 1000, num_turns: 2 }
@@ -238,12 +238,12 @@ function killedRuns() {
     { at: at(89), id: 'A3', kind: 'verify-start', run: 'A3-02-verify', log: 'logs/A3-02-verify.jsonl', effort: 'high' },
     { at: at(95), id: 'A3', kind: 'verify-done', run: 'A3-02-verify', ok: false, cost: 0, seconds: 360, error: 'timeout after 60 min' },
   ]
-  const M = loadManifest(makeRollout({ events: [...events, ...killed, partial] }))
+  const manifest = loadManifest(makeRollout({ events: [...events, ...killed, partial] }))
 
-  writeLog(M, 'A3-01-implement', interruptedTranscript())
-  writeLog(M, 'A3-02-verify', interruptedTranscript())
+  writeLog(manifest, 'A3-01-implement', interruptedTranscript())
+  writeLog(manifest, 'A3-02-verify', interruptedTranscript())
 
-  return M
+  return manifest
 }
 
 function estimatesByRun(runs) {
@@ -251,8 +251,8 @@ function estimatesByRun(runs) {
 }
 
 test('transcriptPage: pages of display items with their index in the log', () => {
-  const M = demoRollout()
-  const last = transcriptPage(M, 'A1-01-implement', { from: 'end', limit: 3 })
+  const manifest = demoRollout()
+  const last = transcriptPage(manifest, 'A1-01-implement', { from: 'end', limit: 3 })
 
   assert.equal(last.run, 'A1-01-implement')
   assert.equal(last.total, 8)
@@ -288,16 +288,16 @@ test('transcriptPage: pages of display items with their index in the log', () =>
   })
   assert.equal(last.items[2].name, 'Read')
 
-  const middle = transcriptPage(M, 'A1-01-implement', { from: 2, limit: 3 })
+  const middle = transcriptPage(manifest, 'A1-01-implement', { from: 2, limit: 3 })
   assert.deepEqual(
     middle.items.map((item) => item.index),
     [2, 3, 4],
   )
 
-  const past = transcriptPage(M, 'A1-01-implement', { from: 99 })
+  const past = transcriptPage(manifest, 'A1-01-implement', { from: 99 })
   assert.deepEqual([past.items, past.from, past.total], [[], 99, 8])
 
-  const whole = transcriptPage(M, 'A1-01-implement')
+  const whole = transcriptPage(manifest, 'A1-01-implement')
   assert.equal(whole.from, 0)
   assert.equal(whole.items.length, 8)
   assert.deepEqual(whole.items[0], { index: 0, kind: 'init', model: 'opus', sessionId: 'session-1' })
@@ -311,7 +311,7 @@ test('transcriptPage: pages of display items with their index in the log', () =>
 })
 
 test('transcriptPage: long fields are cut, and a refusal past the cut still counts', () => {
-  const M = demoRollout()
+  const manifest = demoRollout()
   const long = `${'x'.repeat(25_000 - 'rollout guard: no'.length)}rollout guard: no`
   const command = 'y'.repeat(10_500)
   const lines = [
@@ -321,9 +321,9 @@ test('transcriptPage: long fields are cut, and a refusal past the cut still coun
     { type: 'assistant', message: { content: [{ type: 'text' }] } },
   ]
 
-  writeLog(M, 'A3-01-implement', lines)
+  writeLog(manifest, 'A3-01-implement', lines)
 
-  const [tool, result, grep, text] = transcriptPage(M, 'A3-01-implement').items
+  const [tool, result, grep, text] = transcriptPage(manifest, 'A3-01-implement').items
 
   assert.equal(result.text.length, 10_000)
   assert.equal(result.cut, 15_000)
@@ -339,16 +339,16 @@ test('transcriptPage: long fields are cut, and a refusal past the cut still coun
 })
 
 test('transcriptPage: null for a name outside logs/ or a missing log', () => {
-  const M = demoRollout()
+  const manifest = demoRollout()
 
   for (const run of ['../ledger', 'Z9-01-implement', '.hidden', null]) {
-    assert.equal(transcriptPage(M, run), null, String(run))
+    assert.equal(transcriptPage(manifest, run), null, String(run))
   }
 })
 
 test('estimates: runs that reported no cost get one, and it stays out of the totals', () => {
-  const M = killedRuns()
-  const { view } = rolloutSnapshot(M, 'demo', START).state
+  const manifest = killedRuns()
+  const { view } = rolloutSnapshot(manifest, 'demo', START).state
   const expected = {
     'A2-01-brief-write': null,
     'A1-01-implement': null,
@@ -362,24 +362,24 @@ test('estimates: runs that reported no cost get one, and it stays out of the tot
   assert.equal(view.costs.estimatedUsd, 5.34)
   assert.equal(view.costs.estimatedRuns, 2)
   assert.equal(view.costs.totalUsd, 7.75)
-  assert.deepEqual(estimatesByRun(rolloutPr(M, 'A3').runs), { 'A3-01-implement': 2.67, 'A3-02-verify': 2.67 })
-  assert.deepEqual(estimatesByRun(rolloutPr(M, 'A1').runs), { 'A1-01-implement': null, 'A1-02-verify': null })
+  assert.deepEqual(estimatesByRun(rolloutPr(manifest, 'A3').runs), { 'A3-01-implement': 2.67, 'A3-02-verify': 2.67 })
+  assert.deepEqual(estimatesByRun(rolloutPr(manifest, 'A1').runs), { 'A1-01-implement': null, 'A1-02-verify': null })
 
   const message = { id: 'msg-5', model: 'claude-opus-5-5', content: [], usage: { input_tokens: 1_000_000 } }
-  appendFileSync(join(M.dir, 'logs', 'A3-02-verify.jsonl'), `\n${JSON.stringify({ type: 'assistant', message })}\n`)
+  appendFileSync(join(manifest.dir, 'logs', 'A3-02-verify.jsonl'), `\n${JSON.stringify({ type: 'assistant', message })}\n`)
 
-  assert.deepEqual(estimatesByRun(rolloutPr(M, 'A3').runs), { 'A3-01-implement': 2.67, 'A3-02-verify': 6.67 })
-  assert.equal(rolloutSnapshot(M, 'demo', START).state.view.costs.estimatedUsd, 9.34)
+  assert.deepEqual(estimatesByRun(rolloutPr(manifest, 'A3').runs), { 'A3-01-implement': 2.67, 'A3-02-verify': 6.67 })
+  assert.equal(rolloutSnapshot(manifest, 'demo', START).state.view.costs.estimatedUsd, 9.34)
 })
 
 test('withEstimates: only interrupted or failed runs without a cost and with an unfinished log', () => {
-  const M = demoRollout()
+  const manifest = demoRollout()
   const run = (name, status, costUsd) => ({ run: name, id: 'A3', role: 'fix', status, costUsd })
 
-  writeLog(M, 'A3-01-fix', interruptedTranscript())
-  writeLog(M, 'A3-02-fix', [...interruptedTranscript(), RESULT_LINE])
-  writeLog(M, 'A3-03-fix', interruptedTranscript())
-  writeLog(M, 'A3-04-fix', interruptedTranscript())
+  writeLog(manifest, 'A3-01-fix', interruptedTranscript())
+  writeLog(manifest, 'A3-02-fix', [...interruptedTranscript(), RESULT_LINE])
+  writeLog(manifest, 'A3-03-fix', interruptedTranscript())
+  writeLog(manifest, 'A3-04-fix', interruptedTranscript())
 
   const runs = [
     run('A3-01-fix', 'interrupted', null),
@@ -389,7 +389,7 @@ test('withEstimates: only interrupted or failed runs without a cost and with an 
     run('A3-09-fix', 'interrupted', 0),
     run(null, 'failed', 0),
   ]
-  const estimated = withEstimates(M, runs)
+  const estimated = withEstimates(manifest, runs)
 
   assert.deepEqual(
     estimated.map((item) => item.estimateUsd),
@@ -397,7 +397,7 @@ test('withEstimates: only interrupted or failed runs without a cost and with an 
   )
   assert.deepEqual(estimated[0], { ...runs[0], estimateUsd: 2.67 })
   assert.equal('estimateUsd' in runs[0], false)
-  assert.equal(withEstimates(M, [run('A1-01-implement', 'failed', 0)])[0].estimateUsd, null)
+  assert.equal(withEstimates(manifest, [run('A1-01-implement', 'failed', 0)])[0].estimateUsd, null)
 })
 
 test('rolloutRoot: --root, then a non-empty ROLLOUT_ROOT, then ~/.rollouts', () => {

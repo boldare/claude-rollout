@@ -61,8 +61,8 @@ test('liveness: the lock means running, the heartbeat gives its age and note', (
 })
 
 test('liveness: no lock and no heartbeat', () => {
-  const M = loadManifest(makeRollout({ lock: false, heartbeat: null }))
-  assert.deepEqual(liveness(M), { running: false, pid: null, heartbeatAgeSeconds: null, heartbeatNote: '' })
+  const manifest = loadManifest(makeRollout({ lock: false, heartbeat: null }))
+  assert.deepEqual(liveness(manifest), { running: false, pid: null, heartbeatAgeSeconds: null, heartbeatNote: '' })
 })
 
 test('parseEvents skips blank lines, partial lines and JSON that is not an object', () => {
@@ -185,7 +185,7 @@ test('runsFromEvents: a done without a start still counts', () => {
 })
 
 test('costs: PR totals from the ledger, roles and a cumulative line from runs', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const runs = runsFromEvents([
     start('A1', 'implement', 'A1-01-implement', 0),
     done('A1', 'implement', 'A1-01-implement', 60, { cost: 4.25 }),
@@ -196,7 +196,7 @@ test('costs: PR totals from the ledger, roles and a cumulative line from runs', 
     start('A1', 'verify', 'A1-02-verify', 61),
   ])
 
-  assert.deepEqual(costs(M, { prs: { A1: { costUsd: 4.25 }, A2: { costUsd: 0.3 } } }, runs), {
+  assert.deepEqual(costs(manifest, { prs: { A1: { costUsd: 4.25 }, A2: { costUsd: 0.3 } } }, runs), {
     totalUsd: 4.55,
     byPr: { A1: 4.25, A2: 0.3, A3: 0 },
     byRole: { brief: 0.3, implement: 4.25, fix: 0, verify: 0, delegate: 0 },
@@ -209,7 +209,7 @@ test('costs: PR totals from the ledger, roles and a cumulative line from runs', 
 })
 
 test('delegate runs: start and done pair into one run, its cost goes to the delegate, and prDetail reads its answers', () => {
-  const M = loadManifest(makeRollout({ policy: { delegate: {} } }))
+  const manifest = loadManifest(makeRollout({ policy: { delegate: {} } }))
   const runs = runsFromEvents([
     start('A1', 'delegate', 'A1-01-delegate', 0, { blocked: 'needs-decision' }),
     done('A1', 'delegate', 'A1-01-delegate', 5, { cost: 0.75, result: 'ANSWER' }),
@@ -232,8 +232,8 @@ test('delegate runs: start and done pair into one run, its cost goes to the dele
     runs.map((run) => [run.run, run.role, run.startedAt, run.endedAt, run.status, run.result, run.costUsd]),
     [['A1-01-delegate', 'delegate', at(0), at(5), 'ok', 'ANSWER', 0.75]],
   )
-  assert.equal(costs(M, ledger, runs).byRole.delegate, 0.75)
-  assert.deepEqual(prDetail(M, ledger, [], runs, 'A1').delegate, { maxPerPr: 2, runs: 1, answers })
+  assert.equal(costs(manifest, ledger, runs).byRole.delegate, 0.75)
+  assert.deepEqual(prDetail(manifest, ledger, [], runs, 'A1').delegate, { maxPerPr: 2, runs: 1, answers })
   assert.deepEqual(prDetail(loadManifest(makeRollout()), { prs: {} }, [], [], 'A1').delegate, { maxPerPr: null, runs: 0, answers: [] })
 })
 
@@ -268,7 +268,7 @@ test('prRows: held goes outside approved, and a PR missing from the ledger is fr
 })
 
 test('prRows follows the manifest order and the CLI info rules', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const ledger = {
     prs: {
       A1: { state: 'merged', mergeSha: 'feedface00', attempts: {} },
@@ -278,7 +278,7 @@ test('prRows follows the manifest order and the CLI info rules', () => {
   }
 
   assert.deepEqual(
-    prRows(M, ledger, [], []).map((row) => [row.id, row.info]),
+    prRows(manifest, ledger, [], []).map((row) => [row.id, row.info]),
     [
       ['A1', 'merged as feedfac'],
       ['A2', 'brief-questions: Which API?'],
@@ -288,22 +288,22 @@ test('prRows follows the manifest order and the CLI info rules', () => {
 })
 
 test('prDetail: verdicts fall back to the latest verdict for old ledgers', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
   const verdict = { verdict: 'PASS', sha: 'abc', summary: 'ok' }
   const history = [{ verdict: 'FAIL' }, verdict]
-  const verdicts = (state) => prDetail(M, { prs: { A1: state } }, [], [], 'A1').verdicts
+  const verdicts = (state) => prDetail(manifest, { prs: { A1: state } }, [], [], 'A1').verdicts
 
   assert.deepEqual(verdicts({ verdict }), [verdict])
   assert.deepEqual(verdicts({ verdict, verdicts: [] }), [verdict])
   assert.deepEqual(verdicts({ verdict, verdicts: history }), history)
   assert.deepEqual(verdicts({}), [])
-  assert.equal(prDetail(M, { prs: {} }, [], [], 'Z9'), null)
+  assert.equal(prDetail(manifest, { prs: {} }, [], [], 'Z9'), null)
 })
 
 test('prDetail: approval channel, brief paths, feedback and runs', () => {
   const dir = makeRollout()
-  const M = loadManifest(dir)
-  const onGitHub = { ...M, policy: { ...M.policy, approval: 'github' }, repo: { ...M.repo, maintainers: ['maint'] } }
+  const manifest = loadManifest(dir)
+  const onGitHub = { ...manifest, policy: { ...manifest.policy, approval: 'github' }, repo: { ...manifest.repo, maintainers: ['maint'] } }
   const feedback = [{ id: 'c1', body: 'rename this', action: 'renamed', sha: 'abc', at: at(90) }]
   const ledger = { prs: { A1: { author: 'demo-bot', feedbackHandled: feedback }, A2: { author: 'maint' } } }
   const runs = runsFromEvents([start('A1', 'implement', 'A1-01-implement', 0), start('A2', 'implement', 'A2-01-implement', 1)])
@@ -327,12 +327,12 @@ test('prDetail: approval channel, brief paths, feedback and runs', () => {
   )
   assert.equal(prDetail(onGitHub, ledger, [], runs, 'A2').approval, 'inbox')
   assert.equal(prDetail(onGitHub, ledger, [], runs, 'A3').approval, 'github')
-  assert.equal(prDetail(M, ledger, [], runs, 'A1').approval, 'inbox')
-  assert.equal(prDetail(M, ledger, [], runs, 'A1').merge, 'human')
+  assert.equal(prDetail(manifest, ledger, [], runs, 'A1').approval, 'inbox')
+  assert.equal(prDetail(manifest, ledger, [], runs, 'A1').merge, 'human')
 
   for (const merge of ['manual', 'auto']) {
-    for (const manifest of [M, onGitHub]) {
-      const detail = prDetail({ ...manifest, policy: { ...manifest.policy, merge } }, ledger, [], runs, 'A1')
+    for (const variant of [manifest, onGitHub]) {
+      const detail = prDetail({ ...variant, policy: { ...variant.policy, merge } }, ledger, [], runs, 'A1')
 
       assert.equal(detail.approval, null, merge)
       assert.equal(detail.merge, merge)
@@ -426,17 +426,17 @@ test('parseTranscript: the last result wins, and without one there is no final',
 })
 
 test('readTranscript reads logs/<run>.jsonl and refuses names outside it', () => {
-  const M = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout())
 
   for (const name of ['../ledger', 'a/b', '.hidden', 'a..b', '', null]) {
-    assert.throws(() => readTranscript(M, name), /invalid run name/, String(name))
+    assert.throws(() => readTranscript(manifest, name), /invalid run name/, String(name))
     assert.equal(isRunName(name), false, String(name))
   }
 
   assert.equal(isRunName('A1-01-implement'), true)
 
-  assert.equal(readTranscript(M, 'Z9-01-implement'), null)
-  assert.equal(readTranscript(M, 'A1-01-implement').final.costUsd, 4.25)
+  assert.equal(readTranscript(manifest, 'Z9-01-implement'), null)
+  assert.equal(readTranscript(manifest, 'A1-01-implement').final.costUsd, 4.25)
 })
 
 test('rolloutView: null without a ledger, the whole model with one', () => {

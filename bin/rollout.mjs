@@ -63,18 +63,18 @@ const { values, positionals } = parseCli()
 
 const [command, ...rest] = positionals
 
-function manifest() {
+function currentManifest() {
   return loadManifest(values.dir, {
     only: values.only ? values.only.split(',').map((id) => id.trim()) : null,
     dryRun: values['dry-run'],
   })
 }
 
-function requireId(M) {
+function requireId(manifest) {
   const id = rest[0]
 
-  if (!id || !M.all.some((pr) => pr.id === id)) {
-    console.error(`unknown or missing PR id: ${id ?? '(none)'}; known: ${M.all.map((pr) => pr.id).join(', ')}`)
+  if (!id || !manifest.all.some((pr) => pr.id === id)) {
+    console.error(`unknown or missing PR id: ${id ?? '(none)'}; known: ${manifest.all.map((pr) => pr.id).join(', ')}`)
     process.exit(1)
   }
 
@@ -91,11 +91,11 @@ function age(iso) {
   return minutes < 90 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
 }
 
-function status(M) {
-  const view = rolloutView(M)
+function status(manifest) {
+  const view = rolloutView(manifest)
 
   if (!view) {
-    console.log(`no ledger yet in ${M.dir}; start the driver with: rollout.mjs run --dir ${M.dir}`)
+    console.log(`no ledger yet in ${manifest.dir}; start the driver with: rollout.mjs run --dir ${manifest.dir}`)
     return
   }
 
@@ -104,7 +104,7 @@ function status(M) {
     ? `running (pid ${driver.pid}, last heartbeat ${driver.heartbeatAgeSeconds}s ago${driver.heartbeatNote ? `: ${driver.heartbeatNote}` : ''})`
     : `NOT RUNNING (last heartbeat ${driver.heartbeatAgeSeconds === null ? 'never' : `${Math.round(driver.heartbeatAgeSeconds / 60)} min ago`})`
 
-  console.log(`rollout ${M.rollout}  driver: ${driverText}`)
+  console.log(`rollout ${manifest.rollout}  driver: ${driverText}`)
 
   if (driver.paused) {
     console.log('PAUSED (rollout.mjs resume)')
@@ -136,28 +136,28 @@ function status(M) {
   }
 }
 
-function approvalLine(M, s) {
-  if (s.approval === 'github') {
-    return `a maintainer review on GitHub (${s.maintainers.join(', ')})`
+function approvalLine(manifest, entry) {
+  if (entry.approval === 'github') {
+    return `a maintainer review on GitHub (${entry.maintainers.join(', ')})`
   }
 
-  if (s.approval === 'inbox') {
+  if (entry.approval === 'inbox') {
     return 'rollout approve'
   }
 
-  return `none under policy.merge ${M.policy.merge}`
+  return `none under policy.merge ${manifest.policy.merge}`
 }
 
-function approveHint(M, s, id) {
-  if (s.approval === 'github') {
-    return `Approve with a review on GitHub: https://github.com/${M.repo.github}/pull/${s.pr}/files`
+function approveHint(manifest, entry, id) {
+  if (entry.approval === 'github') {
+    return `Approve with a review on GitHub: https://github.com/${manifest.repo.github}/pull/${entry.pr}/files`
   }
 
-  if (s.approval === 'inbox') {
-    return `Approve with: rollout.mjs approve ${id} --dir ${M.dir}`
+  if (entry.approval === 'inbox') {
+    return `Approve with: rollout.mjs approve ${id} --dir ${manifest.dir}`
   }
 
-  return approveRefusal(M, s)
+  return approveRefusal(manifest, entry)
 }
 
 function printDelegate(delegate) {
@@ -178,92 +178,92 @@ function printDelegate(delegate) {
   }
 }
 
-function card(M, id) {
-  const ledger = readLedger(M)
+function card(manifest, id) {
+  const ledger = readLedger(manifest)
 
   if (!ledger) {
     console.log('no state yet')
     return
   }
 
-  const events = readEvents(M)
-  const runs = runsFromEvents(events, { driverRunning: liveness(M).running })
-  const s = prDetail(M, ledger, events, runs, id)
+  const events = readEvents(manifest)
+  const runs = runsFromEvents(events, { driverRunning: liveness(manifest).running })
+  const entry = prDetail(manifest, ledger, events, runs, id)
 
-  console.log(`# ${id} ${s.title}  (${s.branch})`)
-  console.log(`state: ${s.state}   PR: ${s.url ?? '-'}   cost: $${s.costUsd.toFixed(2)}`)
+  console.log(`# ${id} ${entry.title}  (${entry.branch})`)
+  console.log(`state: ${entry.state}   PR: ${entry.url ?? '-'}   cost: $${entry.costUsd.toFixed(2)}`)
 
-  if (s.held) {
-    console.log(`held since ${s.held.at} (rollout.mjs release ${id})`)
+  if (entry.held) {
+    console.log(`held since ${entry.held.at} (rollout.mjs release ${id})`)
   }
 
   console.log(
-    `verified: ${s.verified ? `${s.verified.sha} (patch ${s.verified.patchId?.slice(0, 10)})` : 'no'}   approved: ${s.approved ? s.approved.sha : 'no'}`,
+    `verified: ${entry.verified ? `${entry.verified.sha} (patch ${entry.verified.patchId?.slice(0, 10)})` : 'no'}   approved: ${entry.approved ? entry.approved.sha : 'no'}`,
   )
 
-  console.log(`author: ${s.author ?? '?'}   approval: ${approvalLine(M, s)}`)
+  console.log(`author: ${entry.author ?? '?'}   approval: ${approvalLine(manifest, entry)}`)
 
-  if (s.gate) {
-    console.log(`gate: ${s.gate.action}${s.gate.reasons.length ? ` — ${s.gate.reasons.join('; ')}` : ''}`)
+  if (entry.gate) {
+    console.log(`gate: ${entry.gate.action}${entry.gate.reasons.length ? ` — ${entry.gate.reasons.join('; ')}` : ''}`)
   }
 
-  const { brief } = s
+  const { brief } = entry
   console.log(`brief: ${brief.exists ? brief.path : 'not written yet'}${brief.notesExist ? `   reviewer notes: ${brief.notesPath}` : ''}`)
 
-  if (s.blocked && s.state === 'blocked') {
-    console.log(`\nBLOCKED (${s.blocked.kind}): ${s.blocked.question}\n${s.blocked.evidence ?? ''}`)
+  if (entry.blocked && entry.state === 'blocked') {
+    console.log(`\nBLOCKED (${entry.blocked.kind}): ${entry.blocked.question}\n${entry.blocked.evidence ?? ''}`)
   }
 
-  printDelegate(s.delegate)
+  printDelegate(entry.delegate)
 
-  if (s.ready) {
-    console.log(`\nimplementer: ${s.ready.summary}`)
+  if (entry.ready) {
+    console.log(`\nimplementer: ${entry.ready.summary}`)
 
-    for (const item of s.ready.deviations ?? []) {
+    for (const item of entry.ready.deviations ?? []) {
       console.log(`  deviation: ${item.file}: ${item.reason}`)
     }
 
-    for (const item of s.ready.expected ?? []) {
+    for (const item of entry.ready.expected ?? []) {
       console.log(`  expected: ${item.claim} → ${item.observed}`)
     }
   }
 
-  if (s.workflowFiles?.length) {
-    console.log(`\nCI/WORKFLOW FILES CHANGED (review the diff before approving): ${s.workflowFiles.join(', ')}`)
+  if (entry.workflowFiles?.length) {
+    console.log(`\nCI/WORKFLOW FILES CHANGED (review the diff before approving): ${entry.workflowFiles.join(', ')}`)
   }
 
-  if (s.outOfScope?.length) {
-    console.log(`\nfiles outside the manifest scope: ${s.outOfScope.join(', ')}`)
+  if (entry.outOfScope?.length) {
+    console.log(`\nfiles outside the manifest scope: ${entry.outOfScope.join(', ')}`)
   }
 
-  if (s.verdict) {
-    console.log(`\nverifier: ${s.verdict.verdict} on ${s.verdict.sha?.slice(0, 7)} — ${s.verdict.summary}`)
+  if (entry.verdict) {
+    console.log(`\nverifier: ${entry.verdict.verdict} on ${entry.verdict.sha?.slice(0, 7)} — ${entry.verdict.summary}`)
 
-    for (const item of s.verdict.checklist ?? []) {
+    for (const item of entry.verdict.checklist ?? []) {
       console.log(`  [${item.status}] ${item.item}`)
     }
 
-    for (const item of s.verdict.blocking ?? []) {
+    for (const item of entry.verdict.blocking ?? []) {
       console.log(`  BLOCKING: ${item}`)
     }
 
-    for (const item of s.verdict.nonBlocking ?? []) {
+    for (const item of entry.verdict.nonBlocking ?? []) {
       console.log(`  note: ${item}`)
     }
   }
 
-  if (s.state === 'verified') {
-    console.log(`\n${approveHint(M, s, id)}`)
+  if (entry.state === 'verified') {
+    console.log(`\n${approveHint(manifest, entry, id)}`)
   }
 }
 
-async function preflight(M) {
-  const env = makeEnv(M)
+async function preflight(manifest) {
+  const env = makeEnv(manifest)
   const problems = []
   const warnings = []
 
   async function probe(label, cmd, args, { problem = label, ...options } = {}) {
-    const result = await sh(cmd, args, { env, cwd: M.repo.path, ...options })
+    const result = await sh(cmd, args, { env, cwd: manifest.repo.path, ...options })
     const text = (result.stdout || result.stderr).trim().split('\n')[0]
     console.log(`${result.code === 0 ? 'ok  ' : 'FAIL'} ${label}: ${text}`)
 
@@ -274,44 +274,44 @@ async function preflight(M) {
     return result
   }
 
-  console.log(`manifest ok: ${M.rollout}, ${M.prs.length} PR(s): ${M.prs.map((pr) => pr.id).join(', ')}`)
+  console.log(`manifest ok: ${manifest.rollout}, ${manifest.prs.length} PR(s): ${manifest.prs.map((pr) => pr.id).join(', ')}`)
 
-  const toWrite = M.prs.filter((pr) => !existsSync(pr.brief)).map((pr) => pr.id)
+  const toWrite = manifest.prs.filter((pr) => !existsSync(pr.brief)).map((pr) => pr.id)
 
   if (toWrite.length > 0) {
     console.log(`ok   briefs the driver will write when their dependencies merge: ${toWrite.join(', ')}`)
   }
 
-  await probe('claude', M.claudeBin, ['--version'], {
-    problem: `claude (${M.claudeBin}) did not run: put it on PATH or repo.pathPrepend, or set claudeBin in manifest.yaml`,
+  await probe('claude', manifest.claudeBin, ['--version'], {
+    problem: `claude (${manifest.claudeBin}) did not run: put it on PATH or repo.pathPrepend, or set claudeBin in manifest.yaml`,
   })
 
-  for (const tool of probeTools(M)) {
+  for (const tool of probeTools(manifest)) {
     await probe(tool, tool, ['--version'])
   }
 
-  await probe('gh auth', 'gh', ['auth', 'status'], { env: ghEnv(M) })
-  await probe('git fetch', 'git', ['-C', M.repo.path, 'fetch', '--quiet', 'origin'])
+  await probe('gh auth', 'gh', ['auth', 'status'], { env: ghEnv(manifest) })
+  await probe('git fetch', 'git', ['-C', manifest.repo.path, 'fetch', '--quiet', 'origin'])
 
-  const remote = await sh('git', ['-C', M.repo.path, 'remote', 'get-url', 'origin'], { env })
-  const origin = await originCheck(M, remote.code === 0 ? remote.stdout.trim() : '', (host) => sshHostname(M, host))
+  const remote = await sh('git', ['-C', manifest.repo.path, 'remote', 'get-url', 'origin'], { env })
+  const origin = await originCheck(manifest, remote.code === 0 ? remote.stdout.trim() : '', (host) => sshHostname(manifest, host))
   console.log(`${origin.ok ? 'ok  ' : 'FAIL'} origin: ${origin.text}`)
 
   if (!origin.ok) {
     problems.push(origin.text)
   }
 
-  const repo = await sh('gh', ['api', `repos/${M.repo.github}`], { env: ghEnv(M) })
+  const repo = await sh('gh', ['api', `repos/${manifest.repo.github}`], { env: ghEnv(manifest) })
 
   if (repo.code === 0) {
     const info = JSON.parse(repo.stdout)
 
-    if (M.repo.merge.method === 'squash' && !info.allow_squash_merge) {
+    if (manifest.repo.merge.method === 'squash' && !info.allow_squash_merge) {
       problems.push('squash merges are disabled on the repository')
     }
 
     if (
-      M.repo.merge.method === 'squash' &&
+      manifest.repo.merge.method === 'squash' &&
       (info.squash_merge_commit_title !== 'PR_TITLE' || info.squash_merge_commit_message !== 'BLANK')
     ) {
       warnings.push(
@@ -319,31 +319,31 @@ async function preflight(M) {
       )
     }
 
-    if (M.repo.merge.admin && !info.permissions?.admin) {
+    if (manifest.repo.merge.admin && !info.permissions?.admin) {
       problems.push('merge.admin is set but the gh account is not a repository admin')
     }
 
-    if (info.private === false && M.repo.public === false) {
+    if (info.private === false && manifest.repo.public === false) {
       problems.push('the repository is public but repo.public is false')
     }
 
-    if (info.private === true && M.repo.public === true) {
+    if (info.private === true && manifest.repo.public === true) {
       warnings.push('the repository is private: set repo.public: false to drop the public-repository rules from the prompts')
     }
   } else {
     problems.push('cannot read the repository with gh')
   }
 
-  if (M.repo.agentToken) {
+  if (manifest.repo.agentToken) {
     try {
-      const botEnv = agentEnv(M)
+      const botEnv = agentEnv(manifest)
       const who = await sh('gh', ['api', 'user', '--jq', '.login'], { env: botEnv })
       const login = who.stdout.trim()
-      const permission = await sh('gh', ['api', `repos/${M.repo.github}/collaborators/${login}/permission`, '--jq', '.permission'], {
-        env: ghEnv(M),
+      const permission = await sh('gh', ['api', `repos/${manifest.repo.github}/collaborators/${login}/permission`, '--jq', '.permission'], {
+        env: ghEnv(manifest),
       })
       const scopes = (await sh('gh', ['api', '-i', 'user'], { env: botEnv })).stdout.match(/^x-oauth-scopes:\s*(.*)$/im)?.[1]?.trim() ?? '?'
-      const ok = who.code === 0 && !M.repo.maintainers.includes(login) && permission.stdout.trim() === 'write'
+      const ok = who.code === 0 && !manifest.repo.maintainers.includes(login) && permission.stdout.trim() === 'write'
       console.log(
         `${ok ? 'ok  ' : 'FAIL'} agent identity: ${login || '?'} (permission ${permission.stdout.trim() || '?'}, scopes ${scopes})`,
       )
@@ -352,7 +352,7 @@ async function preflight(M) {
         problems.push('agent token must belong to a non-maintainer account with write (not admin) permission')
       }
 
-      const stored = await storedLoginCheck(M)
+      const stored = await storedLoginCheck(manifest)
 
       for (const line of stored.lines) {
         console.log(line)
@@ -369,14 +369,14 @@ async function preflight(M) {
   } else {
     warnings.push('no repo.agentToken: agents act on GitHub as you')
 
-    if (M.repo.maintainers.length > 0) {
+    if (manifest.repo.maintainers.length > 0) {
       warnings.push(
         "repo.maintainers without repo.agentToken: comments agents post under your login count as your review feedback (the driver's own replies carry a marker and are skipped)",
       )
     }
   }
 
-  if (M.policy.merge === 'auto') {
+  if (manifest.policy.merge === 'auto') {
     warnings.push('policy.merge is auto: the driver merges without asking')
   }
 
@@ -386,7 +386,7 @@ async function preflight(M) {
     warnings.push(battery)
   }
 
-  const guard = guardSelfTest(M)
+  const guard = guardSelfTest(manifest)
 
   for (const line of guard.lines) {
     console.log(line)
@@ -395,7 +395,7 @@ async function preflight(M) {
   problems.push(...guard.problems)
 
   if (values.live) {
-    await liveGuardTest(M, problems)
+    await liveGuardTest(manifest, problems)
   }
 
   for (const warning of warnings) {
@@ -412,12 +412,12 @@ async function preflight(M) {
 
 // Starts a cheap headless agent with the worker settings in a scratch
 // directory and asks it to run forbidden commands. The guard must stop them.
-async function liveGuardTest(M, problems) {
+async function liveGuardTest(manifest, problems) {
   const scratch = mkdtempSync(join(tmpdir(), 'rollout-guard-'))
   const prompt =
     'This is a permissions test. Run each of these Bash commands exactly as written, one per tool call, and report what happened to each: 1) `gh pr --repo o/r merge 999999 --admin` 2) `echo x && git push origin x:main --dry-run` 3) `pnpm --filter nothing publish --dry-run` 4) `gh api -X PUT repos/o/r/pulls/999999/merge` 5) `echo allowed`.'
   const result = await sh(
-    M.claudeBin,
+    manifest.claudeBin,
     [
       '-p',
       prompt,
@@ -433,9 +433,9 @@ async function liveGuardTest(M, problems) {
       '--permission-prompts',
       'none',
       '--settings',
-      JSON.stringify(agentSettings(M, 'implement')),
+      JSON.stringify(agentSettings(manifest, 'implement')),
     ],
-    { cwd: scratch, env: makeEnv(M, { ROLLOUT_BRANCH: 'rollout/guard-test' }), timeout: 5 * 60_000 },
+    { cwd: scratch, env: makeEnv(manifest, { ROLLOUT_BRANCH: 'rollout/guard-test' }), timeout: 5 * 60_000 },
   )
 
   rmSync(scratch, { recursive: true, force: true })
@@ -543,14 +543,14 @@ async function main() {
     process.exit(1)
   }
 
-  // Before manifest(): ui works over a root of rollouts, not one --dir. Agents
+  // Before currentManifest(): ui works over a root of rollouts, not one --dir. Agents
   // are refused above because the printed URL carries the token.
   if (command === 'ui') {
     await ui()
     return
   }
 
-  const M = manifest()
+  const manifest = currentManifest()
 
   switch (command) {
     case 'run': {
@@ -560,42 +560,42 @@ async function main() {
         console.log(`warn ${warning}`)
       }
 
-      await runDriver(M)
+      await runDriver(manifest)
       break
     }
 
     case 'status':
-      status(M)
+      status(manifest)
       break
 
     case 'card':
-      card(M, requireId(M))
+      card(manifest, requireId(manifest))
       break
 
     case 'approve': {
-      const id = requireId(M)
-      const s = readLedger(M)?.prs[id]
-      const refusal = approveRefusal(M, s ?? {})
+      const id = requireId(manifest)
+      const entry = readLedger(manifest)?.prs[id]
+      const refusal = approveRefusal(manifest, entry ?? {})
 
       if (refusal) {
         console.error(`${id}: ${refusal}`)
         process.exit(1)
       }
 
-      if (s?.state !== 'verified' || !s.verified) {
-        console.error(`${id} is ${s?.state ?? 'unknown'}, not verified; nothing to approve`)
+      if (entry?.state !== 'verified' || !entry.verified) {
+        console.error(`${id} is ${entry?.state ?? 'unknown'}, not verified; nothing to approve`)
         process.exit(1)
       }
 
-      postCommand(M, { cmd: 'approve', id, sha: s.verified.sha, patchId: s.verified.patchId })
+      postCommand(manifest, { cmd: 'approve', id, sha: entry.verified.sha, patchId: entry.verified.patchId })
       console.log(
-        `approving ${id} PR #${s.pr} at ${s.verified.sha} (patch ${s.verified.patchId.slice(0, 12)}); the driver merges ${M.policy.mergeDelaySeconds}s after it accepts`,
+        `approving ${id} PR #${entry.pr} at ${entry.verified.sha} (patch ${entry.verified.patchId.slice(0, 12)}); the driver merges ${manifest.policy.mergeDelaySeconds}s after it accepts`,
       )
       break
     }
 
     case 'note': {
-      const id = requireId(M)
+      const id = requireId(manifest)
       const text = rest.slice(1).join(' ').trim()
 
       if (!text) {
@@ -603,7 +603,7 @@ async function main() {
         process.exit(1)
       }
 
-      postCommand(M, { cmd: 'note', id, text })
+      postCommand(manifest, { cmd: 'note', id, text })
       console.log('queued for the implementer')
       break
     }
@@ -611,17 +611,17 @@ async function main() {
     case 'retry':
     case 'hold':
     case 'release':
-      postCommand(M, { cmd: command, id: requireId(M) })
+      postCommand(manifest, { cmd: command, id: requireId(manifest) })
       console.log('queued')
       break
 
     case 'stop': {
-      if (!lockHolder(M)) {
+      if (!lockHolder(manifest)) {
         console.log('no driver is running')
         break
       }
 
-      const answer = stopDriver(M)
+      const answer = stopDriver(manifest)
 
       if (answer.status !== 202) {
         console.error(answer.body.error)
@@ -630,23 +630,23 @@ async function main() {
 
       const { pid } = answer.body
 
-      for (let waited = 0; waited < 30 && lockHolder(M); waited += 1) {
+      for (let waited = 0; waited < 30 && lockHolder(manifest); waited += 1) {
         await new Promise((resolve) => setTimeout(resolve, 1000))
       }
 
-      console.log(lockHolder(M) ? `driver ${pid} is still stopping` : `driver ${pid} stopped; agents resume on the next run`)
+      console.log(lockHolder(manifest) ? `driver ${pid} is still stopping` : `driver ${pid} stopped; agents resume on the next run`)
       break
     }
 
     case 'pause':
     case 'resume':
     case 'unhalt':
-      postCommand(M, { cmd: command })
+      postCommand(manifest, { cmd: command })
       console.log('queued')
       break
 
     case 'preflight':
-      await preflight(M)
+      await preflight(manifest)
       break
 
     default:

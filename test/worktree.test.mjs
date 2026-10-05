@@ -32,13 +32,13 @@ function fixture() {
   commit(repo, 'a.txt')
   git(repo, 'push', '--quiet', 'origin', 'HEAD:main')
 
-  const M = {
+  const manifest = {
     home: HOME,
     wtRoot: join(dir, 'demo.worktrees'),
     repo: { path: repo, base: 'main', install: null, agentToken: null, pathPrepend: [] },
   }
 
-  return { dir, M, repo, pr: { id: 'A1', branch: 'feat/a1' } }
+  return { dir, manifest, repo, pr: { id: 'A1', branch: 'feat/a1' } }
 }
 
 function mergeElsewhere(repo, file) {
@@ -49,49 +49,49 @@ function mergeElsewhere(repo, file) {
   return sha
 }
 
-async function started(t) {
-  const f = fixture()
-  await enableWorktreeConfig(f.M)
-  const wt = await prepareWorktree(f.M, f.pr)
-  t.after(() => rmSync(f.dir, { recursive: true, force: true }))
+async function started(context) {
+  const setup = fixture()
+  await enableWorktreeConfig(setup.manifest)
+  const wt = await prepareWorktree(setup.manifest, setup.pr)
+  context.after(() => rmSync(setup.dir, { recursive: true, force: true }))
 
-  return { ...f, wt }
+  return { ...setup, wt }
 }
 
-test('prepareWorktree: an untouched worktree moves to the current base', async (t) => {
-  const { M, repo, pr, wt } = await started(t)
+test('prepareWorktree: an untouched worktree moves to the current base', async (context) => {
+  const { manifest, repo, pr, wt } = await started(context)
   const base = mergeElsewhere(repo, 'b.txt')
 
-  assert.equal(await prepareWorktree(M, pr), wt)
+  assert.equal(await prepareWorktree(manifest, pr), wt)
   assert.equal(git(wt, 'rev-parse', 'HEAD'), base)
   assert.equal(git(wt, 'rev-parse', '--abbrev-ref', 'HEAD'), pr.branch)
 })
 
-test('prepareWorktree: local commits stay where they are', async (t) => {
-  const { M, repo, pr, wt } = await started(t)
+test('prepareWorktree: local commits stay where they are', async (context) => {
+  const { manifest, repo, pr, wt } = await started(context)
   const own = commit(wt, 'own.txt')
   mergeElsewhere(repo, 'b.txt')
 
-  await prepareWorktree(M, pr)
+  await prepareWorktree(manifest, pr)
   assert.equal(git(wt, 'rev-parse', 'HEAD'), own)
 })
 
-test('prepareWorktree: uncommitted or untracked changes stay where they are', async (t) => {
-  const { M, repo, pr, wt } = await started(t)
+test('prepareWorktree: uncommitted or untracked changes stay where they are', async (context) => {
+  const { manifest, repo, pr, wt } = await started(context)
   const head = git(wt, 'rev-parse', 'HEAD')
   writeFileSync(join(wt, 'draft.txt'), 'work in progress\n')
   mergeElsewhere(repo, 'b.txt')
 
-  await prepareWorktree(M, pr)
+  await prepareWorktree(manifest, pr)
   assert.equal(git(wt, 'rev-parse', 'HEAD'), head)
 })
 
-test('prepareWorktree: a pushed branch is left to the rebase at the gate', async (t) => {
-  const { M, repo, pr, wt } = await started(t)
+test('prepareWorktree: a pushed branch is left to the rebase at the gate', async (context) => {
+  const { manifest, repo, pr, wt } = await started(context)
   const head = git(wt, 'rev-parse', 'HEAD')
   git(repo, 'push', '--quiet', 'origin', `${head}:refs/heads/${pr.branch}`)
   mergeElsewhere(repo, 'b.txt')
 
-  await prepareWorktree(M, pr)
+  await prepareWorktree(manifest, pr)
   assert.equal(git(wt, 'rev-parse', 'HEAD'), head)
 })

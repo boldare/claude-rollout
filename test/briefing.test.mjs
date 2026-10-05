@@ -27,7 +27,7 @@ test('a transcript source is its last substantial assistant text', () => {
 })
 
 test('PRs get untagged sources plus the ones for their tags', () => {
-  const M = {
+  const manifest = {
     briefing: {
       sources: [
         { title: 'Plan', path: plan, kind: 'markdown' },
@@ -36,8 +36,8 @@ test('PRs get untagged sources plus the ones for their tags', () => {
     },
   }
 
-  assert.match(sourcesFor(M, { briefTags: ['A'] }), /### Plan[\s\S]*### Track A/)
-  assert.doesNotMatch(sourcesFor(M, { briefTags: ['B'] }), /Track A/)
+  assert.match(sourcesFor(manifest, { briefTags: ['A'] }), /### Plan[\s\S]*### Track A/)
+  assert.doesNotMatch(sourcesFor(manifest, { briefTags: ['B'] }), /Track A/)
 })
 
 test('a markdown source rewritten with a different length is read again', () => {
