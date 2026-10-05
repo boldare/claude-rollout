@@ -285,6 +285,7 @@ function showNotice(current, notice) {
     current.notice = null
     scheduleRender()
   }, NOTICE_MS)
+
   scheduleRender()
 }
 
@@ -506,7 +507,7 @@ function context() {
   }
 }
 
-function body(ctx) {
+function renderBody(ctx) {
   if (ctx.route.pr) {
     return renderDetail(ctx)
   }
@@ -533,7 +534,7 @@ function renderRollout() {
     return
   }
 
-  app.replaceChildren(header, renderViewTabs(ctx), body(ctx))
+  app.replaceChildren(header, renderViewTabs(ctx), renderBody(ctx))
 }
 
 function render() {

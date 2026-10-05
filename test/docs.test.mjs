@@ -26,6 +26,7 @@ const PAGES = [
   'how-it-works.html',
   'security.html',
 ]
+
 const TOP_LEVEL_FIELDS = ['rollout', 'model', 'claudeBin', 'repo', 'briefing', 'policy', 'prs']
 
 function read(file) {

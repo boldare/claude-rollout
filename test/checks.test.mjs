@@ -12,6 +12,7 @@ test('green when every required glob matches and all runs pass', () => {
     run(2, 'smoke (default)', 'completed', 'success'),
     run(3, 'smoke (vite 6)', 'completed', 'skipped'),
   ]
+
   assert.equal(summarizeChecks(runs, ['check', 'smoke*']).state, 'green')
 })
 

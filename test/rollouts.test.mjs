@@ -55,11 +55,13 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
     rollouts.map((rollout) => rollout.name),
     ['broken', 'demo', 'fresh'],
   )
+
   assert.match(broken.error, /invalid manifest/)
   assert.deepEqual(
     { ...broken, error: null },
     { name: 'broken', rollout: null, started: false, driver: null, merged: 0, total: 0, costUsd: 0, error: null },
   )
+
   assert.equal(demo.rollout, 'demo')
   assert.equal(demo.started, true)
   assert.equal(demo.merged, 0)
@@ -151,6 +153,7 @@ test('rolloutPr: the detail with the brief and notes texts, with or without a le
     detail.runs.map((run) => run.run),
     ['A1-01-implement', 'A1-02-verify'],
   )
+
   assert.equal(rolloutPr(findRollout(root, 'demo'), 'Z9'), null)
 
   const fresh = rolloutPr(findRollout(root, 'fresh'), 'A1')
@@ -238,6 +241,7 @@ function killedRuns() {
     { at: at(89), id: 'A3', kind: 'verify-start', run: 'A3-02-verify', log: 'logs/A3-02-verify.jsonl', effort: 'high' },
     { at: at(95), id: 'A3', kind: 'verify-done', run: 'A3-02-verify', ok: false, cost: 0, seconds: 360, error: 'timeout after 60 min' },
   ]
+
   const manifest = loadManifest(makeRollout({ events: [...events, ...killed, partial] }))
 
   writeLog(manifest, 'A3-01-implement', interruptedTranscript())
@@ -266,6 +270,7 @@ test('transcriptPage: pages of display items with their index in the log', () =>
     last.items.map((item) => item.index),
     [5, 6, 7],
   )
+
   assert.deepEqual(last.items[0], {
     index: 5,
     kind: 'tool',
@@ -276,6 +281,7 @@ test('transcriptPage: pages of display items with their index in the log', () =>
     inputText: '{\n  "file_path": "README.md"\n}',
     cut: 0,
   })
+
   assert.deepEqual(last.items[1], {
     index: 6,
     kind: 'tool-result',
@@ -286,6 +292,7 @@ test('transcriptPage: pages of display items with their index in the log', () =>
     refused: true,
     cut: 0,
   })
+
   assert.equal(last.items[2].name, 'Read')
 
   const middle = transcriptPage(manifest, 'A1-01-implement', { from: 2, limit: 3 })
@@ -389,12 +396,14 @@ test('withEstimates: only interrupted or failed runs without a cost and with an 
     run('A3-09-fix', 'interrupted', 0),
     run(null, 'failed', 0),
   ]
+
   const estimated = withEstimates(manifest, runs)
 
   assert.deepEqual(
     estimated.map((item) => item.estimateUsd),
     [2.67, null, null, null, null, null],
   )
+
   assert.deepEqual(estimated[0], { ...runs[0], estimateUsd: 2.67 })
   assert.equal('estimateUsd' in runs[0], false)
   assert.equal(withEstimates(manifest, [run('A1-01-implement', 'failed', 0)])[0].estimateUsd, null)

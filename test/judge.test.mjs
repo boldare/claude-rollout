@@ -120,6 +120,7 @@ test('does not merge onto a red base branch', () => {
     verifiedAndApproved,
     facts({ mainChecks: { state: 'red', missing: [], pending: [], failing: ['check'] } }),
   )
+
   assert.equal(verdict.action, 'wait')
 })
 
@@ -197,6 +198,7 @@ test('policy: forbidden paths, versions, changesets, denylist, multi-line commit
     commits: [{ sha: 'abc1234def', message: 'fix: thing\n\nCo-Authored-By: someone' }],
     changesets: [{ path: '.changeset/big.md', text: '---\n"@demo/core": major\n---\n' }],
   })
+
   const violations = policyViolations(manifest, pr, bad).join('\n')
 
   assert.match(violations, /forbidden path packages\/core\/CHANGELOG\.md/)
@@ -307,7 +309,7 @@ test('a held PR waits: no merge, no rebase, no ready notice in manual mode', () 
   assert.equal(judge(manifest, pr, { ...held, held: null }, facts()).action, 'merge')
 })
 
-const withMerge = (manifest, merge) => ({ ...manifest, policy: { ...manifest.policy, merge } })
+const withMerge = (base, merge) => ({ ...base, policy: { ...base.policy, merge } })
 
 test('approvalChannel: inbox or GitHub under human, none under manual and auto', () => {
   assert.equal(approvalChannel(manifest, 'bot'), 'inbox')
@@ -326,10 +328,12 @@ test('approveRefusal: manual and auto refuse, and so does a PR approved on GitHu
     approveRefusal(withMerge(manifest, 'manual'), { pr: 7, author: 'bot' }),
     'policy.merge is manual: no approval is needed. Merge the PR on GitHub once the driver says it is ready',
   )
+
   assert.equal(
     approveRefusal(withMerge(GM, 'auto'), { pr: 7, author: 'maint' }),
     'policy.merge is auto: no approval is needed. The driver merges once the gate passes, and rollout hold stops it',
   )
+
   assert.equal(approveRefusal(GM, { pr: 7, author: 'bot' }), 'PR #7 is approved on GitHub: review it there')
   assert.equal(approveRefusal(GM, { pr: 7, author: 'maint' }), null)
   assert.equal(approveRefusal(GM, { pr: 7 }), null)
@@ -371,6 +375,7 @@ function scanned(alerts, baseOpen = [], overrides = {}) {
 
 const ALERT_REASON =
   'CodeQL js/shell-command-injection-from-environment (medium) bin/rollout.mjs:357: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4'
+
 const NONE = { action: 'none', reasons: [] }
 
 test('codeScanningFindings: a new security alert at the threshold sends the PR back', () => {
@@ -400,6 +405,7 @@ test('codeScanningFindings: without a security level, error ranks as medium and 
       'CodeQL js/shell-command-injection-from-environment (medium) ?:?: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4',
     ],
   })
+
   assert.deepEqual(codeScanningFindings(withScanning({ minSeverity: 'high' }), scanned([error])), NONE)
 
   for (const severity of ['note', 'none', null]) {
@@ -419,6 +425,7 @@ test('codeScanningFindings: an alert from an older commit waits for the analysis
       'code scanning has not analysed abc1234 yet (alert #5 is from unknown)',
     ],
   })
+
   assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve/)
 })
 
@@ -461,10 +468,12 @@ test('judge: code scanning comes after red and pending CI, and before the base a
     action: 'fix',
     reasons: ['smoke: failure', 'CI is red on the PR head'],
   })
+
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { checks: pending })), {
     action: 'wait',
     reasons: ['CI pending (missing: -; running: test)'],
   })
+
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()])), flagged)
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { mainChecks: redBase })), flagged)
   assert.deepEqual(judge(withScanning({ action: 'block' }), pr, verifiedAndApproved, scanned([alert()])), { ...flagged, action: 'block' })

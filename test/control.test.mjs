@@ -127,10 +127,12 @@ test('driverCommand: caffeinate on macOS when it exists, plain node otherwise', 
     command: '/usr/bin/caffeinate',
     args: ['-is', process.execPath, ...plain],
   })
+
   assert.deepEqual(driverCommand(manifest, { dryRun: true, platform: 'darwin', caffeinate: true }), {
     command: '/usr/bin/caffeinate',
     args: ['-is', process.execPath, ...plain, '--dry-run'],
   })
+
   assert.deepEqual(driverCommand(manifest, { platform: 'darwin', caffeinate: false }), { command: process.execPath, args: plain })
   assert.deepEqual(driverCommand(manifest, { platform: 'linux', caffeinate: true }), { command: process.execPath, args: plain })
   assert.deepEqual(driverCommand(manifest, { dryRun: true, platform: 'linux', caffeinate: false }), {
@@ -210,6 +212,7 @@ test('startDriver: 409 while a driver holds the lock, 500 for a command that doe
 
     return null
   }
+
   const refused = await startDriver(locked, {
     command: () => {
       called = true

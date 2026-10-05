@@ -41,7 +41,7 @@ test('probe tools are only node without install or verify steps', () => {
   assert.deepEqual(tools(undefined, null), ['node'])
 })
 
-const manifest = { repo: { github: 'My-Org/my-lib' } }
+const myLib = { repo: { github: 'My-Org/my-lib' } }
 
 function resolverSpy(result) {
   const calls = []
@@ -63,7 +63,7 @@ test('origin on github.com passes without resolving', async () => {
   const spy = resolverSpy('github.com')
 
   for (const url of ['git@github.com:my-org/my-lib.git', 'https://github.com/my-org/my-lib.git', 'git@GitHub.com:MY-ORG/My-Lib.git']) {
-    const result = await originCheck(manifest, url, spy.resolve)
+    const result = await originCheck(myLib, url, spy.resolve)
 
     assert.deepEqual(result, { ok: true, text: 'my-org/my-lib on github.com' }, url)
   }
@@ -73,7 +73,7 @@ test('origin on github.com passes without resolving', async () => {
 
 test('origin through an SSH alias passes when it resolves to github.com', async () => {
   const spy = resolverSpy('GitHub.com')
-  const result = await originCheck(manifest, 'git@github-work:my-org/my-lib.git', spy.resolve)
+  const result = await originCheck(myLib, 'git@github-work:my-org/my-lib.git', spy.resolve)
 
   assert.deepEqual(result, { ok: true, text: 'my-org/my-lib on github.com through SSH host github-work' })
   assert.deepEqual(spy.calls, ['github-work'])
@@ -81,7 +81,7 @@ test('origin through an SSH alias passes when it resolves to github.com', async 
 
 test('origin through an SSH alias fails when it resolves elsewhere', async () => {
   const spy = resolverSpy('gitlab.example.com')
-  const result = await originCheck(manifest, 'git@github-work:my-org/my-lib.git', spy.resolve)
+  const result = await originCheck(myLib, 'git@github-work:my-org/my-lib.git', spy.resolve)
 
   assert.equal(result.ok, false)
   assert.match(result.text, /gitlab\.example\.com/)
@@ -89,7 +89,7 @@ test('origin through an SSH alias fails when it resolves elsewhere', async () =>
 
 test('origin through an SSH alias fails when ssh -G fails', async () => {
   const spy = resolverSpy(new Error('exited 255'))
-  const result = await originCheck(manifest, 'git@github-work:my-org/my-lib.git', spy.resolve)
+  const result = await originCheck(myLib, 'git@github-work:my-org/my-lib.git', spy.resolve)
 
   assert.equal(result.ok, false)
   assert.match(result.text, /github-work/)
@@ -98,8 +98,8 @@ test('origin through an SSH alias fails when ssh -G fails', async () => {
 
 test('origin with another repo name fails before resolving', async () => {
   const spy = resolverSpy('github.com')
-  const result = await originCheck(manifest, 'git@github.com:my-org/my-lib-next.git', spy.resolve)
-  const alias = await originCheck(manifest, 'git@github-work:my-org/my-lib-next.git', spy.resolve)
+  const result = await originCheck(myLib, 'git@github.com:my-org/my-lib-next.git', spy.resolve)
+  const alias = await originCheck(myLib, 'git@github-work:my-org/my-lib-next.git', spy.resolve)
 
   assert.equal(result.ok, false)
   assert.match(result.text, /my-org\/my-lib-next/)
@@ -111,7 +111,7 @@ test('origin over HTTPS on another host fails without resolving', async () => {
   const spy = resolverSpy('github.com')
 
   for (const url of ['https://gitlab.com/my-org/my-lib.git', 'https://github-work/my-org/my-lib.git']) {
-    const result = await originCheck(manifest, url, spy.resolve)
+    const result = await originCheck(myLib, url, spy.resolve)
 
     assert.equal(result.ok, false, url)
   }
@@ -123,7 +123,7 @@ test('origin texts never print credentials', async () => {
   const spy = resolverSpy('github.com')
 
   for (const url of ['https://x-access-token:secret@gitlab.com/my-org/my-lib.git', 'https://x:secret@example.com/a']) {
-    const result = await originCheck(manifest, url, spy.resolve)
+    const result = await originCheck(myLib, url, spy.resolve)
 
     assert.equal(result.ok, false, url)
     assert.doesNotMatch(result.text, /secret/, url)
@@ -132,8 +132,8 @@ test('origin texts never print credentials', async () => {
 
 test('a missing or local origin fails', async () => {
   const spy = resolverSpy('github.com')
-  const missing = await originCheck(manifest, '', spy.resolve)
-  const local = await originCheck(manifest, '/srv/git/my-lib.git', spy.resolve)
+  const missing = await originCheck(myLib, '', spy.resolve)
+  const local = await originCheck(myLib, '/srv/git/my-lib.git', spy.resolve)
 
   assert.equal(missing.ok, false)
   assert.match(missing.text, /\(none\)/)

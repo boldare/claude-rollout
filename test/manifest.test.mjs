@@ -92,6 +92,7 @@ test('loadManifest: the delegate is off by default, has its timeout, and {} turn
     maxPerPr: 2,
     effort: 'high',
   })
+
   assert.deepEqual(loadManifest(makeRollout({ policy: { delegate: { kinds: ['stuck'], maxPerPr: 0 } } })).policy.delegate, {
     kinds: ['stuck'],
     maxPerPr: 0,

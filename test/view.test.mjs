@@ -102,6 +102,7 @@ test('runsFromEvents pairs starts and dones by run id', () => {
     denials: 2,
     status: 'ok',
   })
+
   assert.deepEqual(statuses(runs), ['A1-01-implement:ok', 'A2-01-implement:ok'])
 })
 
@@ -114,6 +115,7 @@ test('runsFromEvents pairs old events by log name, PR and role', () => {
     resume: false,
     log: 'logs/A1-01-implement.jsonl',
   })
+
   const runs = runsFromEvents(
     [
       old(0),
@@ -214,6 +216,7 @@ test('delegate runs: start and done pair into one run, its cost goes to the dele
     start('A1', 'delegate', 'A1-01-delegate', 0, { blocked: 'needs-decision' }),
     done('A1', 'delegate', 'A1-01-delegate', 5, { cost: 0.75, result: 'ANSWER' }),
   ])
+
   const answers = [
     {
       at: at(5),
@@ -226,12 +229,14 @@ test('delegate runs: start and done pair into one run, its cost goes to the dele
       run: 'A1-01-delegate',
     },
   ]
+
   const ledger = { prs: { A1: { costUsd: 0.75, delegate: { runs: 1, lastQuestion: 'abc', limitNotified: false, answers } } } }
 
   assert.deepEqual(
     runs.map((run) => [run.run, run.role, run.startedAt, run.endedAt, run.status, run.result, run.costUsd]),
     [['A1-01-delegate', 'delegate', at(0), at(5), 'ok', 'ANSWER', 0.75]],
   )
+
   assert.equal(costs(manifest, ledger, runs).byRole.delegate, 0.75)
   assert.deepEqual(prDetail(manifest, ledger, [], runs, 'A1').delegate, { maxPerPr: 2, runs: 1, answers })
   assert.deepEqual(prDetail(loadManifest(makeRollout()), { prs: {} }, [], [], 'A1').delegate, { maxPerPr: null, runs: 0, answers: [] })
@@ -320,11 +325,13 @@ test('prDetail: approval channel, brief paths, feedback and runs', () => {
     notesPath: join(dir, 'briefs', 'A1.review-notes.md'),
     notesExist: false,
   })
+
   assert.deepEqual(detail.feedback, feedback)
   assert.deepEqual(
     detail.runs.map((run) => run.run),
     ['A1-01-implement'],
   )
+
   assert.equal(prDetail(onGitHub, ledger, [], runs, 'A2').approval, 'inbox')
   assert.equal(prDetail(onGitHub, ledger, [], runs, 'A3').approval, 'github')
   assert.equal(prDetail(manifest, ledger, [], runs, 'A1').approval, 'inbox')
@@ -332,10 +339,10 @@ test('prDetail: approval channel, brief paths, feedback and runs', () => {
 
   for (const merge of ['manual', 'auto']) {
     for (const variant of [manifest, onGitHub]) {
-      const detail = prDetail({ ...variant, policy: { ...variant.policy, merge } }, ledger, [], runs, 'A1')
+      const variantDetail = prDetail({ ...variant, policy: { ...variant.policy, merge } }, ledger, [], runs, 'A1')
 
-      assert.equal(detail.approval, null, merge)
-      assert.equal(detail.merge, merge)
+      assert.equal(variantDetail.approval, null, merge)
+      assert.equal(variantDetail.merge, merge)
     }
   }
 })
@@ -353,6 +360,7 @@ test('parseTranscript: text, tool calls, results, refusals and the final report'
     { kind: 'tool-result', toolUseId: 'tool-2', text: 'rollout guard: the driver merges PRs', isError: true, refused: true },
     { kind: 'tool-result', toolUseId: 'tool-3', text: 'line one\n[image]\nline two', isError: false, refused: false },
   ])
+
   assert.deepEqual(final, {
     ok: true,
     subtype: 'success',
@@ -403,6 +411,7 @@ test('parseTranscript: messages without a model or an id, and thinking without a
   assert.deepEqual(parseTranscript(jsonLines(onlyThinking)).usage, {
     'claude-opus-5-5': { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 50 },
   })
+
   assert.deepEqual(parseTranscript(jsonLines([lines[0]])).usage, {})
 })
 
@@ -480,6 +489,7 @@ test('status and card read the fixture, partial events line included', () => {
     card.stdout,
     /^state: verified {3}PR: https:\/\/github\.com\/example\/demo\/pull\/11 {3}cost: \$6\.25\nheld since 2026-09-01T11:21:00\.000Z \(rollout\.mjs release A1\)$/m,
   )
+
   assert.match(card.stdout, /verifier: PASS on a1a1a1a/)
 })
 

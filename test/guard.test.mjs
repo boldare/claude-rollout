@@ -270,17 +270,17 @@ test('isEntry resolves both paths and fails closed', () => {
 })
 
 test('decide refuses when the check itself throws', () => {
-  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
+  const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
   const explode = () => {
     throw new Error('boom')
   }
 
-  assert.match(decide(payload, 'worker', {}, explode), /boom/)
-  assert.equal(decide(payload, 'worker', {}), null)
+  assert.match(decide(input, 'worker', {}, explode), /boom/)
+  assert.equal(decide(input, 'worker', {}), null)
 })
 
 test('decide refuses even when the thrown value cannot be printed', () => {
-  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
+  const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } })
   const unprintable = [
     Object.create(null),
     {
@@ -301,7 +301,7 @@ test('decide refuses even when the thrown value cannot be printed', () => {
       throw value
     }
 
-    assert.match(decide(payload, 'worker', {}, explode), /^the guard failed \(.+\), command refused$/)
+    assert.match(decide(input, 'worker', {}, explode), /^the guard failed \(.+\), command refused$/)
   }
 })
 
@@ -455,6 +455,7 @@ test('pre-push hook refuses URLs other than the push URL marker', () => {
   sh(
     `cd work && git config core.hooksPath ${hooks} && git config user.email t@t && git config user.name t && git commit -q --allow-empty -m "fix: one" && git remote add origin ../remote.git`,
   )
+
   writeFileSync(join(dir, 'work', '.git', 'rollout-branch'), BRANCH)
   writeFileSync(join(dir, 'work', '.git', 'rollout-pushurl'), '../remote.git')
 
@@ -547,7 +548,7 @@ test('the hook command exits 2 when the guard cannot run', () => {
     }
   }
 
-  // Node 20 and 22 cannot load a path with a backslash. A Node that can still refuses the merge.
+  // Node cannot load a path with a backslash (24 and 26 at least). A Node that can still refuses the merge.
   const manifest = loadManifest(makeRollout())
 
   manifest.home = join(mkdtempSync(join(tmpdir(), 'rollout-backslash-')), 'sk\\ill')

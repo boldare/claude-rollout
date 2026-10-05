@@ -58,7 +58,7 @@ test('commits split on record separators and keep bodies', () => {
   ])
 })
 
-const manifest = { repo: { maintainers: ['maint'] } }
+const maintained = { repo: { maintainers: ['maint'] } }
 
 function inlineComment(id, login, createdAt, body) {
   return { id, user: { login }, created_at: createdAt, body, path: 'lib/a.mjs', line: 3, diff_hunk: '@@ -1 +1 @@', in_reply_to_id: null }
@@ -87,18 +87,20 @@ test('maintainer feedback keeps maintainer items in time order', () => {
     },
     inlineComment(12, 'someone', '2026-01-01T00:00:00Z', 'Nice'),
   ]
+
   const reviews = [
     review(21, 'maint', '2026-01-01T00:01:00Z', 'COMMENTED', 'Split the module'),
     review(22, 'maint', '2026-01-01T00:02:00Z', 'APPROVED', 'LGTM'),
     review(23, 'maint', '2026-01-01T00:04:00Z', 'CHANGES_REQUESTED', '  \n'),
     review(24, 'someone', '2026-01-01T00:00:00Z', 'CHANGES_REQUESTED', 'No'),
   ]
+
   const conversation = [
     conversationComment(31, 'maint', '2026-01-01T00:02:30Z', 'Also update the docs'),
     conversationComment(32, 'someone', '2026-01-01T00:00:00Z', 'Me too'),
   ]
 
-  assert.deepEqual(maintainerFeedback(manifest, { inline, reviews, conversation }), [
+  assert.deepEqual(maintainerFeedback(maintained, { inline, reviews, conversation }), [
     { id: 'review-21', at: '2026-01-01T00:01:00Z', body: 'Split the module' },
     { id: 'conversation-31', at: '2026-01-01T00:02:30Z', body: 'Also update the docs' },
     {
@@ -115,7 +117,7 @@ test('maintainer feedback keeps maintainer items in time order', () => {
 })
 
 test('maintainer feedback skips bodies whose last line is the driver marker', () => {
-  const feedback = maintainerFeedback(manifest, {
+  const feedback = maintainerFeedback(maintained, {
     inline: [inlineComment(11, 'maint', '2026-01-01T00:00:00Z', 'Renamed (abc1234)\r\n\r\n<!-- rollout-driver -->')],
     reviews: [review(21, 'maint', '2026-01-01T00:01:00Z', 'COMMENTED', 'Done\n\n<!-- rollout-driver -->\n')],
     conversation: [conversationComment(31, 'maint', '2026-01-01T00:02:00Z', 'Review comments addressed:\n\n<!-- rollout-driver -->')],
@@ -125,7 +127,7 @@ test('maintainer feedback skips bodies whose last line is the driver marker', ()
 })
 
 test('maintainer feedback still counts a marker that is not the last line', () => {
-  const feedback = maintainerFeedback(manifest, {
+  const feedback = maintainerFeedback(maintained, {
     inline: [],
     reviews: [review(21, 'maint', '2026-01-01T00:00:00Z', 'COMMENTED', null)],
     conversation: [
@@ -166,6 +168,7 @@ test('the driver marks what it posts and never reads it back as feedback', async
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))
+
     const replyBody = reply.args.at(-1).replace(/^body=/, '')
 
     assert.equal(reply.args.at(-2), '-f')
@@ -317,10 +320,12 @@ test('alertsFrom keeps open alerts, the first line of each message and null for 
   const repeated = alertJson(4)
   repeated.most_recent_instance.message.text =
     '\n  This shell command depends on an uncontrolled absolute path.  \nThis shell command depends on an uncontrolled absolute path.\n'
+
   const plain = alertJson(5, {
     rule: { id: 'js/redundant-operation', severity: 'error' },
     most_recent_instance: { commit_sha: HEAD, message: { text: 'Both operands are identical.' } },
   })
+
   const bare = { number: 6, state: 'open' }
   const fixed = alertJson(7, { state: 'fixed' })
 
@@ -487,6 +492,7 @@ test('refreshOutsideDeps throws every failed lookup, so one that is not an outag
     { tool: 'gh', args: 'pr list --head feat/a1', code: 1, stderr: 'HTTP 502: Bad Gateway' },
     { tool: 'gh', args: 'pr list --head feat/a2', code: 1, stderr: 'HTTP 401: Bad credentials' },
   ])
+
   const manifest = loadManifest(dir, { only: ['A3'] })
   const ledger = { prs: { A1: { state: 'pending' }, A2: { state: 'pending' } }, event: () => {} }
   manifest.prs[0].deps = ['A1', 'A2']
@@ -498,6 +504,7 @@ test('refreshOutsideDeps throws every failed lookup, so one that is not an outag
       error.message,
       /^A1: gh pr list --head feat\/a1 .*HTTP 502: Bad Gateway\nA2: gh pr list --head feat\/a2 .*HTTP 401: Bad credentials$/,
     )
+
     assert.equal(githubUnavailable(error), false)
     assert.equal(githubUnavailable(error.errors[0]), true)
 
@@ -540,6 +547,7 @@ test('codeScanningFor reads the next page after a full one', async () => {
     { tool: 'gh', args: PR_ALERTS, stdout: full },
     { tool: 'gh', args: BASE_ALERTS, stdout: [] },
   ])
+
   const scan = await codeScanningFor(manifest, 11)
 
   assert.equal(scan.alerts.length, 100)
@@ -576,6 +584,7 @@ test('collectFacts reads code scanning for the PR, and not at all under ignore',
     { tool: 'gh', args: PR_ALERTS, stdout: [] },
     { tool: 'git', stdout: '' },
   ]
+
   const ledger = { data: { halted: null }, prs: {} }
 
   const cases = [

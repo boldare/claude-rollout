@@ -6,6 +6,7 @@ import { BATTERY_WARNING, batteryWarning, onBattery, sleptMs } from '../lib/mach
 const LAPTOP_ON_AC = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1234567)\t87%; charging; 0:45 remaining present: true\n"
 const LAPTOP_ON_BATTERY =
   "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1234567)\t64%; discharging; 4:12 remaining present: true\n"
+
 const DESKTOP = "Now drawing from 'AC Power'\n"
 const UPS = "Now drawing from 'UPS Power'\n -UPS-0 (id=7654321)\t98%; discharging; 0:30 remaining present: true\n"
 const GARBAGE = 'Battery Power\n%%% 0x00 not pmset output\n'
@@ -56,6 +57,7 @@ test('batteryWarning: a failed read is no warning', async () => {
   const throwing = () => {
     throw new Error('pmset missing')
   }
+
   const rejecting = async () => {
     throw new Error('pmset timed out')
   }

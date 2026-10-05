@@ -19,6 +19,7 @@ test('failureSignals: a missing session is read from stderr, not from the subtyp
     account: false,
     sessionMissing: true,
   })
+
   assert.equal(failureSignals(RESUME_MISSING.stdout, '').sessionMissing, false)
 })
 
@@ -150,6 +151,7 @@ test('failureReason: the budget cap and claude errors', () => {
     failureReason({ result: BUDGET_RESULT, stderr: '', code: 1, signal: null, budgetUsd: 20 }),
     'hit its budget cap ($20): Reached maximum budget ($20)',
   )
+
   assert.equal(
     failureReason({ result: { subtype: 'error_max_turns', errors: ['Reached maximum number of turns (40)'] }, stderr: '', code: 1 }),
     'error_max_turns: Reached maximum number of turns (40)',
@@ -323,6 +325,7 @@ test('runAgent: a 2-hour sleep counts toward the wall clock and not toward the t
     intervals.map((interval) => interval.ms),
     [MINUTE],
   )
+
   assert.equal(result.seconds, 10200)
   assert.equal(result.awakeSeconds, 3060)
   assert.equal(result.error, 'killed by SIGTERM')
@@ -351,6 +354,7 @@ test('runAgent: the timeout kills a run on its last awake minute', async (contex
     intervals.map((interval) => interval.ms),
     [MINUTE],
   )
+
   assert.equal(result.ok, false)
   assert.equal(result.error, 'timeout after 60 min')
   assert.equal(result.transient, false)
@@ -381,6 +385,7 @@ test('runAgent: the stall watchdog counts quiet awake minutes and skips a sleep'
     intervals.map((interval) => interval.ms),
     [MINUTE],
   )
+
   assert.equal(result.ok, false)
   assert.equal(result.error, 'no output for 20 min')
 })
@@ -428,6 +433,7 @@ test('runAgent: the delegate runs read-only, with no branch and its own schema',
     cwd: manifest.repo.path,
     logName: 'A1-01-delegate',
   })
+
   const args = readFileSync(argsFile, 'utf8').split('\0').slice(0, -1)
   const disallowed = args.indexOf('--disallowedTools')
   const schema = JSON.parse(readFileSync(new URL('../schemas/delegate.json', import.meta.url), 'utf8'))

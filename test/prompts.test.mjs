@@ -91,6 +91,7 @@ test('prompts: the brief writer sees every earlier answer, oldest first, under o
     { question: 'Keep the old flag?', answer: 'Yes, as an alias.' },
     { question: null, answer: 'The plan moved to a new file.' },
   ]
+
   const text = briefWritePrompt(manifest, pr, { ...STATE, briefAnswers })
   const order = [
     'Which default for the delay?',
@@ -106,6 +107,7 @@ test('prompts: the brief writer sees every earlier answer, oldest first, under o
     order,
     [...order].sort((left, right) => left - right),
   )
+
   assert.ok(text.includes('A note from the maintainer:\n\nThe plan moved to a new file.'))
 
   const fresh = briefWritePrompt(manifest, pr, freshPr())
@@ -158,6 +160,7 @@ test('prompts: the verifier skips steps that rewrite files for npm, pnpm, yarn a
     'bun install --frozen-lockfile',
     'bun test',
   ]
+
   const dropped = [
     'pnpm lint:fix',
     'eslint --fix .',
@@ -214,6 +217,7 @@ test('prompts: the delegate sees the question, the plan, the brief and every ear
   const noteHistory = [
     { at: '2026-09-01T10:00:00.000Z', by: 'maintainer', kind: 'needs-decision', question: 'Which name?', text: 'Call it --delay.' },
   ]
+
   const blocked = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 reads --wait.' }
 
   manifest.repo.denylist = ['acme-client', 'example corp']

@@ -37,11 +37,11 @@ function bearer(server) {
 function raw(port, path, { method = 'GET', host = `127.0.0.1:${port}`, headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const outgoing = request({ host: '127.0.0.1', port, method, path, agent: false, headers: { host, ...headers } }, (response) => {
-      let body = ''
+      let received = ''
 
       response.setEncoding('utf8')
-      response.on('data', (chunk) => (body += chunk))
-      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body }))
+      response.on('data', (chunk) => (received += chunk))
+      response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, body: received }))
     })
 
     outgoing.on('error', reject)
@@ -675,6 +675,7 @@ test('stream: needs the token, and close() ends open streams', async (context) =
     stream.next(() => true),
     /stream ended|terminated|aborted/,
   )
+
   await server.close()
 })
 
@@ -739,6 +740,7 @@ test('cli: ui prints a URL with the token, never writes it, and exits 0 on SIGTE
     env: cliEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+
   let stderr = ''
 
   child.stderr.on('data', (chunk) => (stderr += chunk))
@@ -823,6 +825,7 @@ test('cli: card lists the delegate runs and answers with their plan references',
     reasoning: 'The plan keeps it.',
     run: 'A1-01-delegate',
   }
+
   const escalation = { ...answer, decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent.', run: 'A1-02-delegate' }
   const delegate = { runs: 1, lastQuestion: 'abc', limitNotified: false, answers: [answer] }
   const card = cli('card', 'A1', '--dir', makeRollout({ policy: { delegate: {} }, prs: { A1: { state: 'needs_fix', delegate } } }))
@@ -848,6 +851,7 @@ test('cli: card lists the delegate runs and answers with their plan references',
     ),
     off.stdout,
   )
+
   assert.doesNotMatch(off.stdout, /plan: /)
   assert.doesNotMatch(cli('card', 'A1', '--dir', makeRollout()).stdout, /delegate/)
 })
@@ -993,6 +997,7 @@ test('commands: a hold posted through the API becomes a held event in the driver
     held.map((event) => event.id),
     ['A3'],
   )
+
   assert.deepEqual(inboxFiles(dir), [])
 })
 
@@ -1049,6 +1054,7 @@ test('commands: the error answers leave no inbox file', async (context) => {
     headers: { ...bearer(server), origin: server.origin, 'content-type': 'application/json' },
     body: JSON.stringify(pause),
   })
+
   assert.equal(put.status, 405)
 
   assert.deepEqual(inboxFiles(dir), [])
