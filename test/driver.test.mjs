@@ -835,6 +835,7 @@ test('guarded: a PR counts one error per tick, a clean tick resets it, and five 
   await driver.tick()
 
   assert.equal(entry.state, 'escalated')
+  assert.equal(entry.escalation, 'repeated errors')
   assert.equal(kindsSince(M).filter((kind) => kind === 'escalated').length, 1)
   assert.equal(notices.length, 1)
   assert.ok(notices[0].startsWith('A1: repeated errors'), notices[0])
@@ -1903,10 +1904,16 @@ test('mergeCandidate: an analysis of an older commit waits with no notification'
 })
 
 const REJECTED = { ...samplePrs().A1, state: 'needs_fix', fixReason: 'verifier findings', verified: null, approved: null }
+const REJECTED_LABELS = ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings']
 const LABELS_OK = [
   { tool: 'gh', args: 'label create', stdout: '' },
   { tool: 'gh', args: 'pr edit 11', stdout: '' },
 ]
+
+// `gh pr view` for A1 carrying these labels, next to the rollout's own.
+function viewWithLabels(labels) {
+  return viewRule({ labels: ['rollout:demo', ...labels].map((name) => ({ name })) })
+}
 
 function labelEdits(tools) {
   return tools
@@ -1916,21 +1923,22 @@ function labelEdits(tools) {
 }
 
 test('tick: a PR sent back by the verifier gets its stage and reason as labels, once', async () => {
-  const { M, driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), ...LABELS_OK] })
+  const { driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), ...LABELS_OK] })
 
   await driver.tick()
+  tools.answer([FETCH, viewWithLabels(REJECTED_LABELS), ...LABELS_OK])
   await driver.tick()
 
   assert.deepEqual(labelEdits(tools), ['11 --add-label rollout-stage:needs-fix --add-label rollout-reason:verifier-findings'])
   assert.ok(tools.calls().some((call) => call.args.join(' ').startsWith('label create rollout-reason:verifier-findings --color d93f0b')))
-  assert.deepEqual(driver.L.prs.A1.stageLabels, ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings'])
-  assert.equal(M.label.startsWith('rollout:'), true)
+  assert.deepEqual(driver.L.prs.A1.stageLabels, REJECTED_LABELS)
 })
 
 test('tick: when the PR moves on, the old stage and reason come off', async () => {
   const { driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), ...LABELS_OK] })
 
   await driver.tick()
+  tools.answer([FETCH, viewWithLabels(REJECTED_LABELS), ...LABELS_OK])
   driver.L.prs.A1.state = 'verifying'
   await driver.tick()
 
@@ -1938,6 +1946,27 @@ test('tick: when the PR moves on, the old stage and reason come off', async () =
     labelEdits(tools).at(-1),
     '11 --add-label rollout-stage:verifying --remove-label rollout-stage:needs-fix --remove-label rollout-reason:verifier-findings',
   )
+})
+
+test('tick: the labels the PR really carries count, so one removed or added by hand is put right', async () => {
+  const { driver, tools } = tickDriver(
+    { A1: REJECTED },
+    { rules: [FETCH, viewWithLabels(['rollout-reason:verifier-findings', 'rollout-stage:verified', 'bug']), ...LABELS_OK] },
+  )
+
+  await driver.tick()
+
+  assert.deepEqual(labelEdits(tools), ['11 --add-label rollout-stage:needs-fix --remove-label rollout-stage:verified'])
+})
+
+test('tick: during a GitHub outage no label call is made', async () => {
+  const { driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, VIEW_502, ...LABELS_OK] })
+
+  await driver.tick()
+
+  assert.ok(driver.L.data.githubUnavailable)
+  assert.deepEqual(labelEdits(tools), [])
+  assert.ok(!tools.calls().some((call) => call.args[0] === 'label'))
 })
 
 test('tick: a label GitHub refuses is kept on the PR row, counts no error and is tried again', async () => {

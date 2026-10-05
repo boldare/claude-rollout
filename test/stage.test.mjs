@@ -22,12 +22,22 @@ test('stageLabels: a PR sent back says why, for the fix run too', () => {
   assert.deepEqual(stageLabels({ state: 'needs_fix', pr: 11, fixReason: 'CI is red' })[1], 'rollout-reason:ci-is-red')
 })
 
-test('stageLabels: a blocked or escalated PR names the kind of block', () => {
+test('stageLabels: a blocked PR names the kind of block', () => {
   assert.deepEqual(stageLabels({ state: 'blocked', pr: 11, blocked: { kind: 'brief-questions' } }), [
     'rollout-stage:blocked',
     'rollout-reason:brief-questions',
   ])
-  assert.deepEqual(stageLabels({ state: 'escalated', pr: 11, blocked: null }), ['rollout-stage:escalated'])
+})
+
+test('stageLabels: an escalated PR says what escalated it, never a block answered earlier', () => {
+  const escalated = { state: 'escalated', pr: 11, blocked: { kind: 'needs-decision' } }
+
+  assert.deepEqual(stageLabels({ ...escalated, escalation: 'fix attempts exhausted' }), [
+    'rollout-stage:escalated',
+    'rollout-reason:fix-attempts-exhausted',
+  ])
+  assert.deepEqual(stageLabels({ ...escalated, escalation: 'repeated errors' })[1], 'rollout-reason:repeated-errors')
+  assert.deepEqual(stageLabels(escalated), ['rollout-stage:escalated'])
 })
 
 test('slug: lower case, dashes, at most 40 characters and no trailing dash', () => {
