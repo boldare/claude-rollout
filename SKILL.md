@@ -103,7 +103,7 @@ The release PR ("chore: version packages") is never merged by the driver: mergin
 
 ## Machine setup
 
-- Node 20+, git, gh and the repo's package manager. Preflight probes node and the manager that `repo.install` and `repo.verify.common` start with.
+- Node 24+, git, gh and the repo's package manager. Preflight probes node and the manager that `repo.install` and `repo.verify.common` start with.
 - `claude` on PATH (with `repo.pathPrepend` first), or `claudeBin` in the manifest. Agents inherit the driver's environment, so they use the user's `claude` login or `ANTHROPIC_API_KEY`.
 - Notifications go through `osascript` on macOS and `notify-send` on Linux. Other platforms get none.
 - For a long run on a Mac, plug in and keep the lid open. `caffeinate -is` keeps a Mac awake only on AC power, and closing the lid sleeps it anyway. On battery `run`, `preflight` and the UI's Start warn. Other platforms get no warning.
