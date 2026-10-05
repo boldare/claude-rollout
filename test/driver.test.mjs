@@ -1372,8 +1372,8 @@ test('mergeNext: under manual merge one PR is ready at a time, the next waits fo
       .map((event) => event.id),
     ['A1'],
   )
-  assert.deepEqual(stageLabels(driver.L.prs.A3), ['rollout-stage:verified', 'rollout-reason:after-pr-11'])
-  assert.deepEqual(stageLabels(driver.L.prs.A1), ['rollout-stage:verified'])
+  assert.deepEqual(stageLabels(driver.L.prs.A3), ['rollout-stage:verified', 'rollout-reason:queued'])
+  assert.deepEqual(stageLabels(driver.L.prs.A1), ['rollout-stage:verified', 'rollout-reason:ready-to-merge'])
 })
 
 test('mergeNext: the PR already announced ready keeps the slot when an earlier one in the manifest becomes verified', async () => {
@@ -1386,23 +1386,77 @@ test('mergeNext: the PR already announced ready keeps the slot when an earlier o
   assert.equal(driver.L.prs.A1.gate.after, 13)
 })
 
-test('mergeNext: once the ready PR is merged, the one that waited is announced ready again', async () => {
-  const { M, driver } = twoReady()
+test('mergeNext: a "ready" from before a fix run holds no slot once the PR is verified again', async () => {
+  const { driver } = twoReady({
+    A1: { verified: { ...samplePrs().A1.verified, at: at(90) }, gate: { action: 'ready', reasons: ['ready'], sha: SHA, at: at(83) } },
+    A3: { gate: { action: 'ready', reasons: ['ready'], sha: SHA, at: at(84) } },
+  })
+
+  await driver.mergeNext()
+
+  assert.equal(driver.L.prs.A3.gate.action, 'ready')
+  assert.equal(driver.L.prs.A1.gate.action, 'wait')
+  assert.equal(driver.L.prs.A1.gate.after, 13)
+})
+
+const REBASED = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2'
+
+// A3's worktree as prepareWorktree leaves it, with a fake git under which
+// its rebase onto the new base succeeds at REBASED.
+function rebasableWorktree(M, tools) {
+  const wt = worktreePath(
+    M,
+    M.prs.find((pr) => pr.id === 'A3'),
+  )
+  const gitDir = join(wt, '.git-dir')
+
+  mkdirSync(gitDir, { recursive: true })
+  writeFileSync(join(wt, '.git'), `gitdir: ${gitDir}\n`)
+  writeFileSync(join(gitDir, 'rollout-ready'), '')
+  tools.answer([
+    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
+    { tool: 'git', args: 'rev-parse HEAD', stdout: REBASED },
+    { tool: 'git', args: '', stdout: '' },
+  ])
+}
+
+test('mergeNext: once the ready PR is merged, the one that waited is rebased and announced only when CI is green on the new head', async () => {
+  const { M, driver, tools, gate } = twoReady()
+  const readyNotices = (from) =>
+    eventsSince(M, from)
+      .filter((event) => event.kind === 'ready-to-merge')
+      .map((event) => event.id)
 
   await driver.mergeNext()
   driver.L.prs.A1.state = 'merged'
-  const before = readEvents(M).length
+  rebasableWorktree(M, tools)
+  gate.facts = { baseIsAncestor: false }
+  let before = readEvents(M).length
+  await driver.mergeNext()
+
+  assert.equal(driver.L.prs.A3.gate.action, 'rebase')
+  assert.deepEqual(
+    eventsSince(M, before).find((event) => event.kind === 'rebased'),
+    { id: 'A3', kind: 'rebased', head: REBASED.slice(0, 7) },
+  )
+  assert.deepEqual(readyNotices(before), [])
+
+  gate.pr = (pr, entry) => ({ number: entry.pr, headRefName: pr.branch, headRefOid: REBASED })
+  gate.facts = { checks: { state: 'pending', missing: [], pending: ['test'], failing: [], runs: [] } }
+  before = readEvents(M).length
+  await driver.mergeNext()
+
+  assert.equal(driver.L.prs.A3.gate.action, 'wait')
+  assert.deepEqual(readyNotices(before), [])
+
+  gate.facts = {}
+  before = readEvents(M).length
   await driver.mergeNext()
 
   assert.equal(driver.L.prs.A3.gate.action, 'ready')
   assert.equal(driver.L.prs.A3.gate.after, undefined)
-  assert.deepEqual(stageLabels(driver.L.prs.A3), ['rollout-stage:verified'])
-  assert.deepEqual(
-    eventsSince(M, before)
-      .filter((event) => event.kind === 'ready-to-merge')
-      .map((event) => event.id),
-    ['A3'],
-  )
+  assert.deepEqual(stageLabels(driver.L.prs.A3), ['rollout-stage:verified', 'rollout-reason:ready-to-merge'])
+  assert.deepEqual(readyNotices(before), ['A3'])
 })
 
 test('mergeNext: under human merge nothing waits for another PR', async () => {

@@ -1,6 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { approvalChannel, approveRefusal, codeScanningFindings, highestBump, judge, outOfScope, policyViolations } from '../lib/judge.mjs'
+import {
+  approvalChannel,
+  approveRefusal,
+  codeScanningFindings,
+  currentGate,
+  highestBump,
+  judge,
+  outOfScope,
+  policyViolations,
+} from '../lib/judge.mjs'
 
 const M = {
   label: 'rollout:demo',
@@ -452,4 +461,15 @@ test('judge: code scanning comes after red and pending CI, and before the base a
   assert.deepEqual(judge(M, pr, verifiedAndApproved, scanned([alert()], [], { mainChecks: redBase })), flagged)
   assert.deepEqual(judge(withScanning({ action: 'block' }), pr, verifiedAndApproved, scanned([alert()])), { ...flagged, action: 'block' })
   assert.equal(judge(M, pr, verifiedAndApproved, scanned([alert()], [4])).action, 'merge')
+})
+
+test('currentGate: the verdict counts only while the PR is verified and the gate ran since', () => {
+  const gate = { action: 'ready', reasons: ['ready'], at: '2026-01-01T10:05:00.000Z' }
+  const entry = { state: 'verified', verified: { at: '2026-01-01T10:00:00.000Z' }, gate }
+
+  assert.equal(currentGate(entry), gate)
+  assert.deepEqual(currentGate({ ...entry, gate: { ...gate, at: entry.verified.at } }), { ...gate, at: entry.verified.at })
+  assert.equal(currentGate({ ...entry, verified: { at: '2026-01-01T11:00:00.000Z' } }), null)
+  assert.equal(currentGate({ ...entry, state: 'needs_fix' }), null)
+  assert.equal(currentGate({ ...entry, gate: null }), null)
 })

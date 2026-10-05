@@ -40,6 +40,15 @@ test('stageLabels: an escalated PR says what escalated it, never a block answere
   assert.deepEqual(stageLabels(escalated), ['rollout-stage:escalated'])
 })
 
+test('stageLabels: under merge: manual the PR to merge and the ones that wait for it say so, while the gate still holds', () => {
+  const verified = { state: 'verified', pr: 11, verified: { at: '2026-01-01T10:00:00.000Z' } }
+  const ready = { action: 'ready', reasons: ['ready'], at: '2026-01-01T10:05:00.000Z' }
+
+  assert.deepEqual(stageLabels({ ...verified, gate: ready }), ['rollout-stage:verified', 'rollout-reason:ready-to-merge'])
+  assert.deepEqual(stageLabels({ ...verified, gate: { ...ready, action: 'wait', after: 12 } })[1], 'rollout-reason:queued')
+  assert.deepEqual(stageLabels({ ...verified, gate: { ...ready, at: '2026-01-01T09:00:00.000Z' } }), ['rollout-stage:verified'])
+})
+
 test('slug: lower case, dashes, at most 40 characters and no trailing dash', () => {
   assert.equal(slug('Report does not match GitHub'), 'report-does-not-match-github')
   assert.equal(slug('a'.repeat(39) + ' b'), 'a'.repeat(39))
