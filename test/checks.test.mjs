@@ -82,6 +82,23 @@ test('a later in-progress run still replaces a success of the same check', () =>
   assert.equal(summarizeChecks(runs, ['check', 'smoke*']).state, 'pending')
 })
 
+// Every order of the given items.
+function permutations(items) {
+  if (items.length <= 1) {
+    return [items]
+  }
+
+  return items.flatMap((item, index) => permutations(items.toSpliced(index, 1)).map((rest) => [item, ...rest]))
+}
+
+test('the order the API lists the runs in never changes the summary', () => {
+  const runs = [run(1, 'check', 'completed', 'success'), run(5, 'check', 'in_progress'), run(7, 'check', 'completed', 'cancelled')]
+  const states = permutations(runs).map((order) => summarizeChecks(order, ['check']).state)
+
+  assert.equal(states.length, 6)
+  assert.deepEqual(new Set(states), new Set(['pending']))
+})
+
 test('manifest needs required checks', () => {
   const broken = structuredClone(base)
   delete broken.repo.requiredChecks
