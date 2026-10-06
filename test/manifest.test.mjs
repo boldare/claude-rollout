@@ -147,12 +147,36 @@ function withRepo(extra) {
   return dir
 }
 
+test('loadManifest: repo.baseQuietPaths defaults to an empty list and keeps a given one', () => {
+  assert.deepEqual(loadManifest(makeRollout()).repo.baseQuietPaths, [])
+  assert.deepEqual(loadManifest(withRepo({ baseQuietPaths: ['docs/journal/**'] })).repo.baseQuietPaths, ['docs/journal/**'])
+})
+
 test('loadManifest: repo.codeScanning defaults to fix at medium, and a partial value keeps the rest', () => {
   assert.deepEqual(loadManifest(makeRollout()).repo.codeScanning, { action: 'fix', minSeverity: 'medium' })
   assert.deepEqual(loadManifest(withRepo({ codeScanning: { action: 'block' } })).repo.codeScanning, {
     action: 'block',
     minSeverity: 'medium',
   })
+})
+
+test('validateManifest: repo.baseQuietPaths, when set, is a list of strings', () => {
+  const error = 'repo.baseQuietPaths must be a list of path globs'
+  const cases = [
+    [null, [error]],
+    ['docs/journal/**', [error]],
+    [['docs/journal/**', 7], [error]],
+    [undefined, []],
+    [[], []],
+    [['docs/journal/**', 'CHANGELOG.md'], []],
+  ]
+
+  for (const [baseQuietPaths, errors] of cases) {
+    const raw = structuredClone(base)
+
+    raw.repo.baseQuietPaths = baseQuietPaths
+    assert.deepEqual(validateManifest(raw), errors, JSON.stringify(baseQuietPaths ?? null))
+  }
 })
 
 test('validateManifest: repo.codeScanning, when set, is a mapping of a known action and severity', () => {

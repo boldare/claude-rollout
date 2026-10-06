@@ -295,6 +295,19 @@ prs:
                   run.
                 </td>
               </tr>
+              <tr id="repo-baseQuietPaths">
+                <td>baseQuietPaths</td>
+                <td>list of globs</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>
+                  A commit on the base branch with no run of a <code>requiredChecks</code> check, no failed run, one parent and no changed
+                  file outside these globs takes its state from its parent instead of counting as pending. A workflow that pushes with the
+                  default token starts no workflow, and <code>paths-ignore</code> skips one, so such a commit has no required runs. At most
+                  20 commits in a row are skipped. List only paths your required checks never run on: a skipped commit's own result is never
+                  waited for. The base watch after a merge reads the merge commit itself, never its parent.
+                </td>
+              </tr>
               <tr id="repo-agentToken">
                 <td>agentToken</td>
                 <td>path</td>
@@ -807,6 +820,7 @@ prs:
             maintainers.
           </li>
           <li><code>repo.public</code>, when set, is a boolean.</li>
+          <li><code>repo.baseQuietPaths</code>, when set, is a list of path globs.</li>
           <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
             <code>effort.brief</code>, when set, is a known level too.

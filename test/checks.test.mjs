@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { summarizeChecks } from '../lib/checks.mjs'
+import { inheritsParent, speaksForItself, summarizeChecks } from '../lib/checks.mjs'
 import { globToRegExp, matchesAny } from '../lib/glob.mjs'
 import { raiseEffort, validateManifest } from '../lib/manifest.mjs'
 
@@ -47,6 +47,41 @@ test('a required check that was only skipped is red', () => {
   const summary = summarizeChecks(runs, ['check', 'smoke*'])
   assert.equal(summary.state, 'red')
   assert.match(summary.failing.join(), /required check check did not run/)
+})
+
+const quiet = (overrides = {}) => ({
+  runs: [],
+  requiredGlobs: ['test*'],
+  parentCount: 1,
+  files: ['docs/journal/2026-10.md'],
+  globs: ['docs/journal/**'],
+  ...overrides,
+})
+
+test('a commit with no required run, one parent and only quiet files inherits its parent', () => {
+  assert.equal(inheritsParent(quiet()), true)
+  assert.equal(inheritsParent(quiet({ files: [] })), true)
+  assert.equal(inheritsParent(quiet({ files: ['docs/journal/a.md', 'docs/journal/sub/b.md'] })), true)
+  assert.equal(inheritsParent(quiet({ runs: [run(1, 'docs deploy', 'completed', 'success')] })), true)
+  assert.equal(inheritsParent(quiet({ runs: [run(1, 'docs deploy', 'in_progress')] })), true)
+  assert.equal(inheritsParent(quiet({ runs: [run(1, 'docs deploy', 'completed', 'cancelled')] })), true)
+})
+
+test('a commit speaks for itself when a required check ran, a run failed, it has two parents, a loud file or no globs', () => {
+  assert.equal(inheritsParent(quiet({ files: ['lib/driver.mjs'] })), false)
+  assert.equal(inheritsParent(quiet({ files: ['docs/journal/a.md', 'lib/driver.mjs'] })), false)
+  assert.equal(inheritsParent(quiet({ parentCount: 2 })), false)
+  assert.equal(inheritsParent(quiet({ parentCount: 0 })), false)
+  assert.equal(inheritsParent(quiet({ runs: [run(1, 'test (24)', 'in_progress')] })), false)
+  assert.equal(inheritsParent(quiet({ runs: [run(1, 'docs deploy', 'completed', 'failure')] })), false)
+  assert.equal(inheritsParent(quiet({ globs: [] })), false)
+})
+
+test('speaksForItself: a required run in any state or a failed run, never a cancellation', () => {
+  assert.equal(speaksForItself([run(1, 'test (24)', 'queued')], ['test*']), true)
+  assert.equal(speaksForItself([run(1, 'lint', 'completed', 'timed_out')], ['test*']), true)
+  assert.equal(speaksForItself([run(1, 'lint', 'completed', 'cancelled'), run(2, 'docs', 'completed', 'skipped')], ['test*']), false)
+  assert.equal(speaksForItself([], ['test*']), false)
 })
 
 test('a cancelled run does not replace a completed run of the same check', () => {
