@@ -140,15 +140,15 @@
             <p>
               Preflight requires its permission on the repository to be exactly <code>write</code>, and its login to be outside
               <a href="manifest.html#repo-maintainers"><code>repo.maintainers</code></a
-              >. Admin fails the check.
+              >. Admin fails the check, unless the account is an <a href="#admin-bot">admin with a limited token</a>.
             </p>
           </li>
           <li>
             <strong>Create a classic token with the <code>repo</code> and <code>workflow</code> scopes</strong>
             <p>
               <code>workflow</code> matters only for PRs that change <code>.github/workflows/</code>, and preflight warns when it is
-              missing. Preflight reads the scopes from the <code>x-oauth-scopes</code> header. A fine-grained token has none, so preflight
-              cannot confirm <code>workflow</code> and warns.
+              missing. Preflight reads the scopes from the <code>x-oauth-scopes</code> header. A fine-grained token has no scopes, so
+              preflight warns that it cannot see the token's Workflows permission.
             </p>
           </li>
           <li>
@@ -160,6 +160,63 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
             <p>Point <code>repo.agentToken</code> at the file. <code>~</code> is expanded.</p>
           </li>
         </ol>
+
+        <h3 id="admin-bot">An admin account with a limited token</h3>
+
+        <p>
+          Sometimes the agents' account has to be an admin, for example a shared machine account that owns the organization. An organization
+          owner is an admin of every repository, and that role cannot be lowered for one repository. Set
+          <a href="manifest.html#repo-agentAdmin"><code>repo.agentAdmin: true</code></a> and give the account a fine-grained token.
+          Preflight then accepts the admin role only when the token cannot act as one (<code>adminAgentCheck</code> in
+          <code>lib/preflight.mjs</code>):
+        </p>
+
+        <ul>
+          <li>The token is fine-grained: it starts with <code>github_pat_</code>. A classic token can do all the admin role can.</li>
+          <li>
+            The token gets 403 or 404 from an endpoint of each admin permission: Administration, Secrets and Webhooks on the repository, and
+            Administration on the organization, which manages its rulesets.
+          </li>
+          <li>
+            The account cannot bypass any ruleset on <a href="manifest.html#repo-base"><code>repo.base</code></a
+            >, the organization's included. GitHub's <code>current_user_can_bypass</code>, read with the token, must be
+            <code>never</code> for each one. A role on the bypass list counts, so the admin role must not be there.
+          </li>
+          <li>
+            Branch protection on <code>repo.base</code>, if there is any, has "Do not allow bypassing the above settings" turned on.
+            Preflight reads it with your login, which needs the admin role for that.
+          </li>
+        </ul>
+
+        <p>
+          Any other answer, an error or no answer fails. Create the token with the organization as its resource owner, only the repositories
+          the rollouts work on, and these repository permissions:
+        </p>
+
+        <dl class="kv">
+          <dt>Contents</dt>
+          <dd>read and write, to push the PR branch</dd>
+          <dt>Pull requests</dt>
+          <dd>read and write, to open and edit the PR and reply in review threads</dd>
+          <dt>Issues</dt>
+          <dd>read and write, for comments in the PR conversation</dd>
+          <dt>Checks, Commit statuses, Actions</dt>
+          <dd>read, to follow CI and read its logs</dd>
+          <dt>Workflows</dt>
+          <dd>
+            read and write, only for PRs with <a href="manifest.html#pr-allowWorkflows"><code>allowWorkflows</code></a>
+          </dd>
+        </dl>
+
+        <p>Metadata is always on. Leave everything else at No access, Administration, Secrets and Webhooks above all.</p>
+
+        <div class="callout warn">
+          <p>
+            <strong>Preflight checks once.</strong> The driver does not repeat these checks on every tick. Whoever later puts the admin role
+            or the account on a bypass list, or gives the token an admin permission, opens a way around the rules. Run preflight again after
+            such a change. It only looks at <code>repo.github</code>, so check every other repository the token reaches in its own rollout.
+          </p>
+        </div>
 
         <h3 id="agent-env">What the agents get</h3>
 
@@ -220,7 +277,10 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           <li>Requiring code scanning results is optional, see <a href="#code-scanning">below</a>.</li>
         </ul>
 
-        <p>The bypass list holds only the repository admin role, never the bot.</p>
+        <p>
+          The bypass list holds only the repository admin role, never the bot. With an <a href="#admin-bot">admin bot</a> the admin role
+          must not be on it either: name the people who may bypass instead.
+        </p>
 
         <h3 id="squash-admin">Squash merges and the admin role</h3>
 
@@ -568,10 +628,12 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
               <tr>
                 <td class="nowrap">The bot</td>
                 <td>
-                  That the token file exists, that its login has exactly the <code>write</code> permission and is not a maintainer, that
-                  agents' gh has no stored login to fall back to in the environment agents get, and a warning without the
-                  <code>workflow</code> scope. An <code>info</code> line says when gh would fall back to your keyring login with
-                  <code>GH_HOST</code> set. It is never a problem, because agents never get <code>GH_HOST</code>. Without
+                  That the token file exists, that its login is not a maintainer and has exactly the <code>write</code> permission, or
+                  <code>admin</code> with <code>repo.agentAdmin</code> and a token that cannot act as one (<a href="#admin-bot"
+                    >An admin account</a
+                  >), that agents' gh has no stored login to fall back to in the environment agents get, and a warning without the
+                  <code>workflow</code> scope or for a fine-grained token. An <code>info</code> line says when gh would fall back to your
+                  keyring login with <code>GH_HOST</code> set. It is never a problem, because agents never get <code>GH_HOST</code>. Without
                   <code>repo.agentToken</code>, one warning, plus a second one when <code>repo.maintainers</code> is set.
                 </td>
               </tr>
