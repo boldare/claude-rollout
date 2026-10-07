@@ -4,7 +4,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadManifest } from '../lib/manifest.mjs'
-import { originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
+import {
+  adminAgentCheck,
+  isFineGrained,
+  originCheck,
+  parseApiResponse,
+  probeTools,
+  sshHostname,
+  storedLoginCheck,
+} from '../lib/preflight.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 function tools(install, verify) {
@@ -277,4 +285,192 @@ test('stored login: the GH_HOST fallback is an info line, never a problem', asyn
     assert.deepEqual(result.lines, [STORED_OK])
     assert.deepEqual(result.problems, [])
   })
+})
+
+test('fine-grained tokens are the ones with the github_pat_ prefix', () => {
+  assert.equal(isFineGrained('github_pat_synthetic'), true)
+
+  for (const token of ['ghp_synthetic', 'gho_synthetic', 'synthetic-agent-token', '', undefined]) {
+    assert.equal(isFineGrained(token), false, String(token))
+  }
+})
+
+test('api responses: the status line and the JSON body, on errors too', () => {
+  const ok = 'HTTP/2.0 200 OK\nContent-Type: application/json\n\n[{"ruleset_id":7}]\n'
+  const missing = 'HTTP/2.0 404 Not Found\r\nContent-Type: application/json\r\n\r\n{"message":"Branch not protected"}'
+
+  assert.deepEqual(parseApiResponse(ok), { status: 200, json: [{ ruleset_id: 7 }] })
+  assert.deepEqual(parseApiResponse(missing), { status: 404, json: { message: 'Branch not protected' } })
+  assert.deepEqual(parseApiResponse('HTTP/1.1 502 Bad Gateway\n\n<html>'), { status: 502, json: null })
+  assert.deepEqual(parseApiResponse('HTTP/2.0 204 No Content\n\n'), { status: 204, json: null })
+  assert.deepEqual(parseApiResponse(''), { status: 0, json: null })
+})
+
+const adminRepo = { repo: { github: 'my-org/my-lib', base: 'main' } }
+const RULES = 'repos/my-org/my-lib/rules/branches/main?per_page=100'
+const PROTECTION = 'repos/my-org/my-lib/branches/main/protection'
+const DENIED = { status: 403, json: { message: 'Resource not accessible by personal access token' } }
+
+// Answers by path. A path without an answer gets none, the way a network error looks.
+function fakeApi(answers) {
+  const calls = []
+
+  async function call(path) {
+    calls.push(path)
+
+    return answers[path] ?? { status: 0, json: null }
+  }
+
+  return { calls, call }
+}
+
+function limitedBot(overrides) {
+  return {
+    'repos/my-org/my-lib/actions/permissions': DENIED,
+    'repos/my-org/my-lib/actions/secrets': DENIED,
+    'repos/my-org/my-lib/hooks': DENIED,
+    'orgs/my-org/rulesets': DENIED,
+    [RULES]: {
+      status: 200,
+      json: [
+        { type: 'deletion', ruleset_source_type: 'Repository', ruleset_id: 7 },
+        { type: 'pull_request', ruleset_source_type: 'Repository', ruleset_id: 7 },
+        { type: 'non_fast_forward', ruleset_source_type: 'Organization', ruleset_id: 9 },
+      ],
+    },
+    'repos/my-org/my-lib/rulesets/7': { status: 200, json: { name: 'main', current_user_can_bypass: 'never' } },
+    'repos/my-org/my-lib/rulesets/9': { status: 200, json: { name: 'org baseline', current_user_can_bypass: 'never' } },
+    ...overrides,
+  }
+}
+
+async function checkAdmin({ bot = {}, maintainer = {}, fineGrained = true, manifest = adminRepo } = {}) {
+  const botApi = fakeApi(limitedBot(bot))
+  const maintainerApi = fakeApi({ [PROTECTION]: { status: 404, json: { message: 'Branch not protected' } }, ...maintainer })
+  const result = await adminAgentCheck(manifest, { login: 'org-bot', fineGrained, bot: botApi.call, maintainer: maintainerApi.call })
+
+  return { ...result, botCalls: botApi.calls, maintainerCalls: maintainerApi.calls }
+}
+
+test('admin agent: a fine-grained token without admin permissions or bypass passes', async () => {
+  const result = await checkAdmin()
+
+  assert.deepEqual(result.lines, [
+    'ok   agent token is fine-grained',
+    'ok   agent token cannot use Administration (repos/my-org/my-lib/actions/permissions: 403)',
+    'ok   agent token cannot use Secrets (repos/my-org/my-lib/actions/secrets: 403)',
+    'ok   agent token cannot use Webhooks (repos/my-org/my-lib/hooks: 403)',
+    'ok   agent token cannot use organization Administration (orgs/my-org/rulesets: 403)',
+    'ok   org-bot cannot bypass ruleset main on main',
+    'ok   org-bot cannot bypass ruleset org baseline on main',
+    'ok   no branch protection on main',
+  ])
+
+  assert.deepEqual(result.problems, [])
+})
+
+test('admin agent: the bot token asks about itself, and only branch protection is read as you', async () => {
+  const result = await checkAdmin()
+
+  assert.ok(!result.botCalls.includes(PROTECTION))
+  assert.deepEqual(result.maintainerCalls, [PROTECTION])
+})
+
+test('admin agent: a classic token fails without a single call', async () => {
+  const result = await checkAdmin({ fineGrained: false })
+
+  assert.deepEqual(result.lines, ['FAIL agent token is not fine-grained'])
+  assert.deepEqual(result.problems, ['repo.agentAdmin needs a fine-grained agent token: a classic one can do all the admin role can'])
+  assert.deepEqual(result.botCalls, [])
+  assert.deepEqual(result.maintainerCalls, [])
+})
+
+test('admin agent: 404 counts as no access, like 403', async () => {
+  const result = await checkAdmin({ bot: { 'orgs/my-org/rulesets': { status: 404, json: { message: 'Not Found' } } } })
+
+  assert.ok(result.lines.includes('ok   agent token cannot use organization Administration (orgs/my-org/rulesets: 404)'))
+  assert.deepEqual(result.problems, [])
+})
+
+test('admin agent: a token with an admin permission fails and names it', async () => {
+  const result = await checkAdmin({
+    bot: {
+      'repos/my-org/my-lib/actions/permissions': { status: 200, json: { enabled: true } },
+      'repos/my-org/my-lib/hooks': { status: 200, json: [] },
+    },
+  })
+
+  assert.ok(result.lines.includes('FAIL agent token can use Administration (repos/my-org/my-lib/actions/permissions: 200)'))
+  assert.deepEqual(result.problems, [
+    'agent token has the Administration permission: take it away',
+    'agent token has the Webhooks permission: take it away',
+  ])
+})
+
+test('admin agent: an error or no answer proves nothing and fails', async () => {
+  const result = await checkAdmin({
+    bot: {
+      'repos/my-org/my-lib/actions/secrets': { status: 500, json: null },
+      'orgs/my-org/rulesets': { status: 0, json: null },
+    },
+  })
+
+  assert.deepEqual(result.problems, [
+    'cannot tell whether the agent token can use Secrets (repos/my-org/my-lib/actions/secrets: 500)',
+    'cannot tell whether the agent token can use organization Administration (orgs/my-org/rulesets: no answer)',
+  ])
+})
+
+test('admin agent: any bypass but never fails, an unknown one too', async () => {
+  for (const bypass of ['always', 'pull_requests_only', 'exempt', undefined]) {
+    const result = await checkAdmin({
+      bot: { 'repos/my-org/my-lib/rulesets/9': { status: 200, json: { name: 'org baseline', current_user_can_bypass: bypass } } },
+    })
+
+    assert.ok(result.lines.includes(`FAIL org-bot can bypass ruleset org baseline on main (${bypass ?? 'unknown'})`), String(bypass))
+    assert.deepEqual(result.problems, ['org-bot can bypass ruleset org baseline: take its role and its account off the bypass list'])
+  }
+})
+
+test('admin agent: rules or a ruleset the token cannot read fail', async () => {
+  const noRules = await checkAdmin({ bot: { [RULES]: DENIED } })
+
+  assert.deepEqual(noRules.problems, ['cannot read the rules on main with the agent token (403)'])
+
+  const noRuleset = await checkAdmin({ bot: { 'repos/my-org/my-lib/rulesets/9': { status: 404, json: { message: 'Not Found' } } } })
+
+  assert.deepEqual(noRuleset.problems, ['cannot read ruleset 9 on main with the agent token (404)'])
+})
+
+test('admin agent: a base without rulesets passes that part', async () => {
+  const result = await checkAdmin({ bot: { [RULES]: { status: 200, json: [] } } })
+
+  assert.ok(result.lines.includes('ok   no ruleset applies to main'))
+  assert.deepEqual(result.problems, [])
+})
+
+test('admin agent: branch protection must hold for admins, and must be readable', async () => {
+  const enforced = await checkAdmin({ maintainer: { [PROTECTION]: { status: 200, json: { enforce_admins: { enabled: true } } } } })
+
+  assert.ok(enforced.lines.includes('ok   branch protection on main holds for admins too'))
+  assert.deepEqual(enforced.problems, [])
+
+  const bypassed = await checkAdmin({ maintainer: { [PROTECTION]: { status: 200, json: { enforce_admins: { enabled: false } } } } })
+
+  assert.deepEqual(bypassed.problems, [
+    'branch protection on main lets admins bypass it: turn on "Do not allow bypassing the above settings"',
+  ])
+
+  // GitHub answers a plain Not Found when you are not an admin.
+  const hidden = await checkAdmin({ maintainer: { [PROTECTION]: { status: 404, json: { message: 'Not Found' } } } })
+
+  assert.deepEqual(hidden.problems, ['cannot read the branch protection on main as you (404): it needs the admin role'])
+})
+
+test('admin agent: a base with a slash is one path segment', async () => {
+  const manifest = { repo: { github: 'my-org/my-lib', base: 'release/1.x' } }
+  const result = await checkAdmin({ manifest })
+
+  assert.ok(result.botCalls.includes('repos/my-org/my-lib/rules/branches/release%2F1.x?per_page=100'))
+  assert.deepEqual(result.maintainerCalls, ['repos/my-org/my-lib/branches/release%2F1.x/protection'])
 })

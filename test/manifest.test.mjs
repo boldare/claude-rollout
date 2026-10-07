@@ -160,6 +160,28 @@ test('loadManifest: repo.codeScanning defaults to fix at medium, and a partial v
   })
 })
 
+test('loadManifest: repo.agentAdmin is off by default', () => {
+  assert.equal(loadManifest(makeRollout()).repo.agentAdmin, false)
+})
+
+test('validateManifest: repo.agentAdmin is a boolean and needs repo.agentToken', () => {
+  const needsToken = "repo.agentAdmin needs repo.agentToken: it lets the agents' account be an admin"
+  const cases = [
+    [{ agentAdmin: 'yes', agentToken: '~/token' }, ['repo.agentAdmin must be true or false']],
+    [{ agentAdmin: null, agentToken: '~/token' }, ['repo.agentAdmin must be true or false']],
+    [{ agentAdmin: true }, [needsToken]],
+    [{ agentAdmin: true, agentToken: '~/token' }, []],
+    [{ agentAdmin: false }, []],
+  ]
+
+  for (const [extra, errors] of cases) {
+    const raw = structuredClone(base)
+
+    Object.assign(raw.repo, extra)
+    assert.deepEqual(validateManifest(raw), errors, JSON.stringify(extra))
+  }
+})
+
 test('validateManifest: repo.baseQuietPaths, when set, is a list of strings', () => {
   const error = 'repo.baseQuietPaths must be a list of path globs'
   const cases = [
