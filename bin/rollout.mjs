@@ -36,6 +36,8 @@ import { execFile } from 'node:child_process'
 
 const CLI_OPTIONS = {
   allowPositionals: true,
+  // --no-open is the negative of open.
+  allowNegative: true,
   options: {
     dir: { type: 'string', default: process.env.ROLLOUT_DIR ?? process.cwd() },
     only: { type: 'string' },
@@ -43,8 +45,7 @@ const CLI_OPTIONS = {
     live: { type: 'boolean', default: false },
     root: { type: 'string' },
     port: { type: 'string' },
-    // Its own option because allowNegative is missing before Node 20.16.
-    'no-open': { type: 'boolean', default: false },
+    open: { type: 'boolean', default: true },
     'read-only': { type: 'boolean', default: false },
   },
 }
@@ -513,7 +514,7 @@ async function ui() {
     console.log('read-only: the controls are disabled')
   }
 
-  if (!values['no-open']) {
+  if (values.open) {
     openBrowser(server.url)
   }
 

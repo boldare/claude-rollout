@@ -767,6 +767,44 @@ test('cli: ui prints a URL with the token, never writes it, and exits 0 on SIGTE
   assert.deepEqual(await exited, [0, null])
 })
 
+// Starts `rollout ui` with a fake open and xdg-open first on PATH, prints its
+// URL and stops it. The fake openers append what they were given to `opened`.
+async function uiWithFakeOpener(context, args) {
+  const root = makeRolloutRoot()
+  const bin = mkdtempSync(join(tmpdir(), 'rollout-opener-'))
+  const opened = join(bin, 'opened')
+
+  for (const opener of ['open', 'xdg-open']) {
+    writeFileSync(join(bin, opener), `#!/bin/sh\necho "$1" >> '${opened}'\n`, { mode: 0o755 })
+  }
+
+  const child = spawn(process.execPath, [BIN, 'ui', '--root', root, '--port', '0', ...args], {
+    env: { ...cliEnv(), PATH: `${bin}:${process.env.PATH}` },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+
+  context.after(() => child.kill())
+
+  const url = /^rollout ui: (\S+)/.exec(await firstLine(child.stdout))[1]
+
+  return { url, opened, child }
+}
+
+test(
+  'cli: ui opens the URL in the browser, and --no-open keeps it closed',
+  { skip: !['darwin', 'linux'].includes(process.platform) },
+  async (context) => {
+    const quiet = await uiWithFakeOpener(context, ['--no-open'])
+    const opening = await uiWithFakeOpener(context, [])
+
+    await waitFor(() => existsSync(opening.opened), 'the browser to open')
+
+    // By the time the second ui opened its URL, the first had long had the chance.
+    assert.equal(readFileSync(opening.opened, 'utf8'), `${opening.url}\n`)
+    assert.equal(existsSync(quiet.opened), false)
+  },
+)
+
 test('cli: an unknown flag or a missing value prints the error and the usage, without a stack', () => {
   const cases = [
     { args: ['status', '--bogus', '--dir', makeRollout()], error: "rollout: Unknown option '--bogus'" },
