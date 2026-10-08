@@ -28,7 +28,16 @@ import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { agentEnv } from '../lib/identity.mjs'
 import { ghEnv } from '../lib/github.mjs'
-import { guardSelfTest, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
+import {
+  adminAgentCheck,
+  ghApi,
+  guardSelfTest,
+  isFineGrained,
+  originCheck,
+  probeTools,
+  sshHostname,
+  storedLoginCheck,
+} from '../lib/preflight.mjs'
 import { agentSettings } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
@@ -345,13 +354,33 @@ async function preflight(manifest) {
       })
 
       const scopes = (await sh('gh', ['api', '-i', 'user'], { env: botEnv })).stdout.match(/^x-oauth-scopes:\s*(.*)$/im)?.[1]?.trim() ?? '?'
-      const ok = who.code === 0 && !manifest.repo.maintainers.includes(login) && permission.stdout.trim() === 'write'
-      console.log(
-        `${ok ? 'ok  ' : 'FAIL'} agent identity: ${login || '?'} (permission ${permission.stdout.trim() || '?'}, scopes ${scopes})`,
-      )
+      const role = permission.stdout.trim()
+      const fineGrained = isFineGrained(botEnv.GH_TOKEN)
+      const admin = role === 'admin' && manifest.repo.agentAdmin
+      const ok = who.code === 0 && !manifest.repo.maintainers.includes(login) && (role === 'write' || admin)
+      console.log(`${ok ? 'ok  ' : 'FAIL'} agent identity: ${login || '?'} (permission ${role || '?'}, scopes ${scopes})`)
 
-      if (!ok) {
+      if (!ok && role === 'admin') {
+        problems.push(
+          `the agents' account ${login} is an admin: give it the write role, or set repo.agentAdmin to check that its fine-grained token cannot act as one`,
+        )
+      } else if (!ok) {
         problems.push('agent token must belong to a non-maintainer account with write (not admin) permission')
+      }
+
+      if (ok && admin) {
+        const limits = await adminAgentCheck(manifest, {
+          login,
+          fineGrained,
+          bot: (path) => ghApi(botEnv, path),
+          maintainer: (path) => ghApi(ghEnv(manifest), path),
+        })
+
+        for (const line of limits.lines) {
+          console.log(line)
+        }
+
+        problems.push(...limits.problems)
       }
 
       const stored = await storedLoginCheck(manifest)
@@ -362,7 +391,15 @@ async function preflight(manifest) {
 
       problems.push(...stored.problems)
 
-      if (!/\bworkflow\b/.test(scopes)) {
+      if (manifest.repo.agentAdmin && role === 'write') {
+        warnings.push(`repo.agentAdmin is set, but ${login} has the write role and does not need it`)
+      }
+
+      if (fineGrained) {
+        warnings.push(
+          'agent token is fine-grained: preflight cannot see whether it has the Workflows permission that PRs changing .github/workflows need',
+        )
+      } else if (!/\bworkflow\b/.test(scopes)) {
         warnings.push('agent token lacks the workflow scope: PRs that change .github/workflows cannot be pushed')
       }
     } catch (error) {

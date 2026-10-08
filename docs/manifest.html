@@ -319,6 +319,17 @@ prs:
                   <a href="accounts.html">Accounts</a>.
                 </td>
               </tr>
+              <tr id="repo-agentAdmin">
+                <td>agentAdmin</td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>no</td>
+                <td>
+                  Lets the account behind <code>agentToken</code> be an admin, an organization owner say. Preflight then accepts the admin
+                  role only for a fine-grained token without admin permissions, on a base branch whose rules the account cannot bypass.
+                  Needs <code>agentToken</code>. See <a href="accounts.html#admin-bot">An admin account</a>.
+                </td>
+              </tr>
               <tr id="repo-maintainers">
                 <td>maintainers</td>
                 <td>list of logins</td>

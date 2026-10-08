@@ -83,8 +83,10 @@
 
         <ul>
           <li>
-            <strong>The bot account's GitHub role and the rulesets.</strong> The bot has the Write role and no bypass. A merge needs a
-            maintainer's review and green checks. See <a href="accounts.html">Accounts</a> and the preflight check of
+            <strong>The bot account's GitHub role and the rulesets.</strong> The bot has the Write role and no bypass, or an admin role its
+            fine-grained token cannot use, which preflight checks under
+            <a href="manifest.html#repo-agentAdmin"><code>repo.agentAdmin</code></a
+            >. A merge needs a maintainer's review and green checks. See <a href="accounts.html">Accounts</a> and the preflight check of
             <a href="manifest.html#repo-agentToken"><code>repo.agentToken</code></a
             >.
           </li>
