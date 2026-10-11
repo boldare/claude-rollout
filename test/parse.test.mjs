@@ -164,7 +164,7 @@ test('the driver marks what it posts and never reads it back as feedback', async
 
   try {
     writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 })
-    const manifest = { repo: { path: dir, github: 'example/demo', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] } }
+    const manifest = { repo: { path: dir, github: 'example/widgets', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] } }
 
     await replyAsAgents(manifest, 7, 101, 'Renamed the helper (abc1234)')
     await commentAsAgents(manifest, 7, 'Review comments addressed:\n\n- "x": done (abc1234)')
@@ -205,7 +205,7 @@ test('the driver pins every gh call to the manifest repo on github.com', async (
     writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 })
     const manifest = {
       label: 'rollout:demo',
-      repo: { path: dir, github: 'example/demo', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] },
+      repo: { path: dir, github: 'example/widgets', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] },
     }
 
     await ensureLabel(manifest)
@@ -221,7 +221,7 @@ test('the driver pins every gh call to the manifest repo on github.com', async (
     assert.equal(calls.length, 4)
 
     for (const call of calls) {
-      assert.equal(call.GH_REPO, 'github.com/example/demo')
+      assert.equal(call.GH_REPO, 'github.com/example/widgets')
       assert.equal(call.GH_HOST, 'github.com')
     }
   } finally {
@@ -292,7 +292,7 @@ function alertJson(number, overrides = {}) {
   return {
     number,
     state: 'open',
-    html_url: `https://github.com/example/demo/security/code-scanning/${number}`,
+    html_url: `https://github.com/example/widgets/security/code-scanning/${number}`,
     rule: { id: 'js/shell-command-injection-from-environment', severity: 'warning', security_severity_level: 'medium' },
     tool: { name: 'CodeQL' },
     most_recent_instance: {
@@ -316,7 +316,7 @@ function mappedAlert(number) {
     path: 'bin/rollout.mjs',
     line: 357,
     message: 'This shell command depends on an uncontrolled absolute path.',
-    url: `https://github.com/example/demo/security/code-scanning/${number}`,
+    url: `https://github.com/example/widgets/security/code-scanning/${number}`,
     sha: HEAD,
   }
 }
@@ -345,7 +345,7 @@ test('alertsFrom keeps open alerts, the first line of each message and null for 
       path: null,
       line: null,
       message: 'Both operands are identical.',
-      url: 'https://github.com/example/demo/security/code-scanning/5',
+      url: 'https://github.com/example/widgets/security/code-scanning/5',
       sha: HEAD,
     },
     {
@@ -368,7 +368,7 @@ test('alertsFrom keeps open alerts, the first line of each message and null for 
 })
 
 test('codeScanningUnavailable: a 404 or a 403 means no code scanning, a rate limit or a 500 does not', () => {
-  const prefix = 'gh api -X GET repos/example/demo/code-scanning/alerts exited 1: '
+  const prefix = 'gh api -X GET repos/example/widgets/code-scanning/alerts exited 1: '
 
   for (const text of [
     'gh: no analysis found (HTTP 404)',
@@ -390,24 +390,24 @@ const OUTAGES = [
   'gh: Server Error (HTTP 500)',
   'HTTP 429: Too Many Requests',
   'non-200 OK status code: 502 Bad Gateway body: ""',
-  "fatal: unable to access 'https://github.com/example/demo.git/': The requested URL returned error: 503",
-  "fatal: unable to access 'https://github.com/example/demo.git/': The requested URL returned error: 429",
+  "fatal: unable to access 'https://github.com/example/widgets.git/': The requested URL returned error: 503",
+  "fatal: unable to access 'https://github.com/example/widgets.git/': The requested URL returned error: 429",
   'Server Error',
   'GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug.',
   'gh: API rate limit exceeded for user ID 1. (HTTP 403)',
   'gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)',
-  "fatal: unable to access 'https://github.com/example/demo.git/': Could not resolve host: github.com",
+  "fatal: unable to access 'https://github.com/example/widgets.git/': Could not resolve host: github.com",
   'ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known',
   'Get "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host',
   'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com',
-  "fatal: unable to access 'https://github.com/example/demo.git/': Failed to connect to github.com port 443 after 75000 ms",
+  "fatal: unable to access 'https://github.com/example/widgets.git/': Failed to connect to github.com port 443 after 75000 ms",
   "curl: (7) Couldn't connect to server",
   'dial tcp 192.0.2.10:443: connect: connection refused',
   'read tcp 192.0.2.2:50000->192.0.2.10:443: read: connection reset by peer',
   'dial tcp 192.0.2.10:443: connect: network is unreachable',
   'Get "https://api.github.com/graphql": net/http: TLS handshake timeout',
   'ssh: connect to host github.com port 22: No route to host',
-  "fatal: unable to access 'https://github.com/example/demo.git/': Operation timed out after 300000 milliseconds with 0 bytes received",
+  "fatal: unable to access 'https://github.com/example/widgets.git/': Operation timed out after 300000 milliseconds with 0 bytes received",
   'kex_exchange_identification: read: Connection timed out',
   'git -C repo fetch --quiet --prune origin timed out after 600 s',
   'dial tcp: lookup api.github.com on 192.0.2.53:53: read udp 192.0.2.2:5353->192.0.2.53:53: i/o timeout',
@@ -418,19 +418,19 @@ const OUTAGES = [
 // Failures of the call itself. They still count as errors.
 const NOT_OUTAGES = [
   'HTTP 401: Bad credentials (https://api.github.com/graphql)',
-  'HTTP 403: Resource not accessible by integration (https://api.github.com/repos/example/demo/pulls/11)',
-  'HTTP 404: Not Found (https://api.github.com/repos/example/demo/pulls/12)',
+  'HTTP 403: Resource not accessible by integration (https://api.github.com/repos/example/widgets/pulls/11)',
+  'HTTP 404: Not Found (https://api.github.com/repos/example/widgets/pulls/12)',
   'HTTP 422: Validation Failed',
   'GraphQL: Could not resolve to a PullRequest with the number of 12. (repository.pullRequest)',
-  "GraphQL: Could not resolve to a Repository with the name 'example/demo'. (repository)",
+  "GraphQL: Could not resolve to a Repository with the name 'example/widgets'. (repository)",
   'no pull requests found for branch "feat/a1"',
   'git@github.com: Permission denied (publickey).',
   'fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.',
-  "fatal: unable to access 'https://github.com/example/demo.git/': The requested URL returned error: 403",
+  "fatal: unable to access 'https://github.com/example/widgets.git/': The requested URL returned error: 403",
   'fatal: unable to access the remote',
   'fake gh: no rule for pr view 11 --json number',
   'gate down',
-  " ! [rejected]        fix/timeout -> fix/timeout (fetch first)\nerror: failed to push some refs to 'https://github.com/example/demo.git'",
+  " ! [rejected]        fix/timeout -> fix/timeout (fetch first)\nerror: failed to push some refs to 'https://github.com/example/widgets.git'",
 ]
 
 function failedView(text) {
@@ -525,8 +525,8 @@ function scanningRollout(rules) {
   return { manifest: loadManifest(dir), calls: () => tools.calls().map((call) => call.args.join(' ')) }
 }
 
-const PR_ALERTS = 'repos/example/demo/code-scanning/alerts -f ref=refs/pull/11/head -f state=open -f per_page=100'
-const BASE_ALERTS = 'repos/example/demo/code-scanning/alerts -f ref=refs/heads/main -f state=open -f per_page=100'
+const PR_ALERTS = 'repos/example/widgets/code-scanning/alerts -f ref=refs/pull/11/head -f state=open -f per_page=100'
+const BASE_ALERTS = 'repos/example/widgets/code-scanning/alerts -f ref=refs/heads/main -f state=open -f per_page=100'
 
 test('codeScanningFor reads the PR head and then the base, one page each', async () => {
   const { manifest, calls } = scanningRollout([
@@ -743,9 +743,9 @@ test('baseChecks reads a tip once per map of reads, and a commit shape once at a
   assert.equal(historyCalls(), 2)
 })
 
-const RUNS = `repos/example/demo/commits/${HEAD}/check-runs -f per_page=100`
-const REVIEWS = 'repos/example/demo/pulls/11/reviews -f per_page=100'
-const CONVERSATION = 'repos/example/demo/issues/11/comments -f per_page=100'
+const RUNS = `repos/example/widgets/commits/${HEAD}/check-runs -f per_page=100`
+const REVIEWS = 'repos/example/widgets/pulls/11/reviews -f per_page=100'
+const CONVERSATION = 'repos/example/widgets/issues/11/comments -f per_page=100'
 
 function passingRuns(count, nameOf) {
   return Array.from({ length: count }, (_, i) => ({ id: i + 1, name: nameOf(i + 1), status: 'completed', conclusion: 'success' }))

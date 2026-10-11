@@ -248,7 +248,7 @@ test('prRows: held goes outside approved, and a PR missing from the ledger is fr
 
   assert.equal(first.info, 'held; approved; wait: held (rollout release A1)')
   assert.equal(first.head, 'a1a1a1a')
-  assert.equal(first.url, 'https://github.com/example/demo/pull/11')
+  assert.equal(first.url, 'https://github.com/example/widgets/pull/11')
   assert.equal(first.lastEventAt, at(81))
   assert.equal(first.gate.mergeState, 'CLEAN')
   assert.equal(second.activeRun, 'A2-01-implement')
@@ -570,7 +570,7 @@ test('status and card read the fixture, partial events line included', () => {
   assert.equal(card.status, 0, card.stderr)
   assert.match(
     card.stdout,
-    /^state: verified {3}PR: https:\/\/github\.com\/example\/demo\/pull\/11 {3}cost: \$6\.25\nheld since 2026-09-01T11:21:00\.000Z \(rollout\.mjs release A1\)$/m,
+    /^state: verified {3}PR: https:\/\/github\.com\/example\/widgets\/pull\/11 {3}cost: \$6\.25\nheld since 2026-09-01T11:21:00\.000Z \(rollout\.mjs release A1\)$/m,
   )
 
   assert.match(card.stdout, /verifier: PASS on a1a1a1a/)

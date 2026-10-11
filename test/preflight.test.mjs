@@ -244,7 +244,7 @@ test("stored login: the check uses the agents' env and passes when it finds no l
       assert.equal(first.GH_TOKEN, undefined)
       assert.equal(first.GH_HOST, undefined)
       assert.equal(first.GH_CONFIG_DIR, join(manifest.dir, '.gh-agents'))
-      assert.equal(first.GH_REPO, 'github.com/example/demo')
+      assert.equal(first.GH_REPO, 'github.com/example/widgets')
     })
   } finally {
     if (inherited === undefined) {
@@ -318,7 +318,7 @@ function repositoryAnswer(probe) {
     return { stderr: 'error connecting to api.github.com\n', code: 1 }
   }
 
-  const stdout = response(probe, ['Content-Type: application/json; charset=utf-8'], { full_name: 'example/demo' })
+  const stdout = response(probe, ['Content-Type: application/json; charset=utf-8'], { full_name: 'example/widgets' })
 
   if (probe === 200) {
     return { stdout }
@@ -334,9 +334,9 @@ function agentAnswers({ permission = 'write', scopes = 'repo, workflow, read:org
 
   return {
     'api user --jq .login': { stdout: 'demo-bot\n' },
-    'api repos/example/demo/collaborators/demo-bot/permission --jq .permission': { stdout: `${permission}\n` },
+    'api repos/example/widgets/collaborators/demo-bot/permission --jq .permission': { stdout: `${permission}\n` },
     'api -i user': { stdout: response(200, headers, { login: 'demo-bot' }) },
-    'api -i repos/example/demo': repositoryAnswer(probe),
+    'api -i repos/example/widgets': repositoryAnswer(probe),
   }
 }
 
@@ -355,16 +355,19 @@ const READ_ORG_WARNING =
 test('agent token: a classic token that sees the repository passes', async () => {
   await withAgentToken(CLASSIC_TOKEN, agentAnswers(), async (manifest, calls) => {
     const result = await agentTokenCheck(manifest)
-    const probe = calls().find((call) => call.args.join(' ') === 'api -i repos/example/demo')
+    const probe = calls().find((call) => call.args.join(' ') === 'api -i repos/example/widgets')
     const role = calls().find((call) => call.args[1].endsWith('/permission'))
 
     assert.deepEqual(result, {
-      lines: ['ok   agent identity: demo-bot (permission write, scopes repo, workflow, read:org)', 'ok   agent token can see example/demo'],
+      lines: [
+        'ok   agent identity: demo-bot (permission write, scopes repo, workflow, read:org)',
+        'ok   agent token can see example/widgets',
+      ],
       problems: [],
       warnings: [],
     })
 
-    assert.deepEqual(probe.args, ['api', '-i', 'repos/example/demo'])
+    assert.deepEqual(probe.args, ['api', '-i', 'repos/example/widgets'])
     assert.equal(probe.GH_TOKEN, CLASSIC_TOKEN)
     assert.notEqual(role.GH_TOKEN, CLASSIC_TOKEN)
   })
@@ -375,10 +378,10 @@ test('agent token: a token that cannot see the repository fails with the status'
     await withAgentToken(CLASSIC_TOKEN, agentAnswers({ probe: status }), async (manifest) => {
       const result = await agentTokenCheck(manifest)
 
-      assert.ok(result.lines.includes(`FAIL agent token cannot see example/demo (${status})`), status)
+      assert.ok(result.lines.includes(`FAIL agent token cannot see example/widgets (${status})`), status)
       assert.deepEqual(
         result.problems,
-        [`agent token cannot see example/demo (${status}): give the token the repo scope and its account access to the repository`],
+        [`agent token cannot see example/widgets (${status}): give the token the repo scope and its account access to the repository`],
         status,
       )
     })
@@ -389,9 +392,9 @@ test('agent token: a repository probe without an answer fails', async () => {
   await withAgentToken(CLASSIC_TOKEN, agentAnswers({ probe: null }), async (manifest) => {
     const result = await agentTokenCheck(manifest)
 
-    assert.ok(result.lines.includes('FAIL agent token cannot see example/demo (no answer)'))
+    assert.ok(result.lines.includes('FAIL agent token cannot see example/widgets (no answer)'))
     assert.deepEqual(result.problems, [
-      'agent token cannot see example/demo (no answer): give the token the repo scope and its account access to the repository',
+      'agent token cannot see example/widgets (no answer): give the token the repo scope and its account access to the repository',
     ])
   })
 })
@@ -404,7 +407,7 @@ test('agent token: a fine-grained token fails without scope warnings and is neve
     assert.deepEqual(result.lines, [
       'ok   agent identity: demo-bot (permission write, scopes ?)',
       'FAIL agent token is fine-grained, so agents cannot follow CI',
-      'ok   agent token can see example/demo',
+      'ok   agent token can see example/widgets',
     ])
 
     assert.deepEqual(result.problems, [
@@ -412,7 +415,7 @@ test('agent token: a fine-grained token fails without scope warnings and is neve
     ])
 
     assert.deepEqual(result.warnings, [])
-    assert.ok(calls().some((call) => call.args.join(' ') === 'api -i repos/example/demo'))
+    assert.ok(calls().some((call) => call.args.join(' ') === 'api -i repos/example/widgets'))
     assert.equal(printed.includes(FINE_GRAINED_TOKEN), false)
     assert.equal(printed.includes(FINE_GRAINED_TOKEN.slice('github_pat_'.length)), false)
   })

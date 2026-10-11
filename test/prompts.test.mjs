@@ -316,7 +316,7 @@ test('codeScanningNote: a false positive goes to the maintainer as a code-scanni
   for (const part of [
     '- #4 js/shell-command-injection-from-environment at bin/rollout.mjs:357',
     'Never silence the analyser',
-    '`gh api repos/example/demo/code-scanning/alerts/<number>`',
+    '`gh api repos/example/widgets/code-scanning/alerts/<number>`',
     'report BLOCKED with kind `code-scanning`',
   ]) {
     assert.ok(note.includes(part), part)

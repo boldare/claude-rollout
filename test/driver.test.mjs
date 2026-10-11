@@ -75,7 +75,7 @@ function prJson(overrides = {}) {
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
     mergedAt: null,
-    url: 'https://github.com/example/demo/pull/11',
+    url: 'https://github.com/example/widgets/pull/11',
     author: { login: 'demo-bot' },
     ...overrides,
   }
@@ -898,7 +898,7 @@ const FETCH_UNREACHABLE = {
   tool: 'git',
   args: 'fetch',
   code: 128,
-  stderr: "fatal: unable to access 'https://github.com/example/demo.git/': Could not resolve host: github.com",
+  stderr: "fatal: unable to access 'https://github.com/example/widgets.git/': Could not resolve host: github.com",
 }
 
 // Runs the ticks and returns how many github-unavailable events each one logged.
@@ -917,7 +917,7 @@ async function unavailablePerTick(manifest, driver, ticks) {
 test('tick: six ticks of HTTP 502 escalate nothing, and an outage of 30 minutes notifies once and again when it ends', async () => {
   const { manifest, driver, tools, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH, VIEW_502] })
   const entry = driver.ledger.prs.A1
-  gate.error = new Error('gh api -X GET repos/example/demo/pulls/11/reviews -f per_page=100 exited 1: gh: Server Error (HTTP 500)')
+  gate.error = new Error('gh api -X GET repos/example/widgets/pulls/11/reviews -f per_page=100 exited 1: gh: Server Error (HTTP 500)')
 
   assert.deepEqual(await unavailablePerTick(manifest, driver, 6), [1, 1, 1, 1, 1, 1])
   assert.deepEqual(kindsSince(manifest), Array(6).fill('github-unavailable'))
@@ -2065,7 +2065,7 @@ function scanAlert(overrides = {}) {
     path: 'bin/rollout.mjs',
     line: 357,
     message: 'This shell command depends on an uncontrolled absolute path.',
-    url: 'https://github.com/example/demo/security/code-scanning/4',
+    url: 'https://github.com/example/widgets/security/code-scanning/4',
     sha: SHA,
     ...overrides,
   }
@@ -2076,7 +2076,7 @@ function scanned(alerts) {
 }
 
 const ALERT_REASON =
-  'CodeQL js/shell-command-injection-from-environment (medium) bin/rollout.mjs:357: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4'
+  'CodeQL js/shell-command-injection-from-environment (medium) bin/rollout.mjs:357: This shell command depends on an uncontrolled absolute path. https://github.com/example/widgets/security/code-scanning/4'
 
 const CLAIMED = { state: 'ready_claimed', pr: 11, claimedSha: SHA, attempts: { implement: 1, fix: 0, verify: 0, brief: 0 } }
 
@@ -2098,7 +2098,7 @@ test('checkClaim: a new code scanning alert on the head goes back to the impleme
   assert.ok(entry.fixNote.includes(`- ${ALERT_REASON}`))
   assert.match(entry.fixNote, /Never silence the analyser/)
   assert.match(entry.fixNote, /kind `code-scanning`/)
-  assert.match(entry.fixNote, /gh api repos\/example\/demo\/code-scanning\/alerts\/<number>/)
+  assert.match(entry.fixNote, /gh api repos\/example\/widgets\/code-scanning\/alerts\/<number>/)
   assert.equal(entry.claimPatchId, undefined)
   assert.equal(entry.patchSince, undefined)
   assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'needs-fix', reason: 'code scanning' }])
