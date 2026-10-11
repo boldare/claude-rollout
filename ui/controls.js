@@ -1,4 +1,4 @@
-import { commandBody, dialogFor, prControls, rolloutControls } from './commands.js'
+import { commandBody, dialogFor, prControls, rolloutControls, rowControls } from './commands.js'
 import { ask } from './dialog.js'
 import { element } from './dom.js'
 
@@ -11,8 +11,11 @@ const LABELS = {
   hold: 'Hold',
   release: 'Release',
   note: 'Note',
+  answer: 'Answer',
   retry: 'Retry',
 }
+
+const CLASSES = { stop: 'danger', answer: 'primary' }
 
 async function run(command, pr, ctx) {
   const options = dialogFor(command, { rollout: ctx.view?.rollout ?? ctx.state?.name, driver: ctx.view?.driver ?? null, pr })
@@ -30,7 +33,7 @@ async function run(command, pr, ctx) {
 }
 
 function button(command, pr, ctx) {
-  const node = element('button', LABELS[command], command === 'stop' ? 'danger' : '')
+  const node = element('button', LABELS[command], CLASSES[command] ?? '')
 
   node.type = 'button'
   node.disabled = Boolean(ctx.sending)
@@ -56,4 +59,8 @@ export function renderRolloutControls(ctx) {
 
 export function renderPrControls(pr, ctx) {
   return controls(prControls(pr, ctx.readOnly), pr, ctx)
+}
+
+export function renderRowControls(row, ctx) {
+  return controls(rowControls(row, ctx.readOnly), row, ctx)
 }

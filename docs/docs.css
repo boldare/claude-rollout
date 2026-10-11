@@ -756,6 +756,14 @@ ol.steps > li > strong:first-child {
   --tone: var(--merged);
 }
 
+.badge.waiting {
+  --tone: var(--fail);
+}
+
+.badge.answered {
+  --tone: var(--pass);
+}
+
 .role-brief {
   --tone: var(--brief);
 }
@@ -1305,6 +1313,14 @@ ol.steps > li > strong:first-child {
 
 .mock tr.selected td:first-child {
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.mock tr.waiting td {
+  background: color-mix(in srgb, var(--fail) 6%, transparent);
+}
+
+.mock tr.waiting td:first-child {
+  box-shadow: inset 2px 0 0 var(--fail);
 }
 
 .mock .total,

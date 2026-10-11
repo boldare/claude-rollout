@@ -26,6 +26,8 @@ export const ERROR_KINDS = [
   'report-unchecked',
 ]
 
+const WAITING_STATES = ['blocked', 'escalated']
+const RESUMED = { brief: ', writer resumed', implement: ', implementer resumed', fix: ', implementer resumed' }
 const DETAIL_LIMIT = 200
 const HIDDEN_FIELDS = new Set(['at', 'id', 'kind'])
 
@@ -55,6 +57,20 @@ export function driverStatus(driver) {
   }
 
   return driver.running ? 'running' : 'stopped'
+}
+
+export function isWaiting(row) {
+  return WAITING_STATES.includes(row.state)
+}
+
+export function answeredText(answered) {
+  if (!answered) {
+    return null
+  }
+
+  const who = answered.by === 'delegate' ? 'delegate answered' : 'answered'
+
+  return `${who}${RESUMED[answered.role] ?? ''}`
 }
 
 export function stateCounts(rows) {

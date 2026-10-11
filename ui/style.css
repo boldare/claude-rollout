@@ -495,6 +495,14 @@ pre {
   font-weight: 400;
 }
 
+.badge.waiting {
+  --tone: var(--fail);
+}
+
+.badge.answered {
+  --tone: var(--pass);
+}
+
 /* Cards and tables */
 
 .scroll,
@@ -565,6 +573,20 @@ tr.selected td {
 
 tr.selected td:first-child {
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* A PR that waits for the maintainer stands out from running work. */
+tr.waiting td {
+  background: color-mix(in srgb, var(--fail) 6%, transparent);
+}
+
+tr.waiting td:first-child {
+  box-shadow: inset 2px 0 0 var(--fail);
+}
+
+.board td > .controls {
+  display: inline-flex;
+  vertical-align: middle;
 }
 
 .board td:first-child a,
@@ -1312,8 +1334,25 @@ dialog {
   box-shadow: var(--shadow-md);
 }
 
+dialog.wide {
+  width: min(44rem, calc(100vw - 4rem));
+}
+
 dialog h2 {
   margin: 0 0 8px;
+}
+
+dialog h3 {
+  margin: 12px 0 4px;
+}
+
+.dialog-section {
+  max-height: 30vh;
+  margin: 0 0 12px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--well);
 }
 
 dialog textarea {
