@@ -310,8 +310,9 @@
           </li>
           <li>
             <strong>The control plane.</strong> Any command that names the rollout directory, the installed skill (<code>ROLLOUT_HOME</code>
-            and any <code>.claude/skills/rollout</code>), the rollout's name as a path, or the push markers <code>rollout-branch</code>,
-            <code>rollout-pushurl</code> and <code>rollout-ready</code>.
+            and any <code>.claude/skills/rollout</code>), the rollout's name as a path or a word, as in a branch or a PR title, or the push
+            markers <code>rollout-branch</code>, <code>rollout-pushurl</code> and <code>rollout-ready</code>. Loading the manifest refuses a
+            branch, title, base or repository that would trip this rule (<a href="manifest.html#validation">what loading checks</a>).
           </li>
           <li>
             <strong>The environment the guard relies on.</strong> Setting <code>GH_TOKEN</code>, <code>GH_CONFIG_DIR</code>,
