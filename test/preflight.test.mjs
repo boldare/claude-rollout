@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadManifest } from '../lib/manifest.mjs'
-import { originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
+import { agentTokenCheck, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 function tools(install, verify) {
@@ -197,14 +197,16 @@ if (finds !== 'always' && !GH_TOKEN && !(finds === 'keyring' && GH_HOST)) {
   )
 }
 
-async function withStoredLogin(finds, run) {
+// The fake gh written by writeGh comes first on repo.pathPrepend, and token is
+// the content of repo.agentToken.
+async function withAgentGh(token, writeGh, run) {
   const bin = mkdtempSync(join(tmpdir(), 'rollout-gh-'))
   const manifest = loadManifest(makeRollout())
 
   manifest.repo.pathPrepend = [bin]
   manifest.repo.agentToken = join(manifest.dir, 'agent-token')
-  writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
-  fakeGh(bin, finds)
+  writeFileSync(manifest.repo.agentToken, `${token}\n`)
+  writeGh(bin)
 
   try {
     await run(manifest, () =>
@@ -215,7 +217,12 @@ async function withStoredLogin(finds, run) {
     )
   } finally {
     rmSync(bin, { recursive: true, force: true })
+    rmSync(manifest.dir, { recursive: true, force: true })
   }
+}
+
+function withStoredLogin(finds, run) {
+  return withAgentGh('synthetic-agent-token', (bin) => fakeGh(bin, finds), run)
 }
 
 const STORED_OK = "ok   without GH_TOKEN, agents' gh has no stored login to fall back to"
@@ -276,5 +283,201 @@ test('stored login: the GH_HOST fallback is an info line, never a problem', asyn
 
     assert.deepEqual(result.lines, [STORED_OK])
     assert.deepEqual(result.problems, [])
+  })
+})
+
+// Answers by the exact joined arguments, logs what gh saw and never reads
+// stdin, which sh() leaves open. An unknown call fails.
+function fakeAnsweringGh(dir, answers) {
+  writeFileSync(
+    join(dir, 'gh'),
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+const { join } = require('node:path')
+const args = process.argv.slice(2)
+const answers = ${JSON.stringify(answers)}
+const answer = answers[args.join(' ')] ?? { stderr: 'unexpected call\\n', code: 1 }
+appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ args, GH_TOKEN: process.env.GH_TOKEN }) + '\\n')
+process.stdout.write(answer.stdout ?? '')
+process.stderr.write(answer.stderr ?? '')
+process.exitCode = answer.code ?? 0
+`,
+    { mode: 0o755 },
+  )
+}
+
+const REASONS = { 200: 'OK', 403: 'Forbidden', 404: 'Not Found' }
+
+// What `gh api -i` prints: a status line, headers ending in \r\n, a blank line and the body.
+function response(status, headers, body) {
+  return `HTTP/2.0 ${status} ${REASONS[status]}\n${headers.map((header) => `${header}\r\n`).join('')}\r\n${JSON.stringify(body)}`
+}
+
+function repositoryAnswer(probe) {
+  if (probe === null) {
+    return { stderr: 'error connecting to api.github.com\n', code: 1 }
+  }
+
+  const stdout = response(probe, ['Content-Type: application/json; charset=utf-8'], { full_name: 'example/demo' })
+
+  if (probe === 200) {
+    return { stdout }
+  }
+
+  return { stdout, stderr: `gh: ${REASONS[probe]} (HTTP ${probe})\n`, code: 1 }
+}
+
+// scopes null leaves the X-Oauth-Scopes header out, and probe null is a probe GitHub never answered.
+function agentAnswers({ permission = 'write', scopes = 'repo, workflow, read:org', probe = 200 } = {}) {
+  const scopeHeader = scopes === null ? [] : [`X-Oauth-Scopes: ${scopes}`]
+  const headers = ['Content-Type: application/json; charset=utf-8', 'X-Accepted-Oauth-Scopes: ', ...scopeHeader, 'X-Ratelimit-Limit: 5000']
+
+  return {
+    'api user --jq .login': { stdout: 'demo-bot\n' },
+    'api repos/example/demo/collaborators/demo-bot/permission --jq .permission': { stdout: `${permission}\n` },
+    'api -i user': { stdout: response(200, headers, { login: 'demo-bot' }) },
+    'api -i repos/example/demo': repositoryAnswer(probe),
+  }
+}
+
+const CLASSIC_TOKEN = 'ghp_synthetic0123456789abcdef'
+const FINE_GRAINED_TOKEN = 'github_pat_synthetic0123456789abcdef'
+
+function withAgentToken(token, answers, run) {
+  return withAgentGh(token, (bin) => fakeAnsweringGh(bin, answers), run)
+}
+
+const IDENTITY_PROBLEM = 'agent token must belong to a non-maintainer account with write (not admin) permission'
+const WORKFLOW_WARNING = 'agent token lacks the workflow scope: PRs that change .github/workflows cannot be pushed'
+const READ_ORG_WARNING =
+  'agent token lacks the read:org scope: gh cannot edit or read a PR with a team review request, so agents cannot update their PR description'
+
+test('agent token: a classic token that sees the repository passes', async () => {
+  await withAgentToken(CLASSIC_TOKEN, agentAnswers(), async (manifest, calls) => {
+    const result = await agentTokenCheck(manifest)
+    const probe = calls().find((call) => call.args.join(' ') === 'api -i repos/example/demo')
+    const role = calls().find((call) => call.args[1].endsWith('/permission'))
+
+    assert.deepEqual(result, {
+      lines: ['ok   agent identity: demo-bot (permission write, scopes repo, workflow, read:org)', 'ok   agent token can see example/demo'],
+      problems: [],
+      warnings: [],
+    })
+
+    assert.deepEqual(probe.args, ['api', '-i', 'repos/example/demo'])
+    assert.equal(probe.GH_TOKEN, CLASSIC_TOKEN)
+    assert.notEqual(role.GH_TOKEN, CLASSIC_TOKEN)
+  })
+})
+
+test('agent token: a token that cannot see the repository fails with the status', async () => {
+  for (const status of [404, 403]) {
+    await withAgentToken(CLASSIC_TOKEN, agentAnswers({ probe: status }), async (manifest) => {
+      const result = await agentTokenCheck(manifest)
+
+      assert.ok(result.lines.includes(`FAIL agent token cannot see example/demo (${status})`), status)
+      assert.deepEqual(
+        result.problems,
+        [`agent token cannot see example/demo (${status}): give the token the repo scope and its account access to the repository`],
+        status,
+      )
+    })
+  }
+})
+
+test('agent token: a repository probe without an answer fails', async () => {
+  await withAgentToken(CLASSIC_TOKEN, agentAnswers({ probe: null }), async (manifest) => {
+    const result = await agentTokenCheck(manifest)
+
+    assert.ok(result.lines.includes('FAIL agent token cannot see example/demo (no answer)'))
+    assert.deepEqual(result.problems, [
+      'agent token cannot see example/demo (no answer): give the token the repo scope and its account access to the repository',
+    ])
+  })
+})
+
+test('agent token: a fine-grained token fails without scope warnings and is never printed', async () => {
+  await withAgentToken(FINE_GRAINED_TOKEN, agentAnswers({ scopes: null }), async (manifest, calls) => {
+    const result = await agentTokenCheck(manifest)
+    const printed = JSON.stringify(result)
+
+    assert.deepEqual(result.lines, [
+      'ok   agent identity: demo-bot (permission write, scopes ?)',
+      'FAIL agent token is fine-grained, so agents cannot follow CI',
+      'ok   agent token can see example/demo',
+    ])
+
+    assert.deepEqual(result.problems, [
+      'agent token is fine-grained: GitHub gives it no Checks permission, so agents cannot follow CI. Use a classic token with the repo, workflow and read:org scopes',
+    ])
+
+    assert.deepEqual(result.warnings, [])
+    assert.ok(calls().some((call) => call.args.join(' ') === 'api -i repos/example/demo'))
+    assert.equal(printed.includes(FINE_GRAINED_TOKEN), false)
+    assert.equal(printed.includes(FINE_GRAINED_TOKEN.slice('github_pat_'.length)), false)
+  })
+})
+
+test('agent token: a classic token without read:org, write:org or admin:org warns', async () => {
+  const cases = [
+    ['repo, workflow', [READ_ORG_WARNING]],
+    ['repo, workflow, read:org', []],
+    ['repo, workflow, write:org', []],
+    ['repo, workflow, admin:org', []],
+    ['repo, read:org', [WORKFLOW_WARNING]],
+    ['repo, read:org_extra, workflows', [WORKFLOW_WARNING, READ_ORG_WARNING]],
+  ]
+
+  for (const [scopes, warnings] of cases) {
+    await withAgentToken(CLASSIC_TOKEN, agentAnswers({ scopes }), async (manifest) => {
+      const result = await agentTokenCheck(manifest)
+
+      assert.deepEqual(result.warnings, warnings, scopes)
+      assert.deepEqual(result.problems, [], scopes)
+    })
+  }
+})
+
+test('agent token: an empty or missing scopes header is no scopes', async () => {
+  await withAgentToken(CLASSIC_TOKEN, agentAnswers({ scopes: '' }), async (manifest) => {
+    const result = await agentTokenCheck(manifest)
+
+    assert.equal(result.lines[0], 'ok   agent identity: demo-bot (permission write, scopes none)')
+    assert.deepEqual(result.warnings, [WORKFLOW_WARNING, READ_ORG_WARNING])
+  })
+
+  await withAgentToken(CLASSIC_TOKEN, agentAnswers({ scopes: null }), async (manifest) => {
+    const result = await agentTokenCheck(manifest)
+
+    assert.equal(result.lines[0], 'ok   agent identity: demo-bot (permission write, scopes ?)')
+    assert.deepEqual(result.warnings, [WORKFLOW_WARNING, READ_ORG_WARNING])
+  })
+})
+
+test('agent token: an account with admin permission fails the identity check', async () => {
+  await withAgentToken(CLASSIC_TOKEN, agentAnswers({ permission: 'admin' }), async (manifest) => {
+    const result = await agentTokenCheck(manifest)
+
+    assert.equal(result.lines[0], 'FAIL agent identity: demo-bot (permission admin, scopes repo, workflow, read:org)')
+    assert.deepEqual(result.problems, [IDENTITY_PROBLEM])
+  })
+})
+
+test('agent token: a maintainer account fails the identity check', async () => {
+  await withAgentToken(CLASSIC_TOKEN, agentAnswers(), async (manifest) => {
+    manifest.repo.maintainers = ['demo-bot']
+
+    const result = await agentTokenCheck(manifest)
+
+    assert.match(result.lines[0], /^FAIL agent identity: demo-bot /)
+    assert.deepEqual(result.problems, [IDENTITY_PROBLEM])
+  })
+})
+
+test('agent token: a missing token file throws', async () => {
+  await withAgentToken(CLASSIC_TOKEN, agentAnswers(), async (manifest) => {
+    rmSync(manifest.repo.agentToken)
+
+    await assert.rejects(agentTokenCheck(manifest), /repo\.agentToken .* does not exist/)
   })
 })
