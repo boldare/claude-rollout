@@ -6,12 +6,14 @@ import { join } from 'node:path'
 import {
   alertsFrom,
   baseChecks,
+  checksFor,
   codeScanningFor,
   codeScanningUnavailable,
   collectFacts,
   commentAsAgents,
   deleteRemoteBranch,
   ensureLabel,
+  feedbackFor,
   githubUnavailable,
   maintainerFeedback,
   parseAddedLines,
@@ -20,7 +22,9 @@ import {
   refreshOutsideDeps,
   remoteRepo,
   replyAsAgents,
+  reviewsFor,
 } from '../lib/github.mjs'
+import { githubApproval } from '../lib/judge.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { fakeTools, makeRollout } from './fixtures.mjs'
 
@@ -737,4 +741,107 @@ test('baseChecks reads a tip once per map of reads, and a commit shape once at a
 
   assert.equal(runsCalls(), 4)
   assert.equal(historyCalls(), 2)
+})
+
+const RUNS = `repos/example/demo/commits/${HEAD}/check-runs -f per_page=100`
+const REVIEWS = 'repos/example/demo/pulls/11/reviews -f per_page=100'
+const CONVERSATION = 'repos/example/demo/issues/11/comments -f per_page=100'
+
+function passingRuns(count, nameOf) {
+  return Array.from({ length: count }, (_, i) => ({ id: i + 1, name: nameOf(i + 1), status: 'completed', conclusion: 'success' }))
+}
+
+const jobName = (id) => (id === 1 ? 'test' : `job ${id}`)
+
+test('checksFor sees a failing run on the second page', async () => {
+  const { manifest, calls } = scanningRollout([
+    {
+      tool: 'gh',
+      args: `${RUNS} -f page=2`,
+      stdout: { check_runs: [{ id: 101, name: 'lint', status: 'completed', conclusion: 'failure' }] },
+    },
+    { tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(100, jobName) } },
+  ])
+
+  const checks = await checksFor(manifest, HEAD)
+
+  assert.equal(checks.state, 'red')
+  assert.deepEqual(checks.failing, ['lint: failure'])
+  assert.deepEqual(calls(), [`api -X GET ${RUNS} -f page=1`, `api -X GET ${RUNS} -f page=2`])
+})
+
+test('checksFor finds a required check on the second page', async () => {
+  const { manifest } = scanningRollout([
+    {
+      tool: 'gh',
+      args: `${RUNS} -f page=2`,
+      stdout: { check_runs: [{ id: 101, name: 'test', status: 'completed', conclusion: 'success' }] },
+    },
+    { tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(100, (id) => `docs ${id}`) } },
+  ])
+
+  const checks = await checksFor(manifest, HEAD)
+
+  assert.equal(checks.state, 'green')
+  assert.deepEqual(checks.missing, [])
+})
+
+test('reviewsFor reads a maintainer approval on the second page', async () => {
+  const others = Array.from({ length: 99 }, (_, i) => review(i + 1, 'demo-bot', '2026-10-01T09:00:00Z', 'COMMENTED', 'ok'))
+  const { manifest } = scanningRollout([
+    { tool: 'gh', args: `${REVIEWS} -f page=2`, stdout: [review(101, 'maint', '2026-10-01T12:00:00Z', 'APPROVED', '')] },
+    { tool: 'gh', args: REVIEWS, stdout: [...others, review(100, 'maint', '2026-10-01T10:00:00Z', 'CHANGES_REQUESTED', 'fix it')] },
+  ])
+
+  manifest.repo.maintainers = ['maint']
+
+  const approval = githubApproval(
+    manifest,
+    { patchSince: '2026-10-01T08:00:00Z' },
+    { reviews: await reviewsFor(manifest, 11), pr: { number: 11 } },
+  )
+
+  assert.deepEqual(approval, { approved: true, by: 'maint', at: '2026-10-01T12:00:00Z' })
+})
+
+test('feedbackFor reads a maintainer comment on the second page', async () => {
+  const others = Array.from({ length: 100 }, (_, i) => conversationComment(i + 1, 'demo-bot', '2026-10-01T09:00:00Z', 'status'))
+  const { manifest, calls } = scanningRollout([
+    { tool: 'gh', args: `${CONVERSATION} -f page=2`, stdout: [conversationComment(101, 'maint', '2026-10-01T10:00:00Z', 'Rename it.')] },
+    { tool: 'gh', args: CONVERSATION, stdout: others },
+    { tool: 'gh', args: 'pulls/11/comments', stdout: [] },
+    { tool: 'gh', args: 'pulls/11/reviews', stdout: [] },
+  ])
+
+  manifest.repo.maintainers = ['maint']
+
+  assert.deepEqual(await feedbackFor(manifest, 11), [{ id: 'conversation-101', at: '2026-10-01T10:00:00Z', body: 'Rename it.' }])
+  assert.deepEqual(
+    calls().filter((call) => call.includes('issues/11/comments')),
+    [`api -X GET ${CONVERSATION} -f page=1`, `api -X GET ${CONVERSATION} -f page=2`],
+  )
+})
+
+test('checksFor reads the next page after a full one and stops after a short one', async () => {
+  const full = scanningRollout([
+    { tool: 'gh', args: `${RUNS} -f page=2`, stdout: NO_RUNS },
+    { tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(100, jobName) } },
+  ])
+
+  assert.equal((await checksFor(full.manifest, HEAD)).runs.length, 100)
+  assert.deepEqual(full.calls(), [`api -X GET ${RUNS} -f page=1`, `api -X GET ${RUNS} -f page=2`])
+
+  const short = scanningRollout([{ tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(99, jobName) } }])
+
+  assert.equal((await checksFor(short.manifest, HEAD)).runs.length, 99)
+  assert.deepEqual(short.calls(), [`api -X GET ${RUNS} -f page=1`])
+})
+
+test('checksFor rejects a page without a list instead of returning the runs read so far', async () => {
+  const { manifest } = scanningRollout([
+    { tool: 'gh', args: `${RUNS} -f page=2`, stdout: { message: 'x' } },
+    { tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(100, jobName) } },
+  ])
+
+  await assert.rejects(checksFor(manifest, HEAD), /check-runs page 2 has no list/)
 })
