@@ -113,6 +113,12 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+// lib/manifest.mjs uses it, so no manifest hands agents a branch, title, base
+// or repository that the guard refuses.
+export function rolloutNamePattern(name) {
+  return new RegExp(`(^|[\\s/"'=])${escapeRegExp(name)}(?![\\w.-])`)
+}
+
 // The live rollout: its directory (not the sibling `<dir>.worktrees`), the
 // installed skill, and relative paths that name the rollout directory.
 function contextPatterns({ dir, home, name } = {}) {
@@ -127,7 +133,7 @@ function contextPatterns({ dir, home, name } = {}) {
   }
 
   if (name) {
-    patterns.push(new RegExp(`(^|[\\s/"'=])${escapeRegExp(name)}(?![\\w.-])`))
+    patterns.push(rolloutNamePattern(name))
   }
 
   return patterns
