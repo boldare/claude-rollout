@@ -551,7 +551,8 @@
                   policy to the diff. Then it reads the new code scanning alerts on the head.
                 </td>
                 <td>
-                  CI green, no policy violation, no new alert and a free slot: <code>verifying</code>. CI red, CI still unsettled after
+                  A note that still waits for the implementer: <code>needs_fix</code>, before any check. CI green, no policy violation, no
+                  new alert and a free slot: <code>verifying</code>. CI red, CI still unsettled after
                   <a href="manifest.html#policy-ciStallMinutes"><code>ciStallMinutes</code></a
                   >, a violation or a new alert: <code>needs_fix</code>. A new alert under
                   <a href="manifest.html#repo-codeScanning"><code>codeScanning.action: block</code></a
@@ -561,7 +562,10 @@
               </tr>
               <tr id="state-verifying">
                 <td class="nowrap"><span class="badge state state-verifying">verifying</span></td>
-                <td>A fresh read-only verifier tries to refute READY for that SHA, against the brief's acceptance checklist.</td>
+                <td>
+                  A fresh read-only verifier tries to refute READY for that SHA, against the brief's acceptance checklist and the
+                  <a href="commands.html#cmd-note">recorded decisions</a>. Where a decision conflicts with the brief, the decision wins.
+                </td>
                 <td>
                   PASS from an untouched worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>. A PASS from a
                   verifier that changed the tree, or for a stale SHA, is discarded: <code>ready_claimed</code>.
@@ -691,7 +695,10 @@
               </tr>
               <tr>
                 <td class="nowrap"><span class="badge role-implement">implementer</span></td>
-                <td><code>implement.md</code>: the protocol, the brief, the verify recipe, the scope, the forbidden paths</td>
+                <td>
+                  <code>implement.md</code>: the protocol, the brief and the recorded decisions after it, the verify recipe, the scope, the
+                  forbidden paths
+                </td>
                 <td>new, kept as the PR's session</td>
                 <td>Edit, commit, push its own branch, open and edit the PR, wait for CI.</td>
                 <td class="name">ready.json</td>
@@ -712,7 +719,10 @@
               </tr>
               <tr>
                 <td class="nowrap"><span class="badge role-verify">verifier</span></td>
-                <td><code>verify.md</code>: the SHA, the READY report, the recipe without steps that rewrite files</td>
+                <td>
+                  <code>verify.md</code>: the SHA, the READY report, the recipe without steps that rewrite files, the brief and the recorded
+                  decisions after it
+                </td>
                 <td>new, every time</td>
                 <td>Read, build and test. No edits, commits, pushes or GitHub writes.</td>
                 <td class="name">verdict.json</td>
@@ -992,7 +1002,8 @@
           the reason (for example <em>CI is red</em>, <em>rollout policy</em>, <em>verifier findings</em>, <em>merge gate</em>,
           <em>rebase conflict</em> or <em>maintainer review</em>), a note with the details and the current head. A note you queued is
           appended. If the session is gone, the driver drops it, and the next fix starts a new session with the whole implement prompt
-          inside <code>resume-fresh.md</code>.
+          inside <code>resume-fresh.md</code>. That prompt lists every recorded decision after the brief, oldest first, so the new session
+          loses none of them.
         </p>
 
         <h2 id="gate">The merge gate <a class="anchor" href="#gate" aria-label="Link to this section">#</a></h2>

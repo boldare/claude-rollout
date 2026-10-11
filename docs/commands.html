@@ -347,7 +347,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td class="nowrap">
                   <span class="badge state state-pending">pending</span>, or an agent other than the delegate is running
                 </td>
-                <td>Queued. The next brief, implement or fix prompt gets it.</td>
+                <td>
+                  Queued. The next brief, implement or fix prompt gets it. A note queued while a verifier runs sends the PR to a fix run
+                  before the next verification.
+                </td>
               </tr>
               <tr>
                 <td class="nowrap"><span class="badge state state-merged">merged</span></td>
@@ -392,6 +395,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           A note always wins over <a href="how-it-works.html#delegate">the delegate</a>. Sent while the delegate runs, it applies at once,
           and the delegate's result is dropped (<code>delegate-dropped</code>). Sent after a delegate answer, it still reaches the agent,
           queued or as a new fix reason.
+        </p>
+
+        <p>
+          The driver records every note and delegate answer that applies, the last 20 of them. The verifier, and an implementer that starts
+          a new session, get them all after the brief, oldest first. A decision wins over the brief.
         </p>
 
         <h3 id="cmd-retry">retry <a class="anchor" href="#cmd-retry" aria-label="Link to this command">#</a></h3>
