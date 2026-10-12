@@ -1,3 +1,4 @@
+import { sentence } from './format.js'
 import { parseSse } from './sse.js'
 
 const FIRST_WAIT_MS = 1000
@@ -33,7 +34,7 @@ export async function apiPost(token, path, body) {
 async function errorOf(response) {
   const body = parseJson(await response.text().catch(() => ''))
 
-  return body?.error ?? `The server answered ${response.status}.`
+  return body?.error ? sentence(body.error) : `The server answered ${response.status}.`
 }
 
 // The browser's own SSE client cannot send the Authorization header, so the

@@ -1,4 +1,5 @@
 import { cell, element, link, stateBadge, table, wrap } from './dom.js'
+import { sentence } from './format.js'
 
 const HEADINGS = ['PR', 'state', 'section in the plan', 'source']
 
@@ -41,7 +42,7 @@ function planBody(plan, ctx) {
   }
 
   if (plan.status !== 200 || !plan.body) {
-    return [element('p', plan.body?.error ?? `The server answered ${plan.status}.`, 'error')]
+    return [element('p', plan.body?.error ? sentence(plan.body.error) : `The server answered ${plan.status}.`, 'error')]
   }
 
   const { prs, sources } = plan.body

@@ -1,5 +1,5 @@
 import { badge, element, link, withClass, wrap } from './dom.js'
-import { duration, money } from './format.js'
+import { duration, money, sentence } from './format.js'
 import { estimateNote, logSize, pageLabel, pageLinks, resultPreview } from './transcript-model.js'
 
 const PAGE_LINKS = ['first', 'previous', 'next', 'latest']
@@ -212,7 +212,7 @@ function problem(transcript) {
     return element('p', 'No log for this run.', 'muted')
   }
 
-  return element('p', transcript.body?.error ?? `The server answered ${transcript.status}.`, 'error')
+  return element('p', transcript.body?.error ? sentence(transcript.body.error) : `The server answered ${transcript.status}.`, 'error')
 }
 
 export function renderTranscript(ctx) {

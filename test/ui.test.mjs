@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { commandBody, commandNotice, dialogFor, prControls, rolloutControls, rowControls } from '../ui/commands.js'
-import { duration, money, stateLabel } from '../ui/format.js'
+import { duration, money, sentence, stateLabel } from '../ui/format.js'
 import {
   ERROR_KINDS,
   STATES,
@@ -435,6 +435,13 @@ test('format: money and duration', () => {
   assert.equal(duration(null), '-')
 })
 
+test('format: a server message reads as a sentence', () => {
+  assert.equal(sentence('not found'), 'Not found')
+  assert.equal(sentence('Unknown rollout'), 'Unknown rollout')
+  assert.equal(sentence(''), '')
+  assert.equal(sentence(null), '')
+})
+
 test('format: a state id reads as words, every state of the model included', () => {
   assert.equal(stateLabel('needs_fix'), 'needs fix')
   assert.equal(stateLabel('ready_claimed'), 'ready claimed')
@@ -695,7 +702,7 @@ test('commandNotice: queued, stopping, starting and the errors', () => {
   })
 
   assert.deepEqual(commandNotice({ cmd: 'stop' }, { status: 409, body: { error: 'no driver is running' } }, running), {
-    text: 'no driver is running',
+    text: 'No driver is running',
     error: true,
   })
 

@@ -1,3 +1,5 @@
+import { sentence } from './format.js'
+
 const RETRY_STATES = ['escalated', 'blocked', 'interrupted']
 const PR_COMMANDS = ['hold', 'release', 'retry']
 const LOSES_VERIFICATION = ['verified', 'ready_claimed']
@@ -136,15 +138,14 @@ function startNotice(body) {
 }
 
 function queuedNotice(command, driver) {
-  const words = [command.cmd, command.id].filter(Boolean).join(' ')
-  const text = `${words.charAt(0).toUpperCase()}${words.slice(1)} queued.`
+  const text = `${sentence([command.cmd, command.id].filter(Boolean).join(' '))} queued.`
 
   return driver?.running ? text : `${text} It applies when the driver starts.`
 }
 
 export function commandNotice(command, { status, body }, driver) {
   if (status !== 202) {
-    return { text: body?.error ?? `The server answered ${status}.`, error: true }
+    return { text: body?.error ? sentence(body.error) : `The server answered ${status}.`, error: true }
   }
 
   if (command.cmd === 'stop') {

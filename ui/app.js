@@ -5,7 +5,7 @@ import { renderCosts } from './costs.js'
 import { renderDetail } from './detail.js'
 import { element, link, wrap } from './dom.js'
 import { renderEvents } from './events.js'
-import { money } from './format.js'
+import { money, sentence } from './format.js'
 import { renderHeader, renderListHeader, renderViewTabs } from './header.js'
 import { driverStatus, mergeEvents } from './model.js'
 import { renderPlan } from './plan.js'
@@ -147,7 +147,7 @@ function rolloutItem(rollout) {
   const item = element('li', undefined, 'rollout')
 
   if (rollout.error) {
-    item.append(element('strong', rollout.name), element('span', rollout.error, 'error'))
+    item.append(element('strong', rollout.name), element('span', sentence(rollout.error), 'error'))
     return item
   }
 
@@ -276,7 +276,7 @@ function follow(name) {
       scheduleRender()
     },
     onProblem(problem) {
-      current.problem = problem.error
+      current.problem = sentence(problem.error)
       scheduleRender()
     },
     onStatus,

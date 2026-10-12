@@ -1,6 +1,6 @@
 import { renderPrControls } from './controls.js'
 import { badge, cell, element, externalLink, link, list, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
-import { clock, duration, money } from './format.js'
+import { clock, duration, money, sentence } from './format.js'
 import { renderTranscript } from './transcript.js'
 import { estimateNote } from './transcript-model.js'
 
@@ -405,11 +405,11 @@ export function renderDetail(ctx) {
   }
 
   if (detail.status === 404) {
-    return problem('unknown PR', ctx)
+    return problem('Unknown PR', ctx)
   }
 
   if (detail.status !== 200 || !detail.body) {
-    return problem(detail.body?.error ?? `The server answered ${detail.status}.`, ctx)
+    return problem(detail.body?.error ? sentence(detail.body.error) : `The server answered ${detail.status}.`, ctx)
   }
 
   const pr = detail.body

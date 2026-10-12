@@ -6,6 +6,13 @@ function pad(number) {
   return String(number).padStart(2, '0')
 }
 
+// A message from the server as a sentence: not found reads as Not found.
+export function sentence(text) {
+  const value = String(text ?? '')
+
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
 // A state id as a label: needs_fix reads as needs fix.
 export function stateLabel(state) {
   return String(state).replaceAll('_', ' ')
