@@ -93,7 +93,7 @@ function restartsNode(layout, now) {
 }
 
 function legendItem(swatchClass, text) {
-  return wrap('span', element('span', undefined, `swatch ${swatchClass}`), text)
+  return wrap('span', element('span', undefined, `swatch ${swatchClass}`), element('span', text))
 }
 
 function legend() {

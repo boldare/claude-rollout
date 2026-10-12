@@ -71,7 +71,7 @@ export function dialogFor(command, { rollout, driver, pr }) {
   switch (command) {
     case 'stop':
       return {
-        title: `Stop the driver (pid ${driver?.pid})?`,
+        title: `Stop the driver (PID ${driver?.pid})?`,
         text: 'Its agents stop too. The next start resumes their sessions.',
         confirmLabel: 'Stop',
       }
@@ -136,7 +136,8 @@ function startNotice(body) {
 }
 
 function queuedNotice(command, driver) {
-  const text = `${[command.cmd, command.id].filter(Boolean).join(' ')} queued.`
+  const words = [command.cmd, command.id].filter(Boolean).join(' ')
+  const text = `${words.charAt(0).toUpperCase()}${words.slice(1)} queued.`
 
   return driver?.running ? text : `${text} It applies when the driver starts.`
 }
@@ -147,7 +148,7 @@ export function commandNotice(command, { status, body }, driver) {
   }
 
   if (command.cmd === 'stop') {
-    return { text: `Stopping the driver (pid ${body.pid}).`, error: false }
+    return { text: `Stopping the driver (PID ${body.pid}).`, error: false }
   }
 
   if (command.cmd === 'start') {

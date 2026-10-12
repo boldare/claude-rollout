@@ -20,7 +20,7 @@
         ><span>rollout <span class="me">docs</span></span></a
       >
       <div class="facts">
-        <span class="badge alpha">internal alpha</span>
+        <span class="badge alpha">Internal alpha</span>
         <span class="version">v0.1.0</span>
         <span>Node 24+</span>
       </div>
@@ -333,8 +333,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         </ul>
 
         <p>
-          The answer shows as a notice under the header for 15&nbsp;s: <q>hold P2 queued.</q>, with
-          <q>It applies when the driver starts.</q> when no driver runs, <q>Stopping the driver (pid 48213).</q> or
+          The answer shows as a notice under the header for 15&nbsp;s: <q>Hold P2 queued.</q>, with
+          <q>It applies when the driver starts.</q> when no driver runs, <q>Stopping the driver (PID 48213).</q> or
           <q>Starting the driver. Its output goes to …/driver.log.</q> On battery the start notice ends with
           <q>On battery: caffeinate cannot keep this Mac awake, keep the lid open or plug in.</q>
         </p>
@@ -354,20 +354,27 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of the rollout list">
-          <div class="header"><span class="title">rollouts</span></div>
+          <div class="header">
+            <span class="title"
+              ><picture class="logo"
+                ><source srcset="boldare-white.svg" media="(prefers-color-scheme: dark)" />
+                <img src="boldare.svg" alt="" /></picture
+              ><span>Rollouts</span></span
+            >
+          </div>
           <div class="mock-body">
             <div class="scroll">
               <table>
                 <tbody>
                   <tr>
                     <td><strong>my-lib-1.2.0</strong></td>
-                    <td class="small">running</td>
+                    <td class="small">Running</td>
                     <td class="small">1/4 merged</td>
                     <td class="small">$21.44</td>
                   </tr>
                   <tr>
                     <td><strong>my-lib-1.1.0</strong></td>
-                    <td class="small">stopped</td>
+                    <td class="small">Stopped</td>
                     <td class="small">5/5 merged</td>
                     <td class="small">$63.10</td>
                   </tr>
@@ -387,15 +394,20 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <div class="mock" role="img" aria-label="Mockup of the rollout header">
           <div class="header">
-            <span class="title">my-lib-1.2.0 <a class="back" href="#view-list">all rollouts</a></span>
+            <span class="title"
+              ><picture class="logo"
+                ><source srcset="boldare-white.svg" media="(prefers-color-scheme: dark)" />
+                <img src="boldare.svg" alt="" /></picture
+              ><span>my-lib-1.2.0</span> <a class="back" href="#view-list">All rollouts</a></span
+            >
             <div class="facts">
               <span
-                ><span class="badge driver driver-running">running</span><span class="muted">pid 48213</span
-                ><span class="muted">heartbeat 14s ago</span></span
+                ><span class="badge driver driver-running">Running</span><span class="muted">PID 48213</span
+                ><span class="muted">Heartbeat 14s ago</span></span
               >
-              <span><span class="label">merge</span> human</span>
-              <span><span class="label">cost</span> $21.44</span>
-              <span><span class="label">merged</span> 1/4</span>
+              <span><span class="label">Merge</span><span>human</span></span>
+              <span><span class="label">Cost</span><span>$21.44</span></span>
+              <span><span class="label">Merged</span><span>1/4</span></span>
               <a class="error" href="#view-events">1 error</a>
             </div>
             <div class="controls"><span class="fake-button">Pause</span> <span class="fake-button danger">Stop</span></div>
@@ -422,11 +434,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
           </li>
           <li><strong>Errors.</strong> The number of error events. The link opens the events view filtered to errors.</li>
           <li>
-            <strong>Controls</strong> on the right, then banners: <q>reconnecting to the stream…</q>, a problem reading the files, or the
+            <strong>Controls</strong> on the right, then banners: <q>Reconnecting to the stream…</q>, a problem reading the files, or the
             notice of the last command.
           </li>
           <li>
-            A rollout that never ran has no ledger yet. Its header says <q>not started: no ledger yet</q> and offers only Start. Below it is
+            A rollout that never ran has no ledger yet. Its header says <q>Not started: no ledger yet</q> and offers only Start. Below it is
             the <a href="#view-plan">Plan</a> view, so you can check that every PR finds its section before you start.
           </li>
         </ul>
@@ -464,7 +476,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                   <tr>
                     <td class="id">P1</td>
                     <td class="small wrap">feat: config loader</td>
-                    <td><span class="badge state state-merged">merged</span></td>
+                    <td><span class="badge state state-merged">Merged</span></td>
                     <td class="small">#41</td>
                     <td class="small">-</td>
                     <td class="small num">1/1/0/0</td>
@@ -475,9 +487,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                   <tr>
                     <td class="id">P2</td>
                     <td class="small wrap">feat: cli flags</td>
-                    <td><span class="badge state state-verified">verified</span></td>
+                    <td><span class="badge state state-verified">Verified</span></td>
                     <td class="small">#42</td>
-                    <td class="small">P1 <span class="badge state state-merged">merged</span></td>
+                    <td class="small">P1 <span class="badge state state-merged">Merged</span></td>
                     <td class="small num">1/0/1/0</td>
                     <td class="small num">$9.69</td>
                     <td class="small">19m ago</td>
@@ -487,7 +499,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="id">P3</td>
                     <td class="small wrap">docs: config reference</td>
                     <td>
-                      <span class="badge state state-implementing">implementing</span><span class="badge active-run">P3-01-implement</span>
+                      <span class="badge state state-implementing">Implementing</span><span class="badge active-run">P3-01-implement</span>
                     </td>
                     <td class="small">-</td>
                     <td class="small">-</td>
@@ -499,11 +511,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                   <tr>
                     <td class="id">P4</td>
                     <td class="small wrap">feat: watch mode</td>
-                    <td><span class="badge state state-pending">pending</span></td>
+                    <td><span class="badge state state-pending">Pending</span></td>
                     <td class="small">-</td>
                     <td class="small">
-                      P2 <span class="badge state state-verified">verified</span> P3
-                      <span class="badge state state-implementing">implementing</span>
+                      P2 <span class="badge state state-verified">Verified</span> P3
+                      <span class="badge state state-implementing">Implementing</span>
                     </td>
                     <td class="small num">0/0/0/0</td>
                     <td class="small num">$0.00</td>
@@ -514,11 +526,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="id">P5</td>
                     <td class="small wrap">feat: plugin hooks</td>
                     <td>
-                      <span class="badge state state-blocked">blocked</span><span class="badge waiting">needs you</span
+                      <span class="badge state state-blocked">Blocked</span><span class="badge waiting">Needs you</span
                       ><span class="fake-button primary">Answer</span>
                     </td>
                     <td class="small">#45</td>
-                    <td class="small">P1 <span class="badge state state-merged">merged</span></td>
+                    <td class="small">P1 <span class="badge state state-merged">Merged</span></td>
                     <td class="small num">0/1/0/0</td>
                     <td class="small num">$3.10</td>
                     <td class="small">8m ago</td>
@@ -528,8 +540,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="id">P6</td>
                     <td class="small wrap">fix: retry on timeout</td>
                     <td>
-                      <span class="badge state state-fixing">fixing</span><span class="badge active-run">P6-02-fix</span
-                      ><span class="badge answered">answered, implementer resumed</span>
+                      <span class="badge state state-fixing">Fixing</span><span class="badge active-run">P6-02-fix</span
+                      ><span class="badge answered">Answered, implementer resumed</span>
                     </td>
                     <td class="small">#44</td>
                     <td class="small">-</td>
@@ -588,8 +600,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <div class="mock" role="img" aria-label="Mockup of the timeline">
           <div class="mock-body">
             <div class="legend">
-              <span class="role-brief">brief</span><span class="role-implement">implement</span><span class="role-fix">fix</span
-              ><span class="role-verify">verify</span><span class="role-delegate">delegate</span>
+              <span class="role-brief">Brief</span><span class="role-implement">Implement</span><span class="role-fix">Fix</span
+              ><span class="role-verify">Verify</span><span class="role-delegate">Delegate</span>
             </div>
             <div class="scroll">
               <svg class="timeline-mock" viewBox="0 0 640 160" role="presentation">
@@ -651,7 +663,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <div class="mock" role="img" aria-label="Mockup of the events view">
           <div class="mock-body">
-            <p class="chips"><span class="fake-button">PR: all ▾</span> <span class="fake-button">kind: all ▾</span></p>
+            <p class="chips"><span class="fake-button">PR: all ▾</span> <span class="fake-button">Kind: all ▾</span></p>
             <p class="count">6 shown</p>
             <div class="scroll">
               <table>
@@ -802,13 +814,13 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <div class="mock" role="img" aria-label="Mockup of a PR page">
           <div class="mock-body">
-            <p class="back">← back to board</p>
+            <p class="back">← Back to board</p>
             <p class="detail-title">P2 <span class="muted">feat: cli flags</span></p>
             <div class="facts pr-facts">
-              <span class="badge state state-verified">verified</span>
+              <span class="badge state state-verified">Verified</span>
               <a href="#view-pr">#42</a>
-              <span>branch feat/cli-flags</span>
-              <span>head 9c4e1b2</span>
+              <span>Branch feat/cli-flags</span>
+              <span>Head 9c4e1b2</span>
             </div>
             <p class="chips"><span class="fake-button">Hold</span> <span class="fake-button">Note</span></p>
             <nav class="tabs" aria-label="PR tabs">
@@ -824,7 +836,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <dd>awaiting a maintainer review on GitHub (approve PR #42)</dd>
               <dt>GitHub merge state</dt>
               <dd>BLOCKED, as the driver saw it at 12:41</dd>
-              <dt>gate sha</dt>
+              <dt>gate SHA</dt>
               <dd>9c4e1b2</dd>
               <dt>approval</dt>
               <dd>a GitHub review on <a href="#view-pr">#42</a></dd>
@@ -833,7 +845,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <dt>approved</dt>
               <dd class="muted">no</dd>
               <dt>deps</dt>
-              <dd>P1 <span class="badge state state-merged">merged</span></dd>
+              <dd>P1 <span class="badge state state-merged">Merged</span></dd>
               <dt>out of scope</dt>
               <dd class="muted">none</dd>
               <dt>workflow files</dt>
@@ -1154,7 +1166,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             The page has no token, or the server no longer knows it (401). Open the URL from the terminal again. After a restart of
             <code>rollout ui</code> that is a new URL.
           </dd>
-          <dt>reconnecting to the stream…</dt>
+          <dt>Reconnecting to the stream…</dt>
           <dd>
             The stream dropped or went silent for 45&nbsp;s. The page retries on its own. If it stays, check that
             <code>rollout ui</code> still runs.

@@ -162,7 +162,7 @@ function rolloutItem(rollout) {
 }
 
 function renderList() {
-  document.title = 'rollouts'
+  document.title = 'Rollouts'
 
   if (!listing) {
     showLine('Loading…')
@@ -538,7 +538,7 @@ function failure() {
 
   document.title = 'rollout'
 
-  return [element('p', text, 'error'), wrap('p', link(linkTo({}), 'all rollouts'))]
+  return [element('p', text, 'error'), wrap('p', link(linkTo({}), 'All rollouts'))]
 }
 
 function context() {

@@ -4,12 +4,19 @@
    States and roles use the five brand hues as they are on the dark scheme. On the light one each hue is darker,
    so its text and bars still read on white. merged and delegate stay neutral: the palette has five hues for seven
    meanings. TT Commons is the brand typeface and is licensed, so no font file ships: it shows where it is installed.
-   docs/docs.css copies the tokens. */
+   Its x-height is small, so the scale runs larger than for system-ui. docs/docs.css copies the tokens. */
 
 :root {
   color-scheme: light dark;
   --font-ui: 'TT Commons', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --text-sm: 14px;
+  --text: 15px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --mono-sm: 12px;
+  --mono: 13px;
 
   --bg: #f8f8f8;
   --panel: #ffffff;
@@ -89,6 +96,51 @@
   }
 }
 
+/* TT Commons comes from the faces installed on the machine. Its ascent is 0.7em and its descent 0.3em, which
+   puts a label about 1px above the middle of a button or a pill. These faces move the baseline down by 0.07em,
+   so capitals sit as far above the middle as the x-height sits below. */
+
+@font-face {
+  font-family: 'TT Commons';
+  font-weight: 400;
+  src: local('TT Commons Regular'), local('TTCommons-Regular');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
+@font-face {
+  font-family: 'TT Commons';
+  font-style: italic;
+  font-weight: 400;
+  src: local('TT Commons Italic'), local('TTCommons-Italic');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
+@font-face {
+  font-family: 'TT Commons';
+  font-weight: 500;
+  src: local('TT Commons Medium'), local('TTCommons-Medium');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
+@font-face {
+  font-family: 'TT Commons';
+  font-weight: 600;
+  src: local('TT Commons DemiBold'), local('TTCommons-DemiBold');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
+@font-face {
+  font-family: 'TT Commons';
+  font-weight: 700;
+  src: local('TT Commons Bold'), local('TTCommons-Bold');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
 /* Base */
 
 * {
@@ -104,7 +156,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 400 14px/1.5 var(--font-ui);
+  font: 400 var(--text) / 1.5 var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -130,43 +182,43 @@ a:hover {
 
 h1 {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 h2 {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--text-lg);
+  font-weight: 700;
   letter-spacing: -0.01em;
 }
 
 h3 {
-  margin: 22px 0 9px;
-  color: var(--ink-3);
-  font-size: 12.5px;
-  font-weight: 600;
+  margin: 28px 0 12px;
+  color: var(--ink-2);
+  font-size: var(--text);
+  font-weight: 700;
 }
 
 h4 {
-  margin: 16px 0 6px;
+  margin: 20px 0 8px;
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text);
   font-weight: 600;
 }
 
 p {
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 code,
 pre {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
 }
 
 code {
-  padding: 1px 5px;
+  padding: 1px 6px;
   border-radius: 4px;
   background: var(--hover);
 }
@@ -196,30 +248,50 @@ pre {
 
 .number {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
 }
 
+/* Labels start with a capital, as Boldare writes them. Names, ids, titles and values keep their case.
+   ::first-letter needs a block box, so a badge or a legend item keeps its text in a span of its own. */
+
+.tab::first-letter,
+.chip::first-letter,
+.badge:not(.active-run) > span::first-letter,
+.legend > span > span::first-letter,
+.label::first-letter,
+.rollout > span::first-letter,
+.transcript-nav > a::first-letter,
+th::first-letter,
+dt::first-letter,
+h3::first-letter,
+h4::first-letter,
+.costs h2::first-letter,
+summary::first-letter,
+figcaption::first-letter {
+  text-transform: uppercase;
+}
+
 /* Page frame: a header bar across the top, everything else inset below it. */
 
 #app {
-  padding-bottom: 48px;
+  padding-bottom: 64px;
 }
 
 #app > :not(.header) {
-  margin-right: 20px;
-  margin-left: 20px;
+  margin-right: 24px;
+  margin-left: 24px;
 }
 
 #app > .tabs {
-  margin-top: 16px;
-  margin-bottom: 14px;
+  margin-top: 24px;
+  margin-bottom: 20px;
 }
 
 #app > .rollouts {
-  margin-top: 16px;
+  margin-top: 24px;
 }
 
 .rollouts {
@@ -237,11 +309,11 @@ pre {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px 18px;
-  padding: 10px 16px;
+  gap: 8px 24px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--line-soft);
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .rollout:last-child {
@@ -250,8 +322,8 @@ pre {
 
 .rollout strong {
   min-width: 14rem;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text);
+  font-weight: 700;
 }
 
 .rollout strong a {
@@ -264,9 +336,9 @@ pre {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 22px;
-  min-height: 52px;
-  padding: 8px 20px;
+  gap: 12px 32px;
+  min-height: 64px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
@@ -274,25 +346,26 @@ pre {
 .title {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 .title > a {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 /* The logo is a mask filled with the ink, so one file serves both schemes. */
 .logo {
   flex: none;
-  width: 100px;
-  height: 12px;
+  width: 117px;
+  height: 14px;
   background: var(--ink);
   mask: url('boldare.svg') left center / contain no-repeat;
 }
 
 .logo + h1 {
-  padding-left: 12px;
+  padding-left: 14px;
   border-left: 1px solid var(--line);
 }
 
@@ -300,8 +373,8 @@ pre {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 14px;
-  font-size: 13px;
+  gap: 8px 16px;
+  font-size: var(--text-sm);
 }
 
 .facts > * {
@@ -314,8 +387,8 @@ pre {
 .facts > * + :not(.badge)::before {
   content: '';
   width: 1px;
-  height: 11px;
-  margin-right: 8px;
+  height: 14px;
+  margin-right: 10px;
   background: var(--line);
 }
 
@@ -325,6 +398,10 @@ pre {
 
 .fact {
   font-variant-numeric: tabular-nums;
+}
+
+.fact > .label + span {
+  font-weight: 600;
 }
 
 .fact:has(.driver) > span:not(.badge, .warning, .error) {
@@ -341,11 +418,11 @@ pre {
 
 .banner {
   margin: 0;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
   border-radius: var(--r-md);
   background: color-mix(in srgb, currentColor 8%, transparent);
-  font-size: 13.5px;
+  font-size: var(--text-sm);
   white-space: pre-wrap;
 }
 
@@ -358,17 +435,18 @@ pre {
 .tabs {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--r-md);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
   background: var(--hover);
 }
 
 .tab {
-  padding: 3px 12px;
-  border-radius: var(--r-sm);
-  color: var(--ink-3);
-  font-size: 13px;
+  padding: 6px 16px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: var(--text);
+  font-weight: 500;
 }
 
 .tab:hover {
@@ -379,23 +457,24 @@ pre {
 .tab.active {
   background: var(--highlight);
   color: var(--on-highlight);
-  font-weight: 500;
+  font-weight: 700;
   box-shadow: var(--shadow-sm);
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 12px;
+  gap: 8px;
+  margin: 0 0 20px;
 }
 
 .chip {
-  padding: 2px 10px;
+  padding: 5px 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -409,6 +488,7 @@ pre {
   border-color: var(--highlight);
   background: var(--highlight);
   color: var(--on-highlight);
+  font-weight: 700;
 }
 
 /* Badges: a tinted pill. The text mixes the tone with ink, so it reads in both schemes. */
@@ -417,14 +497,14 @@ pre {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-right: 4px;
-  padding: 0 8px;
+  margin-right: 6px;
+  padding: 1px 10px;
   border-radius: var(--r-pill);
   background: color-mix(in srgb, var(--tone, var(--skip)) 14%, transparent);
   color: color-mix(in srgb, var(--tone, var(--ink-3)) 75%, var(--ink));
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 19px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 20px;
   white-space: nowrap;
   vertical-align: baseline;
 }
@@ -506,7 +586,7 @@ pre {
 
 .badge.active-run {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--mono-sm);
   font-weight: 400;
 }
 
@@ -544,7 +624,7 @@ table {
 
 th,
 td {
-  padding: 7px 12px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--line-soft);
   text-align: left;
   vertical-align: top;
@@ -552,8 +632,8 @@ td {
 
 th {
   border-bottom-color: var(--line);
-  color: var(--ink-3);
-  font-size: 12.5px;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -570,7 +650,7 @@ td.detail {
 
 td.info {
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 tr.clickable {
@@ -610,23 +690,23 @@ tr.waiting td:first-child {
 .runs td:first-child,
 a.lane-label {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
 }
 
 .board td:first-child a {
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .board td:nth-child(5) > span {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin: 1px 6px 1px 0;
+  margin: 2px 8px 2px 0;
 }
 
 .board td:nth-child(8) {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
   white-space: nowrap;
 }
 
@@ -637,7 +717,7 @@ a.lane-label {
 .event-log td:nth-child(-n + 3),
 .event-log td.detail {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
 }
 
 .event-log td:first-child {
@@ -702,10 +782,11 @@ a.lane-label {
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
-  margin: 0 0 12px;
-  color: var(--ink-3);
-  font-size: 13px;
+  gap: 8px 20px;
+  margin: 0 0 16px;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .legend > span {
@@ -739,11 +820,11 @@ a.lane-label {
 }
 
 .timeline .scroll {
-  padding: 12px 16px 6px;
+  padding: 14px 18px 8px;
 }
 
 .lanes {
-  --label: 4.5rem;
+  --label: 5rem;
   position: relative;
   min-width: 40rem;
 }
@@ -770,7 +851,7 @@ a.lane-label:hover {
 
 .track {
   position: relative;
-  height: 28px;
+  height: 32px;
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -781,8 +862,8 @@ a.lane-label:hover {
 
 .track .bar {
   position: absolute;
-  top: 8px;
-  bottom: 8px;
+  top: 10px;
+  bottom: 10px;
   min-width: 4px;
 }
 
@@ -844,7 +925,7 @@ a.lane-label:hover {
   position: absolute;
   top: 0;
   right: 0;
-  bottom: 22px;
+  bottom: 24px;
   left: var(--label);
   pointer-events: none;
 }
@@ -863,10 +944,10 @@ a.lane-label:hover {
 
 .axis {
   position: relative;
-  height: 22px;
+  height: 24px;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--mono-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -886,7 +967,7 @@ a.lane-label:hover {
 }
 
 .timeline > p.muted {
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 /* Event log */
@@ -894,10 +975,11 @@ a.lane-label:hover {
 .filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 18px;
-  margin: 0 0 8px;
-  color: var(--ink-3);
-  font-size: 13px;
+  gap: 10px 24px;
+  margin: 0 0 12px;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .filters label {
@@ -907,59 +989,60 @@ a.lane-label:hover {
 }
 
 select {
-  padding: 3px 6px;
+  padding: 5px 8px;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   background: var(--panel);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-weight: 400;
 }
 
 .events > p.muted {
-  margin: 0 0 12px;
-  font-size: 13px;
+  margin: 0 0 16px;
+  font-size: var(--text-sm);
 }
 
 /* Costs */
 
 .total {
   margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
+  font-size: var(--text-xl);
+  font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .costs h2 {
-  margin: 26px 0 10px;
-  color: var(--ink-3);
-  font-size: 12.5px;
-  font-weight: 600;
+  margin: 32px 0 12px;
+  color: var(--ink-2);
+  font-size: var(--text);
+  font-weight: 700;
   letter-spacing: 0;
 }
 
 .cost-bars {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   max-width: 44rem;
-  padding: 14px 16px;
+  padding: 18px 20px;
 }
 
 .cost-bar {
   display: grid;
-  grid-template-columns: 6rem 1fr 5rem;
+  grid-template-columns: 7rem 1fr 6rem;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 .bar-label {
   color: var(--ink-2);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
 }
 
 .bar-track {
-  height: 8px;
+  height: 10px;
   border-radius: var(--r-pill);
   background: var(--line-soft);
 }
@@ -978,13 +1061,13 @@ figure {
 
 .costs figure {
   max-width: 44rem;
-  padding: 14px 16px 10px;
+  padding: 18px 20px 12px;
 }
 
 figcaption {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .cost-line {
@@ -1004,15 +1087,15 @@ figcaption {
 .line-axis {
   display: flex;
   justify-content: space-between;
-  margin-top: 4px;
+  margin-top: 6px;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--mono-sm);
 }
 
 .costs > p.muted,
 .costs > p.estimate {
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 /* PR detail */
@@ -1020,18 +1103,19 @@ figcaption {
 .detail-header {
   display: grid;
   justify-items: start;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 
 .detail-header > a {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .detail-header h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: var(--text-xl);
   letter-spacing: -0.02em;
 }
 
@@ -1041,7 +1125,7 @@ figcaption {
 }
 
 .detail > .tabs {
-  margin-bottom: 14px;
+  margin-bottom: 20px;
 }
 
 dl {
@@ -1052,7 +1136,7 @@ dl {
 
 dt,
 dd {
-  padding: 7px 0;
+  padding: 10px 0;
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -1060,12 +1144,13 @@ dl > :nth-last-child(-n + 2) {
   border-bottom: 0;
 }
 
-/* The line height of a 13px value, so the smaller label sits on its first line. */
+/* The line height of a value, so the smaller label sits on its first line. */
 dt {
-  padding-right: 28px;
+  padding-right: 32px;
   color: var(--ink-3);
-  font-size: 13px;
-  line-height: 19.5px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: calc(var(--text) * 1.5);
 }
 
 dd {
@@ -1083,13 +1168,13 @@ dd li::marker {
 
 .detail > dl {
   max-width: 60rem;
-  padding: 4px 16px;
+  padding: 6px 20px;
 }
 
 ul.inline {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
+  gap: 6px 14px;
   padding: 0;
   list-style: none;
 }
@@ -1105,18 +1190,19 @@ ul.warning {
 }
 
 details {
-  margin: 6px 0;
-  padding: 0 12px;
+  margin: 8px 0;
+  padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--panel);
 }
 
 summary {
-  padding: 7px 0;
+  padding: 10px 0;
   overflow: hidden;
   color: var(--ink-2);
-  font-size: 13.5px;
+  font-size: var(--text-sm);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
@@ -1128,17 +1214,17 @@ summary:hover {
 
 summary::marker {
   color: var(--ink-3);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 details[open] > summary {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .verdict > p:first-child {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .verdict > p.text {
@@ -1147,14 +1233,14 @@ details[open] > summary {
 
 .feedback {
   max-width: 60rem;
-  margin: 12px 0;
-  padding: 12px 16px;
+  margin: 16px 0;
+  padding: 16px 20px;
 }
 
 .feedback pre,
 pre.document {
-  margin: 0 0 8px;
-  padding: 12px 14px;
+  margin: 0 0 10px;
+  padding: 14px 16px;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
   background: var(--well);
@@ -1176,21 +1262,21 @@ td.estimate {
 }
 
 .transcript {
-  margin-top: 16px;
-  padding: 14px 18px;
+  margin-top: 20px;
+  padding: 18px 22px;
 }
 
 .transcript-header {
   display: grid;
-  gap: 2px;
-  padding-bottom: 10px;
+  gap: 4px;
+  padding-bottom: 12px;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .transcript-line {
   margin: 0;
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .transcript-line strong {
@@ -1200,15 +1286,16 @@ td.estimate {
 
 .transcript-header > .transcript-line:first-child strong {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
 }
 
 .transcript-nav {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 14px;
-  margin: 10px 0 14px;
-  font-size: 13px;
+  gap: 8px 16px;
+  margin: 12px 0 16px;
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .transcript-text {
@@ -1220,7 +1307,7 @@ td.estimate {
 .transcript-init,
 .cut-note {
   margin: 4px 0;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .transcript-tool {
@@ -1230,7 +1317,7 @@ td.estimate {
 .tool-line {
   margin: 0 0 4px;
   overflow-wrap: anywhere;
-  font-size: 13.5px;
+  font-size: var(--text-sm);
 }
 
 .tool-line code {
@@ -1293,19 +1380,19 @@ td.estimate {
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
 }
 
 button {
-  padding: 4px 11px;
+  padding: 6px 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   background: var(--raised);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1341,8 +1428,8 @@ button:disabled {
 }
 
 dialog {
-  width: min(30rem, calc(100vw - 4rem));
-  padding: 18px 20px;
+  width: min(32rem, calc(100vw - 4rem));
+  padding: 22px 24px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--raised);
@@ -1355,25 +1442,25 @@ dialog.wide {
 }
 
 dialog h2 {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
 }
 
 dialog h3 {
-  margin: 12px 0 4px;
+  margin: 14px 0 6px;
 }
 
 .dialog-section {
   max-height: 30vh;
-  margin: 0 0 12px;
+  margin: 0 0 14px;
   overflow: auto;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-radius: var(--r-sm);
   background: var(--well);
 }
 
 dialog textarea {
   width: 100%;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   background: var(--bg);
@@ -1390,8 +1477,8 @@ dialog textarea:focus {
 dialog label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13.5px;
+  gap: 8px;
+  font-size: var(--text-sm);
 }
 
 dialog::backdrop {
@@ -1401,8 +1488,8 @@ dialog::backdrop {
 .dialog-buttons {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
-  margin-top: 16px;
+  gap: 8px;
+  margin-top: 20px;
 }
 
 /* Plan: the board's slice line, the plan view and the PR's plan tab */

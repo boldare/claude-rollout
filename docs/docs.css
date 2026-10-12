@@ -8,6 +8,13 @@
   --font-ui: 'TT Commons', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
+  --text-sm: 14px;
+  --text: 15px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --mono-sm: 12px;
+  --mono: 13px;
+
   --bg: #f8f8f8;
   --panel: #ffffff;
   --raised: #ffffff;
@@ -86,6 +93,51 @@
   }
 }
 
+/* TT Commons comes from the faces installed on the machine. Its ascent is 0.7em and its descent 0.3em, which
+   puts a label about 1px above the middle of a button or a pill. These faces move the baseline down by 0.07em,
+   so capitals sit as far above the middle as the x-height sits below. */
+
+@font-face {
+  font-family: 'TT Commons';
+  font-weight: 400;
+  src: local('TT Commons Regular'), local('TTCommons-Regular');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
+@font-face {
+  font-family: 'TT Commons';
+  font-style: italic;
+  font-weight: 400;
+  src: local('TT Commons Italic'), local('TTCommons-Italic');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
+@font-face {
+  font-family: 'TT Commons';
+  font-weight: 500;
+  src: local('TT Commons Medium'), local('TTCommons-Medium');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
+@font-face {
+  font-family: 'TT Commons';
+  font-weight: 600;
+  src: local('TT Commons DemiBold'), local('TTCommons-DemiBold');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
+@font-face {
+  font-family: 'TT Commons';
+  font-weight: 700;
+  src: local('TT Commons Bold'), local('TTCommons-Bold');
+  ascent-override: 77%;
+  descent-override: 23%;
+}
+
 /* Base */
 
 * {
@@ -94,7 +146,7 @@
 
 html {
   /* Anchors land below the sticky bar, not under it. */
-  scroll-padding-top: 72px;
+  scroll-padding-top: 84px;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
@@ -103,7 +155,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 400 14px/1.5 var(--font-ui);
+  font: 400 var(--text) / 1.5 var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -146,7 +198,7 @@ code {
   color: var(--ink-3);
 }
 
-/* Top bar: the same 52px panel strip as the UI header and the describe-me header. */
+/* Top bar: the same 64px panel strip as the UI header. */
 
 .topbar {
   position: sticky;
@@ -154,9 +206,9 @@ code {
   z-index: 10;
   display: flex;
   align-items: center;
-  gap: 18px;
-  min-height: 52px;
-  padding: 0 20px;
+  gap: 20px;
+  min-height: 64px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
@@ -164,11 +216,11 @@ code {
 .wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .wordmark:hover {
@@ -178,12 +230,12 @@ code {
 /* A picture, not the UI's CSS mask: a mask image does not load from file://, and the docs open offline. */
 .logo img {
   display: block;
-  width: 100px;
-  height: 12px;
+  width: 117px;
+  height: 14px;
 }
 
 .logo + span {
-  padding-left: 12px;
+  padding-left: 14px;
   border-left: 1px solid var(--line);
 }
 
@@ -195,9 +247,9 @@ code {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 14px;
+  gap: 8px 16px;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .facts > * {
@@ -210,8 +262,8 @@ code {
 .facts > * + :not(.badge)::before {
   content: '';
   width: 1px;
-  height: 11px;
-  margin-right: 8px;
+  height: 14px;
+  margin-right: 10px;
   background: var(--line);
 }
 
@@ -238,16 +290,16 @@ code {
 .sidebar,
 .toc {
   position: sticky;
-  top: 52px;
-  max-height: calc(100vh - 52px);
+  top: 64px;
+  max-height: calc(100vh - 64px);
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
 
 .sidebar {
-  min-height: calc(100vh - 52px);
-  padding: 18px 10px 32px;
+  min-height: calc(100vh - 64px);
+  padding: 22px 12px 40px;
   border-right: 1px solid var(--line);
   background: var(--panel);
 }
@@ -266,21 +318,21 @@ code {
 }
 
 .group {
-  margin: 0 0 6px;
-  padding: 0 9px;
+  margin: 0 0 8px;
+  padding: 0 10px;
   color: var(--ink-3);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 700;
 }
 
 .sidebar a,
 .toc a {
   position: relative;
   display: block;
-  padding: 4px 9px;
+  padding: 6px 10px;
   border-radius: var(--r-sm);
   color: var(--ink-2);
-  font-size: 13.5px;
+  font-size: var(--text);
 }
 
 .sidebar a:hover,
@@ -294,7 +346,7 @@ code {
 .sidebar a[aria-current='page'] {
   background: var(--tint);
   color: var(--ink);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .sidebar a[aria-current='page']::before {
@@ -309,12 +361,12 @@ code {
 }
 
 .toc {
-  padding: 28px 16px 32px 4px;
+  padding: 32px 16px 40px 4px;
 }
 
 .toc a {
-  padding: 3px 9px;
-  font-size: 13px;
+  padding: 4px 10px;
+  font-size: var(--text-sm);
 }
 
 /* The page */
@@ -323,8 +375,8 @@ code {
   width: 100%;
   max-width: 50rem;
   margin: 0 auto;
-  padding: 28px 36px 64px;
-  font-size: 15px;
+  padding: 32px 40px 72px;
+  font-size: 16px;
   line-height: 1.65;
 }
 
@@ -333,14 +385,14 @@ code {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 16px;
-  padding-bottom: 14px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
 }
 
 .page-head h1 {
   margin: 0;
-  font-size: 23px;
-  font-weight: 600;
+  font-size: 28px;
+  font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.3;
 }
@@ -349,36 +401,36 @@ code {
   margin: 0 0 0 auto;
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--mono-sm);
 }
 
 .lead {
-  margin: 16px 0 0;
+  margin: 18px 0 0;
   color: var(--ink-2);
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .page h2 {
-  margin: 44px 0 10px;
-  padding-top: 22px;
+  margin: 48px 0 12px;
+  padding-top: 24px;
   border-top: 1px solid var(--line-soft);
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 21px;
+  font-weight: 700;
   letter-spacing: -0.01em;
   line-height: 1.35;
 }
 
 .page h3 {
-  margin: 28px 0 6px;
-  font-size: 15px;
-  font-weight: 600;
+  margin: 32px 0 8px;
+  font-size: 17px;
+  font-weight: 700;
   line-height: 1.4;
 }
 
 .page h4 {
-  margin: 20px 0 4px;
+  margin: 22px 0 6px;
   color: var(--ink-2);
-  font-size: 14px;
+  font-size: var(--text);
   font-weight: 600;
 }
 
@@ -421,23 +473,23 @@ code {
 }
 
 .eyebrow {
-  margin: 22px 0 8px;
+  margin: 24px 0 10px;
   color: var(--ink-3);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 700;
 }
 
 /* Code */
 
 pre {
-  margin: 12px 0;
-  padding: 11px 14px;
+  margin: 14px 0;
+  padding: 12px 16px;
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--well);
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: var(--mono);
   line-height: 1.6;
   white-space: pre;
   scrollbar-width: thin;
@@ -465,7 +517,7 @@ kbd {
   border-radius: 5px;
   background: var(--bg);
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: var(--mono-sm);
   text-align: center;
 }
 
@@ -488,7 +540,7 @@ table {
 
 th,
 td {
-  padding: 8px 12px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--line-soft);
   text-align: left;
   vertical-align: top;
@@ -496,15 +548,15 @@ td {
 
 th {
   border-bottom-color: var(--line);
-  color: var(--ink-3);
-  font-size: 12.5px;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1.5;
   white-space: nowrap;
 }
 
 td {
-  font-size: 14px;
+  font-size: var(--text);
   line-height: 1.55;
 }
 
@@ -516,7 +568,7 @@ tbody tr:last-child td {
 td.name,
 table.fields td:first-child {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
   white-space: nowrap;
 }
 
@@ -542,13 +594,13 @@ tr:target td:first-child {
 dl.kv {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 6px 18px;
-  margin: 12px 0;
-  padding: 12px 16px;
+  gap: 8px 20px;
+  margin: 14px 0;
+  padding: 14px 18px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--panel);
-  font-size: 14px;
+  font-size: var(--text);
 }
 
 dl.kv dt {
@@ -562,13 +614,13 @@ dl.kv dd {
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
-  gap: 12px;
-  margin: 14px 0;
+  gap: 14px;
+  margin: 16px 0;
 }
 
 .card {
   display: block;
-  padding: 14px 16px;
+  padding: 16px 18px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--panel);
@@ -585,14 +637,15 @@ a.card:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 4px;
-  font-size: 14.5px;
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .card p {
   margin: 0;
   color: var(--ink-2);
-  font-size: 14px;
+  font-size: var(--text);
   line-height: 1.55;
 }
 
@@ -609,12 +662,12 @@ a.card:hover {
 
 .callout {
   --tone: var(--accent);
-  margin: 14px 0;
-  padding: 10px 14px;
+  margin: 16px 0;
+  padding: 12px 16px;
   border: 1px solid color-mix(in srgb, var(--tone) 28%, transparent);
   border-radius: var(--r-md);
   background: color-mix(in srgb, var(--tone) 6%, transparent);
-  font-size: 14.5px;
+  font-size: var(--text);
 }
 
 .callout > :first-child {
@@ -651,7 +704,7 @@ ol.steps {
 
 ol.steps > li {
   position: relative;
-  padding-left: 38px;
+  padding-left: 40px;
   counter-increment: step;
 }
 
@@ -666,13 +719,13 @@ ol.steps > li::before {
   left: 0;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: var(--tint-strong);
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
   font-weight: 600;
 }
 
@@ -686,15 +739,15 @@ ol.steps > li > strong:first-child {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-right: 4px;
-  padding: 0 8px;
+  margin-right: 6px;
+  padding: 1px 10px;
   border-radius: var(--r-pill);
   background: color-mix(in srgb, var(--tone, var(--skip)) 14%, transparent);
   color: color-mix(in srgb, var(--tone, var(--ink-3)) 75%, var(--ink));
   font-family: var(--font-ui);
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 19px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 20px;
   white-space: nowrap;
   vertical-align: baseline;
 }
@@ -817,19 +870,19 @@ ol.steps > li > strong:first-child {
   border-radius: var(--r-lg);
   background: var(--bg);
   box-shadow: var(--shadow-md);
-  font-size: 14px;
+  font-size: var(--text);
   line-height: 1.5;
 }
 
 .mock-body {
-  padding: 14px 16px 16px;
+  padding: 18px 20px 20px;
   overflow-x: auto;
 }
 
 .mock-caption {
-  margin: 0 0 14px;
+  margin: 0 0 16px;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
   text-align: right;
 }
 
@@ -837,9 +890,9 @@ ol.steps > li > strong:first-child {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 22px;
-  min-height: 52px;
-  padding: 8px 16px;
+  gap: 12px 32px;
+  min-height: 64px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
@@ -847,16 +900,16 @@ ol.steps > li > strong:first-child {
 .mock .title {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
+  gap: 14px;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .mock .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -865,39 +918,39 @@ ol.steps > li > strong:first-child {
 }
 
 .mock td {
-  padding: 7px 12px;
-  font-size: 14px;
+  padding: 10px 14px;
+  font-size: var(--text);
 }
 
 .mock th {
-  padding: 7px 12px;
+  padding: 10px 14px;
 }
 
 .mock td.id {
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--mono);
+  font-weight: 600;
 }
 
 .mock td.small {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
   white-space: nowrap;
 }
 
 .mock .tabs {
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .fake-button {
   display: inline-block;
-  padding: 4px 11px;
+  padding: 6px 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   background: var(--raised);
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: 600;
   line-height: 1.5;
   white-space: nowrap;
 }
@@ -918,40 +971,42 @@ ol.steps > li > strong:first-child {
 .tabs {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--r-md);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
   background: var(--hover);
 }
 
 .tab {
-  padding: 3px 12px;
-  border-radius: var(--r-sm);
-  color: var(--ink-3);
-  font-size: 13px;
+  padding: 6px 16px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: var(--text);
+  font-weight: 500;
   line-height: 1.5;
 }
 
 .tab.active {
   background: var(--highlight);
   color: var(--on-highlight);
-  font-weight: 500;
+  font-weight: 700;
   box-shadow: var(--shadow-sm);
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 12px;
+  gap: 8px;
+  margin: 0 0 16px;
 }
 
 .chip {
-  padding: 2px 10px;
+  padding: 5px 14px;
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-weight: 500;
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
 }
@@ -960,6 +1015,17 @@ ol.steps > li > strong:first-child {
   border-color: var(--highlight);
   background: var(--highlight);
   color: var(--on-highlight);
+  font-weight: 700;
+}
+
+/* Labels start with a capital, as in the UI. A badge, a legend item or a fact in a mockup carries its capital in the
+   markup, because ::first-letter needs a block box. */
+
+.tab::first-letter,
+.chip::first-letter,
+th::first-letter,
+dt::first-letter {
+  text-transform: uppercase;
 }
 
 /* Timeline mockup, drawn as SVG: one lane per PR, bars in role colours. */
@@ -991,10 +1057,11 @@ ol.steps > li > strong:first-child {
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
-  margin: 0 0 10px;
-  color: var(--ink-3);
-  font-size: 13px;
+  gap: 8px 20px;
+  margin: 0 0 14px;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .legend > span {
@@ -1035,7 +1102,7 @@ ol.steps > li > strong:first-child {
 .diagram figcaption {
   margin-top: 12px;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 
@@ -1154,7 +1221,7 @@ ol.steps > li > strong:first-child {
 
 .pager a {
   display: block;
-  padding: 10px 14px;
+  padding: 12px 16px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--panel);
@@ -1170,7 +1237,7 @@ ol.steps > li > strong:first-child {
 .pager span {
   display: block;
   color: var(--ink-3);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   font-weight: 400;
 }
 
@@ -1184,7 +1251,7 @@ ol.steps > li > strong:first-child {
   padding-top: 14px;
   border-top: 1px solid var(--line-soft);
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 
 .page-foot a {
@@ -1277,8 +1344,8 @@ ol.steps > li > strong:first-child {
 }
 
 .mock .back {
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--text-sm);
+  font-weight: 500;
   letter-spacing: 0;
 }
 
@@ -1287,8 +1354,8 @@ ol.steps > li > strong:first-child {
 }
 
 .mock p.count {
-  margin: 0 0 10px;
-  font-size: 13px;
+  margin: 0 0 12px;
+  font-size: var(--text-sm);
 }
 
 .mock .facts {
@@ -1297,6 +1364,10 @@ ol.steps > li > strong:first-child {
 
 .mock .facts .muted {
   color: var(--ink-3);
+}
+
+.mock .facts .label + span {
+  font-weight: 600;
 }
 
 .mock .facts a.error,
@@ -1310,7 +1381,7 @@ ol.steps > li > strong:first-child {
 
 .mock td.num {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -1319,7 +1390,7 @@ ol.steps > li > strong:first-child {
   min-width: 16rem;
   color: var(--ink-2);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--mono);
   overflow-wrap: anywhere;
 }
 
@@ -1347,8 +1418,8 @@ ol.steps > li > strong:first-child {
 .mock .total,
 .mock .detail-title {
   margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 600;
+  font-size: var(--text-xl);
+  font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.3;
 }

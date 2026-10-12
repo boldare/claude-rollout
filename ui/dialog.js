@@ -83,7 +83,7 @@ export function ask({ title, text, sections = [], confirmLabel, withText = false
   }
 
   if (dryRun) {
-    parts.push(wrap('label', dryRun, element('span', 'dry run: everything real except the merge')))
+    parts.push(wrap('label', dryRun, element('span', 'Dry run: everything real except the merge')))
   }
 
   parts.push(withClass(wrap('div', cancel, accept), 'dialog-buttons'))

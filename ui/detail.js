@@ -24,7 +24,7 @@ function fields(...pairs) {
 
 function namedList(items, className) {
   if (items.length === 0) {
-    return element('span', 'none', 'muted')
+    return element('span', 'None', 'muted')
   }
 
   return list(items, className)
@@ -32,14 +32,14 @@ function namedList(items, className) {
 
 function stamp(mark) {
   if (!mark) {
-    return element('span', 'no', 'muted')
+    return element('span', 'No', 'muted')
   }
 
   return element('span', `${short(mark.sha)} at ${clock(mark.at)}`)
 }
 
 function prLink(pr, text) {
-  return pr.pr ? externalLink(pr.url, text ?? `#${pr.pr}`) : element('span', 'no PR yet', 'muted')
+  return pr.pr ? externalLink(pr.url, text ?? `#${pr.pr}`) : element('span', 'No PR yet', 'muted')
 }
 
 function detailHeader(pr, ctx) {
@@ -51,13 +51,13 @@ function detailHeader(pr, ctx) {
     facts.append(badge('held', 'held'))
   }
 
-  facts.append(prLink(pr), element('span', `branch ${pr.branch}`), element('span', `head ${pr.head}`))
+  facts.append(prLink(pr), element('span', `Branch ${pr.branch}`), element('span', `Head ${pr.head}`))
 
   if (pr.activeRun) {
     facts.append(badge(pr.activeRun, 'active-run'))
   }
 
-  header.append(link(ctx.linkWith({ pr: null, tab: null }), `← back to ${ctx.route.view}`), title, withClass(facts, 'facts'))
+  header.append(link(ctx.linkWith({ pr: null, tab: null }), `← Back to ${ctx.route.view}`), title, withClass(facts, 'facts'))
 
   const controls = renderPrControls(pr, ctx)
 
@@ -80,14 +80,14 @@ function tabs(ctx) {
 
 function gateFields(gate) {
   if (!gate) {
-    return field('gate', element('span', 'no decision yet', 'muted'))
+    return field('gate', element('span', 'No decision yet', 'muted'))
   }
 
   return [
     field('gate', element('strong', gate.action), element('span', ` at ${clock(gate.at)}`, 'muted')),
     field('reasons', namedList(gate.reasons ?? [])),
     field('GitHub merge state', `${gate.mergeState ?? '-'}, as the driver saw it at ${clock(gate.at)}`),
-    field('gate sha', short(gate.sha)),
+    field('gate SHA', short(gate.sha)),
   ]
 }
 
@@ -140,10 +140,10 @@ function approvalField(pr) {
   }
 
   if (pr.approval === 'inbox') {
-    return field('approval', 'in the inbox: ', element('code', `rollout approve ${pr.id}`))
+    return field('approval', 'In the inbox: ', element('code', `rollout approve ${pr.id}`))
   }
 
-  return field('approval', element('span', `not needed under policy.merge ${pr.merge}`, 'muted'))
+  return field('approval', element('span', `Not needed under policy.merge ${pr.merge}`, 'muted'))
 }
 
 function depsField(pr, ctx) {
@@ -329,7 +329,7 @@ function feedbackEntry(entry) {
 
   node.append(
     element('pre', entry.body ?? ''),
-    fields(field('implementer', element('span', action, 'text')), field('sha', short(entry.sha)), field('at', clock(entry.at))),
+    fields(field('implementer', element('span', action, 'text')), field('SHA', short(entry.sha)), field('at', clock(entry.at))),
   )
 
   return node
@@ -394,7 +394,7 @@ const TAB_RENDERERS = {
 }
 
 function problem(text, ctx) {
-  return wrap('section', element('p', text, 'error'), link(ctx.linkWith({ pr: null, tab: null }), `back to ${ctx.route.view}`))
+  return wrap('section', element('p', text, 'error'), link(ctx.linkWith({ pr: null, tab: null }), `Back to ${ctx.route.view}`))
 }
 
 export function renderDetail(ctx) {

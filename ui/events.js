@@ -63,7 +63,7 @@ function eventRow(event, now) {
 export function renderEvents(ctx) {
   const matching = filterEvents(ctx.events, { id: ctx.route.id, kind: ctx.route.kind })
   const shown = matching.slice(0, ROW_LIMIT)
-  const filters = wrap('div', filterSelect('PR', 'id', idChoices(ctx), ctx), filterSelect('kind', 'kind', kindChoices(ctx), ctx))
+  const filters = wrap('div', filterSelect('PR', 'id', idChoices(ctx), ctx), filterSelect('Kind', 'kind', kindChoices(ctx), ctx))
   const section = element('section', undefined, 'events')
   const count = matching.length > ROW_LIMIT ? `showing ${ROW_LIMIT} of ${matching.length}` : `${matching.length} shown`
 

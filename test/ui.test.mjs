@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { commandBody, commandNotice, dialogFor, prControls, rolloutControls, rowControls } from '../ui/commands.js'
-import { duration, money } from '../ui/format.js'
+import { duration, money, stateLabel } from '../ui/format.js'
 import {
   ERROR_KINDS,
   STATES,
@@ -435,6 +435,16 @@ test('format: money and duration', () => {
   assert.equal(duration(null), '-')
 })
 
+test('format: a state id reads as words, every state of the model included', () => {
+  assert.equal(stateLabel('needs_fix'), 'needs fix')
+  assert.equal(stateLabel('ready_claimed'), 'ready claimed')
+  assert.equal(stateLabel('verified'), 'verified')
+
+  for (const state of STATES) {
+    assert.doesNotMatch(stateLabel(state), /_/, state)
+  }
+})
+
 test('transcriptRoute: run and from belong to one PR and its Runs tab', () => {
   const route = { r: 'demo', view: 'board', pr: 'A1', tab: 'runs', run: 'A1-01-implement', from: 3 }
   const pick = (changes) => {
@@ -588,7 +598,7 @@ test('dialogFor: confirmations for stop, start, retry and unhalt, a text for not
   const context = { rollout: 'demo', driver, pr }
 
   assert.deepEqual(dialogFor('stop', context), {
-    title: 'Stop the driver (pid 4242)?',
+    title: 'Stop the driver (PID 4242)?',
     text: 'Its agents stop too. The next start resumes their sessions.',
     confirmLabel: 'Stop',
   })
@@ -651,13 +661,13 @@ test('commandNotice: queued, stopping, starting and the errors', () => {
   const queued = { status: 202, body: { cmd: 'pause', queued: '1-abc.json' } }
   const later = ' It applies when the driver starts.'
 
-  assert.deepEqual(commandNotice({ cmd: 'pause' }, queued, running), { text: 'pause queued.', error: false })
-  assert.deepEqual(commandNotice({ cmd: 'hold', id: 'A1' }, queued, running), { text: 'hold A1 queued.', error: false })
-  assert.deepEqual(commandNotice({ cmd: 'note', id: 'A1', text: 'hi' }, queued, running), { text: 'note A1 queued.', error: false })
-  assert.deepEqual(commandNotice({ cmd: 'pause' }, queued, stopped), { text: `pause queued.${later}`, error: false })
-  assert.deepEqual(commandNotice({ cmd: 'hold', id: 'A1' }, queued, undefined), { text: `hold A1 queued.${later}`, error: false })
+  assert.deepEqual(commandNotice({ cmd: 'pause' }, queued, running), { text: 'Pause queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'hold', id: 'A1' }, queued, running), { text: 'Hold A1 queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'note', id: 'A1', text: 'hi' }, queued, running), { text: 'Note A1 queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'pause' }, queued, stopped), { text: `Pause queued.${later}`, error: false })
+  assert.deepEqual(commandNotice({ cmd: 'hold', id: 'A1' }, queued, undefined), { text: `Hold A1 queued.${later}`, error: false })
   assert.deepEqual(commandNotice({ cmd: 'stop' }, { status: 202, body: { cmd: 'stop', pid: 4242 } }, running), {
-    text: 'Stopping the driver (pid 4242).',
+    text: 'Stopping the driver (PID 4242).',
     error: false,
   })
 
