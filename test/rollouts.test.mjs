@@ -10,6 +10,7 @@ import {
   eventsSince,
   findRollout,
   listRollouts,
+  rolloutPlan,
   rolloutPr,
   rolloutRoot,
   rolloutSnapshot,
@@ -149,6 +150,33 @@ test('rolloutSnapshot: each row carries the heading and first line of its plan s
   )
 
   assert.equal(rolloutPr(findRollout(root, 'demo'), 'A2').plan.text, 'Why: it needs A1.\nMore detail.')
+})
+
+test('rolloutPlan: the PRs with their sections and every source, before the first run too', () => {
+  const root = makeRolloutRoot()
+
+  writeFileSync(join(root, 'fresh', 'plan.md'), '# Plan\n\n## A3 the last slice\nWhy: it goes last.\n')
+
+  const fresh = findRollout(root, 'fresh')
+
+  assert.equal(rolloutSnapshot(fresh, 'fresh', START).state.view, null)
+  assert.deepEqual(rolloutPlan(fresh), {
+    prs: [
+      { id: 'A1', title: 'feat: A1', plan: null },
+      { id: 'A2', title: 'feat: A2', plan: null },
+      { id: 'A3', title: 'feat: A3', plan: { source: 'Plan', heading: 'A3 the last slice', excerpt: 'Why: it goes last.' } },
+    ],
+    sources: [
+      {
+        title: 'Plan',
+        path: join(root, 'fresh', 'plan.md'),
+        kind: 'markdown',
+        tag: null,
+        text: '# Plan\n\n## A3 the last slice\nWhy: it goes last.\n',
+        error: null,
+      },
+    ],
+  })
 })
 
 test('rolloutSnapshot: a numeric id or briefing sources that are not a list leave the board standing', () => {

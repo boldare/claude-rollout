@@ -488,6 +488,15 @@ test('api: the list, a rollout state, events after N, a PR, and the errors', asy
     [['Plan', 'markdown', '# Plan\n\n## A1 the first slice\nWhy: it comes first.\n']],
   )
 
+  assert.deepEqual(
+    plan.prs.map((item) => [item.id, item.plan?.heading ?? null]),
+    [
+      ['A1', 'A1 the first slice'],
+      ['A2', null],
+      ['A3', null],
+    ],
+  )
+
   assert.equal((await get(server, '/api/rollouts/demo/prs/A1')).json().plan.heading, 'A1 the first slice')
   assert.equal((await get(server, '/api/rollouts/demo')).json().view.rows[0].plan.excerpt, 'Why: it comes first.')
   assert.equal((await get(server, '/api/rollouts/nope/plan')).status, 404)

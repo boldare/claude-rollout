@@ -2,10 +2,18 @@ import { cell, element, link, stateBadge, table, wrap } from './dom.js'
 
 const HEADINGS = ['PR', 'state', 'section in the plan', 'source']
 
-function sectionRow(row, ctx) {
-  const target = ctx.linkWith({ pr: row.id, tab: 'plan' })
-  const heading = row.plan ? cell(row.plan.heading) : cell(element('span', 'no section', 'muted'))
-  const node = wrap('tr', cell(link(target, row.id)), cell(stateBadge(row.state)), heading, cell(row.plan?.source ?? '-', 'info'))
+// Before the first run there is no state and no PR page to open.
+function sectionRow(pr, ctx) {
+  const row = ctx.view?.rows.find((item) => item.id === pr.id)
+  const heading = pr.plan ? cell(pr.plan.heading) : cell(element('span', 'no section', 'muted'))
+  const source = cell(pr.plan?.source ?? '-', 'info')
+
+  if (!row) {
+    return wrap('tr', cell(pr.id), cell('-'), heading, source)
+  }
+
+  const target = ctx.linkWith({ pr: pr.id, tab: 'plan' })
+  const node = wrap('tr', cell(link(target, pr.id)), cell(stateBadge(row.state)), heading, source)
 
   node.className = 'clickable'
   node.addEventListener('click', (event) => {
@@ -27,7 +35,7 @@ function sourceBlock(source) {
   return node
 }
 
-function sourceBlocks(plan) {
+function planBody(plan, ctx) {
   if (!plan || plan.status === null) {
     return [element('p', 'Loading…', 'muted')]
   }
@@ -36,24 +44,23 @@ function sourceBlocks(plan) {
     return [element('p', plan.body?.error ?? `The server answered ${plan.status}.`, 'error')]
   }
 
-  if (plan.body.sources.length === 0) {
-    return [element('p', 'The manifest has no briefing sources.', 'muted')]
-  }
+  const { prs, sources } = plan.body
+  const blocks = sources.length === 0 ? [element('p', 'The manifest has no briefing sources.', 'muted')] : sources.map(sourceBlock)
 
-  return plan.body.sources.map(sourceBlock)
+  return [
+    element('h2', 'PRs and their sections'),
+    table(
+      HEADINGS,
+      prs.map((pr) => sectionRow(pr, ctx)),
+    ),
+    ...blocks,
+  ]
 }
 
 export function renderPlan(ctx) {
   const section = element('section', undefined, 'plan')
 
-  section.append(
-    element('h2', 'PRs and their sections'),
-    table(
-      HEADINGS,
-      ctx.view.rows.map((row) => sectionRow(row, ctx)),
-    ),
-    ...sourceBlocks(ctx.plan),
-  )
+  section.append(...planBody(ctx.plan, ctx))
 
   return section
 }

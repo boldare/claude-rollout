@@ -420,7 +420,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <strong>Controls</strong> on the right, then banners: <q>reconnecting to the stream…</q>, a problem reading the files, or the
             notice of the last command.
           </li>
-          <li>A rollout that never ran has no ledger yet. Its header says <q>not started: no ledger yet</q> and offers only Start.</li>
+          <li>
+            A rollout that never ran has no ledger yet. Its header says <q>not started: no ledger yet</q> and offers only Start. Below it is
+            the <a href="#view-plan">Plan</a> view, so you can check that every PR finds its section before you start.
+          </li>
         </ul>
 
         <h3 id="view-board">Board</h3>
@@ -774,6 +777,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <code>## PR P3: events API</code>, and runs to the next heading of the same or a higher level. P1 never matches P10 or P1.1, and
             headings inside code fences do not count. The UI looks in the sources the PR's brief writer gets, in manifest order, and takes
             the first match.
+          </li>
+          <li>
+            <strong>Before the first run</strong> the page shows only this view, without the other tabs. The table has no state and no links
+            yet, because there is no PR page to open.
           </li>
           <li>
             <strong>The files are read on every update</strong> while the view is open, so an edited plan shows up without a restart. A

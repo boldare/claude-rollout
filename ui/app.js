@@ -366,8 +366,17 @@ function loadDetail() {
 }
 
 // The plan file is not watched, so every state push reads it again while the view is open.
+// Before the first run the plan is all there is to show, whatever the view.
 function planKey() {
-  return route.r && !route.pr && route.view === 'plan' ? route.r : null
+  if (!route.r || route.pr) {
+    return null
+  }
+
+  return route.view === 'plan' || notStarted() ? route.r : null
+}
+
+function notStarted() {
+  return Boolean(session.state) && !session.state.view
 }
 
 async function fetchPlan(key, ticket) {
@@ -581,7 +590,7 @@ function renderRollout() {
   }
 
   if (!ctx.view) {
-    app.replaceChildren(header)
+    app.replaceChildren(header, ...(ctx.route.pr ? [] : [renderPlan(ctx)]))
     return
   }
 
