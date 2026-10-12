@@ -50,10 +50,15 @@ function dryRunBox() {
   return box
 }
 
-export function ask({ title, text, confirmLabel, withText = false, withDryRun = false }) {
+function section({ heading, text }) {
+  return [element('h3', heading), element('div', text, 'text dialog-section')]
+}
+
+export function ask({ title, text, sections = [], confirmLabel, withText = false, withDryRun = false }) {
   const node = theDialog()
 
   finish(null)
+  node.className = sections.length > 0 ? 'wide' : ''
 
   const textArea = withText ? element('textarea') : null
   const dryRun = withDryRun ? dryRunBox() : null
@@ -64,6 +69,8 @@ export function ask({ title, text, confirmLabel, withText = false, withDryRun = 
   if (text) {
     parts.push(element('p', text))
   }
+
+  parts.push(...sections.flatMap(section))
 
   if (textArea) {
     textArea.rows = 5

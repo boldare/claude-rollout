@@ -28,13 +28,33 @@ export function prControls(pr, readOnly) {
     return []
   }
 
-  const controls = [pr.held ? 'release' : 'hold', 'note']
+  const controls = [pr.held ? 'release' : 'hold', pr.state === 'blocked' ? 'answer' : 'note']
 
   if (RETRY_STATES.includes(pr.state)) {
     controls.push('retry')
   }
 
   return controls
+}
+
+export function rowControls(row, readOnly) {
+  return !readOnly && row.state === 'blocked' ? ['answer'] : []
+}
+
+function answerDialog(pr) {
+  const { kind, question, evidence } = pr.blocked ?? {}
+  const sections = [
+    { heading: 'question', text: question },
+    { heading: 'evidence', text: evidence },
+  ].filter((section) => section.text)
+
+  return {
+    title: `Answer ${pr.id}`,
+    text: `Blocked (${kind ?? 'unknown'}). The answer goes to the agent as a note.`,
+    sections,
+    confirmLabel: 'Send',
+    withText: true,
+  }
 }
 
 function noteDialog(pr) {
@@ -77,14 +97,17 @@ export function dialogFor(command, { rollout, driver, pr }) {
     case 'note':
       return noteDialog(pr)
 
+    case 'answer':
+      return answerDialog(pr)
+
     default:
       return null
   }
 }
 
 export function commandBody(command, pr, answer) {
-  if (command === 'note') {
-    return { cmd: command, id: pr.id, text: answer.text }
+  if (command === 'note' || command === 'answer') {
+    return { cmd: 'note', id: pr.id, text: answer.text }
   }
 
   if (command === 'start') {

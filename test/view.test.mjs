@@ -269,6 +269,8 @@ test('prRows: held goes outside approved, and a PR missing from the ledger is fr
     lastEventAt: null,
     activeRun: null,
     gate: null,
+    blocked: null,
+    answered: null,
   })
 })
 
@@ -290,6 +292,87 @@ test('prRows follows the manifest order and the CLI info rules', () => {
       ['A3', 'CI is red'],
     ],
   )
+})
+
+test('prRows: blocked only while the PR is blocked, and prDetail keeps the stale one', () => {
+  const manifest = loadManifest(makeRollout())
+  const blocked = { kind: 'needs-decision', question: 'Which API?', evidence: 'Both exist.' }
+  const ledger = {
+    prs: {
+      A1: { state: 'blocked', blocked },
+      A2: { state: 'needs_fix', blocked },
+      A3: { state: 'blocked', blocked: { kind: 'brief-questions' } },
+    },
+  }
+
+  assert.deepEqual(
+    prRows(manifest, ledger, [], []).map((row) => row.blocked),
+    [blocked, null, { kind: 'brief-questions', question: '', evidence: '' }],
+  )
+
+  assert.deepEqual(prDetail(manifest, ledger, [], [], 'A2').blocked, blocked)
+})
+
+function answeredRow(entry, events, driverRunning = true) {
+  const runs = runsFromEvents(events, { driverRunning })
+  const ledger = { prs: { A1: entry } }
+
+  return prRows(loadManifest(makeRollout()), ledger, [], runs)[0].answered
+}
+
+function answeredEntry(state, note = {}) {
+  return {
+    state,
+    noteHistory: [{ at: at(10), by: 'maintainer', kind: 'needs-decision', question: 'Which API?', text: 'the old one', ...note }],
+  }
+}
+
+test('prRows: answered without a run after the answer', () => {
+  assert.deepEqual(answeredRow(answeredEntry('needs_fix'), []), { at: at(10), by: 'maintainer', run: null, role: null })
+})
+
+test('prRows: answered names the fix or brief run that picked the answer up while it runs', () => {
+  assert.deepEqual(answeredRow(answeredEntry('fixing'), [start('A1', 'fix', 'A1-02-fix', 11)]), {
+    at: at(10),
+    by: 'maintainer',
+    run: 'A1-02-fix',
+    role: 'fix',
+  })
+
+  assert.deepEqual(answeredRow(answeredEntry('briefing', { kind: 'brief-questions' }), [start('A1', 'brief', 'A1-02-brief-write', 10)]), {
+    at: at(10),
+    by: 'maintainer',
+    run: 'A1-02-brief-write',
+    role: 'brief',
+  })
+})
+
+test('prRows: answered is null once the run that picked it up ended', () => {
+  const events = [start('A1', 'fix', 'A1-02-fix', 11), done('A1', 'fix', 'A1-02-fix', 20)]
+
+  assert.equal(answeredRow(answeredEntry('verifying'), events), null)
+})
+
+test('prRows: answered skips runs from before the answer, delegate runs and verify runs', () => {
+  const events = [
+    start('A1', 'implement', 'A1-01-implement', 5),
+    start('A1', 'delegate', 'A1-02-delegate', 11),
+    start('A1', 'verify', 'A1-03-verify', 12),
+  ]
+
+  assert.deepEqual(answeredRow(answeredEntry('needs_fix'), events), { at: at(10), by: 'maintainer', run: null, role: null })
+})
+
+test('prRows: answered is null for a plain note and for a PR blocked again, escalated or merged', () => {
+  assert.equal(answeredRow(answeredEntry('needs_fix', { kind: null, question: null }), []), null)
+
+  for (const state of ['blocked', 'escalated', 'merged']) {
+    assert.equal(answeredRow(answeredEntry(state), []), null, state)
+  }
+})
+
+test("prRows: answered names the delegate when the delegate's answer applied", () => {
+  assert.deepEqual(answeredRow(answeredEntry('needs_fix', { by: 'delegate' }), []), { at: at(10), by: 'delegate', run: null, role: null })
 })
 
 test('prDetail: verdicts fall back to the latest verdict for old ledgers', () => {

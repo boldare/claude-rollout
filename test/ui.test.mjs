@@ -5,9 +5,20 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutView, runsFromEvents } from '../lib/view.mjs'
-import { commandBody, commandNotice, dialogFor, prControls, rolloutControls } from '../ui/commands.js'
+import { commandBody, commandNotice, dialogFor, prControls, rolloutControls, rowControls } from '../ui/commands.js'
 import { duration, money } from '../ui/format.js'
-import { ERROR_KINDS, STATES, driverStatus, errorCount, eventDetail, filterEvents, mergeEvents, stateCounts } from '../ui/model.js'
+import {
+  ERROR_KINDS,
+  STATES,
+  answeredText,
+  driverStatus,
+  errorCount,
+  eventDetail,
+  filterEvents,
+  isWaiting,
+  mergeEvents,
+  stateCounts,
+} from '../ui/model.js'
 import { parseSse } from '../ui/sse.js'
 import { MARKERS, timelineLayout } from '../ui/timeline-layout.js'
 import {
@@ -184,6 +195,23 @@ test('driverStatus: halted, paused, running, stopped and unknown', () => {
   assert.equal(driverStatus({ running: true, paused: false, halted: null }), 'running')
   assert.equal(driverStatus({ running: false, paused: false, halted: null }), 'stopped')
   assert.equal(driverStatus(null), 'unknown')
+})
+
+test('isWaiting: blocked and escalated wait for the maintainer, nothing else does', () => {
+  for (const state of STATES) {
+    assert.equal(isWaiting({ state }), state === 'blocked' || state === 'escalated', state)
+  }
+})
+
+test('answeredText: who answered, and who resumed', () => {
+  const answered = { at: at(10), by: 'maintainer', run: null, role: null }
+
+  assert.equal(answeredText(null), null)
+  assert.equal(answeredText(answered), 'answered')
+  assert.equal(answeredText({ ...answered, by: 'delegate' }), 'delegate answered')
+  assert.equal(answeredText({ ...answered, run: 'A1-02-brief-write', role: 'brief' }), 'answered, writer resumed')
+  assert.equal(answeredText({ ...answered, run: 'A1-02-implement', role: 'implement' }), 'answered, implementer resumed')
+  assert.equal(answeredText({ ...answered, run: 'A1-03-fix', role: 'fix' }), 'answered, implementer resumed')
 })
 
 test('stateCounts: known states in lifecycle order, then unknown ones sorted', () => {
@@ -500,7 +528,7 @@ test('rolloutControls: pause or resume, unhalt when halted, stop or start', () =
   assert.deepEqual(rolloutControls(null, true), [])
 })
 
-test('prControls: hold or release, note, and retry for a stuck PR', () => {
+test('prControls: hold or release, note or answer, and retry for a stuck PR', () => {
   const { view } = demo()
   const a1 = view.rows.find((row) => row.id === 'A1')
 
@@ -508,11 +536,50 @@ test('prControls: hold or release, note, and retry for a stuck PR', () => {
   assert.ok(a1.held)
   assert.deepEqual(prControls(a1, false), ['release', 'note'])
   assert.deepEqual(prControls({ id: 'A2', state: 'escalated', held: null }, false), ['hold', 'note', 'retry'])
-  assert.deepEqual(prControls({ id: 'A2', state: 'blocked', held: { at: at(1) } }, false), ['release', 'note', 'retry'])
+  assert.deepEqual(prControls({ id: 'A2', state: 'blocked', held: { at: at(1) } }, false), ['release', 'answer', 'retry'])
+  assert.deepEqual(prControls({ id: 'A2', state: 'blocked', held: null }, false), ['hold', 'answer', 'retry'])
   assert.deepEqual(prControls({ id: 'A2', state: 'interrupted', held: null }, false), ['hold', 'note', 'retry'])
   assert.deepEqual(prControls({ id: 'A2', state: 'implementing', held: null }, false), ['hold', 'note'])
   assert.deepEqual(prControls({ id: 'A2', state: 'merged', held: null }, false), [])
   assert.deepEqual(prControls(a1, true), [])
+})
+
+test('rowControls: answer only for a blocked row that is not read-only', () => {
+  assert.deepEqual(rowControls({ id: 'A2', state: 'blocked' }, false), ['answer'])
+
+  for (const state of ['escalated', 'interrupted', 'implementing', 'merged']) {
+    assert.deepEqual(rowControls({ id: 'A2', state }, false), [], state)
+  }
+
+  assert.deepEqual(rowControls({ id: 'A2', state: 'blocked' }, true), [])
+})
+
+test('dialogFor: answer shows the question and the evidence, never an empty section', () => {
+  const blocked = { kind: 'needs-decision', question: 'Which API?\nThe old one is deprecated.', evidence: 'Both exist in src/api.' }
+  const answer = (pr) => dialogFor('answer', { rollout: 'demo', driver: null, pr })
+
+  assert.deepEqual(answer({ id: 'A2', state: 'blocked', blocked }), {
+    title: 'Answer A2',
+    text: 'Blocked (needs-decision). The answer goes to the agent as a note.',
+    sections: [
+      { heading: 'question', text: 'Which API?\nThe old one is deprecated.' },
+      { heading: 'evidence', text: 'Both exist in src/api.' },
+    ],
+    confirmLabel: 'Send',
+    withText: true,
+  })
+
+  assert.deepEqual(answer({ id: 'A2', state: 'blocked', blocked: { ...blocked, evidence: '' } }).sections, [
+    { heading: 'question', text: 'Which API?\nThe old one is deprecated.' },
+  ])
+
+  assert.deepEqual(answer({ id: 'A2', state: 'blocked', blocked: null }), {
+    title: 'Answer A2',
+    text: 'Blocked (unknown). The answer goes to the agent as a note.',
+    sections: [],
+    confirmLabel: 'Send',
+    withText: true,
+  })
 })
 
 test('dialogFor: confirmations for stop, start, retry and unhalt, a text for note, nothing for the rest', () => {
@@ -568,6 +635,12 @@ test('commandBody: the fields each command needs, and no pid for stop', () => {
   }
 
   assert.deepEqual(commandBody('note', pr, { text: 'use the old API', dryRun: false }), { cmd: 'note', id: 'A1', text: 'use the old API' })
+  assert.deepEqual(commandBody('answer', pr, { text: 'use the old API', dryRun: false }), {
+    cmd: 'note',
+    id: 'A1',
+    text: 'use the old API',
+  })
+
   assert.deepEqual(commandBody('start', null, { text: '', dryRun: true }), { cmd: 'start', dryRun: true })
   assert.deepEqual(commandBody('start', null, { text: '', dryRun: false }), { cmd: 'start', dryRun: false })
 })

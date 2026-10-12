@@ -1,6 +1,7 @@
 import { badge, cell, element, externalLink, link, secondsSince, stateBadge, table, wrap } from './dom.js'
 import { ago, money } from './format.js'
-import { stateCounts } from './model.js'
+import { renderRowControls } from './controls.js'
+import { answeredText, isWaiting, stateCounts } from './model.js'
 
 const HEADINGS = ['PR', 'title', 'state', 'GitHub', 'deps', 'attempts b/i/f/v', 'cost', 'last event', 'info']
 
@@ -21,7 +22,7 @@ function stateChips(rows, ctx) {
   return chips
 }
 
-function stateCell(row) {
+function stateCell(row, ctx) {
   const node = wrap('td', stateBadge(row.state))
 
   if (row.held) {
@@ -30,6 +31,22 @@ function stateCell(row) {
 
   if (row.activeRun) {
     node.append(badge(row.activeRun, 'active-run'))
+  }
+
+  if (isWaiting(row)) {
+    node.append(badge('needs you', 'waiting'))
+  }
+
+  const answered = answeredText(row.answered)
+
+  if (answered) {
+    node.append(badge(answered, 'answered'))
+  }
+
+  const controls = renderRowControls(row, ctx)
+
+  if (controls) {
+    node.append(controls)
   }
 
   return node
@@ -56,7 +73,7 @@ function boardRow(row, ctx) {
     'tr',
     cell(link(ctx.linkWith({ pr: row.id, tab: null }), row.id)),
     cell(row.title),
-    stateCell(row),
+    stateCell(row, ctx),
     cell(row.pr ? externalLink(row.url, `#${row.pr}`) : '-'),
     depsCell(row, ctx),
     cell(attempts(row), 'number'),
@@ -65,9 +82,9 @@ function boardRow(row, ctx) {
     cell(row.info, 'info'),
   )
 
-  node.className = 'clickable'
+  node.className = isWaiting(row) ? 'clickable waiting' : 'clickable'
   node.addEventListener('click', (event) => {
-    if (!event.target.closest('a')) {
+    if (!event.target.closest('a, button')) {
       ctx.go(ctx.linkWith({ pr: row.id, tab: null }))
     }
   })

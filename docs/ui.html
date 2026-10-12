@@ -427,14 +427,15 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <p>
           The default view. Chips on top filter by state and count the PRs in each. One row per PR, in manifest order. Click a row to open
-          the PR page.
+          the PR page. A click on a link or a button in the row does not.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of the board">
           <div class="mock-body">
             <nav class="chips" aria-label="State filter">
-              <span class="chip active">all 4</span><span class="chip">pending 1</span><span class="chip">implementing 1</span
-              ><span class="chip">verified 1</span><span class="chip">merged 1</span>
+              <span class="chip active">all 6</span><span class="chip">pending 1</span><span class="chip">implementing 1</span
+              ><span class="chip">verified 1</span><span class="chip">fixing 1</span><span class="chip">blocked 1</span
+              ><span class="chip">merged 1</span>
             </nav>
             <div class="scroll">
               <table>
@@ -501,6 +502,34 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="small">-</td>
                     <td class="small"></td>
                   </tr>
+                  <tr class="waiting">
+                    <td class="id">P5</td>
+                    <td class="small wrap">feat: plugin hooks</td>
+                    <td>
+                      <span class="badge state state-blocked">blocked</span><span class="badge waiting">needs you</span
+                      ><span class="fake-button primary">Answer</span>
+                    </td>
+                    <td class="small">#45</td>
+                    <td class="small">P1 <span class="badge state state-merged">merged</span></td>
+                    <td class="small num">0/1/0/0</td>
+                    <td class="small num">$3.10</td>
+                    <td class="small">8m ago</td>
+                    <td class="small wrap info">needs-decision: Should a hook that throws stop the run?</td>
+                  </tr>
+                  <tr>
+                    <td class="id">P6</td>
+                    <td class="small wrap">fix: retry on timeout</td>
+                    <td>
+                      <span class="badge state state-fixing">fixing</span><span class="badge active-run">P6-02-fix</span
+                      ><span class="badge answered">answered, implementer resumed</span>
+                    </td>
+                    <td class="small">#44</td>
+                    <td class="small">-</td>
+                    <td class="small num">0/1/1/0</td>
+                    <td class="small num">$4.40</td>
+                    <td class="small">2m ago</td>
+                    <td class="small wrap info">answer from the maintainer</td>
+                  </tr>
                 </tbody>
               </table>
             </div>
@@ -511,6 +540,18 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
           <li>
             <strong>state</strong> is the ledger state, in the colours of <a href="how-it-works.html#state-pending">the PR lifecycle</a>. A
             <span class="badge held">held</span> badge marks a held PR, and a mono badge names the agent run in progress.
+          </li>
+          <li>
+            A tinted row with a <span class="badge waiting">needs you</span> badge waits for you: a blocked PR, brief questions included, or
+            an escalated one.
+          </li>
+          <li>
+            A blocked row has an <a href="#control-answer">Answer</a> button. It opens the agent's question and evidence above a text box.
+          </li>
+          <li>
+            An <span class="badge answered">answered</span> badge appears once the driver has applied your answer, not when you press Send.
+            It reads <q>delegate answered</q> when the delegate answered. It names the writer or the implementer once their run has started,
+            and goes away when that run ends.
           </li>
           <li><strong>GitHub</strong> links to the PR once the implementer opened it.</li>
           <li><strong>deps</strong> lists the dependencies with their own state.</li>
@@ -718,6 +759,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <p>
           Click a PR anywhere to open its page: a back link, the id and title, the state and the PR's facts, the PR controls, and five tabs.
+          A blocked PR shows <a href="#control-answer">Answer</a> in place of Note.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of a PR page">
@@ -916,9 +958,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h2 id="controls">Controls <a class="anchor" href="#controls" aria-label="Link to this section">#</a></h2>
 
         <p>
-          The rollout controls sit on the right of the header, the PR controls on the PR page. Each one shows only when it makes sense, and
-          the ones that are hard to undo ask first. In every confirmation Cancel has the focus, so <kbd>Enter</kbd> never confirms by
-          accident. The Note dialog puts the focus in its text box.
+          The rollout controls sit on the right of the header, the PR controls on the PR page, and Answer also on a blocked row of the
+          board. Each one shows only when it makes sense, and the ones that are hard to undo ask first. In every confirmation Cancel has the
+          focus, so <kbd>Enter</kbd> never confirms by accident. The Note and Answer dialogs put the focus in their text box.
         </p>
 
         <div class="scroll">
@@ -995,9 +1037,17 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                   >, which lifts the hold.
                 </td>
               </tr>
+              <tr id="control-answer">
+                <td>Answer</td>
+                <td>Board row and PR page, for a blocked PR.</td>
+                <td>a text box under the question and the evidence, Send stays off until you type</td>
+                <td>
+                  Queues <a href="commands.html#cmd-note"><code>note</code></a> with your text, like <a href="#control-note">Note</a>.
+                </td>
+              </tr>
               <tr id="control-note">
                 <td>Note</td>
-                <td>PR page, until the PR is merged.</td>
+                <td>PR page, until the PR is merged. A blocked PR gets <a href="#control-answer">Answer</a> instead.</td>
                 <td>a text box, Send stays off until you type</td>
                 <td>
                   Queues <a href="commands.html#cmd-note"><code>note</code></a> with your text. What it does depends on the PR's state. For
