@@ -10,9 +10,14 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="wordmark" href="index.html">rollout <span class="me">docs</span></a>
+      <a class="wordmark" href="index.html"
+        ><picture class="logo"
+          ><source srcset="boldare-white.svg" media="(prefers-color-scheme: dark)" />
+          <img src="boldare.svg" alt="Boldare" /></picture
+        ><span>rollout <span class="me">docs</span></span></a
+      >
       <div class="facts">
-        <span class="badge alpha">internal alpha</span>
+        <span class="badge alpha">Internal alpha</span>
         <span class="version">v0.1.0</span>
         <span>Node 24+</span>
       </div>
@@ -82,7 +87,7 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td class="name"><a href="#cmd-stop">stop</a></td>
                 <td>Stops the driver and its agents.</td>
-                <td><span class="badge where-ui">rollout header</span></td>
+                <td><span class="badge where-ui">Rollout header</span></td>
               </tr>
               <tr>
                 <td class="name"><a href="#cmd-status">status</a></td>
@@ -122,12 +127,12 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td class="name"><a href="#cmd-pause">pause</a>, <a href="#cmd-resume">resume</a></td>
                 <td>Stops new work and merges for the whole rollout, or lets them go on.</td>
-                <td><span class="badge where-ui">rollout header</span></td>
+                <td><span class="badge where-ui">Rollout header</span></td>
               </tr>
               <tr>
                 <td class="name"><a href="#cmd-unhalt">unhalt</a></td>
                 <td>Clears a halt after a red base branch.</td>
-                <td><span class="badge where-ui">rollout header</span></td>
+                <td><span class="badge where-ui">Rollout header</span></td>
               </tr>
               <tr>
                 <td class="name"><a href="#cmd-preflight">preflight</a></td>

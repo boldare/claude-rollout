@@ -1,11 +1,12 @@
 import { cell, element, link, stateBadge, table, wrap } from './dom.js'
+import { sentence } from './format.js'
 
 const HEADINGS = ['PR', 'state', 'section in the plan', 'source']
 
 // Before the first run there is no state and no PR page to open.
 function sectionRow(pr, ctx) {
   const row = ctx.view?.rows.find((item) => item.id === pr.id)
-  const heading = pr.plan ? cell(pr.plan.heading) : cell(element('span', 'no section', 'muted'))
+  const heading = pr.plan ? cell(pr.plan.heading) : cell(element('span', 'No section', 'muted'))
   const source = cell(pr.plan?.source ?? '-', 'info')
 
   if (!row) {
@@ -41,7 +42,7 @@ function planBody(plan, ctx) {
   }
 
   if (plan.status !== 200 || !plan.body) {
-    return [element('p', plan.body?.error ?? `The server answered ${plan.status}.`, 'error')]
+    return [element('p', plan.body?.error ? sentence(plan.body.error) : `The server answered ${plan.status}.`, 'error')]
   }
 
   const { prs, sources } = plan.body

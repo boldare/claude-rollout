@@ -1,3 +1,5 @@
+import { sentence } from './format.js'
+
 const RETRY_STATES = ['escalated', 'blocked', 'interrupted']
 const PR_COMMANDS = ['hold', 'release', 'retry']
 const LOSES_VERIFICATION = ['verified', 'ready_claimed']
@@ -71,7 +73,7 @@ export function dialogFor(command, { rollout, driver, pr }) {
   switch (command) {
     case 'stop':
       return {
-        title: `Stop the driver (pid ${driver?.pid})?`,
+        title: `Stop the driver (PID ${driver?.pid})?`,
         text: 'Its agents stop too. The next start resumes their sessions.',
         confirmLabel: 'Stop',
       }
@@ -136,18 +138,18 @@ function startNotice(body) {
 }
 
 function queuedNotice(command, driver) {
-  const text = `${[command.cmd, command.id].filter(Boolean).join(' ')} queued.`
+  const text = `${sentence([command.cmd, command.id].filter(Boolean).join(' '))} queued.`
 
   return driver?.running ? text : `${text} It applies when the driver starts.`
 }
 
 export function commandNotice(command, { status, body }, driver) {
   if (status !== 202) {
-    return { text: body?.error ?? `The server answered ${status}.`, error: true }
+    return { text: body?.error ? sentence(body.error) : `The server answered ${status}.`, error: true }
   }
 
   if (command.cmd === 'stop') {
-    return { text: `Stopping the driver (pid ${body.pid}).`, error: false }
+    return { text: `Stopping the driver (PID ${body.pid}).`, error: false }
   }
 
   if (command.cmd === 'start') {

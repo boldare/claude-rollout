@@ -72,7 +72,7 @@ export function renderCosts(ctx) {
   const section = element('section', undefined, 'costs')
   const byPr = Object.entries(costs.byPr).sort((first, second) => second[1] - first[1])
 
-  section.append(element('p', `total ${money(costs.totalUsd)} (from the ledger)`, 'total'))
+  section.append(element('p', `Total ${money(costs.totalUsd)} (from the ledger)`, 'total'))
 
   if (costs.estimatedRuns > 0) {
     section.append(element('p', estimateLine(costs), 'estimate'))

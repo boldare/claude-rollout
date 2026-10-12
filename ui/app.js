@@ -5,8 +5,8 @@ import { renderCosts } from './costs.js'
 import { renderDetail } from './detail.js'
 import { element, link, wrap } from './dom.js'
 import { renderEvents } from './events.js'
-import { money } from './format.js'
-import { renderHeader, renderViewTabs } from './header.js'
+import { money, sentence } from './format.js'
+import { renderHeader, renderListHeader, renderViewTabs } from './header.js'
 import { driverStatus, mergeEvents } from './model.js'
 import { renderPlan } from './plan.js'
 import { renderTimeline } from './timeline.js'
@@ -147,7 +147,7 @@ function rolloutItem(rollout) {
   const item = element('li', undefined, 'rollout')
 
   if (rollout.error) {
-    item.append(element('strong', rollout.name), element('span', rollout.error, 'error'))
+    item.append(element('strong', rollout.name), element('span', sentence(rollout.error), 'error'))
     return item
   }
 
@@ -162,7 +162,7 @@ function rolloutItem(rollout) {
 }
 
 function renderList() {
-  document.title = 'rollouts'
+  document.title = 'Rollouts'
 
   if (!listing) {
     showLine('Loading…')
@@ -183,7 +183,7 @@ function renderList() {
 
   const items = element('ul', undefined, 'rollouts')
   items.append(...rollouts.map(rolloutItem))
-  app.replaceChildren(element('h1', 'rollouts'), items)
+  app.replaceChildren(renderListHeader(), items)
 }
 
 // Resolves to whether another refresh makes sense.
@@ -276,7 +276,7 @@ function follow(name) {
       scheduleRender()
     },
     onProblem(problem) {
-      current.problem = problem.error
+      current.problem = sentence(problem.error)
       scheduleRender()
     },
     onStatus,
@@ -538,7 +538,7 @@ function failure() {
 
   document.title = 'rollout'
 
-  return [element('p', text, 'error'), wrap('p', link(linkTo({}), 'all rollouts'))]
+  return [element('p', text, 'error'), wrap('p', link(linkTo({}), 'All rollouts'))]
 }
 
 function context() {

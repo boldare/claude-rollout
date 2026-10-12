@@ -1,3 +1,5 @@
+import { stateLabel } from './format.js'
+
 // Titles, bodies, verdicts, briefs and events are untrusted agent output, so
 // the page is built from elements, textContent and attributes only.
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -84,12 +86,13 @@ export function cell(content, className) {
   return node
 }
 
+// The text sits in its own span, so style.css can start the label with a capital.
 export function badge(text, className) {
-  return element('span', text, `badge ${className}`)
+  return withClass(wrap('span', element('span', text)), `badge ${className}`)
 }
 
 export function stateBadge(state) {
-  return badge(state, `state state-${state}`)
+  return badge(stateLabel(state), `state state-${state}`)
 }
 
 export function secondsSince(iso, now) {

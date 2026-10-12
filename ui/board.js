@@ -1,5 +1,5 @@
 import { badge, cell, element, externalLink, link, secondsSince, stateBadge, table, wrap } from './dom.js'
-import { ago, money } from './format.js'
+import { ago, money, stateLabel } from './format.js'
 import { renderRowControls } from './controls.js'
 import { answeredText, isWaiting, stateCounts } from './model.js'
 
@@ -16,7 +16,7 @@ function stateChips(rows, ctx) {
   chips.append(chip(ctx.linkWith({ state: null }), `all ${rows.length}`, selected === null))
 
   for (const { state, count } of stateCounts(rows)) {
-    chips.append(chip(ctx.linkWith({ state }), `${state} ${count}`, selected === state))
+    chips.append(chip(ctx.linkWith({ state }), `${stateLabel(state)} ${count}`, selected === state))
   }
 
   return chips
@@ -122,7 +122,7 @@ export function renderBoard(ctx) {
   )
 
   if (shown.length === 0) {
-    section.append(element('p', selected ? `No PR is ${selected}.` : 'No PRs.', 'muted'))
+    section.append(element('p', selected ? `No PR is ${stateLabel(selected)}.` : 'No PRs.', 'muted'))
   }
 
   return section

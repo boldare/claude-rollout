@@ -34,14 +34,14 @@ function idChoices(ctx) {
     ctx.route.id === '-' ? null : ctx.route.id,
   )
 
-  return [{ value: '', text: 'all' }, { value: '-', text: 'driver (-)' }, ...ids.map((id) => ({ value: id, text: id }))]
+  return [{ value: '', text: 'All' }, { value: '-', text: 'Driver (-)' }, ...ids.map((id) => ({ value: id, text: id }))]
 }
 
 function kindChoices(ctx) {
   const present = [...new Set(ctx.events.map((event) => event.kind).filter((kind) => typeof kind === 'string'))].sort()
   const kinds = withCurrent(present, ctx.route.kind === 'errors' ? null : ctx.route.kind)
 
-  return [{ value: '', text: 'all' }, { value: 'errors', text: 'errors' }, ...kinds.map((kind) => ({ value: kind, text: kind }))]
+  return [{ value: '', text: 'All' }, { value: 'errors', text: 'Errors' }, ...kinds.map((kind) => ({ value: kind, text: kind }))]
 }
 
 function eventRow(event, now) {
@@ -63,7 +63,7 @@ function eventRow(event, now) {
 export function renderEvents(ctx) {
   const matching = filterEvents(ctx.events, { id: ctx.route.id, kind: ctx.route.kind })
   const shown = matching.slice(0, ROW_LIMIT)
-  const filters = wrap('div', filterSelect('PR', 'id', idChoices(ctx), ctx), filterSelect('kind', 'kind', kindChoices(ctx), ctx))
+  const filters = wrap('div', filterSelect('PR', 'id', idChoices(ctx), ctx), filterSelect('Kind', 'kind', kindChoices(ctx), ctx))
   const section = element('section', undefined, 'events')
   const count = matching.length > ROW_LIMIT ? `showing ${ROW_LIMIT} of ${matching.length}` : `${matching.length} shown`
 

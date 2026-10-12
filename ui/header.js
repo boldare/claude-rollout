@@ -19,7 +19,7 @@ function heartbeat(driver, state, now) {
   const note = driver.heartbeatNote ? ` (${driver.heartbeatNote})` : ''
   const stale = age !== null && age > STALE_HEARTBEAT_SECONDS
 
-  return element('span', `heartbeat ${ago(age)}${note}`, stale ? 'warning' : '')
+  return element('span', `Heartbeat ${ago(age)}${note}`, stale ? 'warning' : '')
 }
 
 function driverPart(driver, state, now) {
@@ -29,11 +29,11 @@ function driverPart(driver, state, now) {
   part.append(badge(status, `driver driver-${status}`))
 
   if (driver.running) {
-    part.append(element('span', `pid ${driver.pid ?? '-'}`), heartbeat(driver, state, now))
+    part.append(element('span', `PID ${driver.pid ?? '-'}`), heartbeat(driver, state, now))
   }
 
   if (driver.halted) {
-    part.append(element('span', `halted: ${driver.halted}`, 'error'))
+    part.append(element('span', `Halted: ${driver.halted}`, 'error'))
   }
 
   return part
@@ -71,7 +71,7 @@ function streamLine(ctx) {
   const parts = []
 
   if (ctx.status === 'reconnecting') {
-    parts.push(element('p', 'reconnecting to the stream…', 'banner warning'))
+    parts.push(element('p', 'Reconnecting to the stream…', 'banner warning'))
   }
 
   if (ctx.problem) {
@@ -85,10 +85,26 @@ function streamLine(ctx) {
   return parts
 }
 
+// A span, not an img: style.css paints the logo through a mask so it follows the scheme.
+function logo() {
+  const mark = element('span', undefined, 'logo')
+  mark.setAttribute('role', 'img')
+  mark.setAttribute('aria-label', 'Boldare')
+
+  return mark
+}
+
+export function renderListHeader() {
+  const header = element('header', undefined, 'header')
+  header.append(withClass(wrap('div', logo(), element('h1', 'Rollouts')), 'title'))
+
+  return header
+}
+
 export function renderHeader(ctx) {
   const name = ctx.view?.rollout ?? ctx.state?.name ?? ctx.route.r
   const header = element('header', undefined, 'header')
-  const title = wrap('div', element('h1', name), link(ctx.linkTo({}), 'all rollouts'))
+  const title = wrap('div', logo(), element('h1', name), link(ctx.linkTo({}), 'All rollouts'))
 
   document.title = name
 
@@ -99,7 +115,7 @@ export function renderHeader(ctx) {
   header.append(withClass(title, 'title'))
 
   if (ctx.state && !ctx.view) {
-    header.append(element('p', 'not started: no ledger yet', 'muted'))
+    header.append(element('p', 'Not started: no ledger yet', 'muted'))
   }
 
   if (ctx.view) {
