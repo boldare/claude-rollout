@@ -68,11 +68,26 @@ function attempts(row) {
   return [brief, implement, fix, verify].map((count) => count ?? 0).join('/')
 }
 
+// The first line of the PR's section in the plan says what slice of it the PR is.
+function titleCell(row) {
+  const node = wrap('td', element('div', row.title))
+
+  node.className = 'pr-title'
+
+  if (row.plan?.excerpt) {
+    const slice = element('div', row.plan.excerpt, 'slice')
+    slice.title = `${row.plan.source}: ${row.plan.heading}`
+    node.append(slice)
+  }
+
+  return node
+}
+
 function boardRow(row, ctx) {
   const node = wrap(
     'tr',
     cell(link(ctx.linkWith({ pr: row.id, tab: null }), row.id)),
-    cell(row.title),
+    titleCell(row),
     stateCell(row, ctx),
     cell(row.pr ? externalLink(row.url, `#${row.pr}`) : '-'),
     depsCell(row, ctx),

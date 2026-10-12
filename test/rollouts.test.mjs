@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -10,6 +10,7 @@ import {
   eventsSince,
   findRollout,
   listRollouts,
+  rolloutPlan,
   rolloutPr,
   rolloutRoot,
   rolloutSnapshot,
@@ -132,6 +133,77 @@ test('rolloutSnapshot: the view without events, and the events beside it', () =>
   assert.deepEqual(fresh, { state: { name: 'fresh', at: new Date(START).toISOString(), view: null }, events: [] })
 })
 
+test('rolloutSnapshot: each row carries the heading and first line of its plan section, never the whole text', () => {
+  const root = makeRolloutRoot()
+
+  writeFileSync(join(root, 'demo', 'plan.md'), '# Plan\n\n## A2 the second slice\n\nWhy: it needs A1.\nMore detail.\n')
+
+  const { rows } = rolloutSnapshot(findRollout(root, 'demo'), 'demo', START).state.view
+
+  assert.deepEqual(
+    rows.map((row) => [row.id, row.plan]),
+    [
+      ['A1', null],
+      ['A2', { source: 'Plan', heading: 'A2 the second slice', excerpt: 'Why: it needs A1.' }],
+      ['A3', null],
+    ],
+  )
+
+  assert.equal(rolloutPr(findRollout(root, 'demo'), 'A2').plan.text, 'Why: it needs A1.\nMore detail.')
+})
+
+test('rolloutPlan: the PRs with their sections and every source, before the first run too', () => {
+  const root = makeRolloutRoot()
+
+  writeFileSync(join(root, 'fresh', 'plan.md'), '# Plan\n\n## A3 the last slice\nWhy: it goes last.\n')
+
+  const fresh = findRollout(root, 'fresh')
+
+  assert.equal(rolloutSnapshot(fresh, 'fresh', START).state.view, null)
+  assert.deepEqual(rolloutPlan(fresh), {
+    prs: [
+      { id: 'A1', title: 'feat: A1', plan: null },
+      { id: 'A2', title: 'feat: A2', plan: null },
+      { id: 'A3', title: 'feat: A3', plan: { source: 'Plan', heading: 'A3 the last slice', excerpt: 'Why: it goes last.' } },
+    ],
+    sources: [
+      {
+        title: 'Plan',
+        path: join(root, 'fresh', 'plan.md'),
+        kind: 'markdown',
+        tag: null,
+        text: '# Plan\n\n## A3 the last slice\nWhy: it goes last.\n',
+        error: null,
+      },
+    ],
+  })
+})
+
+test('rolloutSnapshot: a numeric id or briefing sources that are not a list leave the board standing', () => {
+  const effort = { implement: 'high', verify: 'high' }
+  const pr = (id) => ({ id, branch: `feat/${id}`, title: `feat: ${id}`, brief: 'briefs/brief.md', effort, changeset: 'none' })
+  const dir = makeRollout({ manifest: { prs: [pr('A1'), pr(7)] } })
+
+  mkdirSync(join(dir, 'briefs'))
+  writeFileSync(join(dir, 'briefs', 'brief.md'), '# Brief\n')
+  writeFileSync(join(dir, 'plan.md'), '# Plan\n\n## 7 the seventh\nWhy: numbers work too.\n')
+
+  const plans = (manifest) => rolloutSnapshot(manifest, 'demo', START).state.view.rows.map((row) => [row.id, row.plan?.heading ?? null])
+
+  assert.deepEqual(plans(loadManifest(dir)), [
+    ['A1', null],
+    [7, '7 the seventh'],
+  ])
+
+  const broken = loadManifest(dir)
+  broken.briefing.sources = { title: 'Plan', path: join(dir, 'plan.md') }
+
+  assert.deepEqual(plans(broken), [
+    ['A1', null],
+    [7, null],
+  ])
+})
+
 test('eventsSince: the tail after from, or everything when the file was replaced', () => {
   const events = [{ kind: 'a' }, { kind: 'b' }, { kind: 'c' }]
 
@@ -154,6 +226,7 @@ test('rolloutPr: the detail with the brief and notes texts, with or without a le
     ['A1-01-implement', 'A1-02-verify'],
   )
 
+  assert.equal(detail.plan, null)
   assert.equal(rolloutPr(findRollout(root, 'demo'), 'Z9'), null)
 
   const fresh = rolloutPr(findRollout(root, 'fresh'), 'A1')

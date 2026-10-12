@@ -4,7 +4,7 @@ import { ago, money } from './format.js'
 import { driverStatus, errorCount } from './model.js'
 
 const STALE_HEARTBEAT_SECONDS = 300
-const VIEWS = ['board', 'timeline', 'events', 'costs']
+const VIEWS = ['board', 'timeline', 'events', 'costs', 'plan']
 
 function heartbeatAge(driver, state, now) {
   if (driver.heartbeatAgeSeconds === null || driver.heartbeatAgeSeconds === undefined) {

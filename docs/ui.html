@@ -6,7 +6,7 @@
     <title>Web UI · rollout docs</title>
     <meta
       name="description"
-      content="rollout ui: a local web page over every rollout, with live board, timeline, events, costs and PR pages, and the same controls as the CLI."
+      content="rollout ui: a local web page over every rollout, with live board, timeline, events, costs, plan and PR pages, and the same controls as the CLI."
     />
     <link rel="icon" href="favicon.svg" />
     <link rel="stylesheet" href="docs.css" />
@@ -64,9 +64,9 @@
         <ul>
           <li>
             <strong>A view.</strong> It reads the files in each rollout directory: <code>manifest.yaml</code>, <code>ledger.json</code>,
-            <code>events.jsonl</code>, <code>heartbeat</code>, <code>driver.lock</code>, the briefs and the agent transcripts in
-            <code>logs/</code>. It builds its tables with the same model as <code>rollout status</code> (<code>lib/view.mjs</code>), so the
-            CLI and the UI never disagree.
+            <code>events.jsonl</code>, <code>heartbeat</code>, <code>driver.lock</code>, the briefing sources, the briefs and the agent
+            transcripts in <code>logs/</code>. It builds its tables with the same model as
+            <code>rollout status</code> (<code>lib/view.mjs</code>), so the CLI and the UI never disagree.
           </li>
           <li>
             <strong>A remote control.</strong> Pause, resume, unhalt, retry, note, hold and release become files in the rollout's
@@ -194,7 +194,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <text class="dg-mono" x="14" y="98">#t=&lt;token&gt;</text>
             <text class="dg-text" x="14" y="130">board, timeline,</text>
             <text class="dg-text" x="14" y="148">events, costs,</text>
-            <text class="dg-text" x="14" y="166">PR pages and</text>
+            <text class="dg-text" x="14" y="166">plan, PR pages,</text>
             <text class="dg-text" x="14" y="184">transcripts</text>
 
             <rect class="dg-node strong" x="210" y="20" width="190" height="240" rx="10" />
@@ -398,7 +398,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
           <div class="mock-body">
             <nav class="tabs" aria-label="Views">
               <span class="tab active">board</span><span class="tab">timeline</span><span class="tab">events</span
-              ><span class="tab">costs</span>
+              ><span class="tab">costs</span><span class="tab">plan</span>
             </nav>
           </div>
         </div>
@@ -420,7 +420,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <strong>Controls</strong> on the right, then banners: <q>reconnecting to the stream…</q>, a problem reading the files, or the
             notice of the last command.
           </li>
-          <li>A rollout that never ran has no ledger yet. Its header says <q>not started: no ledger yet</q> and offers only Start.</li>
+          <li>
+            A rollout that never ran has no ledger yet. Its header says <q>not started: no ledger yet</q> and offers only Start. Below it is
+            the <a href="#view-plan">Plan</a> view, so you can check that every PR finds its section before you start.
+          </li>
         </ul>
 
         <h3 id="view-board">Board</h3>
@@ -552,6 +555,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             An <span class="badge answered">answered</span> badge appears once the driver has applied your answer, not when you press Send.
             It reads <q>delegate answered</q> when the delegate answered. It names the writer or the implementer once their run has started,
             and goes away when that run ends.
+          </li>
+          <li>
+            <strong>title</strong> is the PR's title from the manifest. Below it, in grey, the first line of text in the PR's section in the
+            plan, without markdown, so you can tell which slice of the plan the PR is. Headings, code and rules are skipped. Hover it for
+            the source and the section heading. See <a href="#view-plan">Plan</a> for how a section is found.
           </li>
           <li><strong>GitHub</strong> links to the PR once the implementer opened it.</li>
           <li><strong>deps</strong> lists the dependencies with their own state.</li>
@@ -755,10 +763,35 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
           totals. Costs are what Claude reports, see <a href="accounts.html">Accounts</a> for what they mean on a subscription.
         </p>
 
+        <h3 id="view-plan">Plan</h3>
+
+        <p>
+          What the agents work from. On top, a table of the PRs with their state and the heading of their section in the plan. Click a row
+          to open that PR's plan tab. Below it, every source in <a href="manifest.html#briefing">briefing.sources</a> in full, as plain
+          text, with its kind, tag and path. A source that cannot be read shows the error instead.
+        </p>
+
+        <ul>
+          <li>
+            <strong>A PR's section</strong> starts at a heading that begins with the PR id, like <code>### P3 feat: the events API</code> or
+            <code>## PR P3: events API</code>, and runs to the next heading of the same or a higher level. P1 never matches P10 or P1.1, and
+            headings inside code fences do not count. The UI looks in the sources the PR's brief writer gets, in manifest order, and takes
+            the first match.
+          </li>
+          <li>
+            <strong>Before the first run</strong> the page shows only this view, without the other tabs. The table has no state and no links
+            yet, because there is no PR page to open.
+          </li>
+          <li>
+            <strong>The files are read on every update</strong> while the view is open, so an edited plan shows up without a restart. A
+            relative source path resolves against the directory you ran <code>rollout ui</code> in, as it does for <code>rollout run</code>.
+          </li>
+        </ul>
+
         <h3 id="view-pr">PR page</h3>
 
         <p>
-          Click a PR anywhere to open its page: a back link, the id and title, the state and the PR's facts, the PR controls, and five tabs.
+          Click a PR anywhere to open its page: a back link, the id and title, the state and the PR's facts, the PR controls, and six tabs.
           A blocked PR shows <a href="#control-answer">Answer</a> in place of Note.
         </p>
 
@@ -775,7 +808,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <p class="chips"><span class="fake-button">Hold</span> <span class="fake-button">Note</span></p>
             <nav class="tabs" aria-label="PR tabs">
               <span class="tab active">overview</span><span class="tab">runs</span><span class="tab">verifier</span
-              ><span class="tab">review</span><span class="tab">brief</span>
+              ><span class="tab">review</span><span class="tab">plan</span><span class="tab">brief</span>
             </nav>
             <dl class="kv">
               <dt>info</dt>
@@ -845,6 +878,13 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                 <td>
                   A link to the PR on GitHub and every maintainer comment the implementer handled, with what it did about it, the sha and
                   the time.
+                </td>
+              </tr>
+              <tr>
+                <td class="name">plan</td>
+                <td>
+                  The PR's own section of the plan, the source it comes from, and a link to the whole plan. A PR without a section says how
+                  to add one.
                 </td>
               </tr>
               <tr>

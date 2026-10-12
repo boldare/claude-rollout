@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { appendFileSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sourcesFor, sourceText } from '../lib/briefing.mjs'
+import { isBriefedWith, sourcesFor, sourceText } from '../lib/briefing.mjs'
 
 const dir = mkdtempSync(join(tmpdir(), 'rollout-brief-'))
 const transcript = join(dir, 'agent.jsonl')
@@ -38,6 +38,8 @@ test('PRs get untagged sources plus the ones for their tags', () => {
 
   assert.match(sourcesFor(manifest, { briefTags: ['A'] }), /### Plan[\s\S]*### Track A/)
   assert.doesNotMatch(sourcesFor(manifest, { briefTags: ['B'] }), /Track A/)
+  assert.equal(isBriefedWith({}, { tag: 'A' }), false)
+  assert.equal(isBriefedWith({}, {}), true)
 })
 
 test('a markdown source rewritten with a different length is read again', () => {
