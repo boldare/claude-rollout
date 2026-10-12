@@ -488,8 +488,8 @@ test('runAgent: agents get GH_REPO and ROLLOUT_REPO and never GH_HOST', async ()
   )
 
   assert.equal(result.ok, false)
-  assert.equal(env.GH_REPO, 'github.com/example/demo')
-  assert.equal(env.ROLLOUT_REPO, 'example/demo')
+  assert.equal(env.GH_REPO, 'github.com/example/widgets')
+  assert.equal(env.ROLLOUT_REPO, 'example/widgets')
   assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
   assert.equal(env.GH_CONFIG_DIR, join(manifest.dir, '.gh-agents'))
 
@@ -511,7 +511,7 @@ test('agentEnv: extra never brings back GH_HOST or moves GH_REPO', () => {
     ROLLOUT_ROLE: 'implement',
   })
 
-  assert.equal(env.GH_REPO, 'github.com/example/demo')
+  assert.equal(env.GH_REPO, 'github.com/example/widgets')
   assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
   assert.equal(env.GH_CONFIG_DIR, join(manifest.dir, '.gh-agents'))
   assert.equal(env.ROLLOUT_ROLE, 'implement')
@@ -524,6 +524,6 @@ test('agentEnv: extra never brings back GH_HOST or moves GH_REPO', () => {
 
   const unpinned = agentEnv(manifest, { GH_HOST: 'github.com' })
 
-  assert.equal(unpinned.GH_REPO, 'github.com/example/demo')
+  assert.equal(unpinned.GH_REPO, 'github.com/example/widgets')
   assert.equal('GH_HOST' in unpinned, false)
 })

@@ -195,3 +195,117 @@ test('validateManifest: repo.codeScanning, when set, is a mapping of a known act
     assert.deepEqual(validateManifest(raw), errors, JSON.stringify(codeScanning))
   }
 })
+
+function named(rollout, edit) {
+  const raw = structuredClone(base)
+
+  raw.rollout = rollout
+  edit(raw)
+
+  return validateManifest(raw)
+}
+
+const refused = 'names the rollout my-lib-docs, and the guard refuses every command that does'
+
+test('validateManifest: a branch, title, repo.base or repo.github that names the rollout is refused', () => {
+  for (const branch of ['docs/my-lib-docs', 'my-lib-docs/p1', 'feat/my-lib-docs/p1', 'my-lib-docs']) {
+    const errors = named('my-lib-docs', (raw) => {
+      raw.prs[0].branch = branch
+    })
+
+    assert.deepEqual(errors, [`prs.A.branch ${branch} ${refused}: rename the branch`])
+  }
+
+  for (const title of ['docs: my-lib-docs site', 'my-lib-docs site']) {
+    const errors = named('my-lib-docs', (raw) => {
+      raw.prs[0].title = title
+    })
+
+    assert.deepEqual(errors, [`prs.A.title "${title}" ${refused}: reword the title`])
+  }
+
+  const baseErrors = named('my-lib-docs', (raw) => {
+    raw.repo.base = 'my-lib-docs'
+  })
+
+  assert.deepEqual(baseErrors, [`repo.base my-lib-docs ${refused}: rename the rollout`])
+})
+
+test('validateManifest: the default base main names a rollout called main', () => {
+  const errors = named('main', () => {})
+
+  assert.deepEqual(errors, ['repo.base main names the rollout main, and the guard refuses every command that does: rename the rollout'])
+})
+
+test('validateManifest: repo.github names the rollout through its owner or its name', () => {
+  for (const github of ['example/demo', 'demo/site']) {
+    const errors = named('demo', (raw) => {
+      raw.repo.github = github
+    })
+
+    assert.deepEqual(errors, [
+      `repo.github ${github} names the rollout demo, and the guard refuses every command that does: rename the rollout`,
+    ])
+  }
+})
+
+test('validateManifest: the dots of a rollout name match only dots', () => {
+  const dotted = named('my-lib-1.2.0', (raw) => {
+    raw.prs[0].branch = 'release/my-lib-1.2.0'
+  })
+
+  assert.deepEqual(dotted, [
+    'prs.A.branch release/my-lib-1.2.0 names the rollout my-lib-1.2.0, and the guard refuses every command that does: rename the branch',
+  ])
+
+  const other = named('my-lib-1.2.0', (raw) => {
+    raw.prs[0].branch = 'release/my-lib-1x2y0'
+  })
+
+  assert.deepEqual(other, [])
+})
+
+test('validateManifest: the rollout name inside a longer word is not a name', () => {
+  const branches = named('my-lib-docs', (raw) => {
+    raw.prs[0].branch = 'my-lib-docs-p1'
+    raw.prs[1].branch = 'my-lib-docsy'
+    raw.prs.push({ ...structuredClone(raw.prs[0]), id: 'C', branch: 'docs/my-lib-docs-p1', title: 'docs: my-lib-docs-p1 site' })
+  })
+
+  assert.deepEqual(branches, [])
+
+  const github = named('demo', (raw) => {
+    raw.repo.github = 'example/demo-site'
+  })
+
+  assert.deepEqual(github, [])
+})
+
+test('validateManifest: a rollout, branch, title, base or repo of any type does not throw', () => {
+  for (const value of [7, ['my-lib-docs'], { name: 'my-lib-docs' }, null]) {
+    assert.doesNotThrow(() => named(value, () => {}), JSON.stringify(value))
+
+    for (const edit of [
+      (raw) => (raw.prs[0].branch = value),
+      (raw) => (raw.prs[0].title = value),
+      (raw) => (raw.repo.base = value),
+      (raw) => (raw.repo.github = value),
+    ]) {
+      assert.doesNotThrow(() => named('my-lib-docs', edit), JSON.stringify(value))
+      assert.doesNotThrow(() => named(7, edit), JSON.stringify(value))
+    }
+  }
+})
+
+test('loadManifest: a rollout that its repository names is an invalid manifest', () => {
+  const dir = makeRollout({ manifest: { rollout: 'widgets' } })
+
+  assert.throws(
+    () => loadManifest(dir),
+    (error) =>
+      error.message.startsWith('invalid manifest') &&
+      error.message.includes(
+        'repo.github example/widgets names the rollout widgets, and the guard refuses every command that does: rename the rollout',
+      ),
+  )
+})

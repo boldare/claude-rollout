@@ -5,7 +5,7 @@ import { closeSync, copyFileSync, mkdirSync, mkdtempSync, openSync, symlinkSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { check, decide, isEntry } from '../hooks/guard-bash.mjs'
+import { check, decide, isEntry, rolloutNamePattern } from '../hooks/guard-bash.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { guardSelfTest } from '../lib/preflight.mjs'
 import { guardCommand } from '../lib/settings.mjs'
@@ -902,5 +902,39 @@ test('agent repo: padded lines are decided', () => {
       assert.doesNotMatch(result.stderr, /16384/, `${name}, ${role}`)
       assert.match(result.stderr, reason, `${name}, ${role}`)
     }
+  }
+})
+
+test('rolloutNamePattern: refuses exactly the names check() refuses', () => {
+  const create = (title) =>
+    `gh pr create --base main --head docs/p1 --title "${title}" --label "rollout:my-lib-docs" --body-file /tmp/body.md`
+
+  const push = (branch) => ({ command: `git push -u origin ${branch}`, branch, value: branch })
+  const rows = [
+    { ...push('docs/my-lib-docs'), refused: true },
+    { ...push('my-lib-docs/p1'), refused: true },
+    { ...push('feat/my-lib-docs/p1'), refused: true },
+    { ...push('my-lib-docs-p1'), refused: false },
+    { ...push('my-lib-docsy'), refused: false },
+    { command: create('docs: my-lib-docs site'), value: 'docs: my-lib-docs site', refused: true },
+    { command: create('docs: my-lib-docs-p1 site'), value: 'docs: my-lib-docs-p1 site', refused: false },
+    { command: 'git rebase origin/my-lib-docs', value: 'my-lib-docs', refused: true },
+    { command: 'git rebase origin/main', name: 'main', value: 'main', refused: true },
+    { command: 'gh api repos/example/demo/pulls/1', name: 'demo', repo: 'example/demo', value: 'example/demo', refused: true },
+    { command: 'gh api repos/demo/site/pulls/1', name: 'demo', repo: 'demo/site', value: 'demo/site', refused: true },
+    {
+      command: 'gh api repos/example/demo-site/pulls/1',
+      name: 'demo',
+      repo: 'example/demo-site',
+      value: 'example/demo-site',
+      refused: false,
+    },
+  ]
+
+  for (const { command, value, refused, name = 'my-lib-docs', repo = 'o/r', branch = 'docs/p1' } of rows) {
+    const expected = refused ? 'the rollout control plane, its hooks and git hook settings are off limits to agents' : null
+
+    assert.equal(rolloutNamePattern(name).test(value), refused, `${name}: ${value}`)
+    assert.equal(check(command, 'worker', branch, { name, repo }), expected, command)
   }
 })

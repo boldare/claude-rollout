@@ -166,7 +166,12 @@ prs:
                   <code>ci-is-red</code>, <code>brief-questions</code>, <code>repeated-errors</code>). Under <code>merge: manual</code> the
                   one verified PR to merge carries <code>ready-to-merge</code> and the ones that wait for it <code>queued</code>. The driver
                   reads the labels the PR carries, so one removed or added by hand is put right on the next tick. They only inform: a label
-                  GitHub refuses never stops the rollout.
+                  GitHub refuses never stops the rollout. No PR branch or title, <code>repo.base</code> or <code>repo.github</code> may name
+                  the rollout, because the guard refuses every agent command that does. A value names it when the name stands at its start
+                  or after a space, <code>/</code>, a quote or <code>=</code>, and no letter, digit, <code>_</code>, <code>.</code> or
+                  <code>-</code> follows. So <code>docs/my-lib-docs</code> names <code>my-lib-docs</code>, and
+                  <code>my-lib-docs-p1</code> does not. Pick a distinctive name: a rollout called <code>test</code> would also refuse
+                  <code>npm test</code>.
                 </td>
               </tr>
               <tr id="manifest-model">
@@ -249,7 +254,8 @@ prs:
                 <td>yes</td>
                 <td>
                   <code>owner/name</code> on GitHub. Preflight fails unless the clone's <code>origin</code> is this repository on
-                  github.com. The driver passes it to every gh call as <code>GH_REPO</code>.
+                  github.com. The driver passes it to every gh call as <code>GH_REPO</code>. Neither the owner nor the name may be the
+                  rollout's name.
                 </td>
               </tr>
               <tr id="repo-base">
@@ -257,7 +263,10 @@ prs:
                 <td>string</td>
                 <td><code>main</code></td>
                 <td>no</td>
-                <td>The branch every PR targets. After each merge the driver watches its checks and halts when they turn red.</td>
+                <td>
+                  The branch every PR targets. After each merge the driver watches its checks and halts when they turn red. It must not name
+                  the rollout, and that includes the default <code>main</code>.
+                </td>
               </tr>
               <tr id="repo-public">
                 <td>public</td>
@@ -676,14 +685,17 @@ prs:
                 <td>string</td>
                 <td>–</td>
                 <td>yes, unique</td>
-                <td>The PR's branch. It is the only branch its agents may push to.</td>
+                <td>The PR's branch. It is the only branch its agents may push to. No segment may be the rollout's name.</td>
               </tr>
               <tr id="pr-title">
                 <td>title</td>
                 <td>string</td>
                 <td>–</td>
                 <td>yes</td>
-                <td>The PR title. The merge commit's subject is the PR's title on GitHub plus <code>(#N)</code>, with an empty body.</td>
+                <td>
+                  The PR title. The merge commit's subject is the PR's title on GitHub plus <code>(#N)</code>, with an empty body. It must
+                  not name the rollout as a word.
+                </td>
               </tr>
               <tr id="pr-brief">
                 <td>brief</td>
@@ -827,6 +839,10 @@ prs:
           </li>
           <li>Every <code>changeset</code> is a known bump or <code>none</code>, and none is above <code>policy.maxBump</code>.</li>
           <li><code>deps</code> is a list, every dependency names a known PR, and there is no cycle.</li>
+          <li>
+            No PR branch or title, <code>repo.base</code> (the default <code>main</code> included) or <code>repo.github</code> names the
+            rollout, because the guard refuses every agent command that does.
+          </li>
         </ul>
 
         <p>

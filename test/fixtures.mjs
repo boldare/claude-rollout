@@ -229,7 +229,7 @@ function sampleManifest(dir, policy) {
 
   return {
     rollout: 'demo',
-    repo: { path: join(dir, 'repo'), github: 'example/demo', requiredChecks: ['test'] },
+    repo: { path: join(dir, 'repo'), github: 'example/widgets', requiredChecks: ['test'] },
     policy,
     briefing: { sources: [{ title: 'Plan', path: join(dir, 'plan.md'), kind: 'markdown' }] },
     prs: [pr('A1'), pr('A2', { deps: ['A1'] }), pr('A3')],

@@ -380,7 +380,7 @@ function alert(overrides = {}) {
     path: 'bin/rollout.mjs',
     line: 357,
     message: 'This shell command depends on an uncontrolled absolute path.',
-    url: 'https://github.com/example/demo/security/code-scanning/4',
+    url: 'https://github.com/example/widgets/security/code-scanning/4',
     sha: 'abc1234def',
     ...overrides,
   }
@@ -391,7 +391,7 @@ function scanned(alerts, baseOpen = [], overrides = {}) {
 }
 
 const ALERT_REASON =
-  'CodeQL js/shell-command-injection-from-environment (medium) bin/rollout.mjs:357: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4'
+  'CodeQL js/shell-command-injection-from-environment (medium) bin/rollout.mjs:357: This shell command depends on an uncontrolled absolute path. https://github.com/example/widgets/security/code-scanning/4'
 
 const NONE = { action: 'none', reasons: [] }
 
@@ -419,7 +419,7 @@ test('codeScanningFindings: without a security level, error ranks as medium and 
   assert.deepEqual(codeScanningFindings(manifest, scanned([error])), {
     action: 'fix',
     reasons: [
-      'CodeQL js/shell-command-injection-from-environment (medium) ?:?: This shell command depends on an uncontrolled absolute path. https://github.com/example/demo/security/code-scanning/4',
+      'CodeQL js/shell-command-injection-from-environment (medium) ?:?: This shell command depends on an uncontrolled absolute path. https://github.com/example/widgets/security/code-scanning/4',
     ],
   })
 
