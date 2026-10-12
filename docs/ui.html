@@ -554,9 +554,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             and goes away when that run ends.
           </li>
           <li>
-            <strong>title</strong> is the PR's title from the manifest. Below it, in grey, the first line of the PR's section in the plan,
-            so you can tell which slice of the plan the PR is. Hover it for the source and the section heading. See
-            <a href="#view-plan">Plan</a> for how a section is found.
+            <strong>title</strong> is the PR's title from the manifest. Below it, in grey, the first line of text in the PR's section in the
+            plan, without markdown, so you can tell which slice of the plan the PR is. Headings, code and rules are skipped. Hover it for
+            the source and the section heading. See <a href="#view-plan">Plan</a> for how a section is found.
           </li>
           <li><strong>GitHub</strong> links to the PR once the implementer opened it.</li>
           <li><strong>deps</strong> lists the dependencies with their own state.</li>
@@ -771,7 +771,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <ul>
           <li>
             <strong>A PR's section</strong> starts at a heading that begins with the PR id, like <code>### P3 feat: the events API</code> or
-            <code>## PR P3: events API</code>, and runs to the next heading of the same or a higher level. P1 never matches P10, and
+            <code>## PR P3: events API</code>, and runs to the next heading of the same or a higher level. P1 never matches P10 or P1.1, and
             headings inside code fences do not count. The UI looks in the sources the PR's brief writer gets, in manifest order, and takes
             the first match.
           </li>
