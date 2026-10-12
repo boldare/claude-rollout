@@ -54,6 +54,10 @@ policy:
   attempts: { implement: 2, fix: 4, verify: 3 }
   timeouts: { implement: 240, fix: 120, verify: 90 }
 
+# Checks before the verifier, on top of CI, the policy and code scanning.
+# scope: true sends back files outside a PR's scope that its READY report does not list in deviations.
+# gates: { preVerify: { scope: true } }
+
 prs:
   - id: P1
     branch: feat/config-loader

@@ -553,13 +553,19 @@
                 <td class="nowrap"><span class="badge state state-ready_claimed">ready_claimed</span></td>
                 <td>
                   The driver checks the claim itself. It re-reads the PR head, waits for CI on that exact SHA, then applies the rollout
-                  policy to the diff. Then it reads the new code scanning alerts on the head.
+                  policy to the diff. Then it reads the new code scanning alerts on the head. With
+                  <a href="manifest.html#gates-preVerify-scope"><code>gates.preVerify.scope</code></a
+                  >, it then checks that every changed file outside the PR's scope is listed in the READY report's <code>deviations</code>.
+                  Each check with a result logs one <code>gate-check</code> event with the item (<code>ci</code>, <code>policy</code>,
+                  <code>code-scanning</code>, <code>scope</code>), pass or fail, the short SHA and short evidence. The same result for the
+                  same head is logged once.
                 </td>
                 <td>
                   A note that still waits for the implementer: <code>needs_fix</code>, before any check. CI green, no policy violation, no
-                  new alert and a free slot: <code>verifying</code>. CI red, CI still unsettled after
+                  new alert, no undeclared file out of scope and a free slot: <code>verifying</code>. CI red, CI still unsettled after
                   <a href="manifest.html#policy-ciStallMinutes"><code>ciStallMinutes</code></a
-                  >, a violation or a new alert: <code>needs_fix</code>. A new alert under
+                  >, a violation or a new alert: <code>needs_fix</code>. With the scope gate on, an undeclared file out of scope:
+                  <code>needs_fix</code>. A new alert under
                   <a href="manifest.html#repo-codeScanning"><code>codeScanning.action: block</code></a
                   >: <code>blocked</code>. An alert from an analysis of an older commit: it stays here and waits for the analysis of the
                   head.

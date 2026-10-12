@@ -119,6 +119,10 @@ policy:
   attempts: { implement: 2, fix: 4, verify: 3 }
   timeouts: { implement: 240, fix: 120, verify: 90 }
 
+<span class="dim"># Checks before the verifier, on top of CI, the policy and code scanning.</span>
+<span class="dim"># scope: true sends back files outside a PR's scope that its READY report does not list in deviations.</span>
+<span class="dim"># gates: { preVerify: { scope: true } }</span>
+
 prs:
   - id: P1
     branch: feat/config-loader
@@ -219,6 +223,13 @@ prs:
                 <td>see below</td>
                 <td>no</td>
                 <td>Slots, the merge mode, approvals, attempts, timeouts and budgets. See <a href="#policy">policy</a>.</td>
+              </tr>
+              <tr id="manifest-gates">
+                <td>gates</td>
+                <td>object</td>
+                <td>none</td>
+                <td>no</td>
+                <td>Extra checks the driver runs before a stage of a PR. See <a href="#gates">gates</a>.</td>
               </tr>
               <tr id="manifest-prs">
                 <td>prs</td>
@@ -659,6 +670,40 @@ prs:
           </table>
         </div>
 
+        <h2 id="gates">gates <a class="anchor" href="#gates" aria-label="Link to this section">#</a></h2>
+
+        <p>Every key is optional. Without <code>gates</code> the driver runs only its usual checks.</p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>type</th>
+                <th>default</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="gates-preVerify-scope">
+                <td>preVerify.scope</td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>
+                  After CI, the rollout policy and code scanning pass, and before the verifier starts, a changed file outside the PR's
+                  <a href="#pr-scope">scope</a> and <code>repo.alwaysInScope</code> sends the PR back to the implementer as
+                  <code>out of scope</code>, unless the READY report lists it in <code>deviations</code>. Without a manifest
+                  <code>scope</code> the brief's expected files count. The note lists the files. A file listed in <code>deviations</code> by
+                  its exact path passes. The verifier still judges the reason. A PR with no scope and no expected files is never sent back.
+                  The send-back counts toward <code>policy.attempts.fix</code>. With or without <code>gates</code>, each check before the
+                  verifier logs a <code>gate-check</code> event (see <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>). Any
+                  other key under <code>gates</code> or <code>gates.preVerify</code> fails validation.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
         <h2 id="prs">prs <a class="anchor" href="#prs" aria-label="Link to this section">#</a></h2>
 
         <p>
@@ -765,8 +810,9 @@ prs:
                 <td>no</td>
                 <td>
                   The files this PR is expected to change. When empty, the expected files of a brief the driver wrote are used. Files
-                  outside the scope and
-                  <code>repo.alwaysInScope</code> do not block the PR. They are listed on the card and the PR page for your review.
+                  outside the scope and <code>repo.alwaysInScope</code> are listed on the card and the PR page for your review. Without
+                  <a href="#gates-preVerify-scope">gates.preVerify.scope</a> they do not block the PR. With it, a file the READY report does
+                  not list in <code>deviations</code> sends the PR back before the verifier.
                 </td>
               </tr>
               <tr id="pr-extra">
@@ -838,6 +884,10 @@ prs:
           </li>
           <li><code>repo.public</code>, when set, is a boolean.</li>
           <li><code>repo.baseQuietPaths</code>, when set, is a list of path globs.</li>
+          <li>
+            <code>gates</code>, when set, is a mapping whose only key is <code>preVerify</code>. <code>gates.preVerify</code>, when set, is
+            a mapping whose only key is <code>scope</code>, a boolean.
+          </li>
           <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
             <code>effort.brief</code>, when set, is a known level too.
@@ -928,7 +978,10 @@ prs:
               <tr>
                 <td>events.jsonl</td>
                 <td>driver</td>
-                <td>One JSON line per event: runs, gate decisions, merges, errors, rejected commands.</td>
+                <td>
+                  One JSON line per event: runs, the result of each check before the verifier, gate decisions, merges, errors, rejected
+                  commands.
+                </td>
               </tr>
               <tr>
                 <td>heartbeat</td>
