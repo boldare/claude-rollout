@@ -27,7 +27,7 @@ const PAGES = [
   'security.html',
 ]
 
-const TOP_LEVEL_FIELDS = ['rollout', 'model', 'claudeBin', 'repo', 'briefing', 'policy', 'prs']
+const TOP_LEVEL_FIELDS = ['rollout', 'model', 'claudeBin', 'repo', 'briefing', 'policy', 'gates', 'prs']
 
 function read(file) {
   return readFileSync(join(DOCS, file), 'utf8')
@@ -201,6 +201,7 @@ test('docs: every manifest field, from the defaults and the example, has its row
     ...TOP_LEVEL_FIELDS.map((key) => `manifest-${key}`),
     ...[...Object.keys(manifest.repo), ...Object.keys(example.repo)].map((key) => `repo-${key}`),
     ...[...Object.keys(manifest.policy), ...Object.keys(example.policy)].map((key) => `policy-${key}`),
+    ...Object.keys(manifest.gates.preVerify).map((key) => `gates-preVerify-${key}`),
     ...[...Object.keys(manifest.all[0]), ...example.prs.flatMap((pr) => Object.keys(pr))]
       .filter((key) => key !== 'order')
       .map((key) => `pr-${key}`),

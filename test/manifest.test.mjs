@@ -196,6 +196,44 @@ test('validateManifest: repo.codeScanning, when set, is a mapping of a known act
   }
 })
 
+test('validateManifest: gates, when set, is a mapping of preVerify, a mapping of a boolean scope', () => {
+  const cases = [
+    [{ preVerify: { scope: true } }, []],
+    [{ preVerify: { scope: false } }, []],
+    [{ preVerify: {} }, []],
+    [{}, []],
+    [null, ['gates must be a mapping']],
+    [[], ['gates must be a mapping']],
+    ['scope', ['gates must be a mapping']],
+    [true, ['gates must be a mapping']],
+    [{ preMerge: {} }, ['gates: unknown key preMerge']],
+    [{ preVerify: null }, ['gates.preVerify must be a mapping']],
+    [{ preVerify: [] }, ['gates.preVerify must be a mapping']],
+    [{ preVerify: true }, ['gates.preVerify must be a mapping']],
+    [{ preVerify: { scope: true, tests: true } }, ['gates.preVerify: unknown key tests']],
+    [{ preVerify: { scope: 'yes' } }, ['gates.preVerify.scope must be true or false']],
+    [{ preVerify: { scope: null } }, ['gates.preVerify.scope must be true or false']],
+    [{ preVerify: { scope: 1 } }, ['gates.preVerify.scope must be true or false']],
+    [
+      { ready: {}, preVerify: { scope: 'on', brief: true } },
+      ['gates: unknown key ready', 'gates.preVerify: unknown key brief', 'gates.preVerify.scope must be true or false'],
+    ],
+  ]
+
+  for (const [gates, errors] of cases) {
+    const raw = structuredClone(base)
+
+    raw.gates = gates
+    assert.deepEqual(validateManifest(raw), errors, JSON.stringify(gates))
+  }
+})
+
+test('loadManifest: gates.preVerify.scope defaults to false, and true is kept', () => {
+  assert.deepEqual(loadManifest(makeRollout()).gates, { preVerify: { scope: false } })
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: {} } })).gates, { preVerify: { scope: false } })
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: { scope: true } } } })).gates, { preVerify: { scope: true } })
+})
+
 function named(rollout, edit) {
   const raw = structuredClone(base)
 
