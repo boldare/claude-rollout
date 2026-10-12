@@ -29,7 +29,7 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
    Compare with the expected results: {{expect}}
 
 6. Check the writing rules the implementer had: no comments that restate code or narrate the change, short prose, no semicolons in comments, docs, the changeset or the PR text. Report violations as `nonBlocking` unless they are widespread, then as blocking.
-7. Hunt for real defects the checklist may not name: behaviour regressions, edge cases the brief lists but the code misses, public API changes missing from the changeset, weakened or deleted tests, scope creep beyond the brief and the decisions, STYLE.md violations{{publicVerifyCheck}}.
+7. Hunt for real defects the checklist may not name: behaviour regressions, edge cases the brief lists but the code misses, public API changes missing from the changeset, weakened or deleted tests, claims in the PR text or in changed docs and comments that the code and the documented steps do not support on every path they cover, unchanged text in an edited file that the change contradicts, scope creep beyond the brief and the decisions, STYLE.md violations{{publicVerifyCheck}}.
 8. Verdict: PASS only when every checklist item passes, no re-checked finding is `open` and there is no blocking finding. Blocking means a real defect or an unmet item, stated with evidence. Style nits and suggestions go to `nonBlocking`.
 
 Report through the structured output, with `sha` set to the SHA you verified.
