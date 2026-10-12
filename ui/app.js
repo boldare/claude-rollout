@@ -8,6 +8,7 @@ import { renderEvents } from './events.js'
 import { money } from './format.js'
 import { renderHeader, renderViewTabs } from './header.js'
 import { driverStatus, mergeEvents } from './model.js'
+import { renderPlan } from './plan.js'
 import { renderTimeline } from './timeline.js'
 import { FOLLOW_MS, PAGE_SIZE, shouldFollow, transcriptRoute } from './transcript-model.js'
 
@@ -19,10 +20,10 @@ const NOTICE_MS = 15_000
 const STICK_PX = 40
 const OPEN_THE_URL = 'Open the URL that rollout ui printed in its terminal. It carries the access token.'
 const ROUTE_KEYS = ['r', 'view', 'pr', 'tab', 'state', 'id', 'kind', 'run', 'from']
-const VIEWS = ['board', 'timeline', 'events', 'costs']
-const TABS = ['overview', 'runs', 'verifier', 'review', 'brief']
+const VIEWS = ['board', 'timeline', 'events', 'costs', 'plan']
+const TABS = ['overview', 'runs', 'verifier', 'review', 'plan', 'brief']
 const DEFAULTS = { view: 'board', tab: 'overview' }
-const VIEW_RENDERERS = { board: renderBoard, timeline: renderTimeline, events: renderEvents, costs: renderCosts }
+const VIEW_RENDERERS = { board: renderBoard, timeline: renderTimeline, events: renderEvents, costs: renderCosts, plan: renderPlan }
 
 const token = new URLSearchParams(location.hash.slice(1)).get('t')
 const app = document.getElementById('app')
@@ -36,6 +37,7 @@ let listing = null
 let listTimer = null
 let listTicket = 0
 let detailTicket = 0
+let planTicket = 0
 let transcriptTicket = 0
 let transcriptBusy = false
 let followTimer = null
@@ -53,6 +55,7 @@ function freshSession(name) {
     problem: null,
     failure: null,
     detail: null,
+    plan: null,
     transcript: null,
     sending: false,
     notice: null,
@@ -135,6 +138,7 @@ function stopAll() {
   stopList()
   closeStream()
   detailTicket += 1
+  planTicket += 1
   document.title = 'rollout'
   showLine(OPEN_THE_URL)
 }
@@ -263,6 +267,7 @@ function follow(name) {
       current.state = state
       current.problem = null
       loadDetail()
+      loadPlan()
       recheckFollow({ fetchWhenStopped: true })
       scheduleRender()
     },
@@ -358,6 +363,51 @@ function loadDetail() {
   }
 
   fetchDetail(key, detailTicket)
+}
+
+// The plan file is not watched, so every state push reads it again while the view is open.
+function planKey() {
+  return route.r && !route.pr && route.view === 'plan' ? route.r : null
+}
+
+async function fetchPlan(key, ticket) {
+  try {
+    const { status, body } = await apiGet(token, apiPath(route.r, 'plan'))
+
+    if (ticket !== planTicket) {
+      return
+    }
+
+    if (status === 401) {
+      stopAll()
+      return
+    }
+
+    session.plan = { key, status, body }
+  } catch (error) {
+    if (ticket !== planTicket) {
+      return
+    }
+
+    session.plan = { key, status: 0, body: { error: `Cannot reach the server: ${error.message}` } }
+  }
+
+  scheduleRender()
+}
+
+function loadPlan() {
+  const key = planKey()
+  planTicket += 1
+
+  if (!key) {
+    return
+  }
+
+  if (session.plan?.key !== key) {
+    session.plan = { key, status: null, body: null }
+  }
+
+  fetchPlan(key, planTicket)
 }
 
 function transcriptKey() {
@@ -494,6 +544,7 @@ function context() {
     status: session.status,
     problem: session.problem,
     detail: session.detail,
+    plan: session.plan,
     transcript: session.transcript,
     readOnly: session.state?.readOnly !== false,
     sending: session.sending,
@@ -563,6 +614,7 @@ function onRoute() {
   }
 
   const previousKey = detailKey()
+  const previousPlan = planKey()
   const previousTranscript = transcriptKey()
   route = parseRoute(location.hash)
 
@@ -581,6 +633,10 @@ function onRoute() {
 
   if (detailKey() !== previousKey || (route.pr && !session.detail)) {
     loadDetail()
+  }
+
+  if (planKey() !== previousPlan) {
+    loadPlan()
   }
 
   if (transcriptKey() !== previousTranscript || (transcriptKey() && !session.transcript)) {

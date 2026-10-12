@@ -4,7 +4,7 @@ import { clock, duration, money } from './format.js'
 import { renderTranscript } from './transcript.js'
 import { estimateNote } from './transcript-model.js'
 
-const TABS = ['overview', 'runs', 'verifier', 'review', 'brief']
+const TABS = ['overview', 'runs', 'verifier', 'review', 'plan', 'brief']
 const RUN_HEADINGS = ['run', 'role', 'effort', 'start', 'duration', 'cost', 'result', 'denials', 'error']
 const CHECK_HEADINGS = ['item', 'status', 'evidence']
 const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
@@ -363,7 +363,35 @@ function renderBrief(pr) {
   )
 }
 
-const TAB_RENDERERS = { overview: renderOverview, runs: renderRuns, verifier: renderVerifier, review: renderReview, brief: renderBrief }
+function wholePlan(ctx) {
+  return wrap('p', link(ctx.linkWith({ view: 'plan', pr: null, tab: null }), 'The whole plan'))
+}
+
+function renderPlanTab(pr, ctx) {
+  if (!pr.plan) {
+    const hint =
+      'No briefing source has a section for this PR. A section starts with a heading that begins with the PR id, like "### P1 …".'
+
+    return wrap('div', element('p', hint, 'muted'), wholePlan(ctx))
+  }
+
+  return wrap(
+    'div',
+    element('h3', pr.plan.heading),
+    element('p', `from ${pr.plan.source}`, 'muted'),
+    textBlock(pr.plan.text || null, 'The section is empty.'),
+    wholePlan(ctx),
+  )
+}
+
+const TAB_RENDERERS = {
+  overview: renderOverview,
+  runs: renderRuns,
+  verifier: renderVerifier,
+  review: renderReview,
+  plan: renderPlanTab,
+  brief: renderBrief,
+}
 
 function problem(text, ctx) {
   return wrap('section', element('p', text, 'error'), link(ctx.linkWith({ pr: null, tab: null }), `back to ${ctx.route.view}`))

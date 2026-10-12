@@ -480,6 +480,18 @@ test('api: the list, a rollout state, events after N, a PR, and the errors', asy
   assert.equal(pr.briefText, '# A1\n')
   assert.equal(pr.notesText, null)
 
+  writeFileSync(join(root, 'demo', 'plan.md'), '# Plan\n\n## A1 the first slice\nWhy: it comes first.\n')
+
+  const plan = (await get(server, '/api/rollouts/demo/plan')).json()
+  assert.deepEqual(
+    plan.sources.map((source) => [source.title, source.kind, source.text]),
+    [['Plan', 'markdown', '# Plan\n\n## A1 the first slice\nWhy: it comes first.\n']],
+  )
+
+  assert.equal((await get(server, '/api/rollouts/demo/prs/A1')).json().plan.heading, 'A1 the first slice')
+  assert.equal((await get(server, '/api/rollouts/demo')).json().view.rows[0].plan.excerpt, 'Why: it comes first.')
+  assert.equal((await get(server, '/api/rollouts/nope/plan')).status, 404)
+
   const unknownPr = await get(server, '/api/rollouts/demo/prs/Z9')
   assert.equal(unknownPr.status, 404)
   assert.deepEqual(unknownPr.json(), { error: 'unknown PR' })
@@ -494,6 +506,7 @@ test('api: the list, a rollout state, events after N, a PR, and the errors', asy
     '/api',
     '/api/other',
     '/api/rollouts/demo/other',
+    '/api/rollouts/demo/plan/x',
     '/api/rollouts/demo/prs',
     '/api/rollouts/demo/prs/A1/x',
     '/api/rollouts/demo/runs',
