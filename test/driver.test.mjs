@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { createDriver, doneDetail } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { verifyPrompt } from '../lib/prompts.mjs'
 import { stageLabels } from '../lib/stage.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
@@ -2295,4 +2296,327 @@ test('tick: a label GitHub refuses is kept on the PR row, counts no error and is
 
   assert.equal(driver.ledger.prs.A1.stageLabelError, null)
   assert.equal(labelEdits(tools).length, 2)
+})
+
+const FIRST_ROUND = {
+  at: at(50),
+  items: [
+    { id: 'F1', text: 'cli.mjs:40 swallows the error.', answer: { outcome: 'fixed', action: 'It is logged at cli.mjs:42.' } },
+    { id: 'F2', text: 'The retry flag is not documented.', answer: { outcome: 'disputed', action: 'The brief keeps the flag internal.' } },
+  ],
+}
+
+const UNANSWERED = { ...FIRST_ROUND, items: FIRST_ROUND.items.map((item) => ({ ...item, answer: null })) }
+const NEW_FINDING = 'README.md:3 still names the old flag.'
+
+// A1 under verification of SHA, with the findings of the FAIL before it and
+// the implementer's answers. Its fake git shows a clean worktree at SHA.
+function recheckDriver(state = {}) {
+  const setup = tickDriver(
+    {
+      A1: {
+        state: 'verifying',
+        pr: 11,
+        author: 'demo-bot',
+        claimedSha: SHA,
+        sessionId: 'session-1',
+        attempts: { implement: 1, fix: 4, verify: 1, brief: 0 },
+        findings: FIRST_ROUND,
+        ...state,
+      },
+    },
+    {
+      rules: [
+        { tool: 'git', args: 'status --porcelain', stdout: '' },
+        { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+      ],
+    },
+  )
+
+  return { ...setup, pr: setup.manifest.prs.find((item) => item.id === 'A1'), entry: setup.driver.ledger.prs.A1 }
+}
+
+// The next verifier's FAIL on SHA, with `recheck` mapping each id to its status.
+function recheckVerdict(recheck, overrides = {}) {
+  return agentResult({
+    output: {
+      verdict: 'FAIL',
+      sha: SHA,
+      summary: 'A finding is still open.',
+      checklist: [{ item: 'docs updated', status: 'fail', evidence: 'README.md:3' }],
+      blocking: [NEW_FINDING],
+      nonBlocking: [],
+      recheck: Object.entries(recheck).map(([id, status]) => ({ id, status, evidence: `${id} is ${status} at a1a1a1a.` })),
+      ...overrides,
+    },
+  })
+}
+
+function rechecked(setup, result) {
+  return setup.driver.onDone(setup.pr, 'verify', result, { sha: SHA, run: 'A1-04-verify' })
+}
+
+test('verified: a disputed finding the next verifier still finds open escalates the PR, with no fix run', async () => {
+  const setup = recheckDriver({ pendingNote: 'Keep the README short.' })
+  const { manifest, entry, notices } = setup
+
+  await rechecked(
+    setup,
+    recheckVerdict({ F1: 'resolved', F2: 'open' }, { blocking: ['The retry flag is still not documented.', NEW_FINDING] }),
+  )
+
+  assert.equal(entry.state, 'escalated')
+  assert.equal(entry.escalation, 'disputed finding')
+  assert.deepEqual(stageLabels(entry), ['rollout-stage:escalated', 'rollout-reason:disputed-finding'])
+  assert.equal(
+    entry.lastError,
+    'the verifier still finds F2 open, which the implementer disputed: The retry flag is not documented. The implementer: The brief keeps the flag internal.',
+  )
+
+  assert.deepEqual(kindsSince(manifest), ['verify-done', 'escalated'])
+  assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'escalated', reason: 'disputed finding', findings: ['F2'] })
+  assert.equal(notices.length, 1)
+  assert.match(notices[0], /^A1: the verifier still finds F2 open, which the implementer disputed\. /)
+  assert.ok(notices[0].includes('rollout note A1') && notices[0].includes('rollout retry A1'), notices[0])
+
+  assert.equal(entry.attempts.fix, 4)
+  assert.equal(entry.verified, null)
+  assert.equal(entry.pendingNote, 'Keep the README short.')
+  assert.equal(entry.fixReason, 'verifier findings')
+  assert.ok(entry.fixNote.includes(`- F1: The retry flag is still not documented.\n- F2: ${NEW_FINDING}\n`), entry.fixNote)
+  assert.deepEqual(entry.findings.items, [
+    { id: 'F1', text: 'The retry flag is still not documented.', answer: null },
+    { id: 'F2', text: NEW_FINDING, answer: null },
+  ])
+
+  const [fixed, disputed] = FIRST_ROUND.items
+
+  assert.deepEqual(entry.verdict.recheck, [
+    { id: 'F1', status: 'resolved', evidence: 'F1 is resolved at a1a1a1a.', finding: fixed.text, answer: fixed.answer },
+    { id: 'F2', status: 'open', evidence: 'F2 is open at a1a1a1a.', finding: disputed.text, answer: disputed.answer },
+  ])
+})
+
+test('verified: a disputed finding the next verifier calls wrong never escalates', async () => {
+  const failing = recheckDriver()
+
+  await rechecked(failing, recheckVerdict({ F1: 'resolved', F2: 'wrong' }))
+
+  assert.equal(failing.entry.state, 'needs_fix')
+  assert.equal(failing.entry.fixReason, 'verifier findings')
+  assert.equal(failing.entry.escalation, null)
+  assert.deepEqual(kindsSince(failing.manifest), ['verify-done', 'needs-fix'])
+  assert.deepEqual(failing.notices, [])
+  assert.deepEqual(failing.entry.findings.items, [{ id: 'F1', text: NEW_FINDING, answer: null }])
+
+  const passing = recheckDriver()
+  const pass = { verdict: 'PASS', checklist: [{ item: 'docs updated', status: 'pass', evidence: 'README.md:3' }], blocking: [] }
+
+  await rechecked(passing, recheckVerdict({ F1: 'resolved', F2: 'wrong' }, pass))
+
+  assert.equal(passing.entry.state, 'verified')
+  assert.equal(passing.entry.findings, null)
+  assert.deepEqual(kindsSince(passing.manifest), ['verify-done', 'verified'])
+  assert.deepEqual(
+    passing.entry.verdict.recheck.map((item) => [item.id, item.status, item.finding]),
+    [
+      ['F1', 'resolved', FIRST_ROUND.items[0].text],
+      ['F2', 'wrong', FIRST_ROUND.items[1].text],
+    ],
+  )
+})
+
+test('verified: an open finding reported fixed or left unanswered, or a dispute the re-check leaves out, goes to a fix run', async () => {
+  const cases = [
+    { name: 'reported fixed', findings: FIRST_ROUND, recheck: { F1: 'open', F2: 'resolved' } },
+    { name: 'not answered', findings: UNANSWERED, recheck: { F1: 'open', F2: 'open' } },
+    { name: 'left out', findings: FIRST_ROUND, recheck: { F1: 'resolved' } },
+  ]
+
+  for (const { name, findings, recheck } of cases) {
+    const setup = recheckDriver({ findings })
+
+    await rechecked(setup, recheckVerdict(recheck))
+
+    assert.equal(setup.entry.state, 'needs_fix', name)
+    assert.equal(setup.entry.fixReason, 'verifier findings', name)
+    assert.equal(setup.entry.attempts.fix, 4, name)
+    assert.deepEqual(kindsSince(setup.manifest), ['verify-done', 'needs-fix'], name)
+    assert.deepEqual(setup.notices, [], name)
+  }
+})
+
+test('verified: a PASS the driver discards, for a stale SHA or from a touched tree, keeps the findings for the next verifier', async () => {
+  const stale = recheckDriver()
+  const touched = recheckDriver()
+  const pass = { verdict: 'PASS', blocking: [] }
+
+  touched.tools.answer([
+    { tool: 'git', args: 'status --porcelain', stdout: ' M lib/a.mjs' },
+    { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+    { tool: 'git', args: 'reset', stdout: '' },
+    { tool: 'git', args: 'clean', stdout: '' },
+  ])
+
+  await rechecked(stale, recheckVerdict({ F1: 'resolved', F2: 'wrong' }, { ...pass, sha: NEW_HEAD }))
+  await rechecked(touched, recheckVerdict({ F1: 'resolved', F2: 'wrong' }, pass))
+
+  assert.deepEqual(kindsSince(stale.manifest), ['verify-done', 'verify-stale'])
+  assert.deepEqual(kindsSince(touched.manifest), ['verify-done', 'verifier-touched-tree'])
+
+  for (const setup of [stale, touched]) {
+    assert.equal(setup.entry.state, 'ready_claimed')
+    assert.deepEqual(setup.entry.findings, FIRST_ROUND)
+  }
+})
+
+test('verified: a verdict without recheck is recorded with an empty one', async () => {
+  const setup = recheckDriver({ findings: null })
+  const { recheck: _, ...output } = recheckVerdict({}).output
+
+  await rechecked(setup, agentResult({ output }))
+
+  assert.deepEqual(setup.entry.verdict.recheck, [])
+  assert.equal(setup.entry.state, 'needs_fix')
+  assert.deepEqual(setup.entry.findings.items, [{ id: 'F1', text: NEW_FINDING, answer: null }])
+})
+
+// A1 in a fix run after a FAIL whose findings are not answered yet.
+function answeringDriver(rules, state = {}) {
+  const setup = tickDriver(
+    { A1: { state: 'fixing', pr: 11, claimedSha: SHA, sessionId: 'session-1', findings: UNANSWERED, ...state } },
+    { rules },
+  )
+
+  return { ...setup, pr: setup.manifest.prs.find((item) => item.id === 'A1'), entry: setup.driver.ledger.prs.A1 }
+}
+
+function readyReport(headSha, addressed) {
+  return agentResult({ output: { status: 'READY', pr: 11, headSha, summary: 'Done.', ...(addressed ? { addressed } : {}) } })
+}
+
+const ANSWERS = [
+  { id: 'F1', action: 'It is logged at cli.mjs:42.', outcome: 'fixed' },
+  { id: 'F2', action: 'The brief keeps the flag internal.', outcome: 'disputed' },
+]
+
+test('claimReport: answers from one READY report survive a later one with none, and reach the next verifier', async () => {
+  const { manifest, driver, pr, entry } = answeringDriver([viewRule({ headRefOid: NEW_HEAD })])
+  const ciFixed = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3'
+
+  await driver.onDone(pr, 'fix', readyReport(NEW_HEAD, ANSWERS), { run: 'A1-03-fix' })
+
+  assert.equal(entry.state, 'ready_claimed')
+
+  // CI was red on that head, and the fix run after it answered nothing.
+  entry.state = 'fixing'
+  await driver.onDone(pr, 'fix', readyReport(ciFixed), { run: 'A1-04-fix' })
+
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.claimedSha, ciFixed)
+  assert.deepEqual(entry.findings, FIRST_ROUND)
+
+  const prompt = verifyPrompt(manifest, pr, entry, ciFixed)
+
+  assert.ok(prompt.includes('### F1\n\nFinding:\n\ncli.mjs:40 swallows the error.\n\nAnswer (fixed):\n\nIt is logged at cli.mjs:42.'))
+  assert.ok(
+    prompt.includes('### F2\n\nFinding:\n\nThe retry flag is not documented.\n\nAnswer (disputed):\n\nThe brief keeps the flag internal.'),
+  )
+})
+
+test('claimReport: a READY report sent back for GitHub, or parked during an outage, still answers the findings', async () => {
+  const cases = [
+    { state: 'needs_fix', stderr: 'GraphQL: Could not resolve to a PullRequest with the number of 11.' },
+    { state: 'interrupted', stderr: 'HTTP 502: Bad Gateway' },
+  ]
+
+  for (const { state, stderr } of cases) {
+    const { driver, pr, entry } = answeringDriver([{ tool: 'gh', args: 'pr view 11', code: 1, stderr }])
+
+    await driver.onDone(pr, 'fix', readyReport(NEW_HEAD, ANSWERS), { run: 'A1-03-fix' })
+
+    assert.equal(entry.state, state)
+    assert.deepEqual(entry.findings, FIRST_ROUND, state)
+  }
+})
+
+test('claimReport: a finding id in addressed never reaches GitHub, and the review comment is answered as before', async () => {
+  const { manifest, driver, pr, entry, tools } = answeringDriver(
+    [viewRule({ headRefOid: NEW_HEAD }), { tool: 'gh', args: 'api -X POST', stdout: '{}' }],
+    { feedbackInFix: [{ id: 'inline-5', commentId: 55, body: 'Rename this helper.' }] },
+  )
+
+  const addressed = [{ id: 'inline-5', action: 'Renamed it to parseTicket.' }, ANSWERS[0]]
+  const reply = `api -X POST repos/${manifest.repo.github}/pulls/11/comments/55/replies -f body=Renamed it to parseTicket. (b2b2b2b)`
+
+  await driver.onDone(pr, 'fix', readyReport(NEW_HEAD, addressed), { run: 'A1-03-fix' })
+
+  const calls = tools
+    .calls()
+    .filter((call) => call.tool === 'gh')
+    .map((call) => call.args.join(' '))
+
+  const writes = calls.filter((line) => !line.startsWith('pr view 11 '))
+
+  assert.equal(writes.length, 1)
+  assert.ok(writes[0].startsWith(reply), writes[0])
+  assert.ok(
+    calls.every((line) => !line.includes('F1') && !line.includes(ANSWERS[0].action)),
+    calls.join('\n'),
+  )
+
+  assert.deepEqual(entry.findings.items[0].answer, { outcome: 'fixed', action: ANSWERS[0].action })
+  assert.deepEqual(
+    entry.feedbackHandled.map((item) => [item.id, item.action]),
+    [['inline-5', 'Renamed it to parseTicket.']],
+  )
+})
+
+test('note: on a PR escalated over a dispute, the findings go to a fix run with the note, recorded as the answer to the dispute', async () => {
+  const setup = recheckDriver()
+  const { manifest, driver, pr, entry } = setup
+
+  await rechecked(setup, recheckVerdict({ F1: 'resolved', F2: 'open' }))
+
+  const dispute = entry.lastError
+  const findings = entry.fixNote
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Document the flag in the README.' }), [
+    { id: 'A1', kind: 'needs-fix', reason: 'verifier findings' },
+    { id: 'A1', kind: 'note-queued', state: 'needs_fix' },
+  ])
+
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixReason, 'verifier findings')
+  assert.equal(entry.fixNote, findings)
+  assert.ok(findings.includes(`- F1: ${NEW_FINDING}`), findings)
+  assert.equal(entry.pendingNote, 'Document the flag in the README.')
+  assert.equal(entry.attempts.fix, 3)
+  assert.match(dispute, /^the verifier still finds F2 open, which the implementer disputed: The retry flag is not documented\./)
+  assert.deepEqual(
+    entry.noteHistory.map(({ at: _, ...note }) => note),
+    [{ by: 'maintainer', kind: 'disputed finding', question: dispute, text: 'Document the flag in the README.' }],
+  )
+
+  assert.ok(
+    verifyPrompt(manifest, pr, entry, SHA).includes(
+      `### 1. From the maintainer, on disputed finding\n\nQuestion:\n\n${dispute}\n\nAnswer:\n\nDocument the flag in the README.`,
+    ),
+  )
+})
+
+test('retry: a PR escalated over a dispute goes to a fix run with the findings', async () => {
+  const setup = recheckDriver({ interruptedRole: 'verify' })
+  const { manifest, driver, entry } = setup
+
+  await rechecked(setup, recheckVerdict({ F1: 'resolved', F2: 'open' }))
+
+  const findings = entry.fixNote
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'needs_fix' }])
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixReason, 'verifier findings')
+  assert.equal(entry.fixNote, findings)
+  assert.equal(entry.interruptedRole, null)
+  assert.deepEqual(entry.attempts, { implement: 0, fix: 0, verify: 0, brief: 0 })
 })

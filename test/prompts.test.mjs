@@ -2,13 +2,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { freshPr } from '../lib/ledger.mjs'
+import { freshPr, recordAnswers, recordFindings } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import {
   briefReviewPrompt,
   briefWritePrompt,
   codeScanningNote,
   delegatePrompt,
+  findingsNote,
   implementPrompt,
   resumeFreshPrompt,
   verifyPrompt,
@@ -131,7 +132,7 @@ test('prompts: every step starts its own line and the recipe sits indented under
   const verify = verifyPrompt(manifest, pr, STATE, 'a1a1a1a')
 
   assert.deepEqual(stepNumbers(implement), [1, 2, 3, 4, 5, 6, 7, 8])
-  assert.deepEqual(stepNumbers(verify), [1, 2, 3, 4, 5, 6, 7])
+  assert.deepEqual(stepNumbers(verify), [1, 2, 3, 4, 5, 6, 7, 8])
   assert.ok(implement.includes('\n   1. `npm ci`\n   2. `npm test`\n'))
   assert.ok(verify.includes('\n   1. `npm ci`\n   2. `npm test`\n'))
   assert.ok(briefWritePrompt(manifest, pr, STATE).includes('\n  1. `npm ci`\n  2. `npm test`\n'))
@@ -323,4 +324,108 @@ test('codeScanningNote: a false positive goes to the maintainer as a code-scanni
   }
 
   assert.equal(note.includes('needs-decision'), false)
+})
+
+const FINDINGS = ['README.md:3 still names the old flag.', 'No test covers an empty list.', 'cli.mjs:40 swallows the error.']
+
+// A1's state after a FAIL with FINDINGS, where the implementer fixed F1,
+// left F2 unanswered and disputed F3.
+function answered(state = STATE) {
+  const entry = structuredClone(state)
+
+  recordFindings(entry, FINDINGS, '2026-09-01T10:00:00.000Z')
+  recordAnswers(entry, [
+    { id: 'F1', action: 'Renamed it in README.md:3.', outcome: 'fixed' },
+    { id: 'F3', action: 'The error is logged at cli.mjs:42.', outcome: 'disputed' },
+  ])
+
+  return entry
+}
+
+test('findingsNote: numbers the findings in order, lists the failed checklist items and asks for an answer to each', () => {
+  const checklist = [
+    { item: 'tests pass', status: 'pass', evidence: 'npm test: 12 pass' },
+    { item: 'docs updated', status: 'fail', evidence: 'README.md:3' },
+    { item: 'CI green', status: 'unverifiable', evidence: 'no run yet' },
+  ]
+
+  const note = findingsNote(answered().findings.items, checklist, '')
+  const order = ['- F1: README.md:3', '- F2: No test', '- F3: cli.mjs:40'].map((part) => note.indexOf(part))
+
+  assert.ok(note.startsWith('An independent verifier rejected the PR. Blocking findings:\n- F1: '), note)
+  assert.ok(order[0] > -1, note)
+  assert.deepEqual(
+    order,
+    [...order].sort((left, right) => left - right),
+  )
+
+  assert.ok(note.includes('Failed checklist items:\n- docs updated: fail: README.md:3\n- CI green: unverifiable: no run yet\n'), note)
+  assert.equal(note.includes('tests pass'), false)
+
+  for (const part of [
+    '`addressed`',
+    '`outcome` `fixed`',
+    '`outcome` `disputed`',
+    'A disputed finding it still finds open goes to the maintainer.',
+  ]) {
+    assert.ok(note.includes(part), part)
+  }
+
+  assert.equal(note.includes('left this in the worktree'), false)
+  assert.ok(findingsNote([], checklist, '').includes('Blocking findings:\n(none)\n'))
+
+  const touched = findingsNote([], [], 'M lib/a.mjs')
+
+  assert.ok(touched.includes('Failed checklist items:\n(none)\n'), touched)
+  assert.ok(touched.endsWith('\n\nThe verifier left this in the worktree (it has been reset):\nM lib/a.mjs'), touched)
+})
+
+test('prompts: the verifier re-checks the previous findings after the brief and the decisions, as claims with their answers', () => {
+  const manifest = loadManifest(makeRollout())
+  const text = verifyPrompt(manifest, manifest.all[0], answered({ ...STATE, noteHistory: NOTE_HISTORY }), 'a1a1a1a')
+  const brief = text.indexOf('## Brief for A1')
+  const decisions = text.indexOf('## Decisions after the brief')
+  const section = text.indexOf('## Findings to re-check')
+  const order = ['### F1', '### F2', '### F3'].map((heading) => text.indexOf(heading))
+
+  assert.equal(text.split('## Findings to re-check').length, 2)
+  assert.ok(brief > -1)
+  assert.ok(decisions > brief)
+  assert.ok(section > decisions)
+  assert.ok(order[0] > section)
+  assert.deepEqual(
+    order,
+    [...order].sort((left, right) => left - right),
+  )
+
+  for (const part of [
+    'They are claims to check, not decisions.',
+    '### F1\n\nFinding:\n\nREADME.md:3 still names the old flag.\n\nAnswer (fixed):\n\nRenamed it in README.md:3.',
+    '### F2\n\nFinding:\n\nNo test covers an empty list.\n\nNo answer from the implementer.',
+    '### F3\n\nFinding:\n\ncli.mjs:40 swallows the error.\n\nAnswer (disputed):\n\nThe error is logged at cli.mjs:42.',
+  ]) {
+    assert.ok(text.indexOf(part, section) > section, part)
+  }
+
+  for (const step of [
+    '\n4. When the prompt ends with findings to re-check, check each one yourself at this SHA and report its id in `recheck`, with evidence.',
+    '\n   - `open`: the defect is still there, whatever the answer says. An `open` finding also goes into `blocking`.\n',
+    '\n8. Verdict: PASS only when every checklist item passes, no re-checked finding is `open` and there is no blocking finding.',
+  ]) {
+    assert.ok(text.includes(step), step)
+  }
+
+  assert.equal(text.includes('{{'), false)
+})
+
+test('prompts: with no findings to re-check the verifier gets no such section', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+
+  for (const entry of [STATE, freshPr(), { ...STATE, findings: { at: '2026-09-01T10:00:00.000Z', items: [] } }]) {
+    const text = verifyPrompt(manifest, pr, entry, 'a1a1a1a')
+
+    assert.equal(text.includes('## Findings to re-check'), false)
+    assert.equal(text.includes('{{'), false)
+  }
 })
