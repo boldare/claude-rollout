@@ -1,10 +1,11 @@
-/* Styles of the docs site. No scripts, no inline styles, no web fonts: the same rules as the UI. */
+/* Styles of the docs site. No scripts, no inline styles, no web fonts: the same rules as the UI.
+   TT Commons shows where it is installed, like in the UI. */
 
 /* Tokens, copied from ui/style.css so the docs and the UI feel like one family. test/docs.test.mjs keeps them equal. */
 
 :root {
   color-scheme: light dark;
-  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-ui: 'TT Commons', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   --bg: #f8f8f8;
@@ -24,17 +25,17 @@
   --on-highlight: #242424;
 
   --accent: #6a57e0;
-  --pass: #2f9e5f;
-  --fail: #d04747;
-  --warn: #b0760c;
+  --pass: #038075;
+  --fail: #bc4f52;
+  --warn: #8a6d00;
   --skip: #b0b0b0;
 
-  --brief: #c98a12;
-  --implement: #4a63d8;
-  --fix: #2f9e5f;
-  --verify: #d0652f;
-  --delegate: #15899a;
-  --merged: #7b5bd6;
+  --brief: #a07a00;
+  --implement: #6a57e0;
+  --fix: #038075;
+  --verify: #5a85ad;
+  --delegate: #4f4f4f;
+  --merged: #4f4f4f;
 
   --tint: color-mix(in srgb, var(--accent) 7%, transparent);
   --tint-strong: color-mix(in srgb, var(--accent) 13%, transparent);
@@ -65,17 +66,17 @@
     --hover: #383838;
 
     --accent: #a497f0;
-    --pass: #4fbb7d;
-    --fail: #e8756f;
-    --warn: #d3a24a;
+    --pass: #5acbbc;
+    --fail: #f68282;
+    --warn: #f2da3a;
     --skip: #666666;
 
-    --brief: #d3a24a;
-    --implement: #7f95f7;
-    --fix: #4fbb7d;
-    --verify: #e38a5c;
-    --delegate: #45bccb;
-    --merged: #b59bff;
+    --brief: #f2da3a;
+    --implement: #a497f0;
+    --fix: #5acbbc;
+    --verify: #b2cbde;
+    --delegate: #c9c9c9;
+    --merged: #c9c9c9;
 
     --tint: color-mix(in srgb, var(--accent) 10%, transparent);
     --tint-strong: color-mix(in srgb, var(--accent) 18%, transparent);
@@ -102,7 +103,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 400 13px/1.5 var(--font-ui);
+  font: 400 14px/1.5 var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -161,14 +162,29 @@ code {
 }
 
 .wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
   color: var(--ink);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.015em;
 }
 
 .wordmark:hover {
   text-decoration: none;
+}
+
+/* A picture, not the UI's CSS mask: a mask image does not load from file://, and the docs open offline. */
+.logo img {
+  display: block;
+  width: 100px;
+  height: 12px;
+}
+
+.logo + span {
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
 }
 
 .wordmark .me {
@@ -181,7 +197,7 @@ code {
   align-items: center;
   gap: 6px 14px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .facts > * {
@@ -253,7 +269,7 @@ code {
   margin: 0 0 6px;
   padding: 0 9px;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
 }
 
@@ -264,7 +280,7 @@ code {
   padding: 4px 9px;
   border-radius: var(--r-sm);
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .sidebar a:hover,
@@ -298,7 +314,7 @@ code {
 
 .toc a {
   padding: 3px 9px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* The page */
@@ -308,7 +324,7 @@ code {
   max-width: 50rem;
   margin: 0 auto;
   padding: 28px 36px 64px;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.65;
 }
 
@@ -323,7 +339,7 @@ code {
 
 .page-head h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 23px;
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.3;
@@ -339,14 +355,14 @@ code {
 .lead {
   margin: 16px 0 0;
   color: var(--ink-2);
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .page h2 {
   margin: 44px 0 10px;
   padding-top: 22px;
   border-top: 1px solid var(--line-soft);
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.35;
@@ -354,7 +370,7 @@ code {
 
 .page h3 {
   margin: 28px 0 6px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
 }
@@ -362,7 +378,7 @@ code {
 .page h4 {
   margin: 20px 0 4px;
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -407,7 +423,7 @@ code {
 .eyebrow {
   margin: 22px 0 8px;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
 }
 
@@ -481,14 +497,14 @@ td {
 th {
   border-bottom-color: var(--line);
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
   line-height: 1.5;
   white-space: nowrap;
 }
 
 td {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.55;
 }
 
@@ -532,7 +548,7 @@ dl.kv {
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--panel);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 dl.kv dt {
@@ -570,13 +586,13 @@ a.card:hover {
   align-items: center;
   gap: 8px;
   margin: 0 0 4px;
-  font-size: 13.5px;
+  font-size: 14.5px;
 }
 
 .card p {
   margin: 0;
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.55;
 }
 
@@ -598,7 +614,7 @@ a.card:hover {
   border: 1px solid color-mix(in srgb, var(--tone) 28%, transparent);
   border-radius: var(--r-md);
   background: color-mix(in srgb, var(--tone) 6%, transparent);
-  font-size: 13.5px;
+  font-size: 14.5px;
 }
 
 .callout > :first-child {
@@ -676,7 +692,7 @@ ol.steps > li > strong:first-child {
   background: color-mix(in srgb, var(--tone, var(--skip)) 14%, transparent);
   color: color-mix(in srgb, var(--tone, var(--ink-3)) 75%, var(--ink));
   font-family: var(--font-ui);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
   line-height: 19px;
   white-space: nowrap;
@@ -801,7 +817,7 @@ ol.steps > li > strong:first-child {
   border-radius: var(--r-lg);
   background: var(--bg);
   box-shadow: var(--shadow-md);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -813,7 +829,7 @@ ol.steps > li > strong:first-child {
 .mock-caption {
   margin: 0 0 14px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
   text-align: right;
 }
 
@@ -832,7 +848,7 @@ ol.steps > li > strong:first-child {
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.015em;
 }
@@ -850,7 +866,7 @@ ol.steps > li > strong:first-child {
 
 .mock td {
   padding: 7px 12px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .mock th {
@@ -865,7 +881,7 @@ ol.steps > li > strong:first-child {
 
 .mock td.small {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -880,7 +896,7 @@ ol.steps > li > strong:first-child {
   border-radius: var(--r-sm);
   background: var(--raised);
   color: var(--ink);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   line-height: 1.5;
   white-space: nowrap;
@@ -912,7 +928,7 @@ ol.steps > li > strong:first-child {
   padding: 3px 12px;
   border-radius: var(--r-sm);
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -935,7 +951,7 @@ ol.steps > li > strong:first-child {
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
 }
@@ -978,7 +994,7 @@ ol.steps > li > strong:first-child {
   gap: 6px 16px;
   margin: 0 0 10px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .legend > span {
@@ -1019,7 +1035,7 @@ ol.steps > li > strong:first-child {
 .diagram figcaption {
   margin-top: 12px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -1050,13 +1066,13 @@ ol.steps > li > strong:first-child {
 
 .dg-title {
   fill: var(--ink);
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
 .dg-group-title {
   fill: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
 }
 
@@ -1068,7 +1084,7 @@ ol.steps > li > strong:first-child {
 
 .dg-text {
   fill: var(--ink-2);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .dg-mono {
@@ -1110,7 +1126,7 @@ ol.steps > li > strong:first-child {
 /* Edge labels get a halo in the card colour, so a line never runs through the text. */
 .dg-label {
   fill: var(--ink-3);
-  font-size: 11px;
+  font-size: 12px;
   paint-order: stroke;
   stroke: var(--panel);
   stroke-width: 4px;
@@ -1154,7 +1170,7 @@ ol.steps > li > strong:first-child {
 .pager span {
   display: block;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 400;
 }
 
@@ -1168,7 +1184,7 @@ ol.steps > li > strong:first-child {
   padding-top: 14px;
   border-top: 1px solid var(--line-soft);
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .page-foot a {
@@ -1261,7 +1277,7 @@ ol.steps > li > strong:first-child {
 }
 
 .mock .back {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   letter-spacing: 0;
 }
@@ -1272,7 +1288,7 @@ ol.steps > li > strong:first-child {
 
 .mock p.count {
   margin: 0 0 10px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .mock .facts {
@@ -1294,6 +1310,7 @@ ol.steps > li > strong:first-child {
 
 .mock td.num {
   font-family: var(--font-mono);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -1330,7 +1347,7 @@ ol.steps > li > strong:first-child {
 .mock .total,
 .mock .detail-title {
   margin: 0 0 4px;
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.3;

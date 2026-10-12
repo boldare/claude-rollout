@@ -1,11 +1,14 @@
 /* Every style of the page lives here: the CSP blocks inline styles. */
 
 /* Tokens from the Boldare palette (bldr-graphics): paper, white and ink for surfaces, the yellow for highlights.
-   The brand violet, a touch darker so link text keeps AA contrast, is the accent. docs/docs.css copies them. */
+   States and roles use the five brand hues as they are on the dark scheme. On the light one each hue is darker,
+   so its text and bars still read on white. merged and delegate stay neutral: the palette has five hues for seven
+   meanings. TT Commons is the brand typeface and is licensed, so no font file ships: it shows where it is installed.
+   docs/docs.css copies the tokens. */
 
 :root {
   color-scheme: light dark;
-  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-ui: 'TT Commons', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   --bg: #f8f8f8;
@@ -25,17 +28,17 @@
   --on-highlight: #242424;
 
   --accent: #6a57e0;
-  --pass: #2f9e5f;
-  --fail: #d04747;
-  --warn: #b0760c;
+  --pass: #038075;
+  --fail: #bc4f52;
+  --warn: #8a6d00;
   --skip: #b0b0b0;
 
-  --brief: #c98a12;
-  --implement: #4a63d8;
-  --fix: #2f9e5f;
-  --verify: #d0652f;
-  --delegate: #15899a;
-  --merged: #7b5bd6;
+  --brief: #a07a00;
+  --implement: #6a57e0;
+  --fix: #038075;
+  --verify: #5a85ad;
+  --delegate: #4f4f4f;
+  --merged: #4f4f4f;
 
   --tint: color-mix(in srgb, var(--accent) 7%, transparent);
   --tint-strong: color-mix(in srgb, var(--accent) 13%, transparent);
@@ -66,17 +69,17 @@
     --hover: #383838;
 
     --accent: #a497f0;
-    --pass: #4fbb7d;
-    --fail: #e8756f;
-    --warn: #d3a24a;
+    --pass: #5acbbc;
+    --fail: #f68282;
+    --warn: #f2da3a;
     --skip: #666666;
 
-    --brief: #d3a24a;
-    --implement: #7f95f7;
-    --fix: #4fbb7d;
-    --verify: #e38a5c;
-    --delegate: #45bccb;
-    --merged: #b59bff;
+    --brief: #f2da3a;
+    --implement: #a497f0;
+    --fix: #5acbbc;
+    --verify: #b2cbde;
+    --delegate: #c9c9c9;
+    --merged: #c9c9c9;
 
     --tint: color-mix(in srgb, var(--accent) 10%, transparent);
     --tint-strong: color-mix(in srgb, var(--accent) 18%, transparent);
@@ -101,7 +104,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 400 13px/1.5 var(--font-ui);
+  font: 400 14px/1.5 var(--font-ui);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -127,13 +130,13 @@ a:hover {
 
 h1 {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.015em;
 }
 
 h2 {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -141,14 +144,14 @@ h2 {
 h3 {
   margin: 22px 0 9px;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
 }
 
 h4 {
   margin: 16px 0 6px;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -238,7 +241,7 @@ pre {
   padding: 10px 16px;
   border-bottom: 1px solid var(--line-soft);
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .rollout:last-child {
@@ -247,7 +250,7 @@ pre {
 
 .rollout strong {
   min-width: 14rem;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -276,7 +279,7 @@ pre {
 
 .title > a {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* The logo is a mask filled with the ink, so one file serves both schemes. */
@@ -298,7 +301,7 @@ pre {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 14px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .facts > * {
@@ -342,7 +345,7 @@ pre {
   border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
   border-radius: var(--r-md);
   background: color-mix(in srgb, currentColor 8%, transparent);
-  font-size: 12.5px;
+  font-size: 13.5px;
   white-space: pre-wrap;
 }
 
@@ -365,7 +368,7 @@ pre {
   padding: 3px 12px;
   border-radius: var(--r-sm);
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .tab:hover {
@@ -392,7 +395,7 @@ pre {
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -419,7 +422,7 @@ pre {
   border-radius: var(--r-pill);
   background: color-mix(in srgb, var(--tone, var(--skip)) 14%, transparent);
   color: color-mix(in srgb, var(--tone, var(--ink-3)) 75%, var(--ink));
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
   line-height: 19px;
   white-space: nowrap;
@@ -550,7 +553,7 @@ td {
 th {
   border-bottom-color: var(--line);
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -567,7 +570,7 @@ td.detail {
 
 td.info {
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 tr.clickable {
@@ -623,7 +626,7 @@ a.lane-label {
 
 .board td:nth-child(8) {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -702,7 +705,7 @@ a.lane-label {
   gap: 6px 16px;
   margin: 0 0 12px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .legend > span {
@@ -883,7 +886,7 @@ a.lane-label:hover {
 }
 
 .timeline > p.muted {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* Event log */
@@ -894,7 +897,7 @@ a.lane-label:hover {
   gap: 8px 18px;
   margin: 0 0 8px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .filters label {
@@ -910,19 +913,19 @@ select {
   background: var(--panel);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .events > p.muted {
   margin: 0 0 12px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* Costs */
 
 .total {
   margin: 0 0 4px;
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
@@ -930,7 +933,7 @@ select {
 .costs h2 {
   margin: 26px 0 10px;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -981,7 +984,7 @@ figure {
 figcaption {
   margin-bottom: 10px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .cost-line {
@@ -1009,7 +1012,7 @@ figcaption {
 
 .costs > p.muted,
 .costs > p.estimate {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* PR detail */
@@ -1023,12 +1026,12 @@ figcaption {
 
 .detail-header > a {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .detail-header h2 {
   margin: 0;
-  font-size: 19px;
+  font-size: 20px;
   letter-spacing: -0.02em;
 }
 
@@ -1061,7 +1064,7 @@ dl > :nth-last-child(-n + 2) {
 dt {
   padding-right: 28px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 19.5px;
 }
 
@@ -1113,7 +1116,7 @@ summary {
   padding: 7px 0;
   overflow: hidden;
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: 13.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
@@ -1135,7 +1138,7 @@ details[open] > summary {
 
 .verdict > p:first-child {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .verdict > p.text {
@@ -1187,7 +1190,7 @@ td.estimate {
 .transcript-line {
   margin: 0;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .transcript-line strong {
@@ -1197,6 +1200,7 @@ td.estimate {
 
 .transcript-header > .transcript-line:first-child strong {
   font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .transcript-nav {
@@ -1204,7 +1208,7 @@ td.estimate {
   flex-wrap: wrap;
   gap: 6px 14px;
   margin: 10px 0 14px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .transcript-text {
@@ -1216,7 +1220,7 @@ td.estimate {
 .transcript-init,
 .cut-note {
   margin: 4px 0;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .transcript-tool {
@@ -1226,7 +1230,7 @@ td.estimate {
 .tool-line {
   margin: 0 0 4px;
   overflow-wrap: anywhere;
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 .tool-line code {
@@ -1300,7 +1304,7 @@ button {
   background: var(--raised);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -1387,11 +1391,11 @@ dialog label {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 
 dialog::backdrop {
-  background: rgba(8, 10, 12, 0.5);
+  background: rgba(36, 36, 36, 0.6);
 }
 
 .dialog-buttons {
