@@ -1,30 +1,33 @@
 /* Styles of the docs site. No scripts, no inline styles, no web fonts: the same rules as the UI. */
 
-/* Tokens, copied from ui/style.css so the docs, the UI and the describe-me viewer feel like one family. test/docs.test.mjs keeps them equal. */
+/* Tokens, copied from ui/style.css so the docs and the UI feel like one family. test/docs.test.mjs keeps them equal. */
 
 :root {
   color-scheme: light dark;
   --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
-  --bg: #f5f6f8;
+  --bg: #f8f8f8;
   --panel: #ffffff;
   --raised: #ffffff;
-  --well: #f1f3f6;
+  --well: #f2f2f2;
 
-  --ink: #1c2024;
-  --ink-2: #4f5762;
-  --ink-3: #6b7381;
+  --ink: #242424;
+  --ink-2: #4f4f4f;
+  --ink-3: #6b6b6b;
 
-  --line: #e6e9ee;
-  --line-soft: #eff1f5;
-  --hover: #f1f3f6;
+  --line: #e6e6e6;
+  --line-soft: #efefef;
+  --hover: #f2f2f2;
 
-  --accent: #4a63d8;
+  --highlight: #f2da3a;
+  --on-highlight: #242424;
+
+  --accent: #6a57e0;
   --pass: #2f9e5f;
   --fail: #d04747;
   --warn: #b0760c;
-  --skip: #a8b0bb;
+  --skip: #b0b0b0;
 
   --brief: #c98a12;
   --implement: #4a63d8;
@@ -42,30 +45,30 @@
   --r-lg: 12px;
   --r-pill: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(20, 24, 32, 0.05);
-  --shadow-md: 0 1px 2px rgba(20, 24, 32, 0.05), 0 6px 16px -6px rgba(20, 24, 32, 0.14);
+  --shadow-sm: 0 1px 2px rgba(36, 36, 36, 0.05);
+  --shadow-md: 0 1px 2px rgba(36, 36, 36, 0.05), 0 6px 16px -6px rgba(36, 36, 36, 0.14);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #111316;
-    --panel: #171a1f;
-    --raised: #1c2026;
-    --well: #0f1114;
+    --bg: #242424;
+    --panel: #2c2c2c;
+    --raised: #333333;
+    --well: #1e1e1e;
 
-    --ink: #e2e6ea;
-    --ink-2: #b0b9c5;
-    --ink-3: #8a939f;
+    --ink: #f8f8f8;
+    --ink-2: #c9c9c9;
+    --ink-3: #a3a3a3;
 
-    --line: #252a31;
-    --line-soft: #1e2228;
-    --hover: #21262d;
+    --line: #3d3d3d;
+    --line-soft: #343434;
+    --hover: #383838;
 
-    --accent: #8ea2ff;
+    --accent: #a497f0;
     --pass: #4fbb7d;
     --fail: #e8756f;
     --warn: #d3a24a;
-    --skip: #5c646f;
+    --skip: #666666;
 
     --brief: #d3a24a;
     --implement: #7f95f7;
@@ -104,7 +107,8 @@ body {
 }
 
 ::selection {
-  background: var(--tint-strong);
+  background: var(--highlight);
+  color: var(--on-highlight);
 }
 
 :focus-visible {
@@ -883,9 +887,9 @@ ol.steps > li > strong:first-child {
 }
 
 .fake-button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--panel);
+  border-color: var(--highlight);
+  background: var(--highlight);
+  color: var(--on-highlight);
 }
 
 .fake-button.danger {
@@ -913,8 +917,8 @@ ol.steps > li > strong:first-child {
 }
 
 .tab.active {
-  background: var(--panel);
-  color: var(--ink);
+  background: var(--highlight);
+  color: var(--on-highlight);
   font-weight: 500;
   box-shadow: var(--shadow-sm);
 }
@@ -937,9 +941,9 @@ ol.steps > li > strong:first-child {
 }
 
 .chip.active {
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: var(--tint);
-  color: var(--ink);
+  border-color: var(--highlight);
+  background: var(--highlight);
+  color: var(--on-highlight);
 }
 
 /* Timeline mockup, drawn as SVG: one lane per PR, bars in role colours. */

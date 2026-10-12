@@ -6,7 +6,7 @@ import { renderDetail } from './detail.js'
 import { element, link, wrap } from './dom.js'
 import { renderEvents } from './events.js'
 import { money } from './format.js'
-import { renderHeader, renderViewTabs } from './header.js'
+import { renderHeader, renderListHeader, renderViewTabs } from './header.js'
 import { driverStatus, mergeEvents } from './model.js'
 import { renderPlan } from './plan.js'
 import { renderTimeline } from './timeline.js'
@@ -183,7 +183,7 @@ function renderList() {
 
   const items = element('ul', undefined, 'rollouts')
   items.append(...rollouts.map(rolloutItem))
-  app.replaceChildren(element('h1', 'rollouts'), items)
+  app.replaceChildren(renderListHeader(), items)
 }
 
 // Resolves to whether another refresh makes sense.

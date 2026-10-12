@@ -85,10 +85,26 @@ function streamLine(ctx) {
   return parts
 }
 
+// A span, not an img: style.css paints the logo through a mask so it follows the scheme.
+function logo() {
+  const mark = element('span', undefined, 'logo')
+  mark.setAttribute('role', 'img')
+  mark.setAttribute('aria-label', 'Boldare')
+
+  return mark
+}
+
+export function renderListHeader() {
+  const header = element('header', undefined, 'header')
+  header.append(withClass(wrap('div', logo(), element('h1', 'rollouts')), 'title'))
+
+  return header
+}
+
 export function renderHeader(ctx) {
   const name = ctx.view?.rollout ?? ctx.state?.name ?? ctx.route.r
   const header = element('header', undefined, 'header')
-  const title = wrap('div', element('h1', name), link(ctx.linkTo({}), 'all rollouts'))
+  const title = wrap('div', logo(), element('h1', name), link(ctx.linkTo({}), 'all rollouts'))
 
   document.title = name
 

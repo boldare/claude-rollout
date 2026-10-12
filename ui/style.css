@@ -1,30 +1,34 @@
 /* Every style of the page lives here: the CSP blocks inline styles. */
 
-/* Tokens, shared with the describe-me viewer so the two tools feel like one family. */
+/* Tokens from the Boldare palette (bldr-graphics): paper, white and ink for surfaces, the yellow for highlights.
+   The brand violet, a touch darker so link text keeps AA contrast, is the accent. docs/docs.css copies them. */
 
 :root {
   color-scheme: light dark;
   --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
-  --bg: #f5f6f8;
+  --bg: #f8f8f8;
   --panel: #ffffff;
   --raised: #ffffff;
-  --well: #f1f3f6;
+  --well: #f2f2f2;
 
-  --ink: #1c2024;
-  --ink-2: #4f5762;
-  --ink-3: #6b7381;
+  --ink: #242424;
+  --ink-2: #4f4f4f;
+  --ink-3: #6b6b6b;
 
-  --line: #e6e9ee;
-  --line-soft: #eff1f5;
-  --hover: #f1f3f6;
+  --line: #e6e6e6;
+  --line-soft: #efefef;
+  --hover: #f2f2f2;
 
-  --accent: #4a63d8;
+  --highlight: #f2da3a;
+  --on-highlight: #242424;
+
+  --accent: #6a57e0;
   --pass: #2f9e5f;
   --fail: #d04747;
   --warn: #b0760c;
-  --skip: #a8b0bb;
+  --skip: #b0b0b0;
 
   --brief: #c98a12;
   --implement: #4a63d8;
@@ -42,30 +46,30 @@
   --r-lg: 12px;
   --r-pill: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(20, 24, 32, 0.05);
-  --shadow-md: 0 1px 2px rgba(20, 24, 32, 0.05), 0 6px 16px -6px rgba(20, 24, 32, 0.14);
+  --shadow-sm: 0 1px 2px rgba(36, 36, 36, 0.05);
+  --shadow-md: 0 1px 2px rgba(36, 36, 36, 0.05), 0 6px 16px -6px rgba(36, 36, 36, 0.14);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #111316;
-    --panel: #171a1f;
-    --raised: #1c2026;
-    --well: #0f1114;
+    --bg: #242424;
+    --panel: #2c2c2c;
+    --raised: #333333;
+    --well: #1e1e1e;
 
-    --ink: #e2e6ea;
-    --ink-2: #b0b9c5;
-    --ink-3: #8a939f;
+    --ink: #f8f8f8;
+    --ink-2: #c9c9c9;
+    --ink-3: #a3a3a3;
 
-    --line: #252a31;
-    --line-soft: #1e2228;
-    --hover: #21262d;
+    --line: #3d3d3d;
+    --line-soft: #343434;
+    --hover: #383838;
 
-    --accent: #8ea2ff;
+    --accent: #a497f0;
     --pass: #4fbb7d;
     --fail: #e8756f;
     --warn: #d3a24a;
-    --skip: #5c646f;
+    --skip: #666666;
 
     --brief: #d3a24a;
     --implement: #7f95f7;
@@ -102,7 +106,8 @@ body {
 }
 
 ::selection {
-  background: var(--tint-strong);
+  background: var(--highlight);
+  color: var(--on-highlight);
 }
 
 :focus-visible {
@@ -200,7 +205,7 @@ pre {
   padding-bottom: 48px;
 }
 
-#app > :not(.header, h1) {
+#app > :not(.header) {
   margin-right: 20px;
   margin-left: 20px;
 }
@@ -210,15 +215,8 @@ pre {
   margin-bottom: 14px;
 }
 
-/* The rollout list, which has no header of its own, gets the same bar. */
-#app > h1:first-child {
-  display: flex;
-  align-items: center;
-  min-height: 52px;
-  margin-bottom: 16px;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+#app > .rollouts {
+  margin-top: 16px;
 }
 
 .rollouts {
@@ -279,6 +277,20 @@ pre {
 .title > a {
   color: var(--ink-3);
   font-size: 12px;
+}
+
+/* The logo is a mask filled with the ink, so one file serves both schemes. */
+.logo {
+  flex: none;
+  width: 100px;
+  height: 12px;
+  background: var(--ink);
+  mask: url('boldare.svg') left center / contain no-repeat;
+}
+
+.logo + h1 {
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
 }
 
 .facts {
@@ -362,8 +374,8 @@ pre {
 }
 
 .tab.active {
-  background: var(--panel);
-  color: var(--ink);
+  background: var(--highlight);
+  color: var(--on-highlight);
   font-weight: 500;
   box-shadow: var(--shadow-sm);
 }
@@ -391,9 +403,9 @@ pre {
 }
 
 .chip.active {
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: var(--tint);
-  color: var(--ink);
+  border-color: var(--highlight);
+  background: var(--highlight);
+  color: var(--on-highlight);
 }
 
 /* Badges: a tinted pill. The text mixes the tone with ink, so it reads in both schemes. */
@@ -1299,14 +1311,14 @@ button:hover:not(:disabled) {
 }
 
 button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--panel);
+  border-color: var(--highlight);
+  background: var(--highlight);
+  color: var(--on-highlight);
 }
 
 button.primary:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
+  border-color: var(--highlight);
+  background: color-mix(in srgb, var(--highlight) 88%, var(--on-highlight));
 }
 
 button.danger {
