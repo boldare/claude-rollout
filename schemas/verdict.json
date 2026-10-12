@@ -21,7 +21,20 @@
       "items": { "type": "string" },
       "description": "Real defects or unmet checklist items, each with file:line or command evidence."
     },
-    "nonBlocking": { "type": "array", "items": { "type": "string" } }
+    "nonBlocking": { "type": "array", "items": { "type": "string" } },
+    "recheck": {
+      "type": "array",
+      "description": "One entry per finding listed under \"Findings to re-check\", empty when the prompt lists none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "type": "string", "enum": ["resolved", "open", "wrong"] },
+          "evidence": { "type": "string" }
+        },
+        "required": ["id", "status", "evidence"]
+      }
+    }
   },
-  "required": ["verdict", "sha", "summary", "checklist", "blocking", "nonBlocking"]
+  "required": ["verdict", "sha", "summary", "checklist", "blocking", "nonBlocking", "recheck"]
 }

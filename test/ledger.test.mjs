@@ -3,7 +3,19 @@ import assert from 'node:assert/strict'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { acquireLock, drainInbox, freshPr, lockHolder, postCommand, recordVerdict, reserveRunName, watchInbox } from '../lib/ledger.mjs'
+import {
+  acquireLock,
+  drainInbox,
+  freshPr,
+  lockHolder,
+  postCommand,
+  recheckedFindings,
+  recordAnswers,
+  recordFindings,
+  recordVerdict,
+  reserveRunName,
+  watchInbox,
+} from '../lib/ledger.mjs'
 import { liveness } from '../lib/view.mjs'
 
 function scratch() {
@@ -66,10 +78,93 @@ test('recordVerdict keeps the latest verdict and the last 10', () => {
   assert.deepEqual(old.verdicts, [{ verdict: 'PASS' }])
 })
 
-test('freshPr has no hold, verdict history or handled feedback', () => {
+test('freshPr has no hold, verdict history, handled feedback or findings', () => {
   assert.equal(freshPr().held, null)
   assert.deepEqual(freshPr().verdicts, [])
   assert.deepEqual(freshPr().feedbackHandled, [])
+  assert.equal(freshPr().findings, null)
+})
+
+const FAILED_AT = '2026-09-01T10:00:00.000Z'
+
+test('recordFindings numbers the findings from F1 in order and replaces the earlier ones', () => {
+  const entry = freshPr()
+
+  recordFindings(entry, ['cli.mjs:40 swallows the error.', 'No test covers an empty list.'], FAILED_AT)
+  recordAnswers(entry, [{ id: 'F1', action: 'It is logged at cli.mjs:42.', outcome: 'fixed' }])
+  recordFindings(
+    entry,
+    ['README.md:3 still names the old flag.', 'The retry flag is not documented.', 'a.mjs:9 is unused.'],
+    '2026-09-01T11:00:00.000Z',
+  )
+
+  assert.deepEqual(entry.findings, {
+    at: '2026-09-01T11:00:00.000Z',
+    items: [
+      { id: 'F1', text: 'README.md:3 still names the old flag.', answer: null },
+      { id: 'F2', text: 'The retry flag is not documented.', answer: null },
+      { id: 'F3', text: 'a.mjs:9 is unused.', answer: null },
+    ],
+  })
+
+  recordFindings(entry, [], FAILED_AT)
+
+  assert.deepEqual(entry.findings, { at: FAILED_AT, items: [] })
+})
+
+test('recordAnswers: a later answer wins, an answer without a known outcome counts as fixed, unknown ids are ignored', () => {
+  const entry = freshPr()
+
+  recordFindings(entry, ['first', 'second', 'third'], FAILED_AT)
+  recordAnswers(entry, [
+    { id: 'F1', action: 'Not a defect, the brief allows it.', outcome: 'disputed' },
+    { id: 'F2', action: 'Added the test.' },
+    { id: 'F9', action: 'No such finding.', outcome: 'fixed' },
+    { id: 'inline-7', action: 'Renamed it.' },
+    { id: 'F3', action: 'Kept it.', outcome: 'disputed' },
+    { id: 'F3', action: 'Removed it after all.', outcome: 'maybe' },
+  ])
+
+  recordAnswers(entry, [{ id: 'F1', action: 'Fixed in a.mjs:3 after all.', outcome: 'fixed' }])
+  recordAnswers(entry, [])
+
+  assert.deepEqual(entry.findings.items, [
+    { id: 'F1', text: 'first', answer: { outcome: 'fixed', action: 'Fixed in a.mjs:3 after all.' } },
+    { id: 'F2', text: 'second', answer: { outcome: 'fixed', action: 'Added the test.' } },
+    { id: 'F3', text: 'third', answer: { outcome: 'fixed', action: 'Removed it after all.' } },
+  ])
+})
+
+test('recordAnswers does nothing without findings', () => {
+  const entry = freshPr()
+
+  recordAnswers(entry, [{ id: 'F1', action: 'Fixed.', outcome: 'fixed' }])
+
+  assert.equal(entry.findings, null)
+})
+
+test('recheckedFindings: each re-checked id with the text and the answer it was checked against', () => {
+  const entry = freshPr()
+
+  recordFindings(entry, ['first', 'second'], FAILED_AT)
+  recordAnswers(entry, [{ id: 'F2', action: 'Not a defect.', outcome: 'disputed' }])
+
+  assert.deepEqual(
+    recheckedFindings(entry, [
+      { id: 'F1', status: 'resolved', evidence: 'a.mjs:3' },
+      { id: 'F2', status: 'open', evidence: 'b.mjs:9' },
+      { id: 'F7', status: 'wrong', evidence: 'There is no F7.' },
+    ]),
+    [
+      { id: 'F1', status: 'resolved', evidence: 'a.mjs:3', finding: 'first', answer: null },
+      { id: 'F2', status: 'open', evidence: 'b.mjs:9', finding: 'second', answer: { outcome: 'disputed', action: 'Not a defect.' } },
+      { id: 'F7', status: 'wrong', evidence: 'There is no F7.', finding: null, answer: null },
+    ],
+  )
+
+  assert.deepEqual(recheckedFindings(freshPr(), [{ id: 'F1', status: 'open', evidence: 'x' }]), [
+    { id: 'F1', status: 'open', evidence: 'x', finding: null, answer: null },
+  ])
 })
 
 test('watchInbox wakes soon after a command is posted', async () => {

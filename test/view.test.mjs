@@ -18,7 +18,7 @@ import {
   rolloutView,
   runsFromEvents,
 } from '../lib/view.mjs'
-import { START, at, interruptedTranscript, jsonLines, makeRollout, sampleTranscript } from './fixtures.mjs'
+import { START, at, interruptedTranscript, jsonLines, makeRollout, samplePrs, sampleTranscript } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
 
@@ -584,4 +584,67 @@ test('status and card without a ledger, or with an empty events file', () => {
   assert.equal(cli('card', 'A1', '--dir', bare).stdout, 'no state yet\n')
   assert.equal(cli('status', '--dir', quiet).status, 0)
   assert.doesNotMatch(cli('status', '--dir', quiet).stdout, /recent events/)
+})
+
+// A FAIL that re-checked the findings of the FAIL before it, as the driver records it.
+const RECHECKED = {
+  verdict: 'FAIL',
+  sha: 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+  summary: 'A disputed finding is still open.',
+  checklist: [{ item: 'docs updated', status: 'fail', evidence: 'README.md:3' }],
+  blocking: ['The retry flag is still not documented.'],
+  nonBlocking: [],
+  recheck: [
+    {
+      id: 'F1',
+      status: 'resolved',
+      evidence: 'cli.mjs:42 logs it.',
+      finding: 'cli.mjs:40 swallows the error.',
+      answer: { outcome: 'fixed', action: 'It is logged at cli.mjs:42.' },
+    },
+    {
+      id: 'F2',
+      status: 'open',
+      evidence: 'The brief lists the flag in the docs.',
+      finding: 'The retry flag is not documented.',
+      answer: { outcome: 'disputed', action: 'The brief keeps the flag internal.' },
+    },
+    { id: 'F3', status: 'wrong', evidence: 'A decision allows it.', finding: 'a.mjs:9 is unused.', answer: null },
+  ],
+  at: at(90),
+  run: 'A1-04-verify',
+}
+
+test('prDetail keeps the re-checked findings of a verdict, with their text and answer', () => {
+  const manifest = loadManifest(makeRollout())
+  const detail = prDetail(manifest, { prs: { A1: { verdict: RECHECKED, verdicts: [RECHECKED] } } }, [], [], 'A1')
+
+  assert.deepEqual(detail.verdict.recheck, RECHECKED.recheck)
+  assert.deepEqual(detail.verdicts[0].recheck, RECHECKED.recheck)
+})
+
+test('card: every re-checked finding with its status, the answer and the evidence, and a verdict without them as before', () => {
+  const dir = makeRollout({ prs: { A1: { ...samplePrs().A1, state: 'escalated', verdict: RECHECKED, verdicts: [RECHECKED] } } })
+  const card = cli('card', 'A1', '--dir', dir)
+  const lines = [
+    '  [fail] docs updated',
+    '  re-check F1 [resolved]: cli.mjs:40 swallows the error.',
+    '    answer (fixed): It is logged at cli.mjs:42.',
+    '    evidence: cli.mjs:42 logs it.',
+    '  re-check F2 [open]: The retry flag is not documented.',
+    '    answer (disputed): The brief keeps the flag internal.',
+    '    evidence: The brief lists the flag in the docs.',
+    '  re-check F3 [wrong]: a.mjs:9 is unused.',
+    '    evidence: A decision allows it.',
+    '  BLOCKING: The retry flag is still not documented.',
+  ]
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.ok(card.stdout.includes(lines.join('\n')), card.stdout)
+
+  const plain = cli('card', 'A1', '--dir', makeRollout())
+
+  assert.equal(plain.status, 0, plain.stderr)
+  assert.ok(plain.stdout.includes('\nverifier: PASS on a1a1a1a — Every checklist item holds.\n  [pass] tests pass\n\n'), plain.stdout)
+  assert.doesNotMatch(plain.stdout, /re-check/)
 })

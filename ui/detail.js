@@ -7,6 +7,8 @@ import { estimateNote } from './transcript-model.js'
 const TABS = ['overview', 'runs', 'verifier', 'review', 'brief']
 const RUN_HEADINGS = ['run', 'role', 'effort', 'start', 'duration', 'cost', 'result', 'denials', 'error']
 const CHECK_HEADINGS = ['item', 'status', 'evidence']
+const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
+const RECHECK_CLASSES = { resolved: 'check-pass', open: 'check-fail', wrong: 'check-unverifiable' }
 
 function short(sha) {
   return typeof sha === 'string' && sha ? sha.slice(0, 7) : '-'
@@ -252,6 +254,19 @@ function checklist(items) {
   return table(CHECK_HEADINGS, rows, 'checklist')
 }
 
+function recheckRow(item) {
+  const answer = item.answer ? `${item.answer.outcome}: ${item.answer.action}` : 'no answer'
+  const statusClass = Object.hasOwn(RECHECK_CLASSES, item.status) ? RECHECK_CLASSES[item.status] : ''
+
+  return wrap(
+    'tr',
+    cell(`${item.id}: ${item.finding ?? '(unknown id)'}`, 'text'),
+    cell(answer, 'text'),
+    cell(item.status, statusClass),
+    cell(item.evidence ?? '', 'text'),
+  )
+}
+
 function verdictBody(verdict) {
   const body = element('div', undefined, 'verdict')
   const line = wrap(
@@ -262,6 +277,11 @@ function verdictBody(verdict) {
 
   body.append(line, element('p', verdict.summary ?? '', 'text'))
   body.append(checklist(verdict.checklist ?? []))
+
+  if (verdict.recheck?.length > 0) {
+    body.append(element('h4', 're-checked findings'), table(RECHECK_HEADINGS, verdict.recheck.map(recheckRow), 'checklist'))
+  }
+
   body.append(element('h4', 'blocking'), namedList(verdict.blocking ?? []))
   body.append(element('h4', 'non-blocking'), namedList(verdict.nonBlocking ?? []))
 

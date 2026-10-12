@@ -126,7 +126,7 @@
     },
     "addressed": {
       "type": "array",
-      "description": "For a fix that answers maintainer review comments: one entry per comment id you were given, with what you did.",
+      "description": "One entry per review comment id or verifier finding id you were given. For a finding, `outcome` says whether you fixed it or dispute it, and `action` holds the evidence or the reason.",
       "items": {
         "type": "object",
         "properties": {
@@ -135,6 +135,10 @@
           },
           "action": {
             "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": ["fixed", "disputed"]
           }
         },
         "required": ["id", "action"]

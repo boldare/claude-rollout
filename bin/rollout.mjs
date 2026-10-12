@@ -243,6 +243,16 @@ function card(manifest, id) {
       console.log(`  [${item.status}] ${item.item}`)
     }
 
+    for (const item of entry.verdict.recheck ?? []) {
+      console.log(`  re-check ${item.id} [${item.status}]: ${item.finding ?? '(unknown id)'}`)
+
+      if (item.answer) {
+        console.log(`    answer (${item.answer.outcome}): ${item.answer.action}`)
+      }
+
+      console.log(`    evidence: ${item.evidence}`)
+    }
+
     for (const item of entry.verdict.blocking ?? []) {
       console.log(`  BLOCKING: ${item}`)
     }
