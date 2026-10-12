@@ -10,6 +10,7 @@ import {
   codeScanningNote,
   delegatePrompt,
   implementPrompt,
+  resumeFreshPrompt,
   verifyPrompt,
   verifyRecipe,
 } from '../lib/prompts.mjs'
@@ -244,6 +245,68 @@ test('prompts: the delegate sees the question, the plan, the brief and every ear
   assert.equal(text.includes('{{'), false)
   assert.ok(delegatePrompt(manifest, manifest.all[2], { ...freshPr(), blocked }).includes('No brief has been written yet.'))
   assert.ok(delegatePrompt(manifest, pr, { ...freshPr(), blocked }).includes('## Earlier answers\n\nOldest first.\n\n(none)\n'))
+})
+
+const DELEGATE_PREFIX = "Answer from the delegate, on the maintainer's behalf, from the plan:\n\n"
+const NOTE_HISTORY = [
+  { at: '2026-09-01T10:00:00.000Z', by: 'maintainer', kind: 'needs-decision', question: 'Keep the old flag?', text: 'Drop it.' },
+  {
+    at: '2026-09-01T11:00:00.000Z',
+    by: 'delegate',
+    kind: 'needs-decision',
+    question: 'Which name?',
+    text: `${DELEGATE_PREFIX}Call it --delay.`,
+  },
+  { at: '2026-09-01T12:00:00.000Z', by: 'maintainer', kind: null, question: null, text: 'Document the rename in the README.' },
+]
+
+function decisionPrompts(manifest, pr, entry) {
+  return {
+    verify: verifyPrompt(manifest, pr, entry, 'a1a1a1a'),
+    implement: implementPrompt(manifest, pr, entry),
+    resumeFresh: resumeFreshPrompt(manifest, pr, entry, { reason: 'verifier findings', note: 'Fix the README.' }),
+  }
+}
+
+test('prompts: the verifier and a fresh implementer see every recorded decision after the brief, oldest first', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+
+  for (const [name, text] of Object.entries(decisionPrompts(manifest, pr, { ...STATE, noteHistory: NOTE_HISTORY }))) {
+    const brief = text.indexOf('## Brief for A1')
+    const section = text.indexOf('## Decisions after the brief')
+    const order = NOTE_HISTORY.map((note) => text.indexOf(note.text))
+
+    assert.equal(text.split('## Decisions after the brief').length, 2, name)
+    assert.ok(brief > -1, name)
+    assert.ok(section > brief, name)
+    assert.ok(order[0] > section, name)
+    assert.deepEqual(
+      order,
+      [...order].sort((left, right) => left - right),
+      name,
+    )
+
+    assert.ok(
+      text.includes('### 1. From the maintainer, on needs-decision\n\nQuestion:\n\nKeep the old flag?\n\nAnswer:\n\nDrop it.'),
+      name,
+    )
+
+    assert.ok(
+      text.includes(`### 2. From the delegate, on needs-decision\n\nQuestion:\n\nWhich name?\n\nAnswer:\n\n${DELEGATE_PREFIX}`),
+      name,
+    )
+
+    assert.ok(text.includes('### 3. From the maintainer\n\nNote:\n\nDocument the rename in the README.'), name)
+    assert.equal(text.includes('{{'), false, name)
+  }
+
+  for (const entry of [STATE, freshPr()]) {
+    for (const [name, text] of Object.entries(decisionPrompts(manifest, pr, entry))) {
+      assert.equal(text.includes('Decisions after the brief'), false, name)
+      assert.equal(text.includes('{{'), false, name)
+    }
+  }
 })
 
 test('codeScanningNote: a false positive goes to the maintainer as a code-scanning block', () => {

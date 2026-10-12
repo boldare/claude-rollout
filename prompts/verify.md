@@ -5,7 +5,8 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
 ## Inputs
 
 - The current directory is the PR's worktree. It must be at `{{sha}}`.
-- The brief (the spec, including its acceptance checklist) at the end of this prompt.
+- The brief (the spec, including its acceptance checklist) below, followed by the decisions recorded after it when there are any.
+- The driver recorded those decisions from the maintainer and the delegate. Do not try to refute them. Where one conflicts with the brief, judge the PR by the decision.
 - The repo's `CLAUDE.md` and `STYLE.md`.
 - The implementer's READY report:
 
@@ -17,13 +18,13 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
 
 1. `git rev-parse HEAD` must print `{{sha}}`. Otherwise report FAIL with that as the only blocking item.
 2. Read the whole diff: `git diff origin/{{base}}...HEAD`. Read the changed files in full where the diff is not enough.
-3. Go through the brief's acceptance checklist item by item: pass, fail or unverifiable, each with evidence (command output or file:line).
+3. Go through the brief's acceptance checklist item by item, as the decisions amend it: pass, fail or unverifiable, each with evidence (command output or file:line).
 4. Re-run the local verification that proves the checklist:
    {{verify}}
    Compare with the expected results: {{expect}}
 
 5. Check the writing rules the implementer had: no comments that restate code or narrate the change, short prose, no semicolons in comments, docs, the changeset or the PR text. Report violations as `nonBlocking` unless they are widespread, then as blocking.
-6. Hunt for real defects the checklist may not name: behaviour regressions, edge cases the brief lists but the code misses, public API changes missing from the changeset, weakened or deleted tests, scope creep beyond the brief, STYLE.md violations{{publicVerifyCheck}}.
+6. Hunt for real defects the checklist may not name: behaviour regressions, edge cases the brief lists but the code misses, public API changes missing from the changeset, weakened or deleted tests, scope creep beyond the brief and the decisions, STYLE.md violations{{publicVerifyCheck}}.
 7. Verdict: PASS only when every checklist item passes and there is no blocking finding. Blocking means a real defect or an unmet item, stated with evidence. Style nits and suggestions go to `nonBlocking`.
 
 Report through the structured output, with `sha` set to the SHA you verified.
@@ -31,3 +32,5 @@ Report through the structured output, with `sha` set to the SHA you verified.
 ## Brief for {{id}}
 
 {{briefText}}
+
+{{decisions}}

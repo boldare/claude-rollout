@@ -1959,6 +1959,101 @@ test('retry resets the delegate run count and keeps its answers, and waits while
   assert.deepEqual(entry.delegate, { runs: 0, lastQuestion: 'abc', limitNotified: false, answers })
 })
 
+const STOPPED = agentResult({ ok: false, output: null, error: 'stopped', costUsd: 0, seconds: 0 })
+
+// Stands in for the fix run that follows an answer: the PR is claimed again
+// and verified. The failed result keeps verified() and its git calls out.
+async function verifiedAgain(driver, pr, entry) {
+  entry.state = 'ready_claimed'
+  driver.launch(pr, 'verify', { sha: SHA })
+  await waitFor(() => driver.running.size === 0, 'the verifier to finish')
+}
+
+function assertDecisionsAfterBrief(prompt, parts) {
+  const brief = prompt.indexOf('## Brief for A1')
+  const section = prompt.indexOf('## Decisions after the brief')
+
+  assert.ok(brief > -1)
+  assert.ok(section > brief)
+
+  for (const part of parts) {
+    assert.ok(prompt.indexOf(part, section) > section, part)
+  }
+}
+
+test('note: an answer given while the PR was blocked reaches the next verifier, after the brief', async () => {
+  const { manifest, driver, pr, entry, calls } = delegateDriver(
+    { pr: 11, sessionId: 'session-1', claimedSha: SHA },
+    { policy: {}, results: [STOPPED] },
+  )
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Drop the old flag.' }), [
+    { id: 'A1', kind: 'needs-fix', reason: 'answer from the maintainer' },
+  ])
+
+  await verifiedAgain(driver, pr, entry)
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].role, 'verify')
+  assertDecisionsAfterBrief(calls[0].prompt, ['From the maintainer, on needs-decision', DECISION.question, 'Drop the old flag.'])
+})
+
+test('delegate: its answer reaches the next verifier, after the brief', async () => {
+  const { driver, pr, entry, calls } = delegateDriver(
+    { pr: 11, sessionId: 'session-1', claimedSha: SHA },
+    { policy: { delegate: {} }, results: [delegateReport(), STOPPED] },
+  )
+
+  await advanced(driver, pr)
+  assert.equal(entry.fixReason, 'answer from the delegate')
+
+  await verifiedAgain(driver, pr, entry)
+
+  assert.deepEqual(
+    calls.map((call) => call.role),
+    ['delegate', 'verify'],
+  )
+
+  assertDecisionsAfterBrief(calls[1].prompt, ['From the delegate, on needs-decision', DECISION.question, 'Keep it as an alias.'])
+})
+
+test('checkClaim: a note queued while a verifier ran goes to a fix run first, with no agent and no gh or git call', async () => {
+  const note = 'Drop the old flag.'
+  const queued = {
+    pr: 11,
+    claimedSha: SHA,
+    sessionId: 'session-1',
+    pendingNote: note,
+    noteHistory: [{ at: at(10), by: 'maintainer', kind: null, question: null, text: note }],
+    attempts: { implement: 1, fix: 0, verify: 1, brief: 0 },
+  }
+
+  for (const state of [{ state: 'ready_claimed' }, { state: 'interrupted', interruptedRole: 'verify' }]) {
+    const calls = []
+    const runAgent = async (_, pr, options) => {
+      calls.push({ id: pr.id, ...options })
+
+      return agentResult()
+    }
+
+    const dir = makeRollout({ prs: { A1: { ...queued, ...state } }, events: [] })
+    const tools = fakeTools(dir, [])
+    const manifest = loadManifest(dir)
+    const driver = createDriver(manifest, { notify: () => {}, runAgent })
+    const entry = driver.ledger.prs.A1
+
+    await driver.advance(manifest.all.find((item) => item.id === 'A1'))
+
+    assert.equal(entry.state, 'needs_fix', state.state)
+    assert.equal(entry.fixReason, 'answer from the maintainer')
+    assert.equal(entry.fixNote, '')
+    assert.equal(entry.pendingNote, note)
+    assert.deepEqual(kindsSince(manifest), ['needs-fix'])
+    assert.deepEqual(calls, [])
+    assert.deepEqual(tools.calls(), [])
+  }
+})
+
 // A code scanning alert as alertsFrom maps it, on A1's head unless `sha` says otherwise.
 function scanAlert(overrides = {}) {
   return {

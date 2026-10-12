@@ -5,7 +5,7 @@ You work unattended. Nobody will answer questions mid-run: when you need a human
 ## Where you are
 
 - The current directory is a git worktree on branch `{{branch}}`, created from `origin/{{base}}`. Dependencies already merged into it: {{deps}}.
-- Your spec is the brief at the end of this prompt. Read it completely first. Then read `CLAUDE.md` and `STYLE.md` in the repo and follow them.
+- Your spec is the brief below, plus the decisions recorded after it when there are any. Read it completely first. Then read `CLAUDE.md` and `STYLE.md` in the repo and follow them.
 - `gh` is logged in, and node/pnpm on PATH are the versions this repo needs.
 
 ## Protocol
@@ -55,3 +55,5 @@ Never merge, approve, close or comment on other PRs. Never push to `{{base}}` or
 ## Brief for {{id}}
 
 {{briefText}}
+
+{{decisions}}
