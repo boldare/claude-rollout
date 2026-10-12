@@ -377,8 +377,8 @@ function renderPlanTab(pr, ctx) {
 
   return wrap(
     'div',
-    element('h3', pr.plan.heading),
-    element('p', `from ${pr.plan.source}`, 'muted'),
+    element('h3', pr.plan.heading, 'plan-heading'),
+    element('p', `From ${pr.plan.source}`, 'muted'),
     textBlock(pr.plan.text || null, 'The section is empty.'),
     wholePlan(ctx),
   )

@@ -5,7 +5,7 @@ const HEADINGS = ['PR', 'state', 'section in the plan', 'source']
 // Before the first run there is no state and no PR page to open.
 function sectionRow(pr, ctx) {
   const row = ctx.view?.rows.find((item) => item.id === pr.id)
-  const heading = pr.plan ? cell(pr.plan.heading) : cell(element('span', 'no section', 'muted'))
+  const heading = pr.plan ? cell(pr.plan.heading) : cell(element('span', 'No section', 'muted'))
   const source = cell(pr.plan?.source ?? '-', 'info')
 
   if (!row) {
