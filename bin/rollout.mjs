@@ -26,9 +26,8 @@ import { runDriver } from '../lib/driver.mjs'
 import { batteryWarning } from '../lib/machine.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
-import { agentEnv } from '../lib/identity.mjs'
 import { ghEnv } from '../lib/github.mjs'
-import { guardSelfTest, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
+import { agentTokenCheck, guardSelfTest, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
 import { agentSettings } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
@@ -337,34 +336,15 @@ async function preflight(manifest) {
 
   if (manifest.repo.agentToken) {
     try {
-      const botEnv = agentEnv(manifest)
-      const who = await sh('gh', ['api', 'user', '--jq', '.login'], { env: botEnv })
-      const login = who.stdout.trim()
-      const permission = await sh('gh', ['api', `repos/${manifest.repo.github}/collaborators/${login}/permission`, '--jq', '.permission'], {
-        env: ghEnv(manifest),
-      })
-
-      const scopes = (await sh('gh', ['api', '-i', 'user'], { env: botEnv })).stdout.match(/^x-oauth-scopes:\s*(.*)$/im)?.[1]?.trim() ?? '?'
-      const ok = who.code === 0 && !manifest.repo.maintainers.includes(login) && permission.stdout.trim() === 'write'
-      console.log(
-        `${ok ? 'ok  ' : 'FAIL'} agent identity: ${login || '?'} (permission ${permission.stdout.trim() || '?'}, scopes ${scopes})`,
-      )
-
-      if (!ok) {
-        problems.push('agent token must belong to a non-maintainer account with write (not admin) permission')
-      }
-
+      const agent = await agentTokenCheck(manifest)
       const stored = await storedLoginCheck(manifest)
 
-      for (const line of stored.lines) {
+      for (const line of [...agent.lines, ...stored.lines]) {
         console.log(line)
       }
 
-      problems.push(...stored.problems)
-
-      if (!/\bworkflow\b/.test(scopes)) {
-        warnings.push('agent token lacks the workflow scope: PRs that change .github/workflows cannot be pushed')
-      }
+      problems.push(...agent.problems, ...stored.problems)
+      warnings.push(...agent.warnings)
     } catch (error) {
       problems.push(`agent token: ${error.message}`)
     }

@@ -540,12 +540,14 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td>agent identity</td>
                 <td>
-                  Fails when the token's login is a maintainer or its permission is not exactly <code>write</code>, when agents could fall
-                  back to a stored gh login, or when the token file is missing. The fallback check runs <code>gh auth status</code> without
-                  <code>GH_TOKEN</code> in the environment agents get. An <code>info</code> line says when gh would fall back to your
-                  keyring login with <code>GH_HOST</code> set, which agents never get. Warns when the token lacks the
-                  <code>workflow</code> scope, and when there is no <code>repo.agentToken</code> at all. Without it, warns again when
-                  <code>repo.maintainers</code> is set, because comments agents post under your login count as your review feedback.
+                  Fails when the token's login is a maintainer or its permission is not exactly <code>write</code>, when the token is
+                  fine-grained (<code>github_pat_…</code>), which gets no Checks permission, when the token cannot read the repository (any
+                  answer but 200), when agents could fall back to a stored gh login, or when the token file is missing. The fallback check
+                  runs <code>gh auth status</code> without <code>GH_TOKEN</code> in the environment agents get. An <code>info</code> line
+                  says when gh would fall back to your keyring login with <code>GH_HOST</code> set, which agents never get. Warns when a
+                  classic token lacks the <code>workflow</code> or the <code>read:org</code> scope, and when there is no
+                  <code>repo.agentToken</code> at all. Without it, warns again when <code>repo.maintainers</code> is set, because comments
+                  agents post under your login count as your review feedback.
                 </td>
               </tr>
               <tr>

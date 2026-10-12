@@ -144,11 +144,20 @@
             </p>
           </li>
           <li>
-            <strong>Create a classic token with the <code>repo</code> and <code>workflow</code> scopes</strong>
+            <strong>Create a classic token with the <code>repo</code>, <code>workflow</code> and <code>read:org</code> scopes</strong>
             <p>
-              <code>workflow</code> matters only for PRs that change <code>.github/workflows/</code>, and preflight warns when it is
-              missing. Preflight reads the scopes from the <code>x-oauth-scopes</code> header. A fine-grained token has none, so preflight
-              cannot confirm <code>workflow</code> and warns.
+              <code>workflow</code> matters only for PRs that change <code>.github/workflows/</code>. <code>read:org</code> matters because
+              gh reads the team behind a review request. Without it, <code>gh pr edit</code> fails on a PR with a team review request, so
+              agents cannot update their PR description. Preflight reads the scopes from the <code>x-oauth-scopes</code> header and warns
+              when <code>workflow</code> or <code>read:org</code> is missing.
+            </p>
+            <p>
+              A fine-grained token (<code>github_pat_…</code>) fails preflight. GitHub gives it no Checks permission, so
+              <code>gh pr checks</code> cannot read the PR's checks and agents cannot follow CI.
+            </p>
+            <p>
+              Preflight also reads <code>repo.github</code> with the token and fails on any answer but 200. On a public repository any valid
+              token can read it, so there the probe proves little. The token still needs the <code>repo</code> scope to push.
             </p>
           </li>
           <li>
@@ -568,9 +577,10 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
               <tr>
                 <td class="nowrap">The bot</td>
                 <td>
-                  That the token file exists, that its login has exactly the <code>write</code> permission and is not a maintainer, that
-                  agents' gh has no stored login to fall back to in the environment agents get, and a warning without the
-                  <code>workflow</code> scope. An <code>info</code> line says when gh would fall back to your keyring login with
+                  That the token file exists, that its login has exactly the <code>write</code> permission and is not a maintainer, that it
+                  is not a fine-grained token, that it can read <code>repo.github</code> (any answer but 200 fails), that agents' gh has no
+                  stored login to fall back to in the environment agents get, and a warning without the <code>workflow</code> or the
+                  <code>read:org</code> scope. An <code>info</code> line says when gh would fall back to your keyring login with
                   <code>GH_HOST</code> set. It is never a problem, because agents never get <code>GH_HOST</code>. Without
                   <code>repo.agentToken</code>, one warning, plus a second one when <code>repo.maintainers</code> is set.
                 </td>
