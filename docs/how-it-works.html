@@ -565,10 +565,13 @@
                 <td>
                   A fresh read-only verifier tries to refute READY for that SHA, against the brief's acceptance checklist and the
                   <a href="commands.html#cmd-note">recorded decisions</a>. Where a decision conflicts with the brief, the decision wins.
+                  After a FAIL it also re-checks <a href="#resume">the previous findings</a> and the implementer's answers to them, as
+                  claims.
                 </td>
                 <td>
-                  PASS from an untouched worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>. A PASS from a
-                  verifier that changed the tree, or for a stale SHA, is discarded: <code>ready_claimed</code>.
+                  PASS from an untouched worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>, or
+                  <code>escalated</code> when a finding the implementer disputed is still open. A PASS from a verifier that changed the
+                  tree, or for a stale SHA, is discarded: <code>ready_claimed</code>.
                 </td>
               </tr>
               <tr id="state-verified">
@@ -610,13 +613,15 @@
               <tr id="state-escalated">
                 <td class="nowrap"><span class="badge state state-escalated">escalated</span></td>
                 <td>
-                  The attempts of a role ran out, or the PR had an error in five ticks in a row. An <a href="#outage">outage</a> never
-                  counts toward the five.
+                  The attempts of a role ran out, the PR had an error in five ticks in a row, or the verifier still finds open a finding the
+                  implementer disputed, which is yours to decide (reason <code>disputed finding</code>). An
+                  <a href="#outage">outage</a> never counts toward the five.
                 </td>
                 <td>
                   <code>rollout retry</code> resets the attempts. A PR whose verification still holds goes back to <code>verified</code>.
                   <code>rollout note</code> sends an answer to a fix run. On a PR with no brief and no GitHub PR, the note goes to the brief
-                  writer instead.
+                  writer instead. After a disputed finding, both send the PR to <code>needs_fix</code> with the findings. A note goes with
+                  them, recorded as your decision on the dispute.
                 </td>
               </tr>
               <tr id="state-interrupted">
@@ -721,7 +726,7 @@
                 <td class="nowrap"><span class="badge role-verify">verifier</span></td>
                 <td>
                   <code>verify.md</code>: the SHA, the READY report, the recipe without steps that rewrite files, the brief and the recorded
-                  decisions after it
+                  decisions after it, and after a FAIL the previous findings with the implementer's answers
                 </td>
                 <td>new, every time</td>
                 <td>Read, build and test. No edits, commits, pushes or GitHub writes.</td>
@@ -963,8 +968,8 @@
                   <code>status</code> (READY or BLOCKED) and <code>summary</code> are required. READY also needs <code>pr</code> and
                   <code>headSha</code>, which the driver checks, not the schema. <code>blocked</code> with a kind, a question and evidence
                   for BLOCKED. Optional: <code>checks</code>, <code>localVerification</code>, <code>checklist</code>, <code>expected</code>,
-                  <code>filesChanged</code>, <code>changeset</code>, <code>deviations</code>, and <code>addressed</code> for review
-                  comments.
+                  <code>filesChanged</code>, <code>changeset</code>, <code>deviations</code>, and <code>addressed</code> for review comments
+                  and verifier findings. An entry for a finding also has <code>outcome</code>, fixed or disputed.
                 </td>
               </tr>
               <tr>
@@ -972,7 +977,8 @@
                 <td class="nowrap">verifier</td>
                 <td>
                   <code>verdict</code> (PASS or FAIL), <code>sha</code>, <code>summary</code>, <code>checklist</code> with pass, fail or
-                  unverifiable and evidence per item, <code>blocking</code>, <code>nonBlocking</code>. All required.
+                  unverifiable and evidence per item, <code>blocking</code>, <code>nonBlocking</code>, and <code>recheck</code> with
+                  resolved, open or wrong and evidence per finding to re-check, empty when there is none. All required.
                 </td>
               </tr>
               <tr>
@@ -1004,6 +1010,15 @@
           appended. If the session is gone, the driver drops it, and the next fix starts a new session with the whole implement prompt
           inside <code>resume-fresh.md</code>. That prompt lists every recorded decision after the brief, oldest first, so the new session
           loses none of them.
+        </p>
+
+        <p>
+          After a verifier FAIL the note numbers the blocking findings F1, F2 and on, and the implementer answers each one in
+          <code>addressed</code>: fixed, with the evidence, or disputed, with its reason. The driver keeps the answers of every READY report
+          until the next verdict, so a CI fix in between loses none. The next verifier gets the findings and the answers after the brief and
+          the decisions, as claims to check. It reports each one as resolved, open or wrong, and an open one blocks a PASS. When a finding
+          the implementer disputed is still open, the PR goes to <a href="#state-escalated">escalated</a> instead of another fix round.
+          Every FAIL numbers its own findings from F1.
         </p>
 
         <h2 id="gate">The merge gate <a class="anchor" href="#gate" aria-label="Link to this section">#</a></h2>
