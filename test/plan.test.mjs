@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { planSection, planSources, prPlan } from '../lib/plan.mjs'
+import { planSection, planSources, prPlan, prPlans } from '../lib/plan.mjs'
 
 const PLAN = [
   '# Plan',
@@ -105,7 +105,7 @@ test('planSection: an empty section has no excerpt, and a long first line is cut
   assert.ok(long.excerpt.endsWith('…'))
 })
 
-test('prPlan: the first source of the PR with a section, skipping other tags and missing files', () => {
+test('prPlan and prPlans: the first source of the PR with a section, skipping other tags and missing files', () => {
   const dir = mkdtempSync(join(tmpdir(), 'rollout-plan-'))
   const main = join(dir, 'plan.md')
   const track = join(dir, 'track.md')
@@ -121,12 +121,22 @@ test('prPlan: the first source of the PR with a section, skipping other tags and
         { title: 'Plan', path: main, kind: 'markdown' },
       ],
     },
+    all: [{ id: 'A1', briefTags: ['track'] }, { id: 'A2' }, { id: 'A3' }],
   }
 
   assert.equal(prPlan(manifest, { id: 'A1', briefTags: ['track'] }).source, 'Track')
   assert.equal(prPlan(manifest, { id: 'A1' }), null)
   assert.deepEqual(prPlan(manifest, { id: 'A2' }), { source: 'Plan', heading: 'A2', text: 'From the plan.', excerpt: 'From the plan.' })
   assert.equal(prPlan({}, { id: 'A1' }), null)
+
+  assert.deepEqual(
+    [...prPlans(manifest)].map(([id, plan]) => [id, plan?.source ?? null]),
+    [
+      ['A1', 'Track'],
+      ['A2', 'Plan'],
+      ['A3', null],
+    ],
+  )
 
   const sources = planSources(manifest)
   assert.deepEqual(
