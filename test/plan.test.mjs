@@ -49,6 +49,11 @@ test('planSection: P1 never matches P10 or P3-extra, and a heading inside a fenc
   assert.equal(planSection(PLAN, 'not'), null)
 })
 
+test('planSection: a numeric id, as YAML reads `id: 3`', () => {
+  assert.equal(planSection('## 3 the third\nBody.', 3).heading, '3 the third')
+  assert.equal(planSection('## 30 not it', 3), null)
+})
+
 test('planSection: a PR prefix and emphasis around the id, a list marker in the excerpt', () => {
   assert.equal(planSection(PLAN, 'P2').heading, '**PR P2**: rules')
   assert.equal(planSection(PLAN, 'P2').excerpt, 'Pure functions.')
