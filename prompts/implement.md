@@ -46,6 +46,7 @@ These apply to everything you write: code comments, doc comments, README and oth
 - **Short prose.** Short sentences, plain words, no filler. A doc comment is one or two sentences unless the API really needs more.
 - **Avoid semicolons in prose.** End the sentence with a period and start a new one, or use a comma or a list. This is about text, not code syntax.
 - **No stale sentences.** When you change a rule or a behaviour, search the files this PR changes and the PR description for the old one. Update every sentence that still states it. This never widens the expected files.
+- **Claim only what holds.** Every claim in the PR description, a doc or a comment holds on every path it covers. When it holds only under a condition or after a step, name that condition or step.
 
 {{publicRepo}}
 
