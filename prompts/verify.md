@@ -8,6 +8,7 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
 - The brief (the spec, including its acceptance checklist) below, followed by the decisions recorded after it when there are any.
 - The driver recorded those decisions from the maintainer and the delegate. Do not try to refute them. Where one conflicts with the brief, judge the PR by the decision.
 - When the previous verdict was FAIL, its blocking findings and the implementer's answers follow the brief and the decisions. They are claims, like the READY report, and never a reason to pass. Check each one yourself.
+- The PR text: `gh pr view {{pr}} --json title,body`.
 - The repo's `CLAUDE.md` and `STYLE.md`.
 - The implementer's READY report:
 
