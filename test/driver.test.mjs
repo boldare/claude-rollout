@@ -2381,7 +2381,34 @@ test('checkClaim: a pass is logged once per claim, and again for a new claim', a
   await driver.advance(pr)
 
   assert.deepEqual(eventsSince(manifest, before), passes(REBASED))
-  assert.deepEqual(entry.notified.gateChecks, { claimedAt: at(3), seen: ['ci:pass', 'policy:pass', 'code-scanning:pass'] })
+  assert.deepEqual(entry.notified.gateChecks, {
+    claimedAt: at(3),
+    sha: REBASED,
+    seen: ['ci:pass', 'policy:pass', 'code-scanning:pass'],
+  })
+})
+
+// Sync's head-moved-same-patch moves claimedSha and keeps claimedAt. A gate block and rollout retry can then bring the PR back here.
+test('checkClaim: a new head under the same claim logs its passes again', async () => {
+  const { manifest, driver, tools, gate, pr, entry } = claimDriver({})
+
+  entry.claimedAt = at(1)
+
+  await driver.advance(pr)
+
+  const before = readEvents(manifest).length
+  entry.claimedSha = REBASED
+  gate.pr = { headRefOid: REBASED }
+  tools.answer([viewRule({ headRefOid: REBASED }), { tool: 'gh', args: `commits/${REBASED}/check-runs`, stdout: GREEN_RUNS }])
+
+  await driver.advance(pr)
+
+  assert.equal(entry.claimedAt, at(1))
+  assert.deepEqual(eventsSince(manifest, before), [
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE, REBASED),
+    gateCheckEvent('policy', 'pass', 'no violations', REBASED),
+    gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium', REBASED),
+  ])
 })
 
 test('checkClaim: the scope gate failing again on the same SHA after a new READY logs its fail again', async () => {
