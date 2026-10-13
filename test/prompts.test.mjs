@@ -82,6 +82,7 @@ test('prompts: a private repo without a denylist gets neither rule', () => {
   }
 
   assert.ok(prompts.briefReview.includes('4. Check for scope leaking in from other PRs.\n'))
+  assert.ok(prompts.verify.includes('- The PR text: `gh pr view 12 --json title,body`.'))
   assertFilled(prompts)
 })
 

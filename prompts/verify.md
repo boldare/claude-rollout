@@ -8,6 +8,7 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
 - The brief (the spec, including its acceptance checklist) below, followed by the decisions recorded after it when there are any.
 - The driver recorded those decisions from the maintainer and the delegate. Do not try to refute them. Where one conflicts with the brief, judge the PR by the decision.
 - When the previous verdict was FAIL, its blocking findings and the implementer's answers follow the brief and the decisions. They are claims, like the READY report, and never a reason to pass. Check each one yourself.
+- The PR text: `gh pr view {{pr}} --json title,body`.
 - The repo's `CLAUDE.md` and `STYLE.md`.
 - The implementer's READY report:
 
@@ -29,7 +30,9 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
    Compare with the expected results: {{expect}}
 
 6. Check the writing rules the implementer had: no comments that restate code or narrate the change, short prose, no semicolons in comments, docs, the changeset or the PR text. Report violations as `nonBlocking` unless they are widespread, then as blocking.
-7. Hunt for real defects the checklist may not name: behaviour regressions, edge cases the brief lists but the code misses, public API changes missing from the changeset, weakened or deleted tests, scope creep beyond the brief and the decisions, STYLE.md violations{{publicVerifyCheck}}.
+7. Hunt for real defects the checklist may not name: behaviour regressions, edge cases the brief lists but the code misses, public API changes missing from the changeset, weakened or deleted tests, scope creep beyond the brief and the decisions, STYLE.md violations{{publicVerifyCheck}}. Check the text against the change too, within the PR's own files and text:
+   - A claim in the PR text, a changed doc or a changed comment that does not hold on every path it covers, or holds only through a step nobody wrote down.
+   - Unchanged text in an edited file that the change contradicts. Judge the old text by the change, not the change by the old text.
 8. Verdict: PASS only when every checklist item passes, no re-checked finding is `open` and there is no blocking finding. Blocking means a real defect or an unmet item, stated with evidence. Style nits and suggestions go to `nonBlocking`.
 
 Report through the structured output, with `sha` set to the SHA you verified.
