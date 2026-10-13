@@ -147,6 +147,8 @@ function kindsSince(manifest, from = 0) {
   return eventsSince(manifest, from).map((event) => event.kind)
 }
 
+const GREEN_EVIDENCE = 'required checks passed, runs: test (success)'
+
 function gateCheckEvent(item, result, evidence, sha = SHA) {
   return { id: 'A1', kind: 'gate-check', stage: 'preVerify', item, level: 'required', result, sha: sha.slice(0, 7), evidence }
 }
@@ -1575,7 +1577,7 @@ test('checkClaim: a claimed PR merged or closed since sync is left to the next s
   assert.equal(gate.calls, 1)
   assert.equal(driver.ledger.prs.A1.state, 'ready_claimed')
   assert.equal(driver.ledger.prs.A1.claimPatchId, undefined)
-  assert.deepEqual(eventsSince(manifest), [gateCheckEvent('ci', 'pass', 'passed: test')])
+  assert.deepEqual(eventsSince(manifest), [gateCheckEvent('ci', 'pass', GREEN_EVIDENCE)])
 })
 
 const PREFIX = "Answer from the delegate, on the maintainer's behalf, from the plan:\n\n"
@@ -2108,7 +2110,7 @@ test('checkClaim: a new code scanning alert on the head goes back to the impleme
   assert.equal(entry.claimPatchId, undefined)
   assert.equal(entry.patchSince, undefined)
   assert.deepEqual(eventsSince(manifest), [
-    gateCheckEvent('ci', 'pass', 'passed: test'),
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     gateCheckEvent('code-scanning', 'fail', ALERT_REASON),
     { id: 'A1', kind: 'needs-fix', reason: 'code scanning' },
@@ -2128,7 +2130,7 @@ test('checkClaim: with action block, a new alert blocks the PR for the maintaine
   assert.equal(entry.verified, null)
   assert.equal(entry.claimPatchId, undefined)
   assert.deepEqual(eventsSince(manifest), [
-    gateCheckEvent('ci', 'pass', 'passed: test'),
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     gateCheckEvent('code-scanning', 'fail', ALERT_REASON),
     { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
@@ -2146,7 +2148,7 @@ test('checkClaim: an alert from an older commit waits for the analysis of the he
   assert.equal(entry.state, 'ready_claimed')
   assert.equal(entry.claimPatchId, undefined)
   assert.deepEqual(eventsSince(manifest), [
-    gateCheckEvent('ci', 'pass', 'passed: test'),
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     {
       id: 'A1',
@@ -2169,10 +2171,10 @@ test('checkClaim: a repo without code scanning logs it once and goes on', async 
   assert.equal(entry.state, 'ready_claimed')
   assert.equal(entry.claimPatchId, samplePrs().A1.verified.patchId)
   assert.deepEqual(eventsSince(manifest), [
-    gateCheckEvent('ci', 'pass', 'passed: test'),
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     { id: 'A1', kind: 'code-scanning-unavailable', reason: 'gh: no analysis found (HTTP 404)' },
-    gateCheckEvent('code-scanning', 'pass', 'unavailable'),
+    gateCheckEvent('code-scanning', 'skip', 'unavailable'),
   ])
 
   assert.equal(entry.notified.codeScanningUnavailable, true)
@@ -2247,7 +2249,7 @@ test('checkClaim: with gates.preVerify.scope, an undeclared file out of scope go
   assert.deepEqual(entry.outOfScope, ['README.md'])
   assert.deepEqual(agentCalls, [])
   assert.deepEqual(eventsSince(manifest), [
-    gateCheckEvent('ci', 'pass', 'passed: test'),
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium'),
     gateCheckEvent('scope', 'fail', 'undeclared: README.md'),
@@ -2267,7 +2269,7 @@ test('checkClaim: with gates.preVerify.scope, a file out of scope listed in devi
   const events = eventsSince(manifest)
 
   assert.deepEqual(events.slice(0, 4), [
-    gateCheckEvent('ci', 'pass', 'passed: test'),
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium'),
     gateCheckEvent('scope', 'pass', 'declared in deviations: README.md'),
@@ -2303,7 +2305,7 @@ test('checkClaim: without gates, an undeclared file out of scope still goes on t
   assert.deepEqual(entry.outOfScope, ['README.md'])
   assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
   assert.deepEqual(eventsSince(manifest).slice(0, 3), [
-    gateCheckEvent('ci', 'pass', 'passed: test'),
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium'),
   ])
@@ -2347,13 +2349,15 @@ test('checkClaim: CI that does not settle logs a failed ci check right before it
   ])
 })
 
-test('checkClaim: a check is logged once per claimed SHA and result, and again for a new SHA', async () => {
+test('checkClaim: a pass is logged once per claim, and again for a new claim', async () => {
   const { manifest, driver, tools, gate, pr, entry } = claimDriver({})
   const passes = (sha) => [
-    gateCheckEvent('ci', 'pass', 'passed: test', sha),
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE, sha),
     gateCheckEvent('policy', 'pass', 'no violations', sha),
     gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium', sha),
   ]
+
+  entry.claimedAt = at(1)
 
   await driver.advance(pr)
   await driver.advance(pr)
@@ -2361,15 +2365,98 @@ test('checkClaim: a check is logged once per claimed SHA and result, and again f
   assert.equal(gate.calls, 2)
   assert.deepEqual(eventsSince(manifest), passes(SHA))
 
-  const before = readEvents(manifest).length
+  let before = readEvents(manifest).length
+  entry.claimedAt = at(2)
+
+  await driver.advance(pr)
+
+  assert.deepEqual(eventsSince(manifest, before), passes(SHA))
+
+  before = readEvents(manifest).length
   entry.claimedSha = REBASED
+  entry.claimedAt = at(3)
   gate.pr = { headRefOid: REBASED }
   tools.answer([viewRule({ headRefOid: REBASED }), { tool: 'gh', args: `commits/${REBASED}/check-runs`, stdout: GREEN_RUNS }])
 
   await driver.advance(pr)
 
   assert.deepEqual(eventsSince(manifest, before), passes(REBASED))
-  assert.deepEqual(entry.notified.gateChecks, { sha: REBASED, seen: ['ci:pass', 'policy:pass', 'code-scanning:pass'] })
+  assert.deepEqual(entry.notified.gateChecks, { claimedAt: at(3), seen: ['ci:pass', 'policy:pass', 'code-scanning:pass'] })
+})
+
+test('checkClaim: the scope gate failing again on the same SHA after a new READY logs its fail again', async () => {
+  const { manifest, driver, pr, entry } = verifiableDriver({ gates: SCOPE_GATE })
+  const round = [
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
+    gateCheckEvent('policy', 'pass', 'no violations'),
+    gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium'),
+    gateCheckEvent('scope', 'fail', 'undeclared: README.md'),
+    { id: 'A1', kind: 'needs-fix', reason: 'out of scope' },
+  ]
+
+  entry.claimedAt = at(1)
+
+  await driver.advance(pr)
+
+  entry.state = 'ready_claimed'
+  entry.claimedAt = at(2)
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(eventsSince(manifest), [...round, ...round])
+})
+
+test('checkClaim: a claim resumed after a fail, with no new READY, logs every check again', async () => {
+  const { manifest, driver, pr, entry } = claimDriver(scanned([scanAlert()]))
+  const round = [
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
+    gateCheckEvent('policy', 'pass', 'no violations'),
+    gateCheckEvent('code-scanning', 'fail', ALERT_REASON),
+    { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
+  ]
+
+  manifest.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
+  entry.claimedAt = at(1)
+
+  await driver.advance(pr)
+
+  entry.state = 'ready_claimed'
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'blocked')
+  assert.equal(entry.claimedAt, at(1))
+  assert.deepEqual(eventsSince(manifest), [...round, ...round])
+})
+
+test('checkClaim: code scanning turned off is a skip, not a pass', async () => {
+  const { manifest, driver, pr } = claimDriver(scanned([scanAlert()]))
+  manifest.repo.codeScanning = { action: 'ignore', minSeverity: 'medium' }
+
+  await driver.advance(pr)
+
+  assert.deepEqual(eventsSince(manifest), [
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
+    gateCheckEvent('policy', 'pass', 'no violations'),
+    gateCheckEvent('code-scanning', 'skip', 'off'),
+  ])
+})
+
+test('checkClaim: a ci pass lists every run on the SHA with its conclusion', async () => {
+  const { manifest, driver, tools, pr } = claimDriver({})
+  const runs = {
+    check_runs: [
+      { id: 1, name: 'test', status: 'completed', conclusion: 'success' },
+      { id: 2, name: 'docs', status: 'completed', conclusion: 'skipped' },
+    ],
+  }
+
+  tools.answer([viewRule(), { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: runs }])
+
+  await driver.advance(pr)
+
+  assert.deepEqual(eventsSince(manifest)[0], gateCheckEvent('ci', 'pass', 'required checks passed, runs: test (success), docs (skipped)'))
 })
 
 test('checkClaim: every gate-check event is short and names the stage and the level', async () => {

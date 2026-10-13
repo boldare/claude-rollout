@@ -556,9 +556,12 @@
                   policy to the diff. Then it reads the new code scanning alerts on the head. With
                   <a href="manifest.html#gates-preVerify-scope"><code>gates.preVerify.scope</code></a
                   >, it then checks that every changed file outside the PR's scope is listed in the READY report's <code>deviations</code>.
-                  Each check with a result logs one <code>gate-check</code> event with the item (<code>ci</code>, <code>policy</code>,
-                  <code>code-scanning</code>, <code>scope</code>), pass or fail, the short SHA and short evidence. The same result for the
-                  same head is logged once.
+                  Each check with a result logs a <code>gate-check</code> event with the item (<code>ci</code>, <code>policy</code>,
+                  <code>code-scanning</code>, <code>scope</code>), the result, the short SHA and short evidence. The result is pass, fail,
+                  or skip for code scanning that is off or unavailable. A <code>ci</code> pass lists every run on the SHA with its
+                  conclusion. A pass or skip is logged once per claim, and a READY report or a moved head starts a new claim. A fail is
+                  always logged, right before the send-back or block it causes, and the next round of checks on that claim logs every result
+                  again.
                 </td>
                 <td>
                   A note that still waits for the implementer: <code>needs_fix</code>, before any check. CI green, no policy violation, no
