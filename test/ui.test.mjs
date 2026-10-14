@@ -260,6 +260,27 @@ test('eventDetail: every other field as key=value, skipping null and cutting lon
   assert.equal(long, `note=${'n'.repeat(200)}…`)
 })
 
+test('a gate-check event: its fields in the detail, found by its kind, and never a run', () => {
+  const check = {
+    at: at(1),
+    id: 'A1',
+    kind: 'gate-check',
+    stage: 'preVerify',
+    item: 'scope',
+    level: 'required',
+    result: 'fail',
+    sha: 'abc1234',
+    evidence: 'undeclared: README.md',
+  }
+
+  const events = [{ at: at(0), id: 'A1', kind: 'implement-start', run: 'A1-01-implement' }, check]
+
+  assert.equal(eventDetail(check), 'stage=preVerify item=scope level=required result=fail sha=abc1234 evidence=undeclared: README.md')
+
+  assert.deepEqual(filterEvents(events, { kind: 'gate-check' }), [check])
+  assert.deepEqual(runsFromEvents([check], { driverRunning: true }), [])
+})
+
 test('timelineLayout: the demo rollout', () => {
   const layout = demoLayout()
   const [a1, a2, a3] = layout.lanes

@@ -9,6 +9,7 @@ import {
   judge,
   outOfScope,
   policyViolations,
+  undeclaredOutOfScope,
 } from '../lib/judge.mjs'
 
 const manifest = {
@@ -247,6 +248,35 @@ test('changeset bump parsing', () => {
 test('out-of-scope files are reported, changesets are always allowed', () => {
   const extra = facts({ files: [...facts().files, { status: 'modified', path: 'README.md' }] })
   assert.deepEqual(outOfScope(manifest, pr, extra), ['README.md'])
+})
+
+test('undeclaredOutOfScope: a file out of scope stays unless deviations name its exact path', () => {
+  const outside = ['README.md', 'docs/usage.md', 'scripts/release.sh']
+  const reason = 'needed for the change'
+
+  assert.deepEqual(undeclaredOutOfScope(outside), outside)
+  assert.deepEqual(undeclaredOutOfScope(outside, [{ file: 'README.md', reason }]), ['docs/usage.md', 'scripts/release.sh'])
+  assert.deepEqual(
+    undeclaredOutOfScope(outside, [
+      { file: 'docs/usage.md', reason },
+      { file: 'README.md', reason },
+    ]),
+    ['scripts/release.sh'],
+  )
+
+  assert.deepEqual(
+    undeclaredOutOfScope(outside, [
+      { file: 'docs', reason },
+      { file: 'docs/', reason },
+      { file: 'docs/**', reason },
+    ]),
+    outside,
+  )
+
+  assert.deepEqual(undeclaredOutOfScope(outside, [{ file: 'scripts/*.sh', reason }]), outside)
+  assert.deepEqual(undeclaredOutOfScope([], [{ file: 'README.md', reason }]), [])
+  assert.deepEqual(undeclaredOutOfScope(['README.md'], null), ['README.md'])
+  assert.deepEqual(undeclaredOutOfScope(['README.md'], undefined), ['README.md'])
 })
 
 const GM = { ...manifest, policy: { ...manifest.policy, approval: 'github' }, repo: { ...manifest.repo, maintainers: ['maint'] } }
