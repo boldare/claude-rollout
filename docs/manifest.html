@@ -510,7 +510,11 @@ prs:
                 <td>string</td>
                 <td>none</td>
                 <td>no</td>
-                <td>A tagged source goes only to PRs that list the tag in <code>briefTags</code>. Untagged sources go to every PR.</td>
+                <td>
+                  A tagged source goes only to PRs that list the tag in <code>briefTags</code>. Untagged sources go to every PR. A source
+                  whose tag only one PR lists, such as an addendum for it, is all that PR's in the UI's plan views, unless it has a section
+                  for the PR. See <a href="ui.html#view-plan">Plan</a>.
+                </td>
               </tr>
             </tbody>
           </table>

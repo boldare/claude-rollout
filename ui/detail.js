@@ -367,21 +367,33 @@ function wholePlan(ctx) {
   return wrap('p', link(ctx.linkWith({ view: 'plan', pr: null, tab: null }), 'The whole plan'))
 }
 
-function renderPlanTab(pr, ctx) {
-  if (!pr.plan) {
-    const hint =
-      'No briefing source has a section for this PR. A section starts with a heading that begins with the PR id, like "### P1 …".'
-
-    return wrap('div', element('p', hint, 'muted'), wholePlan(ctx))
+// Says where the UI looked and what it looks for, with the PR's own id, so the plan can be fixed.
+function noSectionHint(pr) {
+  if (pr.planSources.length === 0) {
+    return 'This PR gets no briefing source, so there is no plan to look in.'
   }
 
-  return wrap(
-    'div',
-    element('h3', pr.plan.heading, 'plan-heading'),
-    element('p', `From ${pr.plan.source}`, 'muted'),
-    textBlock(pr.plan.text || null, 'The section is empty.'),
-    wholePlan(ctx),
-  )
+  return [
+    `No source this PR gets has a section for it (${pr.planSources.join(', ')}).`,
+    `A section starts with the PR id in a heading, like "### ${pr.id} …", or in bold at the start of a paragraph or a list item, like "**${pr.id} …**".`,
+    "A source whose tag no other PR lists is the PR's in full.",
+  ].join(' ')
+}
+
+function sliceParts(slice) {
+  return [
+    element('h3', slice.heading, 'plan-heading'),
+    element('p', `From ${slice.source}`, 'muted'),
+    textBlock(slice.text || null, 'The section is empty.'),
+  ]
+}
+
+function renderPlanTab(pr, ctx) {
+  if (pr.plan.length === 0) {
+    return wrap('div', element('p', noSectionHint(pr), 'muted'), wholePlan(ctx))
+  }
+
+  return wrap('div', ...pr.plan.flatMap(sliceParts), wholePlan(ctx))
 }
 
 const TAB_RENDERERS = {

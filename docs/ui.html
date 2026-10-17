@@ -574,9 +574,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             and goes away when that run ends.
           </li>
           <li>
-            <strong>title</strong> is the PR's title from the manifest. Below it, in grey, the first line of text in the PR's section in the
-            plan, without markdown, so you can tell which slice of the plan the PR is. Headings, code and rules are skipped. Hover it for
-            the source and the section heading. See <a href="#view-plan">Plan</a> for how a section is found.
+            <strong>title</strong> is the PR's title from the manifest. Below it, in grey, the first line of text in the PR's first section
+            in the plan, without markdown, so you can tell which slice of the plan the PR is. Headings, code, rules and a remark in
+            parentheses after the bold, like the deps in <code>**P3 …** (P1)</code>, are skipped. Hover it for the source and the section
+            heading. See <a href="#view-plan">Plan</a> for how a section is found.
           </li>
           <li><strong>GitHub</strong> links to the PR once the implementer opened it.</li>
           <li><strong>deps</strong> lists the dependencies with their own state.</li>
@@ -783,17 +784,28 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h3 id="view-plan">Plan</h3>
 
         <p>
-          What the agents work from. On top, a table of the PRs with their state and the heading of their section in the plan. Click a row
-          to open that PR's plan tab. Below it, every source in <a href="manifest.html#briefing">briefing.sources</a> in full, as plain
-          text, with its kind, tag and path. A source that cannot be read shows the error instead.
+          What the agents work from. On top, a table of the PRs with their state and the headings of their sections in the plan, one line
+          per source. Click a row to open that PR's plan tab. Below it, every source in
+          <a href="manifest.html#briefing">briefing.sources</a> in full, as plain text, with its kind, tag and path. A source that cannot be
+          read shows the error instead.
         </p>
 
         <ul>
           <li>
-            <strong>A PR's section</strong> starts at a heading that begins with the PR id, like <code>### P3 feat: the events API</code> or
-            <code>## PR P3: events API</code>, and runs to the next heading of the same or a higher level. P1 never matches P10 or P1.1, and
-            headings inside code fences do not count. The UI looks in the sources the PR's brief writer gets, in manifest order, and takes
-            the first match.
+            <strong>A PR's section</strong> starts where the PR id opens a heading, like <code>### P3 feat: the events API</code> or
+            <code>## PR P3: events API</code>, or the bold at the start of a paragraph or a list item, like
+            <code>**P3 `feat/events`** (P1)</code> or <code>- **P3 (api).** The events API.</code> A heading runs to the next heading of the
+            same or a higher level, a bold paragraph to the next bold paragraph or heading, and a list item to the next item at its level. A
+            heading wins over bold that names the PR earlier, such as a summary list. The id must open the heading or the bold, so
+            <code>**No absolute paths (P3).**</code> is no section. P1 never matches P10 or P1.1, and nothing inside code fences counts.
+          </li>
+          <li>
+            <strong>A source of the PR's own</strong>, one whose <a href="manifest.html#source-tag">tag</a> no other PR lists, such as an
+            addendum for it, is the PR's in full when it has no section for the PR. Its first heading names it.
+          </li>
+          <li>
+            <strong>Every source</strong> the PR's brief writer gets adds its section, in manifest order. The board shows the first line of
+            the first one, the PR's plan tab shows them all.
           </li>
           <li>
             <strong>Before the first run</strong> the page shows only this view, without the other tabs. The table has no state and no links
@@ -900,8 +912,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <tr>
                 <td class="name">plan</td>
                 <td>
-                  The PR's own section of the plan, the source it comes from, and a link to the whole plan. A PR without a section says how
-                  to add one.
+                  The PR's sections of the plan, each with the source it comes from, and a link to the whole plan. A PR without one names
+                  the sources it gets and says how to add a section.
                 </td>
               </tr>
               <tr>
