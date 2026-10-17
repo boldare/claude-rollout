@@ -489,7 +489,7 @@ test('api: the list, a rollout state, events after N, a PR, and the errors', asy
   )
 
   assert.deepEqual(
-    plan.prs.map((item) => [item.id, item.plan?.heading ?? null]),
+    plan.prs.map((item) => [item.id, item.plan[0]?.heading ?? null]),
     [
       ['A1', 'A1 the first slice'],
       ['A2', null],
@@ -497,8 +497,8 @@ test('api: the list, a rollout state, events after N, a PR, and the errors', asy
     ],
   )
 
-  assert.equal((await get(server, '/api/rollouts/demo/prs/A1')).json().plan.heading, 'A1 the first slice')
-  assert.equal((await get(server, '/api/rollouts/demo')).json().view.rows[0].plan.excerpt, 'Why: it comes first.')
+  assert.equal((await get(server, '/api/rollouts/demo/prs/A1')).json().plan[0].heading, 'A1 the first slice')
+  assert.equal((await get(server, '/api/rollouts/demo')).json().view.rows[0].plan[0].excerpt, 'Why: it comes first.')
   assert.equal((await get(server, '/api/rollouts/nope/plan')).status, 404)
 
   const unknownPr = await get(server, '/api/rollouts/demo/prs/Z9')

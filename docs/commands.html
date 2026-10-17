@@ -522,6 +522,13 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>It does not validate, or a brief is missing and there are no briefing sources. Nothing else runs then.</td>
               </tr>
               <tr>
+                <td>plan sections</td>
+                <td>
+                  Warns when a PR of the run has no section in the briefing sources it gets, so the UI cannot show its slice of the plan.
+                  The agents still get every source in full. See <a href="ui.html#view-plan">Plan</a> for what counts as a section.
+                </td>
+              </tr>
+              <tr>
                 <td class="name">claude --version</td>
                 <td>The binary does not run. Put it on PATH or in <code>repo.pathPrepend</code>, or set <code>claudeBin</code>.</td>
               </tr>

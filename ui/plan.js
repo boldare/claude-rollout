@@ -3,11 +3,17 @@ import { sentence } from './format.js'
 
 const HEADINGS = ['PR', 'state', 'section in the plan', 'source']
 
+// One line per slice, in the order the PR page shows them.
+function sliceLines(slices, field) {
+  return wrap('div', ...slices.map((slice) => element('div', slice[field])))
+}
+
 // Before the first run there is no state and no PR page to open.
 function sectionRow(pr, ctx) {
   const row = ctx.view?.rows.find((item) => item.id === pr.id)
-  const heading = pr.plan ? cell(pr.plan.heading) : cell(element('span', 'No section', 'muted'))
-  const source = cell(pr.plan?.source ?? '-', 'info')
+  const found = pr.plan.length > 0
+  const heading = cell(found ? sliceLines(pr.plan, 'heading') : element('span', 'No section', 'muted'))
+  const source = cell(found ? sliceLines(pr.plan, 'source') : '-', 'info')
 
   if (!row) {
     return wrap('tr', cell(pr.id), cell('-'), heading, source)

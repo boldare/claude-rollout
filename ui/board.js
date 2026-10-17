@@ -71,12 +71,13 @@ function attempts(row) {
 // The first line of the PR's section in the plan says what slice of it the PR is.
 function titleCell(row) {
   const node = wrap('td', element('div', row.title))
+  const first = (row.plan ?? []).find((slice) => slice.excerpt)
 
   node.className = 'pr-title'
 
-  if (row.plan?.excerpt) {
-    const slice = element('div', row.plan.excerpt, 'slice')
-    slice.title = `${row.plan.source}: ${row.plan.heading}`
+  if (first) {
+    const slice = element('div', first.excerpt, 'slice')
+    slice.title = `${first.source}: ${first.heading}`
     node.append(slice)
   }
 

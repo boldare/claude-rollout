@@ -25,6 +25,7 @@ import { stopDriver } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { batteryWarning } from '../lib/machine.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
+import { prsWithoutPlan } from '../lib/plan.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { ghEnv } from '../lib/github.mjs'
 import { agentTokenCheck, guardSelfTest, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
@@ -290,6 +291,16 @@ async function preflight(manifest) {
 
   if (toWrite.length > 0) {
     console.log(`ok   briefs the driver will write when their dependencies merge: ${toWrite.join(', ')}`)
+  }
+
+  const unplanned = prsWithoutPlan(manifest)
+
+  if (unplanned.length > 0) {
+    const [id] = unplanned
+
+    warnings.push(
+      `no section in the plan for ${unplanned.join(', ')}: the UI cannot show their slice of it. Start each PR's entry with its id, in a heading ("### ${id} …") or in bold ("**${id} …**")`,
+    )
   }
 
   await probe('claude', manifest.claudeBin, ['--version'], {
