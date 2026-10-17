@@ -198,7 +198,13 @@ prs:
                 <td>path</td>
                 <td><code>claude</code></td>
                 <td>no</td>
-                <td>The Claude Code binary. The default finds <code>claude</code> on PATH, with <code>repo.pathPrepend</code> first.</td>
+                <td>
+                  The Claude Code binary. The default finds <code>claude</code> on PATH, with <code>repo.pathPrepend</code> first. Set it
+                  when the first <code>claude</code> on PATH is a wrapper script, such as the shim a terminal like cmux puts there. Agents
+                  would run through it, with whatever it adds, and stop when it stops them.
+                  <a href="commands.html#cmd-preflight">preflight</a>
+                  warns about one.
+                </td>
               </tr>
               <tr id="manifest-repo">
                 <td>repo</td>

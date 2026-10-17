@@ -1,15 +1,64 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadManifest } from '../lib/manifest.mjs'
-import { agentTokenCheck, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
+import { agentTokenCheck, claudeWrapperWarning, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 function tools(install, verify) {
   return probeTools({ repo: { install, verify } })
 }
+
+// One directory per entry, each with an executable `claude` holding that text.
+function pathWith(context, ...texts) {
+  const root = mkdtempSync(join(tmpdir(), 'rollout-claude-'))
+  context.after(() => rmSync(root, { recursive: true, force: true }))
+
+  return texts
+    .map((text, index) => {
+      const dir = join(root, String(index))
+      mkdirSync(dir)
+      writeFileSync(join(dir, 'claude'), text)
+      chmodSync(join(dir, 'claude'), 0o755)
+
+      return dir
+    })
+    .join(':')
+}
+
+const WRAPPER = '#!/usr/bin/env bash\nexec /opt/terminal/claude-wrapper "$@"\n'
+const NATIVE = '\u00cf\u00fa\u00ed\u00fe binary'
+const NPM = '#!/usr/bin/env node\nimport("./cli.js")\n'
+
+test('claude wrapper: a shell script first on PATH warns and names the binary behind it', (context) => {
+  const path = pathWith(context, WRAPPER, NATIVE)
+  const [wrapper, native] = path.split(':').map((dir) => join(dir, 'claude'))
+  const warning = claudeWrapperWarning('claude', path)
+
+  assert.ok(warning.startsWith(`claude on PATH is a wrapper script (${wrapper}).`), warning)
+  assert.ok(warning.endsWith(`Set claudeBin in manifest.yaml to the Claude Code binary, for example ${native}`), warning)
+})
+
+test('claude wrapper: without a binary behind it the warning names none', (context) => {
+  const warning = claudeWrapperWarning('claude', pathWith(context, WRAPPER))
+
+  assert.ok(warning.endsWith('Set claudeBin in manifest.yaml to the Claude Code binary'), warning)
+})
+
+test('claude wrapper: the native binary and the npm node script pass', (context) => {
+  assert.equal(claudeWrapperWarning('claude', pathWith(context, NATIVE, WRAPPER)), null)
+  assert.equal(claudeWrapperWarning('claude', pathWith(context, NPM)), null)
+})
+
+test('claude wrapper: an explicit claudeBin path and a missing claude pass', (context) => {
+  const path = pathWith(context, WRAPPER)
+
+  assert.equal(claudeWrapperWarning(join(path, 'claude'), path), null)
+  assert.equal(claudeWrapperWarning('claude', ''), null)
+  assert.equal(claudeWrapperWarning('claude', undefined), null)
+})
 
 test('probe tools come from the install command', () => {
   assert.deepEqual(tools('pnpm install --frozen-lockfile', {}), ['node', 'pnpm'])
