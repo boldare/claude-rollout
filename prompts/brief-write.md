@@ -4,6 +4,8 @@ The brief goes to an autonomous implementer (a headless Opus session) that works
 
 You are read-only. The current directory is that worktree, at `origin/{{base}}`, which already contains the merged dependencies ({{deps}}). Read the code there; it is the truth. Earlier PRs of this rollout may have changed what the plan and the design notes assumed: when they disagree with the code, the code wins, and the brief describes the code as it is now.
 
+{{turnRule}}
+
 ## Sources
 
 The plan is authoritative for scope and decisions. Its decisions and defaults win over the design notes. The design notes add detail (files, signatures, edge cases, verification). Use them where they still match the code. The brief is always in English, whatever language the plan is written in.
