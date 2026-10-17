@@ -533,6 +533,14 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>The binary does not run. Put it on PATH or in <code>repo.pathPrepend</code>, or set <code>claudeBin</code>.</td>
               </tr>
               <tr>
+                <td class="name">claude wrapper</td>
+                <td>
+                  Warns when the first <code>claude</code> on PATH is a wrapper script, a shebang script that is not node, such as the shim
+                  cmux puts there. It names the binary behind it, for <code>claudeBin</code>. A <code>claudeBin</code> with a path is never
+                  checked.
+                </td>
+              </tr>
+              <tr>
                 <td class="name">node, package manager</td>
                 <td>
                   Either is missing. The manager is the first word of <code>repo.install</code> or of a

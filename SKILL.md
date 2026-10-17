@@ -105,7 +105,7 @@ The release PR ("chore: version packages") is never merged by the driver: mergin
 ## Machine setup
 
 - Node 24+, git, gh and the repo's package manager. Preflight probes node and the manager that `repo.install` and `repo.verify.common` start with.
-- `claude` on PATH (with `repo.pathPrepend` first), or `claudeBin` in the manifest. Agents inherit the driver's environment, so they use the user's `claude` login or `ANTHROPIC_API_KEY`.
+- `claude` on PATH (with `repo.pathPrepend` first), or `claudeBin` in the manifest. Agents inherit the driver's environment, so they use the user's `claude` login or `ANTHROPIC_API_KEY`. When the first `claude` on PATH is a wrapper script, such as the shim cmux puts there, preflight warns: agents would run through it, with whatever it adds, and stop when it stops them. Set `claudeBin` to the real binary.
 - Notifications go through `osascript` on macOS and `notify-send` on Linux. Other platforms get none.
 - For a long run on a Mac, plug in and keep the lid open. `caffeinate -is` keeps a Mac awake only on AC power, and closing the lid sleeps it anyway. On battery `run`, `preflight` and the UI's Start warn. Other platforms get no warning.
 - `ROLLOUT_DIR` sets the default `--dir`. `ROLLOUT_ROOT` sets the default root for `ui`.

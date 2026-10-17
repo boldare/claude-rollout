@@ -28,7 +28,15 @@ import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../
 import { prsWithoutPlan } from '../lib/plan.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { ghEnv } from '../lib/github.mjs'
-import { agentTokenCheck, guardSelfTest, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
+import {
+  agentTokenCheck,
+  claudeWrapperWarning,
+  guardSelfTest,
+  originCheck,
+  probeTools,
+  sshHostname,
+  storedLoginCheck,
+} from '../lib/preflight.mjs'
 import { agentSettings } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
@@ -306,6 +314,12 @@ async function preflight(manifest) {
   await probe('claude', manifest.claudeBin, ['--version'], {
     problem: `claude (${manifest.claudeBin}) did not run: put it on PATH or repo.pathPrepend, or set claudeBin in manifest.yaml`,
   })
+
+  const wrapper = claudeWrapperWarning(manifest.claudeBin, env.PATH)
+
+  if (wrapper) {
+    warnings.push(wrapper)
+  }
 
   for (const tool of probeTools(manifest)) {
     await probe(tool, tool, ['--version'])
