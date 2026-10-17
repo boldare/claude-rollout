@@ -260,6 +260,14 @@
                 <td>The same, plus Edit, Write and NotebookEdit everywhere. They are also passed as <code>--disallowedTools</code>.</td>
               </tr>
               <tr>
+                <td class="nowrap">denied tools</td>
+                <td colspan="2">
+                  <code>ScheduleWakeup</code>, <code>CronCreate</code>, <code>CronDelete</code>, <code>CronList</code>,
+                  <code>RemoteTrigger</code> and <code>Monitor</code>, also passed as <code>--disallowedTools</code>. They act in a later
+                  turn, and a headless run ends with its turn.
+                </td>
+              </tr>
+              <tr>
                 <td class="nowrap">allowed Bash</td>
                 <td>
                   <code>git *</code>, <code>pnpm *</code>, <code>node *</code>, <code>gh pr create|edit|view|checks|list</code>,

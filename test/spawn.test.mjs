@@ -439,9 +439,52 @@ test('runAgent: the delegate runs read-only, with no branch and its own schema',
   const schema = JSON.parse(readFileSync(new URL('../schemas/delegate.json', import.meta.url), 'utf8'))
 
   assert.equal(result.ok, false)
-  assert.deepEqual(args.slice(disallowed, disallowed + 4), ['--disallowedTools', 'Edit', 'Write', 'NotebookEdit'])
+  assert.deepEqual(args.slice(disallowed, disallowed + 10), [
+    '--disallowedTools',
+    'Edit',
+    'Write',
+    'NotebookEdit',
+    'ScheduleWakeup',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+    'RemoteTrigger',
+    'Monitor',
+  ])
+
   assert.equal(readFileSync(branchFile, 'utf8'), '')
   assert.deepEqual(JSON.parse(args[args.indexOf('--json-schema') + 1]), schema)
+})
+
+test('runAgent: an implementer may edit files but gets no tool that waits for a later turn', async () => {
+  const manifest = loadManifest(makeRollout())
+  const argsFile = join(manifest.dir, 'args.bin')
+
+  fakeClaude(manifest, `printf '%s\\0' "$@" > '${argsFile}'\nexit 1`)
+
+  await runAgent(manifest, manifest.all[0], {
+    role: 'implement',
+    prompt: 'unused',
+    effort: 'high',
+    sessionId: '00000000-0000-4000-8000-000000000000',
+    resume: false,
+    cwd: manifest.repo.path,
+    logName: 'A1-01-implement',
+  })
+
+  const args = readFileSync(argsFile, 'utf8').split('\0').slice(0, -1)
+  const disallowed = args.indexOf('--disallowedTools')
+
+  assert.deepEqual(args.slice(disallowed, disallowed + 8), [
+    '--disallowedTools',
+    'ScheduleWakeup',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+    'RemoteTrigger',
+    'Monitor',
+    '--session-id',
+  ])
 })
 
 // What a maintainer's shell may export. With GH_HOST set, gh reads the keyring login.

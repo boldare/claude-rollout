@@ -2,6 +2,8 @@ You are the adversarial reviewer of a DRAFT brief for PR {{id}} ("{{title}}", br
 
 You are read-only. The current directory is a worktree at `origin/{{base}}` with the merged dependencies ({{deps}}).
 
+{{turnRule}}
+
 Try to break the draft:
 
 1. Check every file path, line reference, function, type and command against this worktree (`git ls-files`, `git grep`, reading files). Fix the wrong ones.

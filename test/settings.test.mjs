@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
-import { agentSettings, guardCommand, readOnlyRole } from '../lib/settings.mjs'
+import { agentSettings, disallowedTools, guardCommand, readOnlyRole } from '../lib/settings.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 function pushRules(branch) {
@@ -78,6 +78,26 @@ test('the delegate is read-only: the verifier guard and no file edits', () => {
 
   assert.deepEqual(allow, agentSettings(manifest, 'verify').permissions.allow)
   assert.ok(guardCommand(manifest, 'delegate').endsWith(' verifier || exit 2'))
+})
+
+test('agentSettings: no role gets a tool that waits for a later turn, and only read-only roles lose the file tools', () => {
+  const manifest = loadManifest(makeRollout())
+
+  for (const role of ['brief', 'implement', 'fix', 'verify', 'delegate']) {
+    const { deny } = agentSettings(manifest, role).permissions
+
+    for (const tool of ['ScheduleWakeup', 'CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger', 'Monitor']) {
+      assert.ok(deny.includes(tool), `${role}: ${tool}`)
+    }
+
+    assert.deepEqual(
+      disallowedTools(role).filter((tool) => !deny.includes(tool)),
+      [],
+      role,
+    )
+
+    assert.equal(deny.includes('Edit'), readOnlyRole(role), role)
+  }
 })
 
 test('agentSettings: every role gets the guard with a finite timeout and the exit 2 fallback', () => {

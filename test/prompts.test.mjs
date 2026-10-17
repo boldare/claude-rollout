@@ -10,6 +10,7 @@ import {
   codeScanningNote,
   delegatePrompt,
   findingsNote,
+  fixPrompt,
   implementPrompt,
   resumeFreshPrompt,
   verifyPrompt,
@@ -40,6 +41,24 @@ function assertFilled(prompts) {
     assert.equal(text.includes('{{'), false, name)
   }
 }
+
+test('prompts: every role is told that its run ends with its turn', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const prompts = {
+    ...render({ public: false, denylist: [] }),
+    fix: fixPrompt(manifest, pr, STATE, { reason: 'ci', note: 'n', head: 'abc' }),
+    resumeFresh: resumeFreshPrompt(manifest, pr, STATE, { reason: 'session missing', note: 'n' }),
+  }
+
+  for (const [name, text] of Object.entries(prompts)) {
+    assert.ok(text.includes('Your run ends when your turn ends'), name)
+    assert.ok(text.includes('never end a turn to wait'), name)
+  }
+
+  assert.ok(prompts.implement.includes('Wait for CI in the foreground too (step 6).'))
+  assertFilled(prompts)
+})
 
 test('prompts: a public repo keeps the public-repository rules', () => {
   const prompts = render({ public: true, denylist: ['acme-client'] })

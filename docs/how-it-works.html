@@ -918,7 +918,8 @@
   --permission-mode auto --permission-prompts none \
   --settings &lt;deny and allow rules, the guard hook&gt; \
   --max-budget-usd &lt;policy.budgetUsd[effort]&gt; \
-  [--disallowedTools Edit Write NotebookEdit] <span class="dim"># verifier, brief and delegate roles</span>
+  --disallowedTools [Edit Write NotebookEdit] <span class="dim"># the file tools for the verifier, brief and delegate roles</span>
+                    ScheduleWakeup CronCreate CronDelete CronList RemoteTrigger Monitor
   --session-id &lt;new uuid&gt; | --resume &lt;the PR's session&gt;</code></pre>
 
         <dl class="kv">
@@ -941,6 +942,12 @@
             the role's <a href="manifest.html#policy-timeouts"><code>policy.timeouts</code></a
             >. Both count awake time, checked once a minute. A check that comes more than a minute late counts the gap as sleep, so a
             sleeping machine kills no run. SIGTERM first, SIGKILL 10 s later.
+          </dd>
+          <dt>One turn</dt>
+          <dd>
+            A headless run ends with the agent's turn. An agent that ends a turn to wait for a background command, a subagent or a wakeup is
+            asked for its report at once and is cut off. So every prompt tells the agent to wait in the foreground, and the tools that act
+            in a later turn are disallowed.
           </dd>
           <dt>Transcript</dt>
           <dd>
