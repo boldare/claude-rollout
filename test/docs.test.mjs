@@ -201,7 +201,7 @@ test('docs: every manifest field, from the defaults and the example, has its row
     ...TOP_LEVEL_FIELDS.map((key) => `manifest-${key}`),
     ...[...Object.keys(manifest.repo), ...Object.keys(example.repo)].map((key) => `repo-${key}`),
     ...[...Object.keys(manifest.policy), ...Object.keys(example.policy)].map((key) => `policy-${key}`),
-    ...Object.keys(manifest.gates.preVerify).map((key) => `gates-preVerify-${key}`),
+    ...Object.entries(manifest.gates).flatMap(([stage, keys]) => Object.keys(keys).map((key) => `gates-${stage}-${key}`)),
     ...[...Object.keys(manifest.all[0]), ...example.prs.flatMap((pr) => Object.keys(pr))]
       .filter((key) => key !== 'order')
       .map((key) => `pr-${key}`),

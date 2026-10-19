@@ -906,8 +906,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                 <td>
                   The latest verdict, PASS or FAIL, with the sha, the summary, the checklist with evidence, and the blocking and
                   non-blocking findings. After a FAIL, a table of the re-checked findings shows each previous finding with the implementer's
-                  answer, its status (resolved, open or wrong) and the evidence. Below it, the history lists every verdict, newest first, as
-                  collapsed entries.
+                  answer, its status (resolved, open or wrong) and the evidence. With
+                  <a href="manifest.html#gates-preVerify-required">pre-verify commands</a>, a table shows the driver's own results for the
+                  claimed head: each command with its level, its result, and as evidence its summary and the end of its output. A failed
+                  recommended command shows as a warning. The table also shows before the first verdict. Below it, the history lists every
+                  verdict, newest first, as collapsed entries.
                 </td>
               </tr>
               <tr>

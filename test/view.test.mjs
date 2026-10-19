@@ -648,3 +648,75 @@ test('card: every re-checked finding with its status, the answer and the evidenc
   assert.ok(plain.stdout.includes('\nverifier: PASS on a1a1a1a — Every checklist item holds.\n  [pass] tests pass\n\n'), plain.stdout)
   assert.doesNotMatch(plain.stdout, /re-check/)
 })
+
+// A required command that passed and a recommended one that failed, on A1's head.
+const PRE_VERIFY = {
+  sha: 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+  at: at(79),
+  results: [
+    {
+      command: 'npm test',
+      level: 'required',
+      result: 'pass',
+      summary: 'exit 0',
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      seconds: 40,
+      tail: 'tests 12, pass 12\n',
+      changes: [],
+    },
+    {
+      command: 'npm run lint',
+      level: 'recommended',
+      result: 'fail',
+      summary: 'exit 1',
+      exitCode: 1,
+      signal: null,
+      timedOut: false,
+      seconds: 5,
+      tail: 'line 1\nline 2\n\nline 3\nline 4\n   \nline 5\nline 6\n\n',
+      changes: [],
+    },
+  ],
+}
+
+test('prDetail: the pre-verify results of the claimed head, and none for another head', () => {
+  const manifest = loadManifest(makeRollout())
+  const detail = (state) => prDetail(manifest, { prs: { A1: state } }, [], [], 'A1').preVerify
+
+  assert.deepEqual(detail({ claimedSha: PRE_VERIFY.sha, preVerify: PRE_VERIFY }), PRE_VERIFY)
+  assert.equal(detail({ claimedSha: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', preVerify: PRE_VERIFY }), null)
+  assert.equal(detail({ claimedSha: PRE_VERIFY.sha }), null)
+  assert.equal(detail({}), null)
+})
+
+test('card: the pre-verify results after the verifier, with the last lines of output of a failed command', () => {
+  const dir = makeRollout({ prs: { A1: { ...samplePrs().A1, preVerify: PRE_VERIFY } } })
+  const card = cli('card', 'A1', '--dir', dir)
+  const block = [
+    '  [pass] tests pass',
+    '',
+    'pre-verify commands at a1a1a1a:',
+    '  [pass] required: npm test (exit 0)',
+    '  [fail] recommended: npm run lint (exit 1)',
+    '    line 2',
+    '    line 3',
+    '    line 4',
+    '    line 5',
+    '    line 6',
+    '',
+    'Approve with: ',
+  ]
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.ok(card.stdout.includes(block.join('\n')), card.stdout)
+  assert.doesNotMatch(card.stdout, /tests 12, pass 12/)
+
+  const moved = makeRollout({
+    prs: { A1: { ...samplePrs().A1, claimedSha: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', preVerify: PRE_VERIFY } },
+  })
+
+  assert.doesNotMatch(cli('card', 'A1', '--dir', moved).stdout, /pre-verify commands/)
+  assert.doesNotMatch(cli('card', 'A1', '--dir', makeRollout()).stdout, /pre-verify commands/)
+})

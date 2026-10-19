@@ -40,6 +40,8 @@ You work unattended. Nobody will answer questions mid-run: when you need a human
    - every check on that SHA passed.
 8. **Report** through the structured output: `status: READY` with `pr`, `headSha` (full SHA), checks, your local verification, the brief's acceptance checklist item by item with evidence, expected-vs-observed numbers, files changed, the changeset and deviations. Or `status: BLOCKED` with `blocked`.
 
+{{preVerify}}
+
 ## Writing
 
 These apply to everything you write: code comments, doc comments, README and other docs, the changeset, commit subjects and the PR description.

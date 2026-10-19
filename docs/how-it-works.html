@@ -91,7 +91,8 @@
             <strong>Stop and resume.</strong> The first Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents (SIGTERM, then
             SIGKILL after 5 s), saves and exits. A second signal exits at once. On the next <code>run</code>, every run that was in progress
             gets its attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. An implementer or fixer
-            then continues its own session, a verifier starts over and an unfinished brief is written again.
+            then continues its own session, a verifier starts over and an unfinished brief is written again. A stop kills running pre-verify
+            commands and their children the same way and drops their results, and the next run runs them again.
           </li>
         </ul>
 
@@ -363,7 +364,8 @@
           <li>
             <strong>A slot is one running agent.</strong>
             <a href="manifest.html#policy-concurrency"><code>policy.concurrency</code></a> caps them (2 by default). A brief holds one slot
-            for its writer and reviewer together. Verifiers take slots too. Gate checks, rebases and merges do not.
+            for its writer and reviewer together. Verifiers take slots too, and the pre-verify commands of a claim take one slot, all of
+            them together. The other checks, rebases and merges do not.
           </li>
           <li>
             <strong>The gate runs before slots are handed out.</strong> A conflict it finds on a high-priority PR then competes for a slot
@@ -562,18 +564,28 @@
                   policy to the diff. Then it reads the new code scanning alerts on the head. With
                   <a href="manifest.html#gates-preVerify-scope"><code>gates.preVerify.scope</code></a
                   >, it then checks that every changed file outside the PR's scope is listed in the READY report's <code>deviations</code>.
-                  Each check with a result logs a <code>gate-check</code> event with the item (<code>ci</code>, <code>policy</code>,
-                  <code>code-scanning</code>, <code>scope</code>), the result, the short SHA and short evidence. The result is pass, fail,
-                  or skip for code scanning that is off or unavailable. A <code>ci</code> pass lists every run on the SHA with its
-                  conclusion. A pass or skip is logged once per claim and head, and a READY report or any new head starts a new list. A fail
-                  is always logged, right before the send-back or block it causes, and the next round of checks logs every result again.
-                  Before the verifier starts, the driver deletes untracked <code>.claude/settings.json</code>,
-                  <code>.claude/settings.local.json</code> and <code>CLAUDE.local.md</code> at the root of the worktree and logs
-                  <code>local-config-removed</code> with their paths. A global gitignore can hide them from the clean-tree check.
+                  With <a href="manifest.html#gates-preVerify-required">pre-verify commands</a>, it then runs them itself in a slot, in the
+                  worktree at that head, one at a time, the required ones first. The PR stays here while they run. A failed required command
+                  ends the run. Their results stay with that head, on the card and the PR page, and a failed recommended command also
+                  reaches the verifier's prompt. A stop, or a claim that moved on while they ran, drops the results. A run that throws logs
+                  <code>on-done-error</code> and backs off like a failed agent run. Each check with a result logs a
+                  <code>gate-check</code> event with the item (<code>ci</code>, <code>policy</code>, <code>code-scanning</code>,
+                  <code>scope</code>, or the pre-verify command itself), its level (<code>required</code>, or <code>recommended</code> for a
+                  recommended command), the result, the short SHA and short evidence. The result is pass, fail, or skip for code scanning
+                  that is off or unavailable. A <code>ci</code> pass lists every run on the SHA with its conclusion. A command's evidence is
+                  its summary, such as <code>exit 1</code>, then as much of the end of its output as fits. A pass or skip is logged once per
+                  claim and head, and a READY report or any new head starts a new list. A fail is always logged, a required one right before
+                  the send-back or block it causes. Only a required fail starts the list over, so the next round of checks logs every result
+                  again. Before the pre-verify commands and before the verifier, the driver deletes untracked
+                  <code>.claude/settings.json</code>, <code>.claude/settings.local.json</code> and <code>CLAUDE.local.md</code> at the root
+                  of the worktree and logs <code>local-config-removed</code> with their paths. A global gitignore can hide them from the
+                  clean-tree check.
                 </td>
                 <td>
                   A note that still waits for the implementer: <code>needs_fix</code>, before any check. CI green, no policy violation, no
-                  new alert, no undeclared file out of scope and a free slot: <code>verifying</code>. CI red, CI still unsettled after
+                  new alert, no undeclared file out of scope and a free slot: <code>verifying</code>. With pre-verify commands, the slot
+                  goes to them first, and the verifier starts on a later tick when no required command failed at that head. A failed
+                  required command: <code>needs_fix</code>, as <code>pre-verify check</code>. CI red, CI still unsettled after
                   <a href="manifest.html#policy-ciStallMinutes"><code>ciStallMinutes</code></a
                   >, a violation or a new alert: <code>needs_fix</code>. With the scope gate on, an undeclared file out of scope:
                   <code>needs_fix</code>. A new alert under

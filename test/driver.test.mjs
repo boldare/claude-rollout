@@ -108,10 +108,15 @@ function gateFacts(manifest, pr = {}) {
   }
 }
 
+// Tests never run a real command. One that reaches this fails its job.
+function noCommands() {
+  return Promise.reject(new Error('this test gives the driver no runCommand'))
+}
+
 // A driver whose gh and git are fakes, with no slot for an agent. Its gate
 // reads gateFacts with `gate.pr` and `gate.facts` on top, or throws `gate.error`.
 // `gate.pr` may be a function of the manifest PR and its ledger entry.
-function tickDriver(prs, { rules = [], only = null, policy = {}, clock, runAgent } = {}) {
+function tickDriver(prs, { rules = [], only = null, policy = {}, clock, runAgent, runCommand = noCommands } = {}) {
   const dir = makeRollout({ prs, events: [], policy: { concurrency: 0, ...policy } })
   const tools = fakeTools(dir, rules)
   const manifest = loadManifest(dir, { only })
@@ -132,6 +137,7 @@ function tickDriver(prs, { rules = [], only = null, policy = {}, clock, runAgent
     },
     clock,
     runAgent,
+    runCommand,
   })
 
   return { manifest, driver, tools, gate, notices, cleaned }
@@ -2444,16 +2450,19 @@ test('checkClaim: no new alert, or one below the threshold, goes on to verificat
 
 // A claimed A1 with green CI, a free slot and a worktree at its head, so checkClaim
 // can start the verifier. Its scope is lib/** and it changes README.md. The agent never finishes.
-function verifiableDriver({ gates, deviations } = {}) {
+function verifiableDriver({ gates, deviations, runCommand } = {}) {
   const agentCalls = []
+  const prompts = []
   const setup = tickDriver(
     { A1: CLAIMED },
     {
       policy: { concurrency: 1 },
       runAgent: (_, pr, options) => {
         agentCalls.push({ id: pr.id, role: options.role })
+        prompts.push(options.prompt)
         return new Promise(() => {})
       },
+      runCommand,
     },
   )
 
@@ -2481,10 +2490,10 @@ function verifiableDriver({ gates, deviations } = {}) {
     setup.manifest.gates = gates
   }
 
-  return { ...setup, pr, entry, agentCalls }
+  return { ...setup, pr, entry, agentCalls, prompts }
 }
 
-const SCOPE_GATE = { preVerify: { scope: true } }
+const SCOPE_GATE = { preVerify: { scope: true, required: [], recommended: [] } }
 
 test('checkClaim: with gates.preVerify.scope, an undeclared file out of scope goes back to the implementer before the verifier', async () => {
   const { manifest, driver, pr, entry, agentCalls } = verifiableDriver({ gates: SCOPE_GATE })
@@ -2546,7 +2555,7 @@ test('checkClaim: with gates.preVerify.scope and no file out of scope, the scope
 test('checkClaim: without gates, an undeclared file out of scope still goes on to the verifier', async () => {
   const { manifest, driver, pr, entry, agentCalls } = verifiableDriver()
 
-  assert.deepEqual(manifest.gates, { preVerify: { scope: false } })
+  assert.deepEqual(manifest.gates, { preVerify: { scope: false, required: [], recommended: [] } })
 
   await driver.advance(pr)
 
@@ -2656,7 +2665,7 @@ test('checkClaim: a pass is logged once per claim, and again for a new claim', a
   assert.deepEqual(entry.notified.gateChecks, {
     claimedAt: at(3),
     sha: REBASED,
-    seen: ['ci:pass', 'policy:pass', 'code-scanning:pass'],
+    seen: ['preVerify:required:ci:pass', 'preVerify:required:policy:pass', 'preVerify:required:code-scanning:pass'],
   })
 })
 
@@ -2774,6 +2783,326 @@ test('checkClaim: every gate-check event is short and names the stage and the le
   assert.equal(event.sha, SHA.slice(0, 7))
   assert.equal(event.evidence.length, 300)
   assert.match(event.evidence, /^failing: job-0: failure, job-1: failure/)
+})
+
+const COMMANDS_GATE = { preVerify: { scope: false, required: ['npm test'], recommended: ['npm run lint'] } }
+
+const CLAIM_PASSES = [
+  gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
+  gateCheckEvent('policy', 'pass', 'no violations'),
+  gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium'),
+]
+
+function commandCheckEvent(item, level, result, evidence, sha = SHA) {
+  return { id: 'A1', kind: 'gate-check', stage: 'preVerify', item, level, result, sha: sha.slice(0, 7), evidence }
+}
+
+// What runCommand resolves with: exit 0 and no output, unless overridden.
+function commandRun(overrides = {}) {
+  return { exitCode: 0, signal: null, timedOut: false, stopped: false, tail: '', seconds: 1, ...overrides }
+}
+
+// A runCommand seam that records every call. `outcomes` maps a command to
+// what it resolves with, or to a function of the call that returns a promise.
+function commandSeam(outcomes = {}) {
+  const calls = []
+
+  function seam(_, pr, options) {
+    calls.push({ id: pr.id, ...options })
+
+    const outcome = outcomes[options.command] ?? commandRun()
+
+    return typeof outcome === 'function' ? outcome(options) : Promise.resolve(outcome)
+  }
+
+  return { calls, runCommand: seam, commands: () => calls.map((call) => call.command) }
+}
+
+function deferred() {
+  let resolve
+  const promise = new Promise((done) => {
+    resolve = done
+  })
+
+  return { promise, resolve }
+}
+
+async function preVerified(setup, driver = setup.driver) {
+  await driver.advance(setup.pr)
+  await waitFor(() => !driver.running.has('A1'), 'the pre-verify commands to finish')
+}
+
+test('checkClaim: with pre-verify commands it runs them as a gate job in the PR worktree instead of starting the verifier', async () => {
+  const seam = commandSeam({ 'npm test': () => new Promise(() => {}) })
+  const { manifest, driver, pr, entry, agentCalls } = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+  await driver.advance(pr)
+
+  assert.equal(driver.running.get('A1'), 'gate')
+  assert.equal(entry.state, 'ready_claimed')
+  assert.deepEqual(agentCalls, [])
+  assert.deepEqual(seam.calls, [{ id: 'A1', command: 'npm test', cwd: worktreePath(manifest, pr) }])
+  assert.deepEqual(eventsSince(manifest), CLAIM_PASSES)
+})
+
+test('checkClaim: without pre-verify commands the verifier starts at once and no command runs', async () => {
+  const seam = commandSeam()
+  const { manifest, driver, pr, entry, agentCalls } = verifiableDriver({ runCommand: seam.runCommand })
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
+  assert.deepEqual(seam.calls, [])
+  assert.equal(entry.preVerify, null)
+  assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'gate-check', 'verify-start'])
+})
+
+test('pre-verify: a failed required command sends the PR back with its output, and the commands after it never run', async () => {
+  const tail = 'not ok 3 - parses an empty list\n# tests 12, fail 1\n'
+  const seam = commandSeam({ 'npm test': commandRun({ exitCode: 1, tail }) })
+  const gates = { preVerify: { scope: false, required: ['npm test', 'npm run build'], recommended: ['npm run lint'] } }
+  const setup = verifiableDriver({ gates, runCommand: seam.runCommand })
+  const { manifest, entry, agentCalls } = setup
+
+  await preVerified(setup)
+
+  assert.deepEqual(seam.commands(), ['npm test'])
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixReason, 'pre-verify check')
+  assert.deepEqual(agentCalls, [])
+  assert.deepEqual(eventsSince(manifest), [
+    ...CLAIM_PASSES,
+    commandCheckEvent('npm test', 'required', 'fail', `exit 1: ${tail.trim()}`),
+    { id: 'A1', kind: 'needs-fix', reason: 'pre-verify check' },
+  ])
+
+  for (const part of [
+    'The driver ran the required pre-verify commands at `a1a1a1a`.',
+    '### `npm test`\n\nexit 1\n\n```\nnot ok 3 - parses an empty list\n# tests 12, fail 1\n```',
+    '- The driver runs every command again on the new head.',
+    '- Never weaken, skip or delete tests or checks to get green.',
+  ]) {
+    assert.ok(entry.fixNote.includes(part), part)
+  }
+
+  assert.equal(entry.preVerify.sha, SHA)
+  assert.deepEqual(
+    entry.preVerify.results.map((record) => [record.command, record.level, record.result, record.summary, record.tail]),
+    [['npm test', 'required', 'fail', 'exit 1', tail]],
+  )
+})
+
+test('pre-verify: a failed recommended command only informs, and the next advance starts the verifier with it in the prompt', async () => {
+  const tail = 'lib/a.mjs\n  3:7  error  Expected blank line before this statement\n'
+  const seam = commandSeam({ 'npm run lint': commandRun({ exitCode: 1, tail }) })
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+  const { manifest, driver, pr, entry, agentCalls, prompts } = setup
+
+  await preVerified(setup)
+
+  assert.equal(entry.state, 'ready_claimed')
+  assert.deepEqual(agentCalls, [])
+  assert.deepEqual(eventsSince(manifest), [
+    ...CLAIM_PASSES,
+    commandCheckEvent('npm test', 'required', 'pass', 'exit 0'),
+    commandCheckEvent('npm run lint', 'recommended', 'fail', `exit 1: ${tail.trim()}`),
+  ])
+
+  const before = readEvents(manifest).length
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
+  assert.deepEqual(kindsSince(manifest, before), ['verify-start'])
+  assert.ok(prompts[0].includes('\n## Recommended commands that failed\n'), prompts[0])
+  assert.ok(prompts[0].includes(`### \`npm run lint\`\n\nexit 1\n\n\`\`\`\n${tail.trim()}\n\`\`\``), prompts[0])
+})
+
+test('pre-verify: a command that leaves tracked changes fails, and the worktree goes back to the claimed head', async () => {
+  const outcomes = {}
+  const seam = commandSeam(outcomes)
+  const setup = verifiableDriver({
+    gates: { preVerify: { scope: false, required: ['npm test'], recommended: [] } },
+    runCommand: seam.runCommand,
+  })
+
+  const { entry, tools } = setup
+
+  // alignWorktree reads the status first, so the command changes it.
+  outcomes['npm test'] = () => {
+    tools.answer([
+      { tool: 'git', args: 'status --porcelain', stdout: ' M package-lock.json' },
+      { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+      { tool: 'git', args: '', stdout: '' },
+    ])
+
+    return Promise.resolve(commandRun({ tail: 'tests 12, pass 12\n' }))
+  }
+
+  await preVerified(setup)
+
+  const [record] = entry.preVerify.results
+  const gitCalls = tools
+    .calls()
+    .filter((call) => call.tool === 'git')
+    .map((call) => call.args.join(' '))
+
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(record.result, 'fail')
+  assert.deepEqual(record.changes, ['M package-lock.json'])
+  assert.equal(record.summary, 'exit 0, left tracked changes: M package-lock.json')
+  assert.ok(entry.fixNote.includes('The driver reset the worktree to that head.'), entry.fixNote)
+  assert.ok(
+    gitCalls.some((line) => line.endsWith(`reset --quiet --hard ${SHA}`)),
+    gitCalls.join('\n'),
+  )
+
+  assert.ok(gitCalls.some((line) => line.endsWith('clean -fdq')))
+})
+
+test('pre-verify: results are dropped when the state or the claim changed meanwhile, or the job was stopped', async () => {
+  const cases = [
+    { name: 'state changed', change: (entry) => (entry.state = 'needs_fix') },
+    { name: 'claim moved', change: (entry) => (entry.claimedSha = NEW_HEAD) },
+    { name: 'stopped', outcome: commandRun({ exitCode: null, signal: 'SIGTERM', stopped: true }) },
+  ]
+
+  for (const { name, change = () => {}, outcome = commandRun({ exitCode: 1, tail: 'boom' }) } of cases) {
+    const job = deferred()
+    const seam = commandSeam({ 'npm test': () => job.promise })
+    const { manifest, driver, pr, entry } = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+    await driver.advance(pr)
+    change(entry)
+
+    const state = entry.state
+
+    job.resolve(outcome)
+    await waitFor(() => !driver.running.has('A1'), `the job to end (${name})`)
+
+    assert.deepEqual(eventsSince(manifest), CLAIM_PASSES, name)
+    assert.equal(entry.preVerify, null, name)
+    assert.equal(entry.state, state, name)
+    assert.deepEqual(seam.commands(), ['npm test'], name)
+  }
+})
+
+test('pre-verify: a PR merged while its commands ran is cleaned up, with no result', async () => {
+  const job = deferred()
+  const seam = commandSeam({ 'npm test': () => job.promise })
+  const { manifest, driver, pr, entry, cleaned } = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+  await driver.advance(pr)
+  entry.state = 'merged'
+  job.resolve(commandRun({ exitCode: 1 }))
+  await waitFor(() => !driver.running.has('A1'), 'the job to end')
+
+  assert.deepEqual(cleaned, ['A1'])
+  assert.equal(entry.preVerify, null)
+  assert.deepEqual(eventsSince(manifest), CLAIM_PASSES)
+})
+
+test('pre-verify: a job that throws logs on-done-error, keeps the PR ready_claimed and backs off', async () => {
+  const seam = commandSeam({
+    'npm test': () => {
+      throw new Error('repo.agentToken agent-token does not exist')
+    },
+  })
+
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+  const { manifest, driver, pr, entry } = setup
+
+  await preVerified(setup)
+
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.preVerify, null)
+  assert.equal(entry.failStreak, 1)
+  assert.ok(Date.parse(entry.retryAfter) > Date.now(), entry.retryAfter)
+  assert.equal(entry.lastError, 'repo.agentToken agent-token does not exist')
+  assert.deepEqual(eventsSince(manifest), [
+    ...CLAIM_PASSES,
+    { id: 'A1', kind: 'on-done-error', error: 'Error: repo.agentToken agent-token does not exist' },
+  ])
+
+  const before = readEvents(manifest).length
+
+  await driver.advance(pr)
+
+  assert.equal(readEvents(manifest).length, before)
+  assert.deepEqual(seam.commands(), ['npm test'])
+})
+
+test('pre-verify: a pass lives in this driver process only, so another driver on the same rollout runs the commands again', async () => {
+  const seam = commandSeam()
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+  const { manifest, gate } = setup
+
+  await preVerified(setup)
+
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
+  assert.equal(setup.entry.preVerify.sha, SHA)
+
+  const restarted = createDriver(manifest, {
+    notify: () => {},
+    cleanup: async () => {},
+    collectFacts: async () => ({ ...gateFacts(manifest, gate.pr), ...gate.facts }),
+    runAgent: () => new Promise(() => {}),
+    runCommand: seam.runCommand,
+  })
+
+  await preVerified(setup, restarted)
+
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint', 'npm test', 'npm run lint'])
+  assert.equal(restarted.ledger.prs.A1.state, 'ready_claimed')
+})
+
+test('pre-verify: a new head or changed commands run the commands again', async () => {
+  const seam = commandSeam()
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+  const { manifest, pr, entry, gate, tools } = setup
+  const gitDir = join(worktreePath(manifest, pr), '.git-dir')
+
+  await preVerified(setup)
+
+  manifest.gates = { preVerify: { scope: false, required: ['npm test', 'npm run build'], recommended: ['npm run lint'] } }
+
+  await preVerified(setup)
+
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint', 'npm test', 'npm run build', 'npm run lint'])
+
+  entry.claimedSha = NEW_HEAD
+  entry.claimedAt = at(5)
+  gate.pr = { headRefOid: NEW_HEAD }
+  tools.answer([
+    viewRule({ headRefOid: NEW_HEAD }),
+    { tool: 'gh', args: `commits/${NEW_HEAD}/check-runs`, stdout: GREEN_RUNS },
+    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
+    { tool: 'git', args: 'rev-parse HEAD', stdout: NEW_HEAD },
+    { tool: 'git', args: '', stdout: '' },
+  ])
+
+  await preVerified(setup)
+
+  assert.equal(seam.calls.length, 8)
+  assert.equal(entry.preVerify.sha, NEW_HEAD)
+  assert.equal(entry.state, 'ready_claimed')
+})
+
+test('pre-verify: the evidence keeps the whole summary and the end of the output, 300 characters at most', async () => {
+  const tail = `${'x'.repeat(1000)}\nthe last line of the output\n`
+  const seam = commandSeam({ 'npm test': commandRun({ exitCode: 1, tail }) })
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+  await preVerified(setup)
+
+  const event = eventsSince(setup.manifest).find((item) => item.item === 'npm test')
+
+  assert.equal(event.evidence.length, 300)
+  assert.ok(event.evidence.startsWith('exit 1: xxx'), event.evidence)
+  assert.ok(event.evidence.endsWith('x\nthe last line of the output'), event.evidence)
 })
 
 test('mergeCandidate: a new code scanning alert drops the verification and goes back to the implementer', async () => {

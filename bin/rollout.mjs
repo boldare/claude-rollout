@@ -188,6 +188,29 @@ function printDelegate(delegate) {
   }
 }
 
+// Only a failed command shows its output, the end of it.
+function printPreVerify(preVerify) {
+  if (!preVerify) {
+    return
+  }
+
+  console.log(`\npre-verify commands at ${preVerify.sha.slice(0, 7)}:`)
+
+  for (const record of preVerify.results) {
+    console.log(`  [${record.result}] ${record.level}: ${record.command} (${record.summary})`)
+
+    if (record.result !== 'fail') {
+      continue
+    }
+
+    const lines = record.tail.split('\n').filter((line) => line.trim())
+
+    for (const line of lines.slice(-5)) {
+      console.log(`    ${line}`)
+    }
+  }
+}
+
 function card(manifest, id) {
   const ledger = readLedger(manifest)
 
@@ -271,6 +294,8 @@ function card(manifest, id) {
       console.log(`  note: ${item}`)
     }
   }
+
+  printPreVerify(entry.preVerify)
 
   if (entry.state === 'verified') {
     console.log(`\n${approveHint(manifest, entry, id)}`)

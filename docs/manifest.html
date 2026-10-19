@@ -121,8 +121,14 @@ policy:
   timeouts: { implement: 240, fix: 120, verify: 90 }
 
 <span class="dim"># Checks before the verifier, on top of CI, the policy and code scanning.</span>
-<span class="dim"># scope: true sends back files outside a PR's scope that its READY report does not list in deviations.</span>
-<span class="dim"># gates: { preVerify: { scope: true } }</span>
+<span class="dim"># gates:</span>
+<span class="dim">#   preVerify:</span>
+<span class="dim">#     # Sends back files outside a PR's scope that its READY report does not list in deviations.</span>
+<span class="dim">#     scope: true</span>
+<span class="dim">#     # The driver runs these itself, the install first. A failed one sends the PR back.</span>
+<span class="dim">#     required: [pnpm install --frozen-lockfile, pnpm test]</span>
+<span class="dim">#     # A failed one sends nothing back. The card, the PR page and the verifier see it.</span>
+<span class="dim">#     recommended: [pnpm lint]</span>
 
 prs:
   - id: P1
@@ -568,8 +574,9 @@ prs:
                 <td>number</td>
                 <td><code>2</code></td>
                 <td>
-                  Agents that run at once. A brief, writer and reviewer together, takes one slot, and so does a verifier. Gate checks,
-                  rebases and merges take none.
+                  Agents that run at once. A brief, writer and reviewer together, takes one slot, and so does a verifier. The
+                  <a href="#gates-preVerify-required">pre-verify commands</a> of a claim take one slot too, all of them together. The other
+                  checks, rebases and merges take none.
                 </td>
               </tr>
               <tr id="policy-merge">
@@ -704,7 +711,10 @@ prs:
 
         <h2 id="gates">gates <a class="anchor" href="#gates" aria-label="Link to this section">#</a></h2>
 
-        <p>Every key is optional. Without <code>gates</code> the driver runs only its usual checks.</p>
+        <p>
+          Every key is optional. Without <code>gates</code> the driver runs only its usual checks. Any other key under <code>gates</code> or
+          <code>gates.preVerify</code> fails validation.
+        </p>
 
         <div class="scroll">
           <table class="fields">
@@ -730,8 +740,37 @@ prs:
                   judges the reason. A PR with neither a manifest <code>scope</code> nor expected files from a brief the driver wrote is
                   never sent back. The send-back counts toward <code>policy.attempts.fix</code>. With or without <code>gates</code>, each
                   check before the verifier logs a <code>gate-check</code> event (see
-                  <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>). Any other key under <code>gates</code> or
-                  <code>gates.preVerify</code> fails validation.
+                  <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>).
+                </td>
+              </tr>
+              <tr id="gates-preVerify-required">
+                <td>preVerify.required</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>
+                  Pre-verify commands that must pass. After CI and the rollout policy pass, code scanning raises no new alert and, when it
+                  is on, the scope check passes, the driver runs the pre-verify commands itself before the verifier starts, in a
+                  <a href="#policy-concurrency">slot</a>. Each runs with <code>sh -c</code> in the PR's worktree at the claimed head, one at
+                  a time, the required ones first, with the <a href="security.html#environment">read-only agents' environment</a> and ten
+                  minutes of awake time each. The driver installs nothing before them, so a project that needs an install lists that command
+                  first. A command fails on an exit code other than 0, a timeout, tracked changes it leaves or a moved HEAD. After tracked
+                  changes or a moved HEAD the driver resets the worktree to the claimed head at once, and after the last command it removes
+                  untracked files the same way. Ignored output stays. A failed required command sends the PR back to the implementer as
+                  <code>pre-verify check</code>, with its exit code and the end of its output, and the commands after it do not run. The
+                  send-back counts toward <code>policy.attempts.fix</code>. The results are <code>gate-check</code> events (see
+                  <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>). The implementer's prompt lists the commands, but only
+                  the driver's own run decides. A run with no failed required command lets the verifier start, and it holds for that head
+                  until the driver restarts or the commands change.
+                </td>
+              </tr>
+              <tr id="gates-preVerify-recommended">
+                <td>preVerify.recommended</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>
+                  Pre-verify commands that only inform. They run the same way, after the required ones, when none of those failed. A failed
+                  one never sends the PR back. It shows as a <code>gate-check</code> event, on the card, on the PR page and in the
+                  verifier's prompt, and the verifier judges any real defect it shows.
                 </td>
               </tr>
             </tbody>
@@ -946,7 +985,8 @@ prs:
           <li><code>repo.baseQuietPaths</code>, when set, is a list of path globs.</li>
           <li>
             <code>gates</code>, when set, is a mapping whose only key is <code>preVerify</code>. <code>gates.preVerify</code>, when set, is
-            a mapping whose only key is <code>scope</code>, a boolean.
+            a mapping with at most these keys: <code>scope</code>, a boolean, and <code>required</code> and <code>recommended</code>, each a
+            list of non-empty strings.
           </li>
           <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
@@ -1083,7 +1123,7 @@ prs:
               <tr>
                 <td>.npmrc-agents</td>
                 <td>driver</td>
-                <td>An npm config without credentials for the agents and <code>repo.install</code>.</td>
+                <td>An npm config without credentials for the agents, <code>repo.install</code> and the pre-verify commands.</td>
               </tr>
             </tbody>
           </table>
