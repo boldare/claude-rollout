@@ -2,7 +2,7 @@ You write the implementation brief for PR {{id}} ("{{title}}", branch `{{branch}
 
 The brief goes to an autonomous implementer (a headless Opus session) that works in a fresh worktree of the repo, opens the PR, waits for CI and reports READY. An independent verifier then checks the PR against the brief's acceptance checklist. Neither of them sees the plan or the design notes below: **everything PR-specific must be in the brief.**
 
-You are read-only. The current directory is that worktree, at `origin/{{base}}`, which already contains the merged dependencies ({{deps}}). Read the code there; it is the truth. Earlier PRs of this rollout may have changed what the plan and the design notes assumed: when they disagree with the code, the code wins, and the brief describes the code as it is now.
+You are read-only. The current directory is that worktree, {{briefWorktree}}. Read the code there; it is the truth. Earlier PRs of this rollout may have changed what the plan and the design notes assumed: when they disagree with the code, the code wins, and the brief describes the code as it is now.
 
 {{turnRule}}
 

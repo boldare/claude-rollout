@@ -2,13 +2,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { createDriver, doneDetail } from '../lib/driver.mjs'
+import { briefDrift, createDriver, doneDetail } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { verifyPrompt } from '../lib/prompts.mjs'
 import { stageLabels } from '../lib/stage.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { worktreePath } from '../lib/worktree.mjs'
+import { previewPath, worktreePath } from '../lib/worktree.mjs'
 import { at, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
 
 function agentResult(overrides = {}) {
@@ -615,6 +615,125 @@ test('launch: the verifier and the brief writer run on the rollout model whateve
 
 test('doneDetail: the model the run reported', () => {
   assert.equal(doneDetail('implement', 'A1-01-implement', agentResult({ model: 'claude-sonnet-5-5' })).model, 'claude-sonnet-5-5')
+})
+
+// A2 depends on A1, which is verified and waits for its merge. Every agent call is
+// recorded and never ends, and git answers everything unless `rules` come first.
+function aheadDriver({ a1 = samplePrs().A1, a2 = { state: 'pending' }, rules = [] } = {}) {
+  const calls = []
+  const setup = tickDriver(
+    { A1: a1, A2: a2 },
+    {
+      policy: { concurrency: 2 },
+      runAgent: (_, pr, options) => {
+        calls.push({ id: pr.id, ...options })
+        return new Promise(() => {})
+      },
+    },
+  )
+
+  setup.tools.answer([...rules, { tool: 'git', args: '', stdout: '' }])
+
+  return { ...setup, pr: setup.manifest.all.find((item) => item.id === 'A2'), entry: setup.driver.ledger.prs.A2, calls }
+}
+
+test('advance: a brief starts once its dependency is verified, in a preview with the verified head merged in', async () => {
+  const { manifest, driver, tools, pr, calls } = aheadDriver()
+
+  await driver.advance(pr)
+  await waitFor(() => calls.length === 1, 'the brief writer')
+
+  assert.equal(calls[0].role, 'brief')
+  assert.equal(calls[0].cwd, previewPath(manifest, pr))
+  assert.match(calls[0].prompt, /verified but not merged yet merged into it locally: A1 at `a1a1a1a`/)
+
+  const start = eventsSince(manifest).find((event) => event.kind === 'brief-start')
+  assert.deepEqual(start.ahead, ['A1@a1a1a1a'])
+
+  const gitCalls = tools.calls().filter((call) => call.tool === 'git')
+  assert.ok(
+    gitCalls.some(
+      (call) => call.args.join(' ') === `-C ${manifest.repo.path} worktree add --quiet --detach ${previewPath(manifest, pr)} origin/main`,
+    ),
+  )
+
+  assert.ok(gitCalls.some((call) => call.args.includes('merge') && call.args.at(-1) === SHA && call.args.includes('commit.gpgsign=false')))
+  assert.ok(!gitCalls.some((call) => call.args.includes(worktreePath(manifest, pr))), 'the PR worktree is not made')
+})
+
+test('advance: a dependency neither merged nor verified holds the brief, and an implementer always waits for the merge', async () => {
+  const unverified = aheadDriver({ a1: { state: 'needs_fix', pr: 11 } })
+
+  await unverified.driver.advance(unverified.pr)
+  assert.equal(unverified.entry.state, 'pending')
+  assert.deepEqual(unverified.calls, [])
+
+  const briefed = aheadDriver()
+  mkdirSync(dirname(briefed.pr.brief), { recursive: true })
+  writeFileSync(briefed.pr.brief, '# A2\n')
+
+  await briefed.driver.advance(briefed.pr)
+  assert.equal(briefed.entry.state, 'pending')
+  assert.deepEqual(briefed.calls, [])
+})
+
+test('advance: heads that conflict in the preview give the attempt back and wait for a new verification', async () => {
+  const { manifest, driver, pr, entry, calls } = aheadDriver({
+    rules: [{ tool: 'git', args: 'merge --quiet --no-ff', code: 1, stderr: 'CONFLICT' }],
+  })
+
+  await driver.advance(pr)
+  await waitFor(() => entry.state === 'pending' && !driver.running.has('A2'), 'the brief to wait')
+
+  assert.deepEqual(calls, [])
+  assert.equal(entry.attempts.brief, 0)
+  assert.equal(entry.previewConflict, `A1@${SHA}`)
+  assert.deepEqual(
+    eventsSince(manifest)
+      .filter((event) => event.kind.startsWith('brief-'))
+      .map((event) => [event.kind, event.ok ?? null]),
+    [
+      ['brief-start', null],
+      ['brief-done', false],
+      ['brief-waits', null],
+    ],
+  )
+
+  await driver.advance(pr)
+  assert.equal(entry.state, 'pending')
+
+  driver.ledger.prs.A1.verified = { sha: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', patchId: 'patch-a1-2', at: at(90) }
+  await driver.advance(pr)
+  assert.equal(entry.state, 'briefing')
+})
+
+test('briefDrift: a dependency that merged with another patch than the brief saw, or with none known', () => {
+  const heads = [
+    { id: 'A1', sha: 'a1', patchId: 'p1' },
+    { id: 'A3', sha: 'a3', patchId: 'p3' },
+    { id: 'A4', sha: 'a4', patchId: null },
+  ]
+
+  const entries = { A1: { verified: { patchId: 'p1' } }, A3: { verified: { patchId: 'p3-fixed' } }, A4: { verified: { patchId: 'p4' } } }
+
+  assert.deepEqual(briefDrift(heads, entries), [
+    { id: 'A3', sha: 'a3' },
+    { id: 'A4', sha: 'a4' },
+  ])
+
+  assert.deepEqual(briefDrift(undefined, entries), [])
+})
+
+test('launch: the implementer hears of a dependency that changed after its brief', async () => {
+  const setup = modelDriver({ A1: { state: 'pending' }, A3: { state: 'merged', verified: { sha: 'c3', patchId: 'patch-a3-fixed' } } })
+
+  setup.entry.briefHeads = [{ id: 'A3', sha: 'c3c3c3c3c3c3', patchId: 'patch-a3' }]
+
+  const call = await launched(setup, 'implement')
+
+  assert.deepEqual(setup.entry.briefDrift, [{ id: 'A3', sha: 'c3c3c3c3c3c3' }])
+  assert.match(call.prompt, /## The brief and its dependencies/)
+  assert.match(call.prompt, /- A3: the brief saw `c3c3c3c`\./)
 })
 
 test('onDone: a PR merged during the run stays merged and is cleaned up after the run', async () => {
