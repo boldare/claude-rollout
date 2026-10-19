@@ -210,10 +210,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <p>
           Sends <code>SIGTERM</code> to the pid in <code>driver.lock</code> and waits up to 30 s for the lock to go. It signals only a live
-          pid above 1, with the same check as the UI's <a href="ui.html#control-stop">Stop</a>. The driver stops its agents with
-          <code>SIGTERM</code>, then <code>SIGKILL</code> after 5 s. The next <code>run</code> resumes the implementers' sessions, and
-          verifications and briefs start over. Without a driver it prints <code>no driver is running</code>, and a lock with pid 0 or -1
-          counts as no driver. Any other refusal prints the reason and exits 1.
+          pid above 1, with the same check as the UI's <a href="ui.html#control-stop">Stop</a>. The driver stops its agents and any
+          pre-verify commands with <code>SIGTERM</code>, then <code>SIGKILL</code> after 5 s. The next <code>run</code> resumes the
+          implementers' sessions, and verifications, briefs and pre-verify commands start over. Without a driver it prints
+          <code>no driver is running</code>, and a lock with pid 0 or -1 counts as no driver. Any other refusal prints the reason and exits
+          1.
         </p>
 
         <h2 id="watching">Watch <a class="anchor" href="#watching" aria-label="Link to this section">#</a></h2>

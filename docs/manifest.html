@@ -755,12 +755,13 @@ prs:
                   minutes of awake time each. The driver installs nothing before them, so a project that needs an install lists that command
                   first. A command fails on an exit code other than 0, a timeout, tracked changes it leaves or a moved HEAD. After tracked
                   changes or a moved HEAD the driver resets the worktree to the claimed head at once, and after the last command it removes
-                  untracked files the same way. Ignored output stays. A failed required command sends the PR back to the implementer as
-                  <code>pre-verify check</code>, with its exit code and the end of its output, and the commands after it do not run. The
-                  send-back counts toward <code>policy.attempts.fix</code>. The results are <code>gate-check</code> events (see
-                  <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>). The implementer's prompt lists the commands, but only
-                  the driver's own run decides. A run with no failed required command lets the verifier start, and it holds for that head
-                  until the driver restarts or the commands change.
+                  untracked files the same way. Ignored output stays. When a stop, a crash or an error cuts the commands short, the driver
+                  cleans the worktree the same way on the PR's next step, before an agent or a command works there. A failed required
+                  command sends the PR back to the implementer as <code>pre-verify check</code>, with its exit code and the end of its
+                  output, and the commands after it do not run. The send-back counts toward <code>policy.attempts.fix</code>. The results
+                  are <code>gate-check</code> events (see <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>). The
+                  implementer's prompt lists the commands, but only the driver's own run decides. A run with no failed required command lets
+                  the verifier start, and it holds for that head until the driver restarts or the commands change.
                 </td>
               </tr>
               <tr id="gates-preVerify-recommended">

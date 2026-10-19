@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { briefDrift, createDriver, doneDetail } from '../lib/driver.mjs'
-import { postCommand } from '../lib/ledger.mjs'
+import { postCommand, readLedger } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { verifyPrompt } from '../lib/prompts.mjs'
 import { stageLabels } from '../lib/stage.mjs'
@@ -3103,6 +3103,138 @@ test('pre-verify: the evidence keeps the whole summary and the end of the output
   assert.equal(event.evidence.length, 300)
   assert.ok(event.evidence.startsWith('exit 1: xxx'), event.evidence)
   assert.ok(event.evidence.endsWith('x\nthe last line of the output'), event.evidence)
+})
+
+// verifiableDriver's fake gh and git once a command left `leftover` in the
+// worktree. git reports it until a reset, and the reset cleans the tree.
+function leftoverRules(gitDir, leftover) {
+  const clean = [
+    viewRule(),
+    { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: GREEN_RUNS },
+    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
+    { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+    { tool: 'git', args: '', stdout: '' },
+  ]
+
+  return [
+    { tool: 'git', args: 'status --porcelain', stdout: leftover },
+    { tool: 'git', args: 'reset --quiet --hard', stdout: '', next: clean },
+    ...clean,
+  ]
+}
+
+function gitLines(tools) {
+  return tools
+    .calls()
+    .filter((call) => call.tool === 'git')
+    .map((call) => call.args.join(' '))
+}
+
+test('pre-verify: a job that starts saves the cleanup it owes, and a job that ends clears it', async () => {
+  const job = deferred()
+  const seam = commandSeam({ 'npm test': () => job.promise })
+  const { manifest, driver, pr, entry } = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+  await driver.advance(pr)
+
+  assert.equal(entry.preVerifyCleanup, SHA)
+  assert.equal(readLedger(manifest).prs.A1.preVerifyCleanup, SHA)
+
+  job.resolve(commandRun())
+  await waitFor(() => !driver.running.has('A1'), 'the job to end')
+
+  assert.equal(entry.preVerifyCleanup, null)
+  assert.equal(readLedger(manifest).prs.A1.preVerifyCleanup, null)
+})
+
+test('pre-verify: what a stopped job left in the worktree is cleaned before the next driver runs the commands again', async () => {
+  const outcomes = {}
+  const seam = commandSeam(outcomes)
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+  const { manifest, pr, tools, gate } = setup
+
+  // The first run writes a file and is stopped. The run after it passes.
+  outcomes['npm test'] = () => {
+    outcomes['npm test'] = commandRun()
+    tools.answer(leftoverRules(join(worktreePath(manifest, pr), '.git-dir'), '?? test-output.log'))
+
+    return Promise.resolve(commandRun({ exitCode: null, signal: 'SIGTERM', stopped: true }))
+  }
+
+  await preVerified(setup)
+
+  assert.equal(readLedger(manifest).prs.A1.preVerifyCleanup, SHA)
+
+  const restarted = createDriver(manifest, {
+    notify: () => {},
+    cleanup: async () => {},
+    collectFacts: async () => ({ ...gateFacts(manifest, gate.pr), ...gate.facts }),
+    runAgent: () => new Promise(() => {}),
+    runCommand: seam.runCommand,
+  })
+
+  await preVerified(setup, restarted)
+
+  const entry = restarted.ledger.prs.A1
+
+  assert.ok(gitLines(tools).some((line) => line.endsWith(`reset --quiet --hard ${SHA}`)))
+  assert.ok(gitLines(tools).some((line) => line.endsWith('clean -fdq')))
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.preVerifyCleanup, null)
+  assert.deepEqual(seam.commands(), ['npm test', 'npm test', 'npm run lint'])
+  assert.equal(kindsSince(manifest).includes('needs-fix'), false)
+  assert.deepEqual(
+    entry.preVerify.results.map((record) => [record.command, record.result]),
+    [
+      ['npm test', 'pass'],
+      ['npm run lint', 'pass'],
+    ],
+  )
+})
+
+test('pre-verify: what a job that threw after a command left is cleaned before the commands run again', async () => {
+  const outcomes = {}
+  const seam = commandSeam(outcomes)
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+  const { manifest, pr, entry, tools } = setup
+  const leftover = leftoverRules(join(worktreePath(manifest, pr), '.git-dir'), '?? test-output.log')
+
+  // The command writes a file, and git fails once when the driver reads the worktree after it.
+  outcomes['npm test'] = () => {
+    outcomes['npm test'] = commandRun()
+    tools.answer([{ tool: 'git', args: 'status --porcelain', code: 128, stderr: 'fatal: index file corrupt', next: leftover }])
+
+    return Promise.resolve(commandRun())
+  }
+
+  await preVerified(setup)
+
+  assert.equal(kindsSince(manifest).at(-1), 'on-done-error')
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.preVerifyCleanup, SHA)
+
+  entry.retryAfter = null
+
+  await preVerified(setup)
+
+  assert.ok(gitLines(tools).some((line) => line.endsWith(`reset --quiet --hard ${SHA}`)))
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.preVerifyCleanup, null)
+  assert.deepEqual(seam.commands(), ['npm test', 'npm test', 'npm run lint'])
+  assert.equal(kindsSince(manifest).includes('needs-fix'), false)
+})
+
+test('pre-verify: a cleanup owed for a worktree that is gone only clears', async () => {
+  const { manifest, driver, tools } = tickDriver({
+    A1: { ...CLAIMED, state: 'needs_fix', fixReason: 'pre-verify check', preVerifyCleanup: SHA },
+  })
+
+  const entry = driver.ledger.prs.A1
+
+  await driver.advance(manifest.prs.find((item) => item.id === 'A1'))
+
+  assert.equal(entry.preVerifyCleanup, null)
+  assert.deepEqual(tools.calls(), [])
 })
 
 test('mergeCandidate: a new code scanning alert drops the verification and goes back to the implementer', async () => {
