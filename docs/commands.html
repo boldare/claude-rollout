@@ -458,7 +458,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <p>
           Holds one PR: no new runs, rebases, ready notices or merges for it. A running agent finishes its step. The driver still syncs the
-          PR with GitHub and collects review comments. It rejects a merged PR and one already held. In the UI:
+          PR with GitHub and collects review comments. It rejects a merged PR and one already held. A PR that depends on the held one gets
+          no brief until <code>release</code> or the merge, and a brief already running finishes. In the UI:
           <a href="ui.html#control-hold">Hold</a>.
         </p>
 

@@ -490,8 +490,8 @@ prs:
 
         <p>
           A PR whose <code>brief</code> file does not exist gets one from the driver, once each of its dependencies has merged or is
-          verified. A read-only writer drafts it from these sources and a read-only reviewer checks it against the code, on the base with
-          the verified dependencies merged in. Without sources, the manifest fails to load as soon as one brief is missing.
+          verified and not held. A read-only writer drafts it from these sources and a read-only reviewer checks it against the code, on the
+          base with the verified dependencies merged in. Without sources, the manifest fails to load as soon as one brief is missing.
         </p>
 
         <div class="scroll">
@@ -788,8 +788,8 @@ prs:
                 <td>yes</td>
                 <td>
                   The brief, relative to the rollout directory. When the file does not exist, the driver writes it from
-                  <a href="#briefing">briefing.sources</a> once each dependency has merged or is verified. Delete the file to have it
-                  written again, for example after a dependency changed a lot before it merged.
+                  <a href="#briefing">briefing.sources</a> once each dependency has merged or is verified and not held. Delete the file to
+                  have it written again, for example after a dependency changed a lot before it merged.
                 </td>
               </tr>
               <tr id="pr-deps">
@@ -798,8 +798,8 @@ prs:
                 <td><code>[]</code></td>
                 <td>no</td>
                 <td>
-                  PRs that must merge first. The brief can be written once they are verified, the implementer starts when they have merged,
-                  and the gate waits for them. A dependency left out by
+                  PRs that must merge first. The brief can be written once they are verified and not held, the implementer starts when they
+                  have merged, and the gate waits for them. A dependency left out by
                   <a href="commands.html#flag-only">--only</a> counts once GitHub shows its branch merged into the base with the rollout
                   label.
                 </td>
