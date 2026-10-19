@@ -1,5 +1,6 @@
 import { cell, element, link, stateBadge, table, wrap } from './dom.js'
 import { sentence } from './format.js'
+import { markdownDocument } from './markdown.js'
 
 const HEADINGS = ['PR', 'state', 'section in the plan', 'source']
 
@@ -32,12 +33,15 @@ function sectionRow(pr, ctx) {
   return node
 }
 
-function sourceBlock(source) {
+// A transcript source is the assistant's last long text, which is markdown too.
+function sourceBlock(source, ctx) {
   const meta = [source.kind, source.tag ? `tag ${source.tag}` : null, source.path].filter(Boolean).join(' · ')
   const node = element('article', undefined, 'plan-source')
+  const body = source.error
+    ? element('p', source.error, 'error')
+    : markdownDocument(source.text, { key: `plan|${source.title}`, level: 3, ctx })
 
-  node.append(element('h2', source.title), element('p', meta, 'muted'))
-  node.append(source.error ? element('p', source.error, 'error') : element('pre', source.text, 'document'))
+  node.append(element('h2', source.title), element('p', meta, 'muted'), body)
 
   return node
 }
@@ -52,7 +56,10 @@ function planBody(plan, ctx) {
   }
 
   const { prs, sources } = plan.body
-  const blocks = sources.length === 0 ? [element('p', 'The manifest has no briefing sources.', 'muted')] : sources.map(sourceBlock)
+  const blocks =
+    sources.length === 0
+      ? [element('p', 'The manifest has no briefing sources.', 'muted')]
+      : sources.map((source) => sourceBlock(source, ctx))
 
   return [
     element('h2', 'PRs and their sections'),

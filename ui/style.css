@@ -254,8 +254,9 @@ pre {
   white-space: nowrap;
 }
 
-/* Labels start with a capital, as Boldare writes them. Names, ids, titles and values keep their case.
-   ::first-letter needs a block box, so a badge or a legend item keeps its text in a span of its own. */
+/* Labels start with a capital, as Boldare writes them. Names, ids, titles and values keep their case, and so does
+   markdown, which is the author's text. ::first-letter needs a block box, so a badge or a legend item keeps its text
+   in a span of its own. */
 
 .tab::first-letter,
 .chip::first-letter,
@@ -264,10 +265,10 @@ pre {
 .label::first-letter,
 .rollout > span::first-letter,
 .transcript-nav > a::first-letter,
-th::first-letter,
+th:not(.markdown *)::first-letter,
 dt::first-letter,
-h3:not(.plan-heading)::first-letter,
-h4::first-letter,
+h3:not(.plan-heading, .markdown *)::first-letter,
+h4:not(.markdown *)::first-letter,
 .costs h2::first-letter,
 summary::first-letter,
 figcaption::first-letter {
@@ -1246,18 +1247,13 @@ details[open] > summary {
   padding: 16px 20px;
 }
 
-.feedback pre,
-pre.document {
+.feedback pre {
   margin: 0 0 10px;
   padding: 14px 16px;
   border: 1px solid var(--line-soft);
   border-radius: var(--r-md);
   background: var(--well);
   line-height: 1.55;
-}
-
-pre.document {
-  max-width: 60rem;
 }
 
 /* Runs and the transcript viewer */
@@ -1527,4 +1523,198 @@ td.pr-title {
   margin: -6px 0 10px;
   font-size: var(--text-sm);
   overflow-wrap: anywhere;
+}
+
+/* Markdown: plans, briefs and reviewer notes as their author formatted them, in a card with a button for the source.
+   Headings get their depth in the document as a class, since the tag depends on the page around it. */
+
+.markdown-doc {
+  max-width: 60rem;
+  margin: 0 0 12px;
+  padding: 16px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+}
+
+.markdown-doc::after {
+  display: block;
+  clear: both;
+  content: '';
+}
+
+.doc-toggle {
+  float: right;
+  margin: -4px -8px 8px 16px;
+  padding: 3px 10px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+pre.markdown-source {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.markdown {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown .depth-1,
+.markdown .depth-2,
+.markdown .depth-3 {
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+.markdown .depth-1 {
+  margin: 28px 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.markdown .depth-2 {
+  margin: 24px 0 8px;
+  font-size: var(--text);
+  font-weight: 700;
+}
+
+.markdown .depth-3 {
+  margin: 18px 0 6px;
+  color: var(--ink-2);
+  font-size: var(--text);
+  font-weight: 600;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown pre,
+.markdown .scroll {
+  margin: 10px 0;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.5rem;
+}
+
+.markdown li + li {
+  margin-top: 4px;
+}
+
+.markdown li > p {
+  margin: 6px 0;
+}
+
+.markdown li > :first-child {
+  margin-top: 0;
+}
+
+.markdown li > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown li > ul,
+.markdown li > ol {
+  margin: 4px 0;
+}
+
+.markdown li::marker {
+  color: var(--ink-3);
+}
+
+.markdown li.task {
+  list-style: none;
+}
+
+.markdown .task-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin: 0 8px 0 -1.45rem;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: -2px;
+}
+
+.markdown .task-box.done {
+  border-color: var(--pass);
+  background: var(--pass);
+  color: var(--panel);
+}
+
+.markdown blockquote {
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--line);
+  margin-left: 0;
+  color: var(--ink-2);
+}
+
+.markdown pre {
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--well);
+  line-height: 1.5;
+}
+
+.markdown hr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+/* A plan's slice runs to the next section, so it often ends on the rule above that section. */
+.markdown > hr:last-child {
+  display: none;
+}
+
+.markdown .scroll {
+  border-radius: var(--r-md);
+}
+
+.markdown th,
+.markdown td {
+  padding: 8px 12px;
+}
+
+.markdown th {
+  background: var(--well);
+  white-space: normal;
+}
+
+.markdown .align-center {
+  text-align: center;
+}
+
+.markdown .align-right {
+  text-align: right;
+}
+
+.markdown del {
+  color: var(--ink-3);
+}
+
+.markdown .unlinked {
+  color: var(--ink-2);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
 }

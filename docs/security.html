@@ -590,6 +590,8 @@
           <li>
             <strong>Text, never HTML.</strong> Titles, verdicts, logs and transcripts are untrusted agent output. The page builds every
             element from text, and <code>test/ui.test.mjs</code> fails on <code>innerHTML</code> and its relatives in <code>ui/</code>.
+            Markdown in plans and briefs goes through <code>ui/markdown-parse.js</code> to a tree of text, so raw HTML stays text and only
+            <code>http</code> and <code>https</code> links can be clicked.
           </li>
         </ul>
 
