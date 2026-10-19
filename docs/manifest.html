@@ -141,6 +141,7 @@ prs:
     deps: [P1]                   <span class="dim"># starts once P1 has merged</span>
     priority: 5
     effort: { implement: high, verify: high }
+    model: { implement: sonnet } <span class="dim"># P2's implementer and fixes, a retry goes back to opus</span>
     changeset: minor
     allowWorkflows: true         <span class="dim"># this PR adds a CI step</span></code></pre>
 
@@ -190,8 +191,9 @@ prs:
                 <td><code>opus</code></td>
                 <td>no</td>
                 <td>
-                  The model for every agent role: brief writer and reviewer, implementer, fixer and verifier. It is passed as
-                  <code>--model</code>.
+                  The model for every agent role: brief writer and reviewer, implementer, fixer, verifier and delegate. It is passed as
+                  <code>--model</code>. A PR's <a href="#pr-model"><code>model.implement</code></a> moves its implementer and fixer to
+                  another model.
                 </td>
               </tr>
               <tr id="manifest-claudeBin">
@@ -816,6 +818,20 @@ prs:
                     <li><code>verify</code> stays fixed.</li>
                     <li><code>brief</code> is for the brief writer and the reviewer.</li>
                   </ul>
+                </td>
+              </tr>
+              <tr id="pr-model">
+                <td>model</td>
+                <td>object</td>
+                <td>implement: the rollout's <a href="#manifest-model">model</a></td>
+                <td>no</td>
+                <td>
+                  <code>implement</code> is the model of the PR's implement and fix runs, such as <code>sonnet</code> for mechanical work.
+                  The second implement attempt and the third fix, the runs that raise the effort, go to the rollout's model. So does every
+                  later run of the PR, also after <a href="commands.html#cmd-retry">retry</a>, because the PR proved too hard for the first
+                  model. The verifier, the brief writer and reviewer and the delegate always run on the rollout's model, so no PR is checked
+                  by a weaker model than the one that wrote it. Every <code>*-start</code> event names the model asked for, and every
+                  <code>*-done</code> event the one that ran, such as <code>claude-sonnet-5-5</code>.
                 </td>
               </tr>
               <tr id="pr-changeset">

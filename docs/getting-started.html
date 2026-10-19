@@ -343,7 +343,7 @@ node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <ul>
           <li>
             Agent timeouts and the stall watchdog count only awake time, so a sleep kills no run. The <code>*-done</code> events carry
-            <code>seconds</code> (wall clock) and <code>awakeSeconds</code>.
+            <code>seconds</code> (wall clock) and <code>awakeSeconds</code>, next to the <code>model</code> that ran.
           </li>
           <li>
             After a wake the driver logs <code>machine-slept</code>. For two minutes it counts failed gh and git calls as an

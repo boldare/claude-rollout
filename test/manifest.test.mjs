@@ -40,6 +40,34 @@ test('loadManifest: no mcpConfig by default, a given one resolves against the ro
   assert.equal(loadManifest(dir).mcpConfig, join(dir, 'mcp.json'))
 })
 
+test('loadManifest: a PR implements on the rollout model unless its model.implement names another', () => {
+  const dir = makeRollout()
+  const raw = parse(readFileSync(join(dir, 'manifest.yaml'), 'utf8'))
+
+  raw.model = 'fable'
+  raw.prs[1].model = { implement: 'sonnet' }
+  writeFileSync(join(dir, 'manifest.yaml'), stringify(raw))
+
+  const manifest = loadManifest(dir)
+
+  assert.equal(manifest.model, 'fable')
+  assert.deepEqual(manifest.all[0].model, { implement: 'fable' })
+  assert.deepEqual(manifest.all[1].model, { implement: 'sonnet' })
+  assert.deepEqual(loadManifest(makeRollout()).all[0].model, { implement: 'opus' })
+})
+
+test('validateManifest: a PR model is a mapping of implement only', () => {
+  const withModel = (model) => validateManifest({ ...base, prs: [{ ...base.prs[0], model }, base.prs[1]] })
+
+  assert.deepEqual(withModel({ implement: 'sonnet' }), [])
+  assert.deepEqual(withModel('sonnet'), ['prs.A.model must be a mapping like { implement: sonnet }'])
+  assert.deepEqual(withModel({}), ['prs.A.model.implement must be a model name, such as sonnet'])
+  assert.deepEqual(withModel({ implement: '' }), ['prs.A.model.implement must be a model name, such as sonnet'])
+  assert.deepEqual(withModel({ implement: 'sonnet', verify: 'haiku' }), [
+    "prs.A.model.verify: only implement can differ, every other role runs on the rollout's model",
+  ])
+})
+
 test('validateManifest: mcpConfig, when set, is a non-empty path', () => {
   const message = 'mcpConfig must be the path of a JSON file with the MCP servers the agents get'
 
