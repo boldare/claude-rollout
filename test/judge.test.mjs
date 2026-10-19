@@ -166,6 +166,22 @@ test('workflow files need allowWorkflows', () => {
   assert.deepEqual(policyViolations(manifest, { ...pr, allowWorkflows: true }, ci), [])
 })
 
+test('Claude Code files need allowClaudeConfig, and a rename out of .claude/ counts', () => {
+  const changed = facts({ files: [...facts().files, { status: 'modified', path: '.claude/settings.json' }] })
+  const renamed = facts({
+    files: [...facts().files, { status: 'renamed', path: 'docs/settings.json', previousPath: '.claude/settings.json' }],
+  })
+
+  for (const prFacts of [changed, renamed]) {
+    const violations = policyViolations(manifest, pr, prFacts)
+
+    assert.equal(violations.length, 1)
+    assert.match(violations[0], /allowClaudeConfig/)
+    assert.match(violations[0], /^touches \.claude\/settings\.json: agents of this rollout load the project's Claude Code settings/)
+    assert.deepEqual(policyViolations(manifest, { ...pr, allowClaudeConfig: true }, prFacts), [])
+  }
+})
+
 test('dependencies must be merged first', () => {
   assert.equal(judge(manifest, pr, verifiedAndApproved, facts({ depsPending: ['A6'] })).action, 'wait')
 })

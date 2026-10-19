@@ -73,7 +73,7 @@
         <pre><code>rollout: my-lib-1.2.0            <span class="dim"># PRs get the label rollout:my-lib-1.2.0</span>
 model: opus                      <span class="dim"># every agent role uses this model</span>
 <span class="dim"># claudeBin: ~/tools/claude      # default: claude from PATH</span>
-<span class="dim"># mcpConfig: mcp.json            # MCP servers for the agents, default none</span>
+<span class="dim"># mcpConfig: mcp.json            # MCP servers for implement and fix, default none</span>
 
 repo:
   path: ~/code/my-lib            <span class="dim"># your local clone</span>
@@ -81,7 +81,7 @@ repo:
   base: main
   public: true                   <span class="dim"># false for a private repo</span>
   pathPrepend: []                <span class="dim"># tool directories that go first on PATH</span>
-  <span class="dim"># runs in every new worktree</span>
+  <span class="dim"># runs in new worktrees and brief previews, with the agents' environment</span>
   install: pnpm install --frozen-lockfile
   <span class="dim"># check run names, as globs</span>
   requiredChecks: ['test*', 'lint']
@@ -215,10 +215,12 @@ prs:
                 <td>none</td>
                 <td>no</td>
                 <td>
-                  A JSON file with the MCP servers the agents get, passed as <code>--mcp-config</code>. A relative path resolves against the
-                  rollout directory, and a missing file fails the manifest. Without it agents get no MCP server at all, not your claude.ai
-                  connectors, plugin servers or configured ones. An MCP tool never passes the Bash guard, so add only servers that cannot
-                  publish, send messages or merge. See <a href="security.html#agent-context">What an agent loads</a>.
+                  A JSON file with the MCP servers implement and fix get, passed as <code>--mcp-config</code>. A relative path resolves
+                  against the rollout directory, and a missing file fails the manifest. The brief writers, the verifier and the delegate
+                  never get it: an MCP tool never passes the Bash guard, so a server that writes files or posts would break the read-only
+                  roles. Without it agents get no MCP server at all, not your claude.ai connectors, plugin servers or configured ones. Add
+                  only servers that cannot publish, send messages or merge. See
+                  <a href="security.html#agent-context">What an agent loads</a>.
                 </td>
               </tr>
               <tr id="manifest-repo">
@@ -328,7 +330,12 @@ prs:
                 <td>command</td>
                 <td>none</td>
                 <td>no</td>
-                <td>A shell command that runs in every new worktree through <code>sh -c</code>, with a 20 minute limit.</td>
+                <td>
+                  A shell command that runs through <code>sh -c</code>, with a 20 minute limit. It runs in a new PR worktree, when an
+                  untouched worktree moves to the base, and in a brief preview. It runs scripts from a worktree an agent may have written,
+                  so it gets the agents' environment: an empty npmrc, no npm tokens and, with <code>repo.agentToken</code>, the bot's token.
+                  See <a href="security.html#environment">The environment</a>.
+                </td>
               </tr>
               <tr id="repo-requiredChecks">
                 <td>requiredChecks</td>
@@ -899,6 +906,16 @@ prs:
                   files are flagged on the card, so you review them before you approve.
                 </td>
               </tr>
+              <tr id="pr-allowClaudeConfig">
+                <td>allowClaudeConfig</td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>no</td>
+                <td>
+                  Lets the PR change files under <code>.claude/</code>. Without it, any such file is a policy violation. Every later agent
+                  of the rollout loads the project's Claude Code settings, so review that diff yourself before you approve.
+                </td>
+              </tr>
               <tr id="pr-briefTags">
                 <td>briefTags</td>
                 <td>list of strings</td>
@@ -1066,7 +1083,7 @@ prs:
               <tr>
                 <td>.npmrc-agents</td>
                 <td>driver</td>
-                <td>An npm config without credentials for the agents.</td>
+                <td>An npm config without credentials for the agents and <code>repo.install</code>.</td>
               </tr>
             </tbody>
           </table>

@@ -4,7 +4,15 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadManifest } from '../lib/manifest.mjs'
-import { agentTokenCheck, claudeWrapperWarning, originCheck, probeTools, sshHostname, storedLoginCheck } from '../lib/preflight.mjs'
+import {
+  agentTokenCheck,
+  claudeWrapperWarning,
+  originCheck,
+  probeTools,
+  sshHostname,
+  storedLoginCheck,
+  userSettingsCheck,
+} from '../lib/preflight.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 function tools(install, verify) {
@@ -58,6 +66,71 @@ test('claude wrapper: an explicit claudeBin path and a missing claude pass', (co
   assert.equal(claudeWrapperWarning(join(path, 'claude'), path), null)
   assert.equal(claudeWrapperWarning('claude', ''), null)
   assert.equal(claudeWrapperWarning('claude', undefined), null)
+})
+
+// A synthetic user settings file in a temp dir, holding `text` as it is.
+function settingsFile(context, text) {
+  const dir = mkdtempSync(join(tmpdir(), 'rollout-settings-'))
+  const file = join(dir, 'settings.json')
+
+  context.after(() => rmSync(dir, { recursive: true, force: true }))
+
+  if (text !== null) {
+    writeFileSync(file, text)
+  }
+
+  return file
+}
+
+test('userSettingsCheck: apiKeyHelper and env warn, naming the variables and never their values', (context) => {
+  const settings = {
+    apiKeyHelper: '/opt/keys/print-key.sh',
+    env: { SYNTHETIC_API_KEY: 'synthetic-secret-1', PROXY_URL: 'synthetic-secret-2' },
+  }
+
+  const file = settingsFile(context, JSON.stringify(settings))
+  const check = userSettingsCheck(file)
+
+  assert.deepEqual(check.lines, [])
+  assert.deepEqual(check.warnings, [
+    `${file} sets apiKeyHelper and env (SYNTHETIC_API_KEY, PROXY_URL). Agents start with --setting-sources project, so they get none of it. Put what they need in the environment that starts the driver`,
+  ])
+
+  for (const value of ['/opt/keys/print-key.sh', 'synthetic-secret-1', 'synthetic-secret-2']) {
+    assert.equal(check.warnings[0].includes(value), false, value)
+  }
+})
+
+test('userSettingsCheck: env alone or apiKeyHelper alone warns', (context) => {
+  const envOnly = settingsFile(context, JSON.stringify({ env: { SYNTHETIC_FLAG: '1' }, model: 'opus' }))
+  const helperOnly = settingsFile(context, JSON.stringify({ apiKeyHelper: 'print-key', env: {} }))
+
+  assert.deepEqual(userSettingsCheck(envOnly), {
+    lines: [],
+    warnings: [
+      `${envOnly} sets env (SYNTHETIC_FLAG). Agents start with --setting-sources project, so they get none of it. Put what they need in the environment that starts the driver`,
+    ],
+  })
+
+  assert.deepEqual(userSettingsCheck(helperOnly), {
+    lines: [],
+    warnings: [
+      `${helperOnly} sets apiKeyHelper. Agents start with --setting-sources project, so they get none of it. Put what they need in the environment that starts the driver`,
+    ],
+  })
+})
+
+test('userSettingsCheck: neither is one ok line, and a missing or invalid file says nothing', (context) => {
+  const plain = settingsFile(context, JSON.stringify({ apiKeyHelper: '', env: {}, permissions: { allow: [] } }))
+
+  assert.deepEqual(userSettingsCheck(plain), {
+    lines: [`ok   user settings: agents load none, and ${plain} sets no apiKeyHelper or env`],
+    warnings: [],
+  })
+
+  for (const text of [null, '{ not json', '']) {
+    assert.deepEqual(userSettingsCheck(settingsFile(context, text)), { lines: [], warnings: [] }, String(text))
+  }
 })
 
 test('probe tools come from the install command', () => {

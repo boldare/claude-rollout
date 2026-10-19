@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { agentEnv } from '../lib/identity.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { children, failureReason, failureSignals, runAgent, streamError } from '../lib/spawn.mjs'
-import { jsonLines, makeRollout, sampleTranscript } from './fixtures.mjs'
+import { jsonLines, makeRollout, readEnvFile, sampleTranscript, withProcessEnv } from './fixtures.mjs'
 
 // What claude prints for `--resume` of a session that never reached disk.
 const RESUME_MISSING = {
@@ -492,6 +492,7 @@ test('runAgent: a verifier starts without MCP servers, skills or file tools, wit
   const argsFile = join(manifest.dir, 'args.bin')
   const envFile = join(manifest.dir, 'env.txt')
 
+  manifest.mcpConfig = join(manifest.dir, 'mcp.json')
   fakeClaude(
     manifest,
     `printf '%s\\0' "$@" > '${argsFile}'\nprintf '%s|%s' "\${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset}" "\${CLAUDE_CODE_PROMPT_CACHE_TTL-unset}" > '${envFile}'\nexit 1`,
@@ -513,6 +514,7 @@ test('runAgent: a verifier starts without MCP servers, skills or file tools, wit
   assert.ok(args.includes('--strict-mcp-config'))
   assert.ok(args.includes('--disable-slash-commands'))
   assert.ok(!args.includes('--mcp-config'))
+  assert.equal(args[args.indexOf('--setting-sources') + 1], 'project')
   assert.deepEqual(args.slice(tools, tools + 7), ['--tools', 'Bash', 'Read', 'WebFetch', 'WebSearch', 'TaskStop', '--max-budget-usd'])
   assert.equal(readFileSync(envFile, 'utf8'), '1|5m')
 })
@@ -612,24 +614,6 @@ const SHELL_GITHUB_ENV = {
   GITHUB_ENTERPRISE_TOKEN: 'synthetic-enterprise-token',
 }
 
-async function withProcessEnv(values, callback) {
-  const saved = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]))
-
-  Object.assign(process.env, values)
-
-  try {
-    return await callback()
-  } finally {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) {
-        delete process.env[name]
-      } else {
-        process.env[name] = value
-      }
-    }
-  }
-}
-
 function withAgentToken(manifest) {
   manifest.repo.agentToken = join(manifest.dir, 'agent-token')
   writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
@@ -638,21 +622,25 @@ function withAgentToken(manifest) {
 test('runAgent: agents get GH_REPO and ROLLOUT_REPO and never GH_HOST', async () => {
   const manifest = loadManifest(makeRollout())
   const envFile = join(manifest.dir, 'agent-env.txt')
+  const npmTokens = { NPM_TOKEN: 'synthetic-npm-token', NODE_AUTH_TOKEN: 'synthetic-node-auth-token' }
 
   withAgentToken(manifest)
   fakeClaude(manifest, `env > '${envFile}'\nexit 1`)
 
-  const result = await withProcessEnv(SHELL_GITHUB_ENV, () => run(manifest, 'A1-01-env'))
-  const lines = readFileSync(envFile, 'utf8').split('\n')
-  const env = Object.fromEntries(
-    lines.filter((line) => line.includes('=')).map((line) => [line.split('=')[0], line.slice(line.indexOf('=') + 1)]),
-  )
+  const result = await withProcessEnv({ ...SHELL_GITHUB_ENV, ...npmTokens }, () => run(manifest, 'A1-01-env'))
+  const env = readEnvFile(envFile)
 
   assert.equal(result.ok, false)
   assert.equal(env.GH_REPO, 'github.com/example/widgets')
   assert.equal(env.ROLLOUT_REPO, 'example/widgets')
   assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
   assert.equal(env.GH_CONFIG_DIR, join(manifest.dir, '.gh-agents'))
+  assert.equal(env.NPM_TOKEN, '')
+  assert.equal(env.NODE_AUTH_TOKEN, '')
+  assert.equal(env.NPM_CONFIG_USERCONFIG, join(manifest.dir, '.npmrc-agents'))
+  assert.equal(env.ROLLOUT_ROLE, 'implement')
+  assert.equal(env.ROLLOUT_BRANCH, manifest.all[0].branch)
+  assert.equal(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1')
 
   for (const name of Object.keys(SHELL_GITHUB_ENV)) {
     assert.equal(name in env, false, name)

@@ -3,7 +3,7 @@ rollout: my-lib-1.2.0
 model: opus
 # claudeBin: ~/tools/claude # default: claude from PATH
 # Set it when claude on PATH is a terminal's wrapper script, such as cmux's shim. preflight warns about one.
-# mcpConfig: mcp.json # MCP servers for the agents. Default: none, not even yours.
+# mcpConfig: mcp.json # MCP servers for implement and fix. Default: none, not even yours.
 
 repo:
   path: ~/code/my-lib

@@ -567,6 +567,9 @@
                   or skip for code scanning that is off or unavailable. A <code>ci</code> pass lists every run on the SHA with its
                   conclusion. A pass or skip is logged once per claim and head, and a READY report or any new head starts a new list. A fail
                   is always logged, right before the send-back or block it causes, and the next round of checks logs every result again.
+                  Before the verifier starts, the driver deletes untracked <code>.claude/settings.json</code>,
+                  <code>.claude/settings.local.json</code> and <code>CLAUDE.local.md</code> at the root of the worktree and logs
+                  <code>local-config-removed</code> with their paths. A global gitignore can hide them from the clean-tree check.
                 </td>
                 <td>
                   A note that still waits for the implementer: <code>needs_fix</code>, before any check. CI green, no policy violation, no
@@ -590,7 +593,9 @@
                 <td>
                   PASS from an untouched worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>, or
                   <code>escalated</code> when a finding the implementer disputed is still open. A PASS from a verifier that changed the
-                  tree, or for a stale SHA, is discarded: <code>ready_claimed</code>.
+                  tree, or for a stale SHA, is discarded: <code>ready_claimed</code>. When the verifier touched the tree, the driver resets
+                  it to the SHA. It first deletes the same untracked Claude Code files as before the verifier and logs
+                  <code>local-config-removed</code> when there were any.
                 </td>
               </tr>
               <tr id="state-verified">
@@ -923,7 +928,9 @@
   --json-schema &lt;schemas/ready|verdict|brief|delegate.json&gt; \
   --permission-mode auto --permission-prompts none \
   --settings &lt;deny and allow rules, the guard hook&gt; \
-  --strict-mcp-config [--mcp-config &lt;mcpConfig&gt;] --disable-slash-commands \
+  --setting-sources project --strict-mcp-config \
+  [--mcp-config &lt;mcpConfig&gt;] <span class="dim"># implement and fix only</span>
+  --disable-slash-commands \
   --tools Bash Read [Edit Write] WebFetch WebSearch TaskStop <span class="dim"># Edit and Write for implement and fix</span>
   --max-budget-usd &lt;policy.budgetUsd[effort]&gt; \
   --disallowedTools [Edit Write NotebookEdit] <span class="dim"># the file tools for the verifier, brief and delegate roles</span>
@@ -943,17 +950,20 @@
           <dt>Context</dt>
           <dd>
             The prompt, the repository's <code>CLAUDE.md</code> and the tools of the role, nothing you installed: no MCP server but
-            <a href="manifest.html#manifest-mcpConfig"><code>mcpConfig</code></a
-            >, no skill and no auto-memory. All of it would be sent with every request of every run. On a subscription Claude Code writes
-            the prompt cache for an hour by default, at twice the input price instead of 1.25 times. The read-only roles never pause that
-            long between turns, so they get five minutes. Implement and fix keep the default, because they wait for CI and a fix resumes the
-            implementer's session. <a href="security.html#agent-context">Security</a> has why the tools are an allowlist.
+            <a href="manifest.html#manifest-mcpConfig"><code>mcpConfig</code></a> for implement and fix, no skill and no auto-memory. An MCP
+            tool never passes the guard, so a server that writes files or posts would break the read-only roles. All of it would be sent
+            with every request of every run. On a subscription Claude Code writes the prompt cache for an hour by default, at twice the
+            input price instead of 1.25 times. The read-only roles never pause that long between turns, so they get five minutes. Implement
+            and fix keep the default, because they wait for CI and a fix resumes the implementer's session.
+            <a href="security.html#agent-context">Security</a> has why the tools are an allowlist.
           </dd>
           <dt>Settings</dt>
           <dd>
             Deny rules for merges, reviews, repo admin and publishing, allow rules per role, attribution off, and a
-            <code>PreToolUse</code> hook that runs <code>hooks/guard-bash.mjs</code> on every Bash call.
-            <a href="security.html">Security</a> has the details.
+            <code>PreToolUse</code> hook that runs <code>hooks/guard-bash.mjs</code> on every Bash call. With
+            <code>--setting-sources project</code>, the project's <code>.claude/settings.json</code> loads too, but not
+            <code>.claude/settings.local.json</code>, <code>CLAUDE.local.md</code> or your user settings.
+            <a href="security.html#agent-context">Security</a> has the details.
           </dd>
           <dt>Watchdogs</dt>
           <dd>
@@ -1085,9 +1095,9 @@
             is the approval, and <code>auto</code> needs none.
           </li>
           <li>
-            <strong>Fix</strong> on a policy violation: a forbidden path, <code>.github/</code> without <code>allowWorkflows</code>, a
-            package version edit, a removed or missing changeset, a bump above <code>maxBump</code>, a denylisted term, or a commit with
-            more than one line.
+            <strong>Fix</strong> on a policy violation: a forbidden path, <code>.github/</code> without <code>allowWorkflows</code>,
+            <code>.claude/</code> without <code>allowClaudeConfig</code>, a package version edit, a removed or missing changeset, a bump
+            above <code>maxBump</code>, a denylisted term, or a commit with more than one line.
           </li>
           <li><strong>Rebase</strong> when the branch is behind the base or conflicts with it.</li>
           <li><strong>Wait</strong> until GitHub reports the PR as mergeable.</li>

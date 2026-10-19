@@ -194,6 +194,24 @@ test('prompts: the implementer hears of a dependency that changed after the brie
   assert.equal(drifted.includes('{{'), false)
 })
 
+test('prompts: the brief writer states the .claude/ rule for both values of allowClaudeConfig', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const refused = briefWritePrompt(manifest, { ...pr, allowClaudeConfig: false }, STATE)
+  const allowed = briefWritePrompt(manifest, { ...pr, allowClaudeConfig: true }, STATE)
+
+  assert.ok(
+    refused.includes(
+      "- **Claude Code files.** This PR must not touch `.claude/`. Agents of this rollout load the project's Claude Code settings.",
+    ),
+  )
+
+  assert.ok(allowed.includes('- **Claude Code files.** This PR may change files under `.claude/`.'))
+  assert.match(allowed, /the maintainer reviews that diff separately/)
+  assert.equal(refused.includes('{{'), false)
+  assert.equal(allowed.includes('{{'), false)
+})
+
 test('prompts: the brief writer assumes no plan language', () => {
   const manifest = loadManifest(makeRollout())
   const text = briefWritePrompt(manifest, manifest.all[0], STATE)

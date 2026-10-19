@@ -15,7 +15,7 @@
 //                         (serves a local web UI over the rollouts in ROOT, default $ROLLOUT_ROOT or ~/.rollouts)
 //                         (--read-only disables the controls)
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadManifest } from '../lib/manifest.mjs'
@@ -36,6 +36,7 @@ import {
   probeTools,
   sshHostname,
   storedLoginCheck,
+  userSettingsCheck,
 } from '../lib/preflight.mjs'
 import { agentSettings, contextArgs, contextEnv } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
@@ -320,6 +321,14 @@ async function preflight(manifest) {
   if (wrapper) {
     warnings.push(wrapper)
   }
+
+  const userSettings = userSettingsCheck(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json'))
+
+  for (const line of userSettings.lines) {
+    console.log(line)
+  }
+
+  warnings.push(...userSettings.warnings)
 
   for (const tool of probeTools(manifest)) {
     await probe(tool, tool, ['--version'])
