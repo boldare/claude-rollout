@@ -157,6 +157,14 @@
                 <td class="name">lib/settings.mjs</td>
               </tr>
               <tr>
+                <td class="nowrap">Agent context</td>
+                <td>
+                  Built-in tools as an allowlist per role, no MCP server but <code>mcpConfig</code>, no skills and no auto-memory.
+                  <a href="#agent-context">Details</a>.
+                </td>
+                <td class="name">lib/settings.mjs</td>
+              </tr>
+              <tr>
                 <td class="nowrap">The git hooks</td>
                 <td>
                   <code>pre-push</code> allows only the PR branch and only the HTTPS push URL. <code>commit-msg</code> allows one subject
@@ -295,6 +303,31 @@
           The push deny rules name <code>main</code> and <code>repo.base</code>. For every other branch, the guard and the pre-push hook
           hold the line, since both allow pushes to the PR branch only.
         </p>
+
+        <h3 id="agent-context">What an agent loads</h3>
+
+        <p>
+          An agent gets the built-in tools of its role and nothing you installed. The guard reads Bash calls only, so any other tool an
+          agent can call is a way around it.
+        </p>
+
+        <ul>
+          <li>
+            <strong>Tools</strong> are an allowlist, passed as <code>--tools</code>: Bash, Read, WebFetch, WebSearch and TaskStop, plus Edit
+            and Write for implement and fix. A tool a newer Claude Code adds reaches no agent until <code>lib/settings.mjs</code>
+            names it. So there are no subagents, workflows, notifications or plugin publishing.
+          </li>
+          <li>
+            <strong>MCP servers</strong>: none, with <code>--strict-mcp-config</code>. Not your claude.ai connectors, not plugin servers,
+            not the ones in your configuration. <a href="manifest.html#manifest-mcpConfig"><code>mcpConfig</code></a> adds the servers of
+            one JSON file. An MCP tool never passes the guard, so add only servers that cannot publish, send messages or merge.
+          </li>
+          <li><strong>Skills</strong>: none, with <code>--disable-slash-commands</code>.</li>
+          <li>
+            <strong>Auto-memory</strong>: off, with <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>. An agent neither reads your notes about
+            the project nor writes new ones there.
+          </li>
+        </ul>
 
         <h3 id="guard">The Bash guard</h3>
 

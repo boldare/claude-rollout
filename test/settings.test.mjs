@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
-import { agentSettings, disallowedTools, guardCommand, readOnlyRole } from '../lib/settings.mjs'
+import { agentSettings, agentTools, contextArgs, contextEnv, disallowedTools, guardCommand, readOnlyRole } from '../lib/settings.mjs'
 import { makeRollout } from './fixtures.mjs'
 
 function pushRules(branch) {
@@ -112,5 +112,38 @@ test('agentSettings: every role gets the guard with a finite timeout and the exi
       assert.equal(hook.timeout, 30, role)
       assert.ok(hook.command.endsWith(' || exit 2'), `${role}: ${hook.command}`)
     }
+  }
+})
+
+test('contextArgs: every role gets no MCP servers, no skills and the built-in tools of its role only', () => {
+  const manifest = loadManifest(makeRollout())
+
+  for (const role of ['brief', 'implement', 'fix', 'verify', 'delegate']) {
+    const args = contextArgs(manifest, role)
+    const tools = args.slice(args.indexOf('--tools') + 1)
+
+    assert.deepEqual(args.slice(0, args.indexOf('--tools')), ['--strict-mcp-config', '--disable-slash-commands'], role)
+    assert.deepEqual(tools, agentTools(role), role)
+    assert.equal(tools.includes('Edit') || tools.includes('Write'), !readOnlyRole(role), role)
+
+    for (const tool of ['Agent', 'Task', 'Workflow', 'Skill', 'ToolSearch', 'NotebookEdit', ...disallowedTools(role)]) {
+      assert.ok(!tools.includes(tool), `${role}: ${tool}`)
+    }
+  }
+})
+
+test('contextArgs: a manifest mcpConfig is the only MCP source the agents get', () => {
+  const manifest = { ...loadManifest(makeRollout()), mcpConfig: '/tmp/rollout/mcp.json' }
+  const args = contextArgs(manifest, 'implement')
+
+  assert.deepEqual(args.slice(0, 4), ['--strict-mcp-config', '--mcp-config', '/tmp/rollout/mcp.json', '--disable-slash-commands'])
+})
+
+test('contextEnv: no role gets the auto-memory, and only the read-only roles get the 5-minute cache', () => {
+  for (const role of ['brief', 'implement', 'fix', 'verify', 'delegate']) {
+    const env = contextEnv(role)
+
+    assert.equal(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1', role)
+    assert.equal(env.CLAUDE_CODE_PROMPT_CACHE_TTL, readOnlyRole(role) ? '5m' : undefined, role)
   }
 })

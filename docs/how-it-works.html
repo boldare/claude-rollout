@@ -917,6 +917,8 @@
   --json-schema &lt;schemas/ready|verdict|brief|delegate.json&gt; \
   --permission-mode auto --permission-prompts none \
   --settings &lt;deny and allow rules, the guard hook&gt; \
+  --strict-mcp-config [--mcp-config &lt;mcpConfig&gt;] --disable-slash-commands \
+  --tools Bash Read [Edit Write] WebFetch WebSearch TaskStop <span class="dim"># Edit and Write for implement and fix</span>
   --max-budget-usd &lt;policy.budgetUsd[effort]&gt; \
   --disallowedTools [Edit Write NotebookEdit] <span class="dim"># the file tools for the verifier, brief and delegate roles</span>
                     ScheduleWakeup CronCreate CronDelete CronList RemoteTrigger Monitor
@@ -928,7 +930,18 @@
             Yours, with <a href="manifest.html#repo-pathPrepend"><code>repo.pathPrepend</code></a> first on <code>PATH</code>, plus the
             <code>ROLLOUT_*</code> variables, <code>GH_REPO</code> pinned to <code>repo.github</code>, no <code>GH_HOST</code> and no npm
             credentials. With a bot token also its <code>GH_TOKEN</code>, an empty <code>GITHUB_TOKEN</code>, a
-            <code>GH_CONFIG_DIR</code> that points at an empty directory and <code>GIT_TERMINAL_PROMPT=0</code>.
+            <code>GH_CONFIG_DIR</code> that points at an empty directory and <code>GIT_TERMINAL_PROMPT=0</code>. Every agent gets
+            <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>, and the verifier, the brief writers and the delegate
+            <code>CLAUDE_CODE_PROMPT_CACHE_TTL=5m</code>.
+          </dd>
+          <dt>Context</dt>
+          <dd>
+            The prompt, the repository's <code>CLAUDE.md</code> and the tools of the role, nothing you installed: no MCP server but
+            <a href="manifest.html#manifest-mcpConfig"><code>mcpConfig</code></a
+            >, no skill and no auto-memory. All of it would be sent with every request of every run. On a subscription Claude Code writes
+            the prompt cache for an hour by default, at twice the input price instead of 1.25 times. The read-only roles never pause that
+            long between turns, so they get five minutes. Implement and fix keep the default, because they wait for CI and a fix resumes the
+            implementer's session. <a href="security.html#agent-context">Security</a> has why the tools are an allowlist.
           </dd>
           <dt>Settings</dt>
           <dd>

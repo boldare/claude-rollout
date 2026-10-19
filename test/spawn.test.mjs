@@ -487,6 +487,84 @@ test('runAgent: an implementer may edit files but gets no tool that waits for a 
   ])
 })
 
+test('runAgent: a verifier starts without MCP servers, skills or file tools, with the 5-minute cache and no auto-memory', async () => {
+  const manifest = loadManifest(makeRollout())
+  const argsFile = join(manifest.dir, 'args.bin')
+  const envFile = join(manifest.dir, 'env.txt')
+
+  fakeClaude(
+    manifest,
+    `printf '%s\\0' "$@" > '${argsFile}'\nprintf '%s|%s' "\${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset}" "\${CLAUDE_CODE_PROMPT_CACHE_TTL-unset}" > '${envFile}'\nexit 1`,
+  )
+
+  await runAgent(manifest, manifest.all[0], {
+    role: 'verify',
+    prompt: 'unused',
+    effort: 'high',
+    sessionId: '00000000-0000-4000-8000-000000000000',
+    resume: false,
+    cwd: manifest.repo.path,
+    logName: 'A1-01-verify',
+  })
+
+  const args = readFileSync(argsFile, 'utf8').split('\0').slice(0, -1)
+  const tools = args.indexOf('--tools')
+
+  assert.ok(args.includes('--strict-mcp-config'))
+  assert.ok(args.includes('--disable-slash-commands'))
+  assert.ok(!args.includes('--mcp-config'))
+  assert.deepEqual(args.slice(tools, tools + 7), ['--tools', 'Bash', 'Read', 'WebFetch', 'WebSearch', 'TaskStop', '--max-budget-usd'])
+  assert.equal(readFileSync(envFile, 'utf8'), '1|5m')
+})
+
+test('runAgent: an implementer keeps the default cache lifetime and gets the manifest mcpConfig', async () => {
+  const manifest = loadManifest(makeRollout())
+  const argsFile = join(manifest.dir, 'args.bin')
+  const envFile = join(manifest.dir, 'env.txt')
+
+  manifest.mcpConfig = join(manifest.dir, 'mcp.json')
+  fakeClaude(
+    manifest,
+    `printf '%s\\0' "$@" > '${argsFile}'\nprintf '%s|%s' "\${CLAUDE_CODE_DISABLE_AUTO_MEMORY-unset}" "\${CLAUDE_CODE_PROMPT_CACHE_TTL-unset}" > '${envFile}'\nexit 1`,
+  )
+
+  // A lifetime the maintainer exports reaches the implementer as it is, so the shell's own is set aside here.
+  const exported = process.env.CLAUDE_CODE_PROMPT_CACHE_TTL
+  delete process.env.CLAUDE_CODE_PROMPT_CACHE_TTL
+
+  try {
+    await runAgent(manifest, manifest.all[0], {
+      role: 'implement',
+      prompt: 'unused',
+      effort: 'high',
+      sessionId: '00000000-0000-4000-8000-000000000000',
+      resume: false,
+      cwd: manifest.repo.path,
+      logName: 'A1-01-implement',
+    })
+  } finally {
+    if (exported !== undefined) {
+      process.env.CLAUDE_CODE_PROMPT_CACHE_TTL = exported
+    }
+  }
+
+  const args = readFileSync(argsFile, 'utf8').split('\0').slice(0, -1)
+  const mcp = args.indexOf('--mcp-config')
+
+  assert.deepEqual(args.slice(mcp - 1, mcp + 2), ['--strict-mcp-config', '--mcp-config', manifest.mcpConfig])
+  assert.deepEqual(args.slice(args.indexOf('--tools') + 1, args.indexOf('--max-budget-usd')), [
+    'Bash',
+    'Read',
+    'Edit',
+    'Write',
+    'WebFetch',
+    'WebSearch',
+    'TaskStop',
+  ])
+
+  assert.equal(readFileSync(envFile, 'utf8'), '1|unset')
+})
+
 // What a maintainer's shell may export. With GH_HOST set, gh reads the keyring login.
 const SHELL_GITHUB_ENV = {
   GH_HOST: 'ghe.example.com',
