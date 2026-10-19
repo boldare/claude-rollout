@@ -1,6 +1,7 @@
 import { renderPrControls } from './controls.js'
 import { badge, cell, element, externalLink, link, list, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
 import { clock, duration, money, sentence } from './format.js'
+import { markdownDocument } from './markdown.js'
 import { renderTranscript } from './transcript.js'
 import { estimateNote } from './transcript-model.js'
 
@@ -349,17 +350,18 @@ function renderReview(pr) {
   return section
 }
 
-function textBlock(text, empty) {
-  return text === null || text === undefined ? element('p', empty, 'muted') : element('pre', text, 'document')
+// Under the tab's h3, so the document's own headings start at h4.
+function textBlock(text, empty, key, ctx) {
+  return text === null || text === undefined ? element('p', empty, 'muted') : markdownDocument(text, { key, level: 4, ctx })
 }
 
-function renderBrief(pr) {
+function renderBrief(pr, ctx) {
   return wrap(
     'div',
     element('h3', 'Brief'),
-    textBlock(pr.briefText, 'No brief file yet.'),
+    textBlock(pr.briefText, 'No brief file yet.', `brief|${pr.id}`, ctx),
     element('h3', 'Reviewer notes'),
-    textBlock(pr.notesText, 'No reviewer notes.'),
+    textBlock(pr.notesText, 'No reviewer notes.', `notes|${pr.id}`, ctx),
   )
 }
 
@@ -380,11 +382,11 @@ function noSectionHint(pr) {
   ].join(' ')
 }
 
-function sliceParts(slice) {
+function sliceParts(slice, pr, ctx) {
   return [
     element('h3', slice.heading, 'plan-heading'),
     element('p', `From ${slice.source}`, 'muted'),
-    textBlock(slice.text || null, 'The section is empty.'),
+    textBlock(slice.text || null, 'The section is empty.', `slice|${pr.id}|${slice.source}`, ctx),
   ]
 }
 
@@ -393,7 +395,7 @@ function renderPlanTab(pr, ctx) {
     return wrap('div', element('p', noSectionHint(pr), 'muted'), wholePlan(ctx))
   }
 
-  return wrap('div', ...pr.plan.flatMap(sliceParts), wholePlan(ctx))
+  return wrap('div', ...pr.plan.flatMap((slice) => sliceParts(slice, pr, ctx)), wholePlan(ctx))
 }
 
 const TAB_RENDERERS = {

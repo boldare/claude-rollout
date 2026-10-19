@@ -29,6 +29,7 @@ const token = new URLSearchParams(location.hash.slice(1)).get('t')
 const app = document.getElementById('app')
 const openVerdicts = new Set()
 const openTranscript = new Map()
+const sourceDocs = new Set()
 
 let route = parseRoute(location.hash)
 let stopped = false
@@ -561,6 +562,7 @@ function context() {
     send: (command) => send(current, command),
     openVerdicts,
     openTranscript,
+    sourceDocs,
     linkTo,
     linkWith,
     go,

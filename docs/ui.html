@@ -786,8 +786,15 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <p>
           What the agents work from. On top, a table of the PRs with their state and the headings of their sections in the plan, one line
           per source. Click a row to open that PR's plan tab. Below it, every source in
-          <a href="manifest.html#briefing">briefing.sources</a> in full, as plain text, with its kind, tag and path. A source that cannot be
+          <a href="manifest.html#briefing">briefing.sources</a> in full, formatted, with its kind, tag and path. A source that cannot be
           read shows the error instead.
+        </p>
+
+        <p id="markdown">
+          Plans, slices, briefs and reviewer notes show as formatted markdown: headings, lists with task items, quotes, code fences, rules
+          and GitHub's tables and strikethrough. <strong>Source</strong> on a document shows its text as it is in the file, and the choice
+          holds while the page updates. Raw HTML stays text, an image shows as a link to it, and only <code>http</code> and
+          <code>https</code> links can be clicked. Any indent only nests, so a fence is the one way to show code.
         </p>
 
         <ul>
@@ -918,7 +925,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               </tr>
               <tr>
                 <td class="name">brief</td>
-                <td>The brief the agents work from and the brief reviewer's notes, as plain text.</td>
+                <td>The brief the agents work from and the brief reviewer's notes, <a href="#markdown">formatted</a>.</td>
               </tr>
             </tbody>
           </table>
