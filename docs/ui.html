@@ -687,7 +687,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">12:26</td>
                     <td class="name">P3</td>
                     <td class="name">implement-start</td>
-                    <td class="detail">run=P3-01-implement log=logs/P3-01-implement.jsonl effort=high resume=false</td>
+                    <td class="detail">run=P3-01-implement log=logs/P3-01-implement.jsonl effort=high model=opus resume=false</td>
                   </tr>
                   <tr>
                     <td class="name">12:25</td>
@@ -700,7 +700,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">P2</td>
                     <td class="name">verify-done</td>
                     <td class="detail">
-                      run=P2-02-verify ok=true result=PASS cost=1.84 seconds=1262 awakeSeconds=1262 denials=0 stopped=false
+                      run=P2-02-verify model=claude-opus-5-5 ok=true result=PASS cost=1.84 seconds=1262 awakeSeconds=1262 denials=0
+                      stopped=false
                     </td>
                   </tr>
                   <tr class="error-event">

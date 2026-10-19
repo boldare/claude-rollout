@@ -565,6 +565,46 @@ test('runAgent: an implementer keeps the default cache lifetime and gets the man
   assert.equal(readFileSync(envFile, 'utf8'), '1|unset')
 })
 
+test('runAgent: the model option is the --model, and the result names the model the init line reports', async () => {
+  const manifest = loadManifest(makeRollout())
+  const argsFile = join(manifest.dir, 'args.bin')
+  const init = { type: 'system', subtype: 'init', session_id: 'session-1', model: 'claude-sonnet-5-5' }
+  const result = {
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    total_cost_usd: 0.5,
+    session_id: 'session-1',
+    structured_output: { status: 'READY' },
+  }
+
+  const options = {
+    role: 'implement',
+    prompt: 'unused',
+    effort: 'high',
+    sessionId: '00000000-0000-4000-8000-000000000000',
+    resume: false,
+    cwd: manifest.repo.path,
+    logName: 'A1-01-implement',
+  }
+
+  fakeClaude(manifest, `printf '%s\\0' "$@" > '${argsFile}'`, [init, result])
+
+  const ran = await runAgent(manifest, manifest.all[0], { ...options, model: 'sonnet' })
+  const args = readFileSync(argsFile, 'utf8').split('\0').slice(0, -1)
+
+  assert.equal(args[args.indexOf('--model') + 1], 'sonnet')
+  assert.equal(ran.ok, true)
+  assert.equal(ran.model, 'claude-sonnet-5-5')
+
+  fakeClaude(manifest, `printf '%s\\0' "$@" > '${argsFile}'\nexit 1`)
+
+  const failed = await runAgent(manifest, manifest.all[0], options)
+
+  assert.equal(readFileSync(argsFile, 'utf8').split('\0')[2], 'opus')
+  assert.equal(failed.model, 'opus')
+})
+
 // What a maintainer's shell may export. With GH_HOST set, gh reads the keyring login.
 const SHELL_GITHUB_ENV = {
   GH_HOST: 'ghe.example.com',

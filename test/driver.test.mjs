@@ -173,6 +173,7 @@ test('doneDetail: no headline when not ok, stopped as a boolean, denials as a co
 
   assert.deepEqual(failed, {
     run: 'A1-02-verify',
+    model: null,
     ok: false,
     result: null,
     cost: 0,
@@ -506,6 +507,114 @@ test('launch never starts an implementer or a fixer without a brief and a GitHub
       { id: 'A1', kind: 'brief-missing', role: 'implement' },
     ],
   )
+})
+
+// A1 with a brief, a ready worktree and model.implement sonnet. Every agent
+// call is recorded, and `result` decides how each run ends: never by default.
+function modelDriver(prs, { result = () => new Promise(() => {}) } = {}) {
+  const calls = []
+  const setup = tickDriver(prs, {
+    policy: { concurrency: 5 },
+    runAgent: (_, pr, options) => {
+      calls.push(options)
+      return result(options)
+    },
+  })
+
+  const pr = setup.manifest.all.find((item) => item.id === 'A1')
+  const wt = worktreePath(setup.manifest, pr)
+  const gitDir = join(wt, '.git-dir')
+
+  pr.model = { implement: 'sonnet' }
+  mkdirSync(gitDir, { recursive: true })
+  mkdirSync(dirname(pr.brief), { recursive: true })
+  writeFileSync(pr.brief, '# A1\n')
+  writeFileSync(join(wt, '.git'), `gitdir: ${gitDir}\n`)
+  writeFileSync(join(gitDir, 'rollout-ready'), '')
+  setup.tools.answer([
+    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
+    { tool: 'git', args: '', stdout: '' },
+  ])
+
+  return { ...setup, pr, entry: setup.driver.ledger.prs.A1, calls }
+}
+
+async function launched(setup, role, options) {
+  const before = setup.calls.length
+
+  setup.driver.launch(setup.pr, role, options)
+  await waitFor(() => setup.calls.length > before, `${role} run`)
+
+  return setup.calls.at(-1)
+}
+
+test('launch: model.implement runs the first implement attempt and two fixes, the rollout model every run from the third fix on', async () => {
+  const setup = modelDriver({ A1: { state: 'pending' } })
+  const models = []
+
+  models.push((await launched(setup, 'implement')).model)
+
+  for (let i = 0; i < 4; i++) {
+    models.push((await launched(setup, 'fix', { reason: 'r' })).model)
+  }
+
+  models.push((await launched(setup, 'implement')).model)
+
+  assert.deepEqual(models, ['sonnet', 'sonnet', 'sonnet', 'opus', 'opus', 'opus'])
+  assert.deepEqual(
+    setup.calls.map((call) => call.effort),
+    ['high', 'high', 'high', 'xhigh', 'max', 'xhigh'],
+  )
+
+  assert.equal(setup.entry.modelRaised, true)
+  assert.deepEqual(
+    eventsSince(setup.manifest)
+      .filter((event) => event.kind.endsWith('-start'))
+      .map((event) => [event.kind, event.model]),
+    [
+      ['implement-start', 'sonnet'],
+      ['fix-start', 'sonnet'],
+      ['fix-start', 'sonnet'],
+      ['fix-start', 'opus'],
+      ['fix-start', 'opus'],
+      ['implement-start', 'opus'],
+    ],
+  )
+})
+
+test('launch: a second implement attempt goes to the rollout model, and the PR stays on it after rollout retry', async () => {
+  const setup = modelDriver(
+    { A1: { state: 'pending', attempts: { implement: 1, fix: 0, verify: 0, brief: 0 } } },
+    { result: () => Promise.resolve(agentResult({ ok: false, costUsd: 0, error: 'error_during_execution' })) },
+  )
+
+  assert.equal((await launched(setup, 'implement')).model, 'opus')
+  await waitFor(() => !setup.driver.running.has('A1'), 'the run to end')
+
+  apply(setup.manifest, setup.driver, { cmd: 'retry', id: 'A1' })
+  setup.entry.retryAfter = null
+
+  assert.equal(setup.entry.attempts.implement, 0)
+  assert.equal((await launched(setup, 'implement')).model, 'opus')
+  assert.equal((await launched(setup, 'fix', { reason: 'r' })).model, 'opus')
+})
+
+test('launch: the verifier and the brief writer run on the rollout model whatever the PR implements on', async () => {
+  const setup = modelDriver({ A1: { state: 'pending', pr: 11, claimedSha: SHA } })
+
+  assert.equal((await launched(setup, 'verify', { sha: SHA })).model, 'opus')
+
+  rmSync(setup.pr.brief)
+
+  const writer = await launched(setup, 'brief')
+
+  assert.equal(writer.role, 'brief')
+  assert.equal(writer.model, 'opus')
+  assert.ok(eventsSince(setup.manifest).some((event) => event.kind === 'brief-start' && event.model === 'opus'))
+})
+
+test('doneDetail: the model the run reported', () => {
+  assert.equal(doneDetail('implement', 'A1-01-implement', agentResult({ model: 'claude-sonnet-5-5' })).model, 'claude-sonnet-5-5')
 })
 
 test('onDone: a PR merged during the run stays merged and is cleaned up after the run', async () => {
@@ -1670,6 +1779,7 @@ test('delegate: an answer to brief questions gives the brief attempt back and no
     run: 'A1-01-delegate',
     log: 'logs/A1-01-delegate.jsonl',
     effort: 'high',
+    model: 'opus',
     blocked: 'brief-questions',
   })
 
