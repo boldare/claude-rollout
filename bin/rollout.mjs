@@ -37,7 +37,7 @@ import {
   sshHostname,
   storedLoginCheck,
 } from '../lib/preflight.mjs'
-import { agentSettings } from '../lib/settings.mjs'
+import { agentSettings, contextArgs, contextEnv } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
 import { execFile } from 'node:child_process'
@@ -452,8 +452,9 @@ async function liveGuardTest(manifest, problems) {
       'none',
       '--settings',
       JSON.stringify(agentSettings(manifest, 'implement')),
+      ...contextArgs(manifest, 'implement'),
     ],
-    { cwd: scratch, env: makeEnv(manifest, { ROLLOUT_BRANCH: 'rollout/guard-test' }), timeout: 5 * 60_000 },
+    { cwd: scratch, env: makeEnv(manifest, { ...contextEnv('implement'), ROLLOUT_BRANCH: 'rollout/guard-test' }), timeout: 5 * 60_000 },
   )
 
   rmSync(scratch, { recursive: true, force: true })

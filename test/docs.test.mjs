@@ -27,7 +27,7 @@ const PAGES = [
   'security.html',
 ]
 
-const TOP_LEVEL_FIELDS = ['rollout', 'model', 'claudeBin', 'repo', 'briefing', 'policy', 'gates', 'prs']
+const TOP_LEVEL_FIELDS = ['rollout', 'model', 'claudeBin', 'mcpConfig', 'repo', 'briefing', 'policy', 'gates', 'prs']
 
 function read(file) {
   return readFileSync(join(DOCS, file), 'utf8')

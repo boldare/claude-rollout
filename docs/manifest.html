@@ -73,6 +73,7 @@
         <pre><code>rollout: my-lib-1.2.0            <span class="dim"># PRs get the label rollout:my-lib-1.2.0</span>
 model: opus                      <span class="dim"># every agent role uses this model</span>
 <span class="dim"># claudeBin: ~/tools/claude      # default: claude from PATH</span>
+<span class="dim"># mcpConfig: mcp.json            # MCP servers for the agents, default none</span>
 
 repo:
   path: ~/code/my-lib            <span class="dim"># your local clone</span>
@@ -204,6 +205,18 @@ prs:
                   would run through it, with whatever it adds, and stop when it stops them.
                   <a href="commands.html#cmd-preflight">preflight</a>
                   warns about one.
+                </td>
+              </tr>
+              <tr id="manifest-mcpConfig">
+                <td>mcpConfig</td>
+                <td>path</td>
+                <td>none</td>
+                <td>no</td>
+                <td>
+                  A JSON file with the MCP servers the agents get, passed as <code>--mcp-config</code>. A relative path resolves against the
+                  rollout directory, and a missing file fails the manifest. Without it agents get no MCP server at all, not your claude.ai
+                  connectors, plugin servers or configured ones. An MCP tool never passes the Bash guard, so add only servers that cannot
+                  publish, send messages or merge. See <a href="security.html#agent-context">What an agent loads</a>.
                 </td>
               </tr>
               <tr id="manifest-repo">

@@ -29,6 +29,27 @@ test('loadManifest: an explicit claudeBin still expands ~/', () => {
   assert.equal(manifest.claudeBin, `${homedir()}/tools/claude`)
 })
 
+test('loadManifest: no mcpConfig by default, a given one resolves against the rollout directory and must exist', () => {
+  assert.equal(loadManifest(makeRollout()).mcpConfig, null)
+
+  const dir = makeRollout({ manifest: { mcpConfig: 'mcp.json' } })
+
+  assert.throws(() => loadManifest(dir), /mcpConfig .*mcp\.json does not exist/)
+
+  writeFileSync(join(dir, 'mcp.json'), '{"mcpServers":{}}\n')
+  assert.equal(loadManifest(dir).mcpConfig, join(dir, 'mcp.json'))
+})
+
+test('validateManifest: mcpConfig, when set, is a non-empty path', () => {
+  const message = 'mcpConfig must be the path of a JSON file with the MCP servers the agents get'
+
+  for (const mcpConfig of ['', 42, ['mcp.json'], { mcpServers: {} }]) {
+    assert.ok(validateManifest({ ...base, mcpConfig }).includes(message), JSON.stringify(mcpConfig))
+  }
+
+  assert.ok(!validateManifest({ ...base, mcpConfig: 'mcp.json' }).includes(message))
+})
+
 test('validateManifest: a manifest that is not a mapping gets one error', () => {
   for (const raw of [null, undefined, 'demo', [], 42]) {
     assert.deepEqual(validateManifest(raw), ['the manifest must be a mapping with rollout, repo and prs'])
