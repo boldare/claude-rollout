@@ -1,6 +1,6 @@
 You are the adversarial reviewer of a DRAFT brief for PR {{id}} ("{{title}}", branch `{{branch}}`) of the rollout `{{rollout}}` in {{github}}. The brief will drive an autonomous implementer and a verifier who see nothing else, so a wrong path, a stale assumption or a missing edge case becomes a wrong PR.
 
-You are read-only. The current directory is a worktree at `origin/{{base}}` with the merged dependencies ({{deps}}).
+You are read-only. The current directory is a worktree {{briefWorktree}}.
 
 {{turnRule}}
 

@@ -158,6 +158,42 @@ test('prompts: every step starts its own line and the recipe sits indented under
   assert.ok(briefWritePrompt(manifest, pr, STATE).includes('\n  1. `npm ci`\n  2. `npm test`\n'))
 })
 
+test('prompts: the brief writers know which dependencies are merged and which are only verified', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all.find((item) => item.id === 'A2')
+  const entry = { briefAnswers: [], noteHistory: [] }
+  const heads = [{ id: 'A1', sha: 'a1a1a1a1a1a1a1a1', patchId: 'patch-a1' }]
+
+  assert.match(
+    briefWritePrompt(manifest, pr, entry),
+    /that worktree, at `origin\/main`, which already contains the merged dependencies \(A1\)\./,
+  )
+
+  assert.match(
+    briefWritePrompt(manifest, pr, entry, heads),
+    /at `origin\/main` with the dependencies that are verified but not merged yet merged into it locally: A1 at `a1a1a1a`\. They can still change before they merge\./,
+  )
+
+  assert.match(
+    briefReviewPrompt(manifest, pr, entry, '# A2', heads),
+    /a worktree at `origin\/main` with the dependencies that are verified but not merged yet/,
+  )
+
+  assert.equal(briefWritePrompt(manifest, pr, entry, heads).includes('{{'), false)
+})
+
+test('prompts: the implementer hears of a dependency that changed after the brief saw it', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all.find((item) => item.id === 'A2')
+  const quiet = implementPrompt(manifest, pr, { briefDrift: [], noteHistory: [] })
+  const drifted = implementPrompt(manifest, pr, { briefDrift: [{ id: 'A1', sha: 'a1a1a1a1a1a1' }], noteHistory: [] })
+
+  assert.doesNotMatch(quiet, /The brief and its dependencies/)
+  assert.match(drifted, /## The brief and its dependencies\n\nThe brief was written before these dependencies merged/)
+  assert.match(drifted, /- A1: the brief saw `a1a1a1a`\./)
+  assert.equal(drifted.includes('{{'), false)
+})
+
 test('prompts: the brief writer assumes no plan language', () => {
   const manifest = loadManifest(makeRollout())
   const text = briefWritePrompt(manifest, manifest.all[0], STATE)

@@ -60,4 +60,4 @@ Never merge, approve, close or comment on other PRs. Never push to `{{base}}` or
 
 {{briefText}}
 
-{{decisions}}
+{{briefDrift}}{{decisions}}

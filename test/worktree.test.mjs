@@ -4,7 +4,8 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { enableWorktreeConfig, prepareWorktree } from '../lib/worktree.mjs'
+import { existsSync } from 'node:fs'
+import { enableWorktreeConfig, preparePreview, prepareWorktree, previewPath, removePreview } from '../lib/worktree.mjs'
 
 const HOME = new URL('..', import.meta.url).pathname
 const IDENTITY = ['-c', 'user.name=Test', '-c', 'user.email=test@example.com']
@@ -94,4 +95,55 @@ test('prepareWorktree: a pushed branch is left to the rebase at the gate', async
 
   await prepareWorktree(manifest, pr)
   assert.equal(git(wt, 'rev-parse', 'HEAD'), head)
+})
+
+// A dependency's PR branch off main with one commit, pushed like an implementer would.
+function pushBranch(repo, branch, file, text = `${file}\n`) {
+  git(repo, 'checkout', '--quiet', '-B', branch, 'origin/main')
+  writeFileSync(join(repo, file), text)
+  git(repo, 'add', file)
+  git(repo, 'commit', '--quiet', '-m', `add ${file}`)
+  git(repo, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`)
+
+  return git(repo, 'rev-parse', 'HEAD')
+}
+
+async function previewSetup(context) {
+  const setup = fixture()
+  await enableWorktreeConfig(setup.manifest)
+  context.after(() => rmSync(setup.dir, { recursive: true, force: true }))
+
+  return { ...setup, pr: { id: 'A3', branch: 'feat/a3' } }
+}
+
+test('preparePreview: origin/main with each verified head merged in, detached, and the PR branch untouched', async (context) => {
+  const { manifest, repo, pr } = await previewSetup(context)
+  const heads = [
+    { id: 'A1', sha: pushBranch(repo, 'feat/a1', 'one.txt') },
+    { id: 'A2', sha: pushBranch(repo, 'feat/a2', 'two.txt') },
+  ]
+
+  const wt = await preparePreview(manifest, pr, heads)
+
+  assert.equal(wt, previewPath(manifest, pr))
+  assert.ok(existsSync(join(wt, 'one.txt')) && existsSync(join(wt, 'two.txt')) && existsSync(join(wt, 'a.txt')))
+  assert.equal(git(wt, 'rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD')
+  assert.equal(git(wt, 'log', '-1', '--format=%s'), 'preview: A2 at ' + heads[1].sha.slice(0, 7))
+  assert.equal(git(repo, 'branch', '--list', pr.branch), '')
+  assert.throws(() => git(wt, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feat/a3'), /no rollout-branch marker/)
+
+  await removePreview(manifest, pr)
+  assert.equal(existsSync(wt), false)
+})
+
+test('preparePreview: heads that conflict give null and leave no preview behind', async (context) => {
+  const { manifest, repo, pr } = await previewSetup(context)
+  const heads = [
+    { id: 'A1', sha: pushBranch(repo, 'feat/a1', 'same.txt', 'one\n') },
+    { id: 'A2', sha: pushBranch(repo, 'feat/a2', 'same.txt', 'two\n') },
+  ]
+
+  assert.equal(await preparePreview(manifest, pr, heads), null)
+  assert.equal(existsSync(previewPath(manifest, pr)), false)
+  assert.equal(await preparePreview(manifest, pr, heads.slice(0, 1)), previewPath(manifest, pr))
 })
