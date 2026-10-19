@@ -393,3 +393,32 @@ export async function waitFor(check, label, timeoutMs = 5000) {
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
 }
+
+// Sets process.env for one callback and restores it after, so a child sees
+// synthetic parent values.
+export async function withProcessEnv(values, callback) {
+  const saved = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]))
+
+  Object.assign(process.env, values)
+
+  try {
+    return await callback()
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[name]
+      } else {
+        process.env[name] = value
+      }
+    }
+  }
+}
+
+// The variables in a file a child wrote with `env`.
+export function readEnvFile(file) {
+  const lines = readFileSync(file, 'utf8').split('\n')
+
+  return Object.fromEntries(
+    lines.filter((line) => line.includes('=')).map((line) => [line.split('=')[0], line.slice(line.indexOf('=') + 1)]),
+  )
+}

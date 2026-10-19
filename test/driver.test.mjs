@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { briefDrift, createDriver, doneDetail } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
@@ -2542,6 +2542,29 @@ test('checkClaim: without gates, an undeclared file out of scope still goes on t
   assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'gate-check', 'verify-start'])
 })
 
+test('checkClaim: untracked Claude Code files in the worktree are removed and logged before the verifier starts', async () => {
+  const { manifest, driver, pr, entry, agentCalls } = verifiableDriver()
+  const wt = worktreePath(manifest, pr)
+
+  mkdirSync(join(wt, '.claude'))
+  writeFileSync(join(wt, '.claude', 'settings.local.json'), '{}\n')
+  writeFileSync(join(wt, 'CLAUDE.local.md'), 'notes\n')
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
+  assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'gate-check', 'local-config-removed', 'verify-start'])
+  assert.deepEqual(eventsSince(manifest)[3], {
+    id: 'A1',
+    kind: 'local-config-removed',
+    paths: ['.claude/settings.local.json', 'CLAUDE.local.md'],
+  })
+
+  assert.equal(existsSync(join(wt, '.claude', 'settings.local.json')), false)
+  assert.equal(existsSync(join(wt, 'CLAUDE.local.md')), false)
+})
+
 test('checkClaim: red CI logs a failed ci check right before it goes back to the implementer', async () => {
   const { manifest, driver, tools, pr, entry } = claimDriver({})
   const runs = {
@@ -3034,6 +3057,27 @@ test('verified: a PASS the driver discards, for a stale SHA or from a touched tr
     assert.equal(setup.entry.state, 'ready_claimed')
     assert.deepEqual(setup.entry.findings, FIRST_ROUND)
   }
+})
+
+test('verified: a reset logs the Claude Code files it removed before it discards the PASS', async () => {
+  const setup = recheckDriver()
+  const wt = worktreePath(setup.manifest, setup.pr)
+
+  mkdirSync(wt, { recursive: true })
+  writeFileSync(join(wt, 'CLAUDE.local.md'), 'notes\n')
+  setup.tools.answer([
+    { tool: 'git', args: 'status --porcelain', stdout: '?? CLAUDE.local.md' },
+    { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+    { tool: 'git', args: 'ls-files', stdout: '' },
+    { tool: 'git', args: 'reset', stdout: '' },
+    { tool: 'git', args: 'clean', stdout: '' },
+  ])
+
+  await rechecked(setup, recheckVerdict({ F1: 'resolved', F2: 'wrong' }, { verdict: 'PASS', blocking: [] }))
+
+  assert.deepEqual(kindsSince(setup.manifest), ['verify-done', 'local-config-removed', 'verifier-touched-tree'])
+  assert.deepEqual(eventsSince(setup.manifest)[1], { id: 'A1', kind: 'local-config-removed', paths: ['CLAUDE.local.md'] })
+  assert.equal(existsSync(join(wt, 'CLAUDE.local.md')), false)
 })
 
 test('verified: a verdict without recheck is recorded with an empty one', async () => {

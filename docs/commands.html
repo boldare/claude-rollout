@@ -541,6 +541,15 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 </td>
               </tr>
               <tr>
+                <td>user settings</td>
+                <td>
+                  Warns when your Claude Code user settings (<code>settings.json</code> in <code>CLAUDE_CONFIG_DIR</code>, or
+                  <code>~/.claude</code>) set <code>apiKeyHelper</code> or <code>env</code>. Agents start with
+                  <code>--setting-sources project</code>, so they get neither. It names the <code>env</code> variables, never their values.
+                  Put what agents need in the environment that starts the driver. A file that is missing or not valid JSON prints nothing.
+                </td>
+              </tr>
+              <tr>
                 <td class="name">node, package manager</td>
                 <td>
                   Either is missing. The manager is the first word of <code>repo.install</code> or of a
@@ -722,20 +731,20 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               </tr>
               <tr>
                 <td>ROLLOUT_ROLE</td>
-                <td>the driver, for agents</td>
+                <td>the driver, for agents and <code>repo.install</code></td>
                 <td>
-                  The agent's role. While it is set, the CLI refuses every command but <code>status</code>, <code>card</code> and
-                  <code>help</code>.
+                  The agent's role, or <code>install</code> for <code>repo.install</code>. While it is set, the CLI refuses every command
+                  but <code>status</code>, <code>card</code> and <code>help</code>.
                 </td>
               </tr>
               <tr>
                 <td>ROLLOUT_ID, ROLLOUT_BRANCH, ROLLOUT_NAME, ROLLOUT_HOME, ROLLOUT_REPO</td>
-                <td>the driver, for agents</td>
+                <td>the driver, for agents and <code>repo.install</code></td>
                 <td>
-                  The PR, its branch (empty for the verifier, brief and delegate roles), the rollout, the skill's directory and
-                  <code>repo.github</code>. The Bash guard reads all of them but <code>ROLLOUT_ID</code>. It refuses gh calls that name
-                  another repository than <code>ROLLOUT_REPO</code>. Agents also get <code>ROLLOUT_DIR</code>, so <code>status</code> and
-                  <code>card</code> work for them without flags.
+                  The PR, its branch (empty for the verifier, brief and delegate roles and for <code>repo.install</code>), the rollout, the
+                  skill's directory and <code>repo.github</code>. The Bash guard reads all of them but <code>ROLLOUT_ID</code>. It refuses
+                  gh calls that name another repository than <code>ROLLOUT_REPO</code>. Agents and the install also get
+                  <code>ROLLOUT_DIR</code>, so <code>status</code> and <code>card</code> work for them without flags.
                 </td>
               </tr>
               <tr>

@@ -68,6 +68,18 @@ test('validateManifest: a PR model is a mapping of implement only', () => {
   ])
 })
 
+test('allowClaudeConfig: false by default, and only a boolean when set', () => {
+  const withFlag = (allowClaudeConfig) => validateManifest({ ...base, prs: [{ ...base.prs[0], allowClaudeConfig }, base.prs[1]] })
+
+  assert.equal(loadManifest(makeRollout()).all[0].allowClaudeConfig, false)
+  assert.deepEqual(withFlag(true), [])
+  assert.deepEqual(withFlag(false), [])
+
+  for (const value of ['yes', null]) {
+    assert.deepEqual(withFlag(value), ['prs.A.allowClaudeConfig must be true or false'], JSON.stringify(value))
+  }
+})
+
 test('validateManifest: mcpConfig, when set, is a non-empty path', () => {
   const message = 'mcpConfig must be the path of a JSON file with the MCP servers the agents get'
 

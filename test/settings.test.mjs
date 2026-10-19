@@ -115,14 +115,19 @@ test('agentSettings: every role gets the guard with a finite timeout and the exi
   }
 })
 
-test('contextArgs: every role gets no MCP servers, no skills and the built-in tools of its role only', () => {
+test('contextArgs: every role gets the project settings only, no MCP servers, no skills and the built-in tools of its role only', () => {
   const manifest = loadManifest(makeRollout())
 
   for (const role of ['brief', 'implement', 'fix', 'verify', 'delegate']) {
     const args = contextArgs(manifest, role)
     const tools = args.slice(args.indexOf('--tools') + 1)
 
-    assert.deepEqual(args.slice(0, args.indexOf('--tools')), ['--strict-mcp-config', '--disable-slash-commands'], role)
+    assert.deepEqual(
+      args.slice(0, args.indexOf('--tools')),
+      ['--setting-sources', 'project', '--strict-mcp-config', '--disable-slash-commands'],
+      role,
+    )
+
     assert.deepEqual(tools, agentTools(role), role)
     assert.equal(tools.includes('Edit') || tools.includes('Write'), !readOnlyRole(role), role)
 
@@ -132,11 +137,23 @@ test('contextArgs: every role gets no MCP servers, no skills and the built-in to
   }
 })
 
-test('contextArgs: a manifest mcpConfig is the only MCP source the agents get', () => {
+test('contextArgs: a manifest mcpConfig is the only MCP source, and only implement and fix get it', () => {
   const manifest = { ...loadManifest(makeRollout()), mcpConfig: '/tmp/rollout/mcp.json' }
-  const args = contextArgs(manifest, 'implement')
 
-  assert.deepEqual(args.slice(0, 4), ['--strict-mcp-config', '--mcp-config', '/tmp/rollout/mcp.json', '--disable-slash-commands'])
+  for (const role of ['implement', 'fix']) {
+    assert.deepEqual(
+      contextArgs(manifest, role).slice(0, 6),
+      ['--setting-sources', 'project', '--strict-mcp-config', '--mcp-config', '/tmp/rollout/mcp.json', '--disable-slash-commands'],
+      role,
+    )
+  }
+
+  for (const role of ['brief', 'verify', 'delegate']) {
+    const args = contextArgs(manifest, role)
+
+    assert.deepEqual(args.slice(0, 4), ['--setting-sources', 'project', '--strict-mcp-config', '--disable-slash-commands'], role)
+    assert.ok(!args.includes('--mcp-config'), role)
+  }
 })
 
 test('contextEnv: no role gets the auto-memory, and only the read-only roles get the 5-minute cache', () => {

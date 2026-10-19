@@ -290,10 +290,8 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           </li>
           <li>The release workflow belongs in <code>repo.forbid</code>, as in <code>examples/manifest.yaml</code>.</li>
           <li>
-            Agents get no npm credentials: an empty npmrc, and empty <code>NPM_TOKEN</code> and <code>NODE_AUTH_TOKEN</code> (<code
-              >runAgent</code
-            >
-            in <code>lib/spawn.mjs</code>).
+            Agents and <a href="manifest.html#repo-install"><code>repo.install</code></a> get no npm credentials: an empty npmrc, and empty
+            <code>NPM_TOKEN</code> and <code>NODE_AUTH_TOKEN</code> (<code>readOnlyEnv</code> in <code>lib/identity.mjs</code>).
           </li>
           <li>Publish and release commands are denied in the agents' settings (<code>lib/settings.mjs</code>).</li>
         </ul>
