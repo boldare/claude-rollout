@@ -526,7 +526,7 @@
                 <td>Waits for its dependencies and for a free slot.</td>
                 <td>
                   Without a <a href="manifest.html#pr-brief"><code>brief</code></a> file: <code>briefing</code> once every dependency is
-                  merged or verified. With one: <code>implementing</code> once every dependency is merged.
+                  merged, or verified and not held. With one: <code>implementing</code> once every dependency is merged.
                 </td>
               </tr>
               <tr id="state-briefing">
@@ -678,7 +678,8 @@
           <li>
             <strong>Held</strong> is set on one PR by <a href="commands.html#cmd-hold"><code>hold</code></a
             >. It gets no new runs, rebases, ready notices or merges until <code>release</code>. A running agent finishes its step. Sync and
-            feedback still run.
+            feedback still run. A PR that depends on the held one gets no brief until <code>release</code> or the merge. A brief already
+            running finishes.
           </li>
           <li><strong>Paused</strong> applies to the whole rollout. No new runs start and nothing merges. Running agents finish.</li>
           <li>

@@ -619,7 +619,7 @@ test('doneDetail: the model the run reported', () => {
 
 // A2 depends on A1, which is verified and waits for its merge. Every agent call is
 // recorded and never ends, and git answers everything unless `rules` come first.
-function aheadDriver({ a1 = samplePrs().A1, a2 = { state: 'pending' }, rules = [] } = {}) {
+function aheadDriver({ a1 = { ...samplePrs().A1, held: null }, a2 = { state: 'pending' }, rules = [] } = {}) {
   const calls = []
   const setup = tickDriver(
     { A1: a1, A2: a2 },
@@ -659,6 +659,26 @@ test('advance: a brief starts once its dependency is verified, in a preview with
 
   assert.ok(gitCalls.some((call) => call.args.includes('merge') && call.args.at(-1) === SHA && call.args.includes('commit.gpgsign=false')))
   assert.ok(!gitCalls.some((call) => call.args.includes(worktreePath(manifest, pr))), 'the PR worktree is not made')
+})
+
+test('advance: a held dependency holds the brief, and release lets it start', async () => {
+  const { manifest, driver, pr, entry, calls } = aheadDriver({ a1: samplePrs().A1 })
+
+  await driver.advance(pr)
+  assert.equal(entry.state, 'pending')
+  assert.deepEqual(calls, [])
+
+  apply(manifest, driver, { cmd: 'release', id: 'A1' })
+  await driver.advance(pr)
+  await waitFor(() => calls.length === 1, 'the brief writer')
+
+  assert.equal(calls[0].role, 'brief')
+  assert.equal(calls[0].cwd, previewPath(manifest, pr))
+
+  apply(manifest, driver, { cmd: 'hold', id: 'A1' })
+  await driver.advance(pr)
+  assert.equal(entry.state, 'briefing')
+  assert.equal(driver.running.get('A2'), 'brief')
 })
 
 test('advance: a dependency neither merged nor verified holds the brief, and an implementer always waits for the merge', async () => {

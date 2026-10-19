@@ -23,6 +23,7 @@ import {
   remoteRepo,
   replyAsAgents,
   reviewsFor,
+  unmergedHeads,
 } from '../lib/github.mjs'
 import { githubApproval } from '../lib/judge.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
@@ -844,4 +845,16 @@ test('checksFor rejects a page without a list instead of returning the runs read
   ])
 
   await assert.rejects(checksFor(manifest, HEAD), /check-runs page 2 has no list/)
+})
+
+test('unmergedHeads: the verified heads of unmerged dependencies, none while one is held, and a merged one is skipped even when held', () => {
+  const pr = { deps: ['A1', 'A3'] }
+  const sha = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+  const verified = { state: 'verified', verified: { sha, patchId: 'patch-a1' }, held: null }
+
+  assert.deepEqual(unmergedHeads(pr, { prs: { A1: verified, A3: { state: 'merged' } } }), [{ id: 'A1', sha, patchId: 'patch-a1' }])
+  assert.equal(unmergedHeads(pr, { prs: { A1: { ...verified, held: { at: '2026-01-01T00:00:00Z' } }, A3: { state: 'merged' } } }), null)
+  assert.deepEqual(unmergedHeads(pr, { prs: { A1: verified, A3: { state: 'merged', held: { at: '2026-01-01T00:00:00Z' } } } }), [
+    { id: 'A1', sha, patchId: 'patch-a1' },
+  ])
 })
