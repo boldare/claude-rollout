@@ -173,7 +173,7 @@ export function renderFooter() {
   const footer = element('footer', undefined, 'footer')
 
   footer.append(
-    element('span', 'MIT · Boldare 2026'),
+    element('span', 'Boldare 2026'),
     markLink(BOLDARE, 'logo', 'Boldare'),
     markLink(REPOSITORY, 'github', 'claude-rollout on GitHub'),
   )

@@ -533,7 +533,7 @@ figcaption::first-letter {
   font-weight: 700;
 }
 
-/* Footer: the licence on the left, Boldare and the repository on the right, all in the grey of the labels. The marks
+/* Footer: Boldare and the year on the left, Boldare and the repository on the right, all in the grey of the labels. The marks
    are masks filled with the text colour, so one file serves both schemes and a hover lights them up with the ink. */
 
 .footer {
