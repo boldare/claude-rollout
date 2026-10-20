@@ -2300,6 +2300,7 @@ test('delegate: a question it takes notifies once, through its answer or escalat
     await driver.onDone(pr, 'fix', blockedReport(DECISION), { run: 'A1-02-fix' })
 
     assert.deepEqual(kindsSince(manifest), ['fix-done', 'blocked'])
+    assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'blocked', reason: 'needs-decision', delegate: true })
     assert.deepEqual(notices, [])
 
     await advanced(driver, pr)
@@ -2312,7 +2313,7 @@ test('delegate: a question it takes notifies once, through its answer or escalat
 
   driver.onBriefDone(pr, agentResult({ output: questions }))
 
-  assert.deepEqual(kindsSince(manifest), ['blocked'])
+  assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'blocked', reason: 'brief-questions', delegate: true }])
   assert.deepEqual(notices, [])
 
   await advanced(driver, pr)
@@ -2329,10 +2330,11 @@ test('delegate: blocked still notifies when the delegate will not take the quest
   ]
 
   for (const { state, policy } of cases) {
-    const { driver, pr, notices, calls } = delegateDriver({ state: 'fixing', pr: 11, blocked: null, ...state }, { policy })
+    const { manifest, driver, pr, notices, calls } = delegateDriver({ state: 'fixing', pr: 11, blocked: null, ...state }, { policy })
 
     await driver.onDone(pr, 'fix', blockedReport(DECISION), { run: 'A1-02-fix' })
 
+    assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'blocked', reason: 'needs-decision' })
     assert.deepEqual(notices, [notice])
     assert.deepEqual(calls, [])
   }
