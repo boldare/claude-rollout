@@ -5,9 +5,9 @@ import { renderCosts } from './costs.js'
 import { renderDetail } from './detail.js'
 import { element, link, wrap } from './dom.js'
 import { renderEvents } from './events.js'
-import { money, sentence } from './format.js'
-import { renderHeader, renderListHeader, renderViewTabs } from './header.js'
-import { driverStatus, mergeEvents } from './model.js'
+import { sentence } from './format.js'
+import { renderFooter, renderHeader, renderListHeader, renderTop, renderViewTabs, rolloutFacts } from './header.js'
+import { mergeEvents } from './model.js'
 import { renderPlan } from './plan.js'
 import { renderTimeline } from './timeline.js'
 import { FOLLOW_MS, PAGE_SIZE, shouldFollow, transcriptRoute } from './transcript-model.js'
@@ -144,6 +144,24 @@ function stopAll() {
   showLine(OPEN_THE_URL)
 }
 
+function rolloutSummary(rollout) {
+  if (!rollout.started && !rollout.driver?.running) {
+    return element('span', 'Not started: no ledger yet', 'facts')
+  }
+
+  return rolloutFacts({
+    driver: rollout.driver,
+    heartbeatAgeSeconds: rollout.driver?.heartbeatAgeSeconds ?? null,
+    merge: rollout.merge,
+    costUsd: rollout.costUsd,
+    merged: rollout.merged,
+    total: rollout.total,
+    errors: rollout.errors > 0 ? rollout.errors : null,
+    errorsHref: linkTo({ r: rollout.name, view: 'events', kind: 'errors' }),
+  })
+}
+
+// The whole row opens the rollout, as a board row opens its PR. A click on a link in it follows the link.
 function rolloutItem(rollout) {
   const item = element('li', undefined, 'rollout')
 
@@ -152,12 +170,15 @@ function rolloutItem(rollout) {
     return item
   }
 
-  item.append(
-    wrap('strong', link(linkTo({ r: rollout.name }), rollout.name)),
-    element('span', driverStatus(rollout.driver)),
-    element('span', `${rollout.merged}/${rollout.total} merged`),
-    element('span', money(rollout.costUsd)),
-  )
+  const target = linkTo({ r: rollout.name })
+
+  item.className = 'rollout clickable'
+  item.append(wrap('strong', link(target, rollout.name)), rolloutSummary(rollout))
+  item.addEventListener('click', (event) => {
+    if (!event.target.closest('a, button')) {
+      go(target)
+    }
+  })
 
   return item
 }
@@ -184,7 +205,7 @@ function renderList() {
 
   const items = element('ul', undefined, 'rollouts')
   items.append(...rollouts.map(rolloutItem))
-  app.replaceChildren(renderListHeader(), items)
+  app.replaceChildren(renderTop(renderListHeader()), items, renderFooter())
 }
 
 // Resolves to whether another refresh makes sense.
@@ -587,16 +608,16 @@ function renderRollout() {
   const header = renderHeader(ctx)
 
   if (!ctx.state) {
-    app.replaceChildren(header, element('p', ctx.problem ? 'No state yet.' : 'Loading…', 'muted'))
+    app.replaceChildren(renderTop(header), element('p', ctx.problem ? 'No state yet.' : 'Loading…', 'muted'))
     return
   }
 
   if (!ctx.view) {
-    app.replaceChildren(header, ...(ctx.route.pr ? [] : [renderPlan(ctx)]))
+    app.replaceChildren(renderTop(header), ...(ctx.route.pr ? [] : [renderPlan(ctx)]), renderFooter())
     return
   }
 
-  app.replaceChildren(header, renderViewTabs(ctx), renderBody(ctx))
+  app.replaceChildren(renderTop(header, renderViewTabs(ctx)), renderBody(ctx), renderFooter())
 }
 
 function render() {

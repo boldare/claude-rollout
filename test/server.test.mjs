@@ -365,6 +365,22 @@ test('static: nested files, but no dotfiles, unknown types or directories', asyn
   assert.equal((await raw(server.port, '/sub/x.js')).body, 'export const x = 2\n')
 })
 
+test('static: every font style.css loads is served as woff2, whole', async (context) => {
+  const { server } = await serve(context)
+  const fonts = [...readFileSync(join(UI, 'style.css'), 'utf8').matchAll(/url\('(fonts\/[^']+\.woff2)'\)/g)].map((match) => match[1])
+
+  assert.equal(new Set(fonts).size, 4)
+
+  for (const font of fonts) {
+    const response = await raw(server.port, `/${font}`)
+
+    assert.equal(response.status, 200, font)
+    assert.equal(response.headers['content-type'], 'font/woff2', font)
+    assert.equal(Number(response.headers['content-length']), readFileSync(join(UI, font)).length, font)
+    assert.equal(response.headers['content-security-policy'], CSP, font)
+  }
+})
+
 test('api: only the Bearer token opens it, and /%61pi is the same path', async (context) => {
   const { server } = await serve(context)
   const wrongOfSameLength = `Bearer ${'x'.repeat(server.token.length)}`

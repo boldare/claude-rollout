@@ -155,11 +155,29 @@ function depsField(pr, ctx) {
   return field('deps', namedList(deps, 'inline'))
 }
 
+// The board's info line repeats the gate, the question and the stamps below, so the page shows only the part of it
+// that has no field of its own.
+function stateFields(pr) {
+  if (pr.state === 'merged' && pr.mergeSha) {
+    return [field('merged as', short(pr.mergeSha))]
+  }
+
+  if (['needs_fix', 'fixing'].includes(pr.state) && pr.fixReason) {
+    return [field('fix reason', element('span', pr.fixReason, 'text'))]
+  }
+
+  if (['escalated', 'interrupted'].includes(pr.state) && pr.lastError) {
+    return [field('last error', element('span', pr.lastError, 'text'))]
+  }
+
+  return []
+}
+
 function renderOverview(pr, ctx) {
   const heldField = pr.held ? [field('held', `since ${clock(pr.held.at)}`)] : []
 
   return fields(
-    field('info', element('span', pr.info || '-', 'text')),
+    stateFields(pr),
     gateFields(pr.gate),
     blockedFields(pr.blocked),
     delegateFields(pr),

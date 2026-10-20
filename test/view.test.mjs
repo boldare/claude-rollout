@@ -375,6 +375,27 @@ test("prRows: answered names the delegate when the delegate's answer applied", (
   assert.deepEqual(answeredRow(answeredEntry('needs_fix', { by: 'delegate' }), []), { at: at(10), by: 'delegate', run: null, role: null })
 })
 
+test('prDetail: the merge commit, the fix reason and the last error, for the overview', () => {
+  const manifest = loadManifest(makeRollout())
+  const ledger = {
+    prs: {
+      A1: { state: 'merged', mergeSha: 'feedface00' },
+      A2: { state: 'fixing', fixReason: 'CI is red' },
+      A3: { state: 'escalated', lastError: 'gh pr create failed' },
+    },
+  }
+
+  const pick = (id) => {
+    const { mergeSha, fixReason, lastError } = prDetail(manifest, ledger, [], [], id)
+
+    return { mergeSha, fixReason, lastError }
+  }
+
+  assert.deepEqual(pick('A1'), { mergeSha: 'feedface00', fixReason: null, lastError: null })
+  assert.deepEqual(pick('A2'), { mergeSha: null, fixReason: 'CI is red', lastError: null })
+  assert.deepEqual(pick('A3'), { mergeSha: null, fixReason: null, lastError: 'gh pr create failed' })
+})
+
 test('prDetail: verdicts fall back to the latest verdict for old ledgers', () => {
   const manifest = loadManifest(makeRollout())
   const verdict = { verdict: 'PASS', sha: 'abc', summary: 'ok' }

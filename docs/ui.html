@@ -349,57 +349,81 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h3 id="view-list">Rollout list</h3>
 
         <p>
-          The first page lists every rollout under the root, with the driver's status, how many PRs are merged and the cost so far. A
-          rollout whose manifest does not load shows the error instead. Click a name to open it.
+          The first page lists every rollout under the root with the facts of its <a href="#view-header">header</a>: the driver's status,
+          the merge policy, the cost so far, how many PRs are merged, and the errors when there are any. A rollout that never ran says so,
+          and one whose manifest does not load shows the error instead. Click a row to open the rollout.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of the rollout list">
           <div class="header">
-            <span class="title"
-              ><picture class="logo"
-                ><source srcset="boldare-white.svg" media="(prefers-color-scheme: dark)" />
-                <img src="boldare.svg" alt="" /></picture
-              ><span>Rollouts</span></span
-            >
+            <span class="title"><span class="name">Rollouts</span></span>
           </div>
           <div class="mock-body">
             <div class="scroll">
               <table>
                 <tbody>
                   <tr>
-                    <td><strong>my-lib-1.2.0</strong></td>
-                    <td class="small">Running</td>
-                    <td class="small">1/4 merged</td>
-                    <td class="small">$21.44</td>
-                  </tr>
-                  <tr>
                     <td><strong>my-lib-1.1.0</strong></td>
-                    <td class="small">Stopped</td>
-                    <td class="small">5/5 merged</td>
-                    <td class="small">$63.10</td>
+                    <td class="small">
+                      <div class="facts">
+                        <span class="badge driver driver-stopped">Stopped</span>
+                        <span><span class="label">Merge</span><span>human</span></span>
+                        <span><span class="label">Cost</span><span>$63.10</span></span>
+                        <span><span class="label">Merged</span><span>5/5</span></span>
+                      </div>
+                    </td>
                   </tr>
                   <tr>
-                    <td><strong>notes-site</strong></td>
-                    <td class="small error-text" colspan="3">invalid manifest: - repo.path and repo.github are required</td>
+                    <td><strong>my-lib-1.2.0</strong></td>
+                    <td class="small">
+                      <div class="facts">
+                        <span
+                          ><span class="badge driver driver-running">Running</span><span class="muted">PID 48213</span
+                          ><span class="muted">Heartbeat 14s ago</span></span
+                        >
+                        <span><span class="label">Merge</span><span>human</span></span>
+                        <span><span class="label">Cost</span><span>$21.44</span></span>
+                        <span><span class="label">Merged</span><span>1/4</span></span>
+                        <a class="error" href="#view-events">1 error</a>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><strong class="muted">notes-site</strong></td>
+                    <td class="small error-text">Invalid manifest: - repo.path and repo.github are required</td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
+          <div class="footer">
+            <span>MIT · Boldare 2026</span>
+            <picture
+              ><source srcset="boldare-white.svg" media="(prefers-color-scheme: dark)" />
+              <img src="boldare.svg" width="117" height="14" alt="" /></picture
+            ><span class="divider"></span
+            ><picture
+              ><source srcset="github-white.svg" media="(prefers-color-scheme: dark)" />
+              <img src="github.svg" width="20" height="20" alt=""
+            /></picture>
+          </div>
         </div>
+
+        <p>
+          Every page ends with the same footer: the licence, and links to Boldare and to the repository on GitHub. They light up when you
+          point at them.
+        </p>
 
         <h3 id="view-header">Header</h3>
 
-        <p>Every page of a rollout starts with the same bar.</p>
+        <p>
+          Every page of a rollout starts with the same bar, and the views follow in a band under it. Both stay at the top of the window
+          while the page scrolls, so a long transcript or plan scrolls under them. On a PR page the view you came from stays marked.
+        </p>
 
         <div class="mock" role="img" aria-label="Mockup of the rollout header">
           <div class="header">
-            <span class="title"
-              ><picture class="logo"
-                ><source srcset="boldare-white.svg" media="(prefers-color-scheme: dark)" />
-                <img src="boldare.svg" alt="" /></picture
-              ><span>my-lib-1.2.0</span> <a class="back" href="#view-list">All rollouts</a></span
-            >
+            <span class="title"><span class="name">my-lib-1.2.0</span> <a class="back" href="#view-list">All rollouts</a></span>
             <div class="facts">
               <span
                 ><span class="badge driver driver-running">Running</span><span class="muted">PID 48213</span
@@ -412,12 +436,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             </div>
             <div class="controls"><span class="fake-button">Pause</span> <span class="fake-button danger">Stop</span></div>
           </div>
-          <div class="mock-body">
-            <nav class="tabs" aria-label="Views">
-              <span class="tab active">board</span><span class="tab">timeline</span><span class="tab">events</span
-              ><span class="tab">costs</span><span class="tab">plan</span>
-            </nav>
-          </div>
+          <nav class="views" aria-label="Views">
+            <span class="tab active">board</span><span class="tab">timeline</span><span class="tab">events</span
+            ><span class="tab">costs</span><span class="tab">plan</span>
+          </nav>
         </div>
 
         <ul>
@@ -828,28 +850,28 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h3 id="view-pr">PR page</h3>
 
         <p>
-          Click a PR anywhere to open its page: a back link, the id and title, the state and the PR's facts, the PR controls, and six tabs.
-          A blocked PR shows <a href="#control-answer">Answer</a> in place of Note.
+          Click a PR anywhere to open its page: a back link, the id and title with the PR controls at the end of the line, the state and the
+          PR's facts, and six tabs. A blocked PR shows <a href="#control-answer">Answer</a> in place of Note.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of a PR page">
           <div class="mock-body">
             <p class="back">← Back to board</p>
-            <p class="detail-title">P2 <span class="muted">feat: cli flags</span></p>
+            <div class="detail-head">
+              <p class="detail-title">P2 <span class="muted">feat: cli flags</span></p>
+              <p class="controls"><span class="fake-button">Hold</span> <span class="fake-button">Note</span></p>
+            </div>
             <div class="facts pr-facts">
               <span class="badge state state-verified">Verified</span>
               <a href="#view-pr">#42</a>
               <span>Branch feat/cli-flags</span>
               <span>Head 9c4e1b2</span>
             </div>
-            <p class="chips"><span class="fake-button">Hold</span> <span class="fake-button">Note</span></p>
             <nav class="tabs" aria-label="PR tabs">
               <span class="tab active">overview</span><span class="tab">runs</span><span class="tab">verifier</span
               ><span class="tab">review</span><span class="tab">plan</span><span class="tab">brief</span>
             </nav>
             <dl class="kv">
-              <dt>info</dt>
-              <dd>wait: awaiting a maintainer review on GitHub (approve PR #42)</dd>
               <dt>gate</dt>
               <dd><strong>wait</strong> <span class="muted">at 12:41</span></dd>
               <dt>reasons</dt>
@@ -886,10 +908,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <tr>
                 <td class="name">overview</td>
                 <td>
-                  The board's info line, the gate's last decision with its reasons, GitHub's merge state and the sha it judged, the question
-                  and evidence of a blocked PR, the delegate's runs and answers with their plan references, the hold, how this PR is
-                  approved, the verified and approved stamps, the dependencies, files outside the PR's scope and changed workflow files.
-                  With the verifier and brief tabs it covers most of
+                  The merge commit, the reason of a fix or the last error, the gate's last decision with its reasons, GitHub's merge state
+                  and the sha it judged, the question and evidence of a blocked PR, the delegate's runs and answers with their plan
+                  references, the hold, how this PR is approved, the verified and approved stamps, the dependencies, files outside the PR's
+                  scope and changed workflow files. With the verifier and brief tabs it covers most of
                   <a href="commands.html#cmd-card"><code>rollout card</code></a
                   >. The implementer's summary, deviations and expected results are only on the card.
                 </td>
