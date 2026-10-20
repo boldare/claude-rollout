@@ -148,6 +148,8 @@ policy:
 <span class="dim">#     # One that does not pass blocks nothing. The card and the PR page show it.</span>
 <span class="dim">#     recommended:</span>
 <span class="dim">#       - Every new option has its row in the docs.</span>
+<span class="dim">#     # Read from the base branch at every verifier launch. Every entry that applies is required.</span>
+<span class="dim">#     criteriaFrom: docs/criteria.yaml</span>
 
 prs:
   - id: P1
@@ -171,8 +173,9 @@ prs:
     allowWorkflows: true         <span class="dim"># this PR adds a CI step</span></code></pre>
 
         <p>
-          Paths expand a leading <code>~</code>. Globs follow <code>lib/glob.mjs</code>: <code>*</code> stays inside one path segment,
-          <code>**</code> spans directories and <code>?</code> is one character other than <code>/</code>.
+          Paths expand a leading <code>~</code>, except <code>gates.verify.criteriaFrom</code>: it is a path in the repository and never
+          expands. Globs follow <code>lib/glob.mjs</code>: <code>*</code> stays inside one path segment, <code>**</code> spans directories
+          and <code>?</code> is one character other than <code>/</code>.
         </p>
 
         <h2 id="top-level">Top level <a class="anchor" href="#top-level" aria-label="Link to this section">#</a></h2>
@@ -738,8 +741,8 @@ prs:
           brief reviewer makes for the driver on each brief the driver writes. <code>gates.ready</code> lists commands the implementer runs
           in its self-check and the driver runs again. <code>gates.preVerify</code> holds checks only the driver runs: the scope check,
           which runs before the ready commands, and the pre-verify commands, which run after them. <code>gates.verify</code> lists criteria
-          the verifier checks. Any other key under <code>gates</code>, <code>gates.brief</code>, <code>gates.ready</code>,
-          <code>gates.preVerify</code> or <code>gates.verify</code> fails validation.
+          the verifier checks, and can name a catalog of more criteria in the repository. Any other key under <code>gates</code>,
+          <code>gates.brief</code>, <code>gates.ready</code>, <code>gates.preVerify</code> or <code>gates.verify</code> fails validation.
         </p>
 
         <div class="scroll">
@@ -898,9 +901,73 @@ prs:
                   <code>verify</code>.
                 </td>
               </tr>
+              <tr id="gates-verify-criteriaFrom">
+                <td>verify.criteriaFrom</td>
+                <td>path in the repository</td>
+                <td><code>null</code></td>
+                <td>
+                  A YAML <a href="#criteria-catalog">criteria catalog</a> in the target repository, as a path relative to its root, such as
+                  <code>docs/criteria.yaml</code>. An absolute path, a leading <code>~</code> or a <code>..</code> segment fails validation.
+                  Each time a verifier starts, the driver reads the file from <code>origin/&lt;base&gt;</code> with <code>git show</code> in
+                  <code>repo.path</code>, never from the PR's branch or worktree. So a PR cannot change its own criteria, and a change
+                  merged into the base applies to the next verifier. The entries that apply to the PR join <code>verify.required</code> and
+                  <code>verify.recommended</code>, after them, as required criteria with their own ids. They are judged like
+                  <code>verify.required</code>. A missing or invalid catalog is an error of that PR: no verifier starts, the PR stays
+                  <code>ready_claimed</code>, and five erroring ticks in a row escalate it as <code>repeated errors</code>.
+                  <a href="commands.html#cmd-preflight">Preflight</a> reads and checks the catalog too.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
+
+        <h3 id="criteria-catalog">
+          The criteria catalog <a class="anchor" href="#criteria-catalog" aria-label="Link to this section">#</a>
+        </h3>
+
+        <p>
+          The file <a href="#gates-verify-criteriaFrom"><code>gates.verify.criteriaFrom</code></a> names is a YAML list. Each entry has an
+          <code>id</code> and a <code>criterion</code>, and may have <code>tags</code> and <code>paths</code>:
+        </p>
+
+        <pre><code>- id: docs-stale
+  criterion: Unchanged text in an edited doc agrees with the change.
+  paths: ['docs/**', '*.md']   <span class="dim"># optional: applies when the PR changes a matching file</span>
+- id: ui-states
+  criterion: Every new UI control has an empty, loading and error state.
+  tags: [ui]                   <span class="dim"># optional: applies when the PR's briefTags include one</span>
+- id: tests-fail-first
+  criterion: A new branch in the code has a test that fails without it.</code></pre>
+
+        <ul>
+          <li>
+            An entry applies to a PR when it has neither <code>tags</code> nor <code>paths</code>, when the PR's
+            <a href="#pr-briefTags"><code>briefTags</code></a> include one of its tags, or when the PR changes a file that one of its globs
+            matches. The previous path of a renamed file counts. So <code>tests-fail-first</code> applies to every PR.
+          </li>
+          <li>
+            Every entry is required. The verifier reports each entry that applies by its id, after the manifest criteria and in catalog
+            order. One that does not pass becomes the blocking finding <code>&lt;id&gt; (required criterion): ...</code>.
+          </li>
+          <li>
+            The only keys are <code>id</code>, <code>criterion</code>, <code>tags</code> and <code>paths</code>, so
+            <code>level</code> fails. An id is a non-empty string, unique in the file. <code>V&lt;n&gt;</code> and
+            <code>B&lt;n&gt;</code> ids are refused, because the driver numbers the manifest criteria that way. A criterion is a non-empty
+            string. <code>tags</code> and <code>paths</code>, when present, are non-empty lists of non-empty strings.
+          </li>
+          <li>
+            Globs follow the same rules as everywhere else: <code>*</code> stays inside one path segment, so <code>*.md</code> matches
+            <code>README.md</code> but not <code>lib/a.md</code>. Quote a glob that starts with <code>*</code>, because YAML reads a bare
+            <code>*</code> as an alias.
+          </li>
+          <li>
+            The file holds a list. Write <code>[]</code> for a catalog with no entries. An empty file fails, and so does invalid YAML. The
+            error lists every problem in file order.
+          </li>
+          <li>
+            The catalog must be on <code>origin/&lt;base&gt;</code>. A file only in your local clone or on another branch counts as missing.
+          </li>
+        </ul>
 
         <h2 id="prs">prs <a class="anchor" href="#prs" aria-label="Link to this section">#</a></h2>
 
@@ -1085,7 +1152,10 @@ prs:
                 <td>list of strings</td>
                 <td>none</td>
                 <td>no</td>
-                <td>The tags of the briefing sources this PR's brief writer gets, on top of the untagged ones.</td>
+                <td>
+                  The tags of the briefing sources this PR's brief writer gets, on top of the untagged ones. They also pick the tagged
+                  entries of the <a href="#criteria-catalog">criteria catalog</a>.
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1115,8 +1185,9 @@ prs:
             <code>gates.ready</code>, when set, is a mapping with at most the keys <code>required</code> and <code>recommended</code>, each
             a list of non-empty strings. <code>gates.preVerify</code>, when set, is a mapping with at most these keys: <code>scope</code>, a
             boolean, and <code>required</code> and <code>recommended</code>, each a list of non-empty strings. <code>gates.verify</code>,
-            when set, is a mapping with at most the keys <code>required</code> and <code>recommended</code>, each a list of non-empty
-            strings.
+            when set, is a mapping with at most these keys: <code>required</code> and <code>recommended</code>, each a list of non-empty
+            strings, and <code>criteriaFrom</code>, a path relative to the repository root with no <code>..</code> segment and no leading
+            <code>/</code> or <code>~</code>.
           </li>
           <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.

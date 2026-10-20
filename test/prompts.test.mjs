@@ -778,7 +778,7 @@ test('prompts: the verifier gets the project criteria with their id and level, b
   const block = [
     '## Project criteria',
     '',
-    'The maintainer set these criteria for every PR of the rollout. Report each one in `criteria` by its id. A required one that does not pass blocks the PR. A recommended one never does.',
+    "The maintainer set these criteria for this PR, in the manifest or in the project's criteria catalog. Report each one in `criteria` by its id. A required one that does not pass blocks the PR. A recommended one never does.",
     '',
     '- V1 (required): A new branch in the code has a test that fails without it.',
     '- V2 (required): No semicolons in prose.',

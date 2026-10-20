@@ -84,6 +84,8 @@ policy:
 #     # One that does not pass blocks nothing. The card and the PR page show it.
 #     recommended:
 #       - Every new option has its row in the docs.
+#     # Read from the base branch at every verifier launch. Every entry that applies is required.
+#     criteriaFrom: docs/criteria.yaml
 
 prs:
   - id: P1

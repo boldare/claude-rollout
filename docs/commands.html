@@ -577,6 +577,15 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td><code>repo.path</code> is wrong or you cannot fetch.</td>
               </tr>
               <tr>
+                <td class="name">criteria catalog</td>
+                <td>
+                  Fails when the <a href="manifest.html#criteria-catalog">criteria catalog</a> that
+                  <a href="manifest.html#gates-verify-criteriaFrom"><code>gates.verify.criteriaFrom</code></a> names is missing from
+                  <code>origin/&lt;base&gt;</code> or invalid, with every error. Otherwise prints how many entries it has. Prints nothing
+                  without <code>criteriaFrom</code>.
+                </td>
+              </tr>
+              <tr>
                 <td class="name">origin</td>
                 <td>
                   Its owner and name must equal <code>repo.github</code>, case aside, so <code>my-org/my-lib-next</code> never passes for

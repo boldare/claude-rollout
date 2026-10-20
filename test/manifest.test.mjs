@@ -397,10 +397,38 @@ test('validateManifest: gates.verify.required and recommended are lists of non-e
   }
 })
 
+test('validateManifest: gates.verify.criteriaFrom is a path relative to the repository root', () => {
+  const valid = ['criteria.yaml', 'docs/criteria.yaml', 'a..b.yaml']
+  const invalid = [
+    '/etc/criteria.yaml',
+    '~/criteria.yaml',
+    '../criteria.yaml',
+    'docs/../criteria.yaml',
+    '',
+    '  ',
+    null,
+    42,
+    true,
+    ['criteria.yaml'],
+  ]
+
+  for (const criteriaFrom of valid) {
+    assert.deepEqual(gatesErrors({ verify: { criteriaFrom } }), [], criteriaFrom)
+  }
+
+  for (const criteriaFrom of invalid) {
+    assert.deepEqual(
+      gatesErrors({ verify: { criteriaFrom } }),
+      ['gates.verify.criteriaFrom must be a path relative to the repository root, with no .. segment and no leading / or ~'],
+      JSON.stringify(criteriaFrom),
+    )
+  }
+})
+
 test('validateManifest: unknown stages first, then per stage its unknown keys and its type errors in table order', () => {
   assert.deepEqual(
     gatesErrors({
-      verify: { criteriaFrom: 'plan' },
+      verify: { catalog: 'plan' },
       preVerify: { recommended: 'lint', tests: ['npm test'], required: [''], scope: 'on' },
       merge: {},
       brief: { required: 'B1', checks: true, runChecks: 'on' },
@@ -417,7 +445,7 @@ test('validateManifest: unknown stages first, then per stage its unknown keys an
       'gates.preVerify.scope must be true or false',
       'gates.preVerify.required must be a list of non-empty strings',
       'gates.preVerify.recommended must be a list of non-empty strings',
-      'gates.verify: unknown key criteriaFrom',
+      'gates.verify: unknown key catalog',
     ],
   )
 
@@ -430,7 +458,7 @@ test('validateManifest: unknown stages first, then per stage its unknown keys an
 test('loadManifest: every gates key gets its default, and set values are kept', () => {
   const brief = { runChecks: false, required: [], recommended: [] }
   const ready = { required: [], recommended: [] }
-  const noCriteria = { required: [], recommended: [] }
+  const noCriteria = { required: [], recommended: [], criteriaFrom: null }
   const defaults = { brief, ready, preVerify: { scope: false, required: [], recommended: [] }, verify: noCriteria }
   const set = { scope: true, required: ['npm ci', 'npm test'], recommended: ['npm run lint'] }
   const briefSet = {
@@ -502,11 +530,23 @@ test('loadManifest: set gates.verify criteria are kept, and a missing level is e
     brief: { runChecks: false, required: [], recommended: [] },
     ready: { required: [], recommended: [] },
     preVerify: { scope: false, required: [], recommended: [] },
-    verify: { required, recommended },
+    verify: { required, recommended, criteriaFrom: null },
   })
 
-  assert.deepEqual(gatesWith({ required }).verify, { required, recommended: [] })
-  assert.deepEqual(gatesWith({ recommended }).verify, { required: [], recommended })
+  assert.deepEqual(gatesWith({ required }).verify, { required, recommended: [], criteriaFrom: null })
+  assert.deepEqual(gatesWith({ recommended }).verify, { required: [], recommended, criteriaFrom: null })
+})
+
+test('loadManifest: gates.verify.criteriaFrom is null by default, and a set path is kept as written', () => {
+  const verifyWith = (verify) => loadManifest(makeRollout({ manifest: { gates: { verify } } })).gates.verify
+
+  assert.equal(loadManifest(makeRollout()).gates.verify.criteriaFrom, null)
+  assert.equal(verifyWith({ required: ['A test per branch.'] }).criteriaFrom, null)
+  assert.deepEqual(verifyWith({ criteriaFrom: 'docs/criteria.yaml' }), {
+    required: [],
+    recommended: [],
+    criteriaFrom: 'docs/criteria.yaml',
+  })
 })
 
 test('loadManifest: each default list is a new array', () => {

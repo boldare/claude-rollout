@@ -1,11 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { readCatalog } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import {
   agentTokenCheck,
+  catalogCheck,
   claudeWrapperWarning,
   originCheck,
   probeTools,
@@ -605,4 +608,128 @@ test('agent token: a missing token file throws', async () => {
 
     await assert.rejects(agentTokenCheck(manifest), /repo\.agentToken .* does not exist/)
   })
+})
+
+const COMMITTER = ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false']
+
+const CATALOG = [
+  '- id: docs-stale',
+  '  criterion: Unchanged text in an edited doc agrees with the change.',
+  "  paths: ['docs/**', '*.md']",
+  '- id: ui-states',
+  '  criterion: Every new UI control has an empty, loading and error state.',
+  '  tags: [ui]',
+  '- id: tests-fail-first',
+  '  criterion: A new branch in the code has a test that fails without it.',
+  '',
+].join('\n')
+
+const ONE_ENTRY = '- id: changelog\n  criterion: The changelog names every user-visible change.\n'
+
+function git(cwd, ...args) {
+  return execFileSync('git', [...COMMITTER, '-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+}
+
+function commitFiles(repo, files) {
+  for (const [file, text] of Object.entries(files)) {
+    writeFileSync(join(repo, file), text)
+    git(repo, 'add', file)
+  }
+
+  git(repo, 'commit', '--quiet', '-m', `change ${Object.keys(files).join(', ')}`)
+}
+
+// A local bare origin whose main holds `files`, and a clone that fetched it. No GitHub.
+function catalogRepo(context, files) {
+  const dir = mkdtempSync(join(tmpdir(), 'rollout-catalog-'))
+  const origin = join(dir, 'origin.git')
+  const repo = join(dir, 'repo')
+
+  context.after(() => rmSync(dir, { recursive: true, force: true }))
+  execFileSync('git', ['init', '--quiet', '--bare', '--initial-branch=main', origin])
+  execFileSync('git', ['clone', '--quiet', origin, repo], { stdio: 'ignore' })
+  commitFiles(repo, { 'README.md': '# Widgets\n', ...files })
+  git(repo, 'push', '--quiet', 'origin', 'HEAD:main')
+  git(repo, 'fetch', '--quiet', 'origin')
+
+  const manifest = { repo: { path: repo, base: 'main', pathPrepend: [] }, gates: { verify: { criteriaFrom: 'criteria.yaml' } } }
+
+  return { dir, origin, repo, manifest }
+}
+
+const ids = (entries) => entries.map((entry) => entry.id)
+
+test('catalogCheck: a valid catalog on origin/<base> prints its entry count', async (context) => {
+  const { manifest } = catalogRepo(context, { 'criteria.yaml': CATALOG })
+
+  assert.deepEqual(await catalogCheck(manifest), { lines: ['ok   criteria catalog criteria.yaml on origin/main: 3 entries'], problems: [] })
+
+  const single = catalogRepo(context, { 'criteria.yaml': ONE_ENTRY })
+
+  assert.deepEqual((await catalogCheck(single.manifest)).lines, ['ok   criteria catalog criteria.yaml on origin/main: 1 entry'])
+
+  const none = catalogRepo(context, { 'criteria.yaml': '[]\n' })
+
+  assert.deepEqual((await catalogCheck(none.manifest)).lines, ['ok   criteria catalog criteria.yaml on origin/main: 0 entries'])
+})
+
+test('catalogCheck: a catalog missing from origin/<base> fails and names the path and the ref, also when the clone has the file', async (context) => {
+  const { repo, manifest } = catalogRepo(context, {})
+
+  writeFileSync(join(repo, 'criteria.yaml'), CATALOG)
+
+  const result = await catalogCheck(manifest)
+  const [problem] = result.problems
+
+  assert.match(problem, /^gates\.verify\.criteriaFrom criteria\.yaml cannot be read from origin\/main: fatal: .*criteria\.yaml/)
+  assert.deepEqual(result, { lines: [`FAIL criteria catalog: ${problem}`], problems: [problem] })
+  await assert.rejects(readCatalog(manifest), { message: problem })
+})
+
+test('catalogCheck: an invalid catalog fails and names every error', async (context) => {
+  const { manifest } = catalogRepo(context, { 'criteria.yaml': '- id: V1\n  criterion: x\n- id: docs-stale\n  level: recommended\n' })
+  const problem = [
+    'gates.verify.criteriaFrom criteria.yaml on origin/main is invalid:',
+    "entry 1 (V1): V<n> and B<n> ids are the driver's own numbering.",
+    'entry 2 (docs-stale): unknown key level.',
+    'entry 2 (docs-stale): criterion must be a non-empty string',
+  ].join(' ')
+
+  assert.deepEqual(await catalogCheck(manifest), { lines: [`FAIL criteria catalog: ${problem}`], problems: [problem] })
+})
+
+test('catalogCheck: without criteriaFrom it prints nothing and runs no git', async () => {
+  const manifest = {
+    repo: { path: join(tmpdir(), 'rollout-no-such-repo'), base: 'main', pathPrepend: [] },
+    gates: { verify: { criteriaFrom: null } },
+  }
+
+  assert.deepEqual(await catalogCheck(manifest), { lines: [], problems: [] })
+})
+
+test('readCatalog: the base branch decides, not the checked-out PR head or an uncommitted edit', async (context) => {
+  const { repo, manifest } = catalogRepo(context, { 'criteria.yaml': CATALOG })
+
+  git(repo, 'checkout', '--quiet', '-b', 'feat/a1')
+  commitFiles(repo, { 'criteria.yaml': ONE_ENTRY })
+  git(repo, 'push', '--quiet', 'origin', 'feat/a1')
+  writeFileSync(join(repo, 'criteria.yaml'), `${ONE_ENTRY}- id: lenient\n  criterion: Anything goes.\n`)
+
+  assert.deepEqual(ids(await readCatalog(manifest)), ['docs-stale', 'ui-states', 'tests-fail-first'])
+  assert.deepEqual((await catalogCheck(manifest)).lines, ['ok   criteria catalog criteria.yaml on origin/main: 3 entries'])
+})
+
+test('readCatalog: a change merged into the base applies once the clone fetches it', async (context) => {
+  const { dir, origin, repo, manifest } = catalogRepo(context, { 'criteria.yaml': CATALOG })
+  const elsewhere = join(dir, 'elsewhere')
+
+  execFileSync('git', ['clone', '--quiet', origin, elsewhere], { stdio: 'ignore' })
+  commitFiles(elsewhere, { 'criteria.yaml': `${CATALOG}${ONE_ENTRY}` })
+  git(elsewhere, 'push', '--quiet', 'origin', 'HEAD:main')
+
+  assert.deepEqual(ids(await readCatalog(manifest)), ['docs-stale', 'ui-states', 'tests-fail-first'])
+
+  git(repo, 'fetch', '--quiet', 'origin')
+
+  assert.deepEqual(ids(await readCatalog(manifest)), ['docs-stale', 'ui-states', 'tests-fail-first', 'changelog'])
 })
