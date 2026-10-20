@@ -649,6 +649,60 @@ test('card: every re-checked finding with its status, the answer and the evidenc
   assert.doesNotMatch(plain.stdout, /re-check/)
 })
 
+// A PASS the driver judged a FAIL: a required criterion failed, a recommended one could not be verified.
+const JUDGED = {
+  ...RECHECKED,
+  summary: 'Every checklist item holds.',
+  checklist: [{ item: 'tests pass', status: 'pass', evidence: 'npm test: 12 pass' }],
+  blocking: ['V1 (required criterion): A new branch in the code has a test that fails without it. lib/a.mjs:12 has no test.'],
+  recheck: [],
+  criteria: [
+    {
+      id: 'V1',
+      level: 'required',
+      text: 'A new branch in the code has a test that fails without it.',
+      result: 'fail',
+      evidence: 'lib/a.mjs:12 has no test.',
+    },
+    { id: 'V2', level: 'required', text: 'No semicolons in prose.', result: 'pass', evidence: 'grep finds none.' },
+    { id: 'V3', level: 'recommended', text: 'Docs: every new option has its row.', result: 'unverifiable', evidence: 'No option changed.' },
+  ],
+}
+
+test('prDetail keeps the criteria of a verdict, with their level, text and result', () => {
+  const manifest = loadManifest(makeRollout())
+  const detail = prDetail(manifest, { prs: { A1: { verdict: JUDGED, verdicts: [RECHECKED, JUDGED] } } }, [], [], 'A1')
+
+  assert.deepEqual(detail.verdict.criteria, JUDGED.criteria)
+  assert.deepEqual(detail.verdicts[1].criteria, JUDGED.criteria)
+  assert.equal(detail.verdicts[0].criteria, undefined)
+})
+
+test('card: every project criterion after the checklist, with evidence only for one that did not pass', () => {
+  const dir = makeRollout({ prs: { A1: { ...samplePrs().A1, state: 'needs_fix', verdict: JUDGED, verdicts: [JUDGED] } } })
+  const card = cli('card', 'A1', '--dir', dir)
+  const lines = [
+    'verifier: FAIL on a1a1a1a — Every checklist item holds.',
+    '  [pass] tests pass',
+    '  criterion V1 (required) [fail]: A new branch in the code has a test that fails without it.',
+    '    evidence: lib/a.mjs:12 has no test.',
+    '  criterion V2 (required) [pass]: No semicolons in prose.',
+    '  criterion V3 (recommended) [unverifiable]: Docs: every new option has its row.',
+    '    evidence: No option changed.',
+    '  BLOCKING: V1 (required criterion): A new branch in the code has a test that fails without it. lib/a.mjs:12 has no test.',
+  ]
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.ok(card.stdout.includes(lines.join('\n')), card.stdout)
+  assert.doesNotMatch(card.stdout, /grep finds none/)
+
+  const rechecked = cli('card', 'A1', '--dir', makeRollout({ prs: { A1: { ...samplePrs().A1, verdict: RECHECKED } } }))
+
+  assert.equal(rechecked.status, 0, rechecked.stderr)
+  assert.ok(rechecked.stdout.includes('  [fail] docs updated\n  re-check F1 [resolved]'), rechecked.stdout)
+  assert.doesNotMatch(rechecked.stdout, /criterion/)
+})
+
 // A required command that passed and a recommended one that failed, on A1's head.
 // A ready record, a pre-verify one and one from before ready commands, without a stage.
 const PRE_VERIFY = {

@@ -11,6 +11,7 @@ const CHECK_HEADINGS = ['item', 'status', 'evidence']
 const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
 const RECHECK_CLASSES = { resolved: 'check-pass', open: 'check-fail', wrong: 'check-unverifiable' }
 const PRE_VERIFY_HEADINGS = ['command', 'stage', 'level', 'result', 'evidence']
+const CRITERIA_HEADINGS = ['criterion', 'level', 'result', 'evidence']
 
 function short(sha) {
   return typeof sha === 'string' && sha ? sha.slice(0, 7) : '-'
@@ -269,6 +270,16 @@ function recheckRow(item) {
   )
 }
 
+function criterionRow(record) {
+  return wrap(
+    'tr',
+    cell(`${record.id}: ${record.text}`, 'text'),
+    cell(record.level),
+    cell(record.result, resultClass(record)),
+    cell(record.evidence ?? '', 'text'),
+  )
+}
+
 function verdictBody(verdict) {
   const body = element('div', undefined, 'verdict')
   const line = wrap(
@@ -279,6 +290,10 @@ function verdictBody(verdict) {
 
   body.append(line, element('p', verdict.summary ?? '', 'text'))
   body.append(checklist(verdict.checklist ?? []))
+
+  if (verdict.criteria?.length > 0) {
+    body.append(element('h4', 'project criteria'), table(CRITERIA_HEADINGS, verdict.criteria.map(criterionRow), 'checklist'))
+  }
 
   if (verdict.recheck?.length > 0) {
     body.append(element('h4', 're-checked findings'), table(RECHECK_HEADINGS, verdict.recheck.map(recheckRow), 'checklist'))
@@ -312,13 +327,13 @@ function historyEntry(pr, verdict, ctx) {
   return details
 }
 
-// A failed recommended command blocks nothing, so it reads as a warning, not as a failure.
-function preVerifyResultClass(record) {
+// A recommended command or criterion that does not pass blocks nothing, so it reads as a warning, not as a failure.
+function resultClass(record) {
   if (record.result === 'pass') {
     return 'check-pass'
   }
 
-  return record.level === 'recommended' ? 'warning' : 'check-fail'
+  return record.level === 'recommended' ? 'warning' : `check-${record.result}`
 }
 
 // A record from before ready commands has no stage and is a pre-verify one.
@@ -330,7 +345,7 @@ function preVerifyRow(record) {
     cell(record.command, 'text'),
     cell(record.stage ?? 'preVerify'),
     cell(record.level),
-    cell(record.result, preVerifyResultClass(record)),
+    cell(record.result, resultClass(record)),
     cell(evidence, 'text'),
   )
 }

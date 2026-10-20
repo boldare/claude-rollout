@@ -11,6 +11,7 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
 - The driver recorded those decisions from the maintainer and the delegate. Do not try to refute them. Where one conflicts with the brief, judge the PR by the decision.
 - When the previous verdict was FAIL, its blocking findings and the implementer's answers follow the brief and the decisions. They are claims, like the READY report, and never a reason to pass. Check each one yourself.
 - When a recommended command the driver ran at this SHA failed, `## Recommended commands that failed` follows the decisions, with the driver's own results.
+- When the maintainer set criteria, `## Project criteria` lists them with their id, level and text, before the findings to re-check.
 - The PR text: `gh pr view {{pr}} --json title,body`.
 - The repo's `CLAUDE.md` and `STYLE.md`.
 - The implementer's READY report:
@@ -24,19 +25,22 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
 1. `git rev-parse HEAD` must print `{{sha}}`. Otherwise report FAIL with that as the only blocking item.
 2. Read the whole diff: `git diff origin/{{base}}...HEAD`. Read the changed files in full where the diff is not enough.
 3. Go through the brief's acceptance checklist item by item, as the decisions amend it: pass, fail or unverifiable, each with evidence (command output or file:line).
-4. When the prompt ends with findings to re-check, check each one yourself at this SHA and report its id in `recheck`, with evidence. Without them, `recheck` is empty.
+4. When the prompt lists project criteria, check each one against the whole PR at this SHA. Report each one in `criteria` by its id: `pass`, `fail` or `unverifiable`, with evidence (command output or file:line). Without project criteria, `criteria` is empty.
+   - A criterion the PR gives no occasion for passes, with the reason as evidence. For example: the PR adds no branch to the code.
+   - A criterion that does not pass goes only into `criteria`, never also into `blocking`. The driver adds the blocking finding itself.
+5. When the prompt ends with findings to re-check, check each one yourself at this SHA and report its id in `recheck`, with evidence. Without them, `recheck` is empty.
    - `resolved`: the defect is gone at this SHA.
-   - `open`: the defect is still there, whatever the answer says. An `open` finding also goes into `blocking`.
+   - `open`: the defect is still there, whatever the answer says. An `open` finding also goes into `blocking`, except one the driver added for a criterion this prompt lists. Such a finding starts with the criterion's id and `(required criterion)`. Report it through `criteria` only, so it is not counted twice. Its `recheck` entry stays.
    - `wrong`: it never was a defect, or a recorded decision allows it.
-5. Re-run the local verification that proves the checklist:
+6. Re-run the local verification that proves the checklist:
    {{verify}}
    Compare with the expected results: {{expect}}
 
-6. Check the writing rules the implementer had: no comments that restate code or narrate the change, short prose, no semicolons in comments, docs, the changeset or the PR text. Report violations as `nonBlocking` unless they are widespread, then as blocking.
-7. Hunt for real defects the checklist may not name: behaviour regressions, edge cases the brief lists but the code misses, public API changes missing from the changeset, weakened or deleted tests, scope creep beyond the brief and the decisions, STYLE.md violations{{publicVerifyCheck}}. Check the text against the change too, within the PR's own files and text:
+7. Check the writing rules the implementer had: no comments that restate code or narrate the change, short prose, no semicolons in comments, docs, the changeset or the PR text. Report violations as `nonBlocking` unless they are widespread, then as blocking.
+8. Hunt for real defects the checklist may not name: behaviour regressions, edge cases the brief lists but the code misses, public API changes missing from the changeset, weakened or deleted tests, scope creep beyond the brief and the decisions, STYLE.md violations{{publicVerifyCheck}}. Check the text against the change too, within the PR's own files and text:
    - A claim in the PR text, a changed doc or a changed comment that does not hold on every path it covers, or holds only through a step nobody wrote down.
    - Unchanged text in an edited file that the change contradicts. Judge the old text by the change, not the change by the old text.
-8. Verdict: PASS only when every checklist item passes, no re-checked finding is `open` and there is no blocking finding. Blocking means a real defect or an unmet item, stated with evidence. Style nits and suggestions go to `nonBlocking`.
+9. Verdict: PASS only when every checklist item passes, every required project criterion passes, no re-checked finding is `open` and there is no blocking finding. Blocking means a real defect or an unmet item, stated with evidence. Style nits and suggestions go to `nonBlocking`.
 
 Report through the structured output, with `sha` set to the SHA you verified.
 
@@ -47,5 +51,7 @@ Report through the structured output, with `sha` set to the SHA you verified.
 {{decisions}}
 
 {{preVerify}}
+
+{{criteria}}
 
 {{findings}}

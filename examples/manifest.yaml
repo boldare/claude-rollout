@@ -56,7 +56,7 @@ policy:
   attempts: { implement: 2, fix: 4, verify: 3 }
   timeouts: { implement: 240, fix: 120, verify: 90 }
 
-# Checks on top of CI, the policy and code scanning: on each brief the driver writes, and before the verifier.
+# Checks on top of CI, the policy and code scanning: on each brief the driver writes, before the verifier, and by it.
 # gates:
 #   brief:
 #     # The brief reviewer runs the draft's existing commands and reports whether each can pass.
@@ -77,6 +77,13 @@ policy:
 #     required: [pnpm build]
 #     # A failed one sends nothing back. The card, the PR page and the verifier see it.
 #     recommended: [pnpm size]
+#   verify:
+#     # The verifier checks each one. A required one that does not pass blocks the PR.
+#     required:
+#       - A new branch in the code has a test that fails without it.
+#     # One that does not pass blocks nothing. The card and the PR page show it.
+#     recommended:
+#       - Every new option has its row in the docs.
 
 prs:
   - id: P1

@@ -589,14 +589,14 @@
                   an error cuts a run short, the driver cleans what it left in the worktree on the PR's next step, before an agent or a
                   command works there, so the clean-tree check does not count it against the implementer. Each check with a result logs a
                   <code>gate-check</code> event with its stage (<code>ready</code> for a ready command, <code>preVerify</code> for every
-                  other check), the item (<code>ci</code>, <code>policy</code>, <code>code-scanning</code>, <code>scope</code>, or the
-                  command itself), its level (<code>required</code>, or <code>recommended</code> for a recommended command), the result, the
-                  short SHA and short evidence. The result is pass, fail, or skip for code scanning that is off or unavailable. A
-                  <code>ci</code> pass lists every run on the SHA with its conclusion. A command's evidence is its summary, such as
-                  <code>exit 1</code>, then as much of the end of its output as fits. A pass or skip is logged once per claim and head, and
-                  a READY report or any new head starts a new list. A fail is always logged, a required one right before the send-back or
-                  block it causes. Only a required fail starts the list over, so the next round of checks logs every result again. Before
-                  the ready and pre-verify commands and before the verifier, the driver deletes untracked
+                  other check before the verifier), the item (<code>ci</code>, <code>policy</code>, <code>code-scanning</code>,
+                  <code>scope</code>, or the command itself), its level (<code>required</code>, or <code>recommended</code> for a
+                  recommended command), the result, the short SHA and short evidence. The result is pass, fail, or skip for code scanning
+                  that is off or unavailable. A <code>ci</code> pass lists every run on the SHA with its conclusion. A command's evidence is
+                  its summary, such as <code>exit 1</code>, then as much of the end of its output as fits. A pass or skip is logged once per
+                  claim and head, and a READY report or any new head starts a new list. A fail is always logged, a required one right before
+                  the send-back or block it causes. Only a required fail starts the list over, so the next round of checks logs every result
+                  again. Before the ready and pre-verify commands and before the verifier, the driver deletes untracked
                   <code>.claude/settings.json</code>, <code>.claude/settings.local.json</code> and <code>CLAUDE.local.md</code> at the root
                   of the worktree and logs <code>local-config-removed</code> with their paths. A global gitignore can hide them from the
                   clean-tree check.
@@ -620,15 +620,22 @@
                 <td>
                   A fresh read-only verifier tries to refute READY for that SHA, against the brief's acceptance checklist and the
                   <a href="commands.html#cmd-note">recorded decisions</a>. Where a decision conflicts with the brief, the decision wins.
-                  After a FAIL it also re-checks <a href="#resume">the previous findings</a> and the implementer's answers to them, as
-                  claims.
+                  With <a href="manifest.html#gates-verify-required"><code>gates.verify</code></a
+                  >, it also checks the project criteria, which the driver fixes when it starts the verifier, and reports each one as pass,
+                  fail or unverifiable. After a FAIL it also re-checks <a href="#resume">the previous findings</a> and the implementer's
+                  answers to them, as claims.
                 </td>
                 <td>
-                  PASS from an untouched worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>, or
-                  <code>escalated</code> when a finding the implementer disputed is still open. A PASS from a verifier that changed the
-                  tree, or for a stale SHA, is discarded: <code>ready_claimed</code>. When the verifier touched the tree, the driver resets
-                  it to the SHA. It first deletes the same untracked Claude Code files as before the verifier and logs
-                  <code>local-config-removed</code> when there were any.
+                  The driver first judges the verdict by those criteria. A required one that does not pass, or that the verifier does not
+                  report, is a finding, and a PASS with one counts as a FAIL. A recommended one never blocks. PASS from an untouched
+                  worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>, or <code>escalated</code> when a
+                  finding the implementer disputed is still open. A PASS from a verifier that changed the tree, or for a stale SHA, is
+                  discarded: <code>ready_claimed</code>. When the verifier touched the tree, the driver resets it to the SHA. It first
+                  deletes the same untracked Claude Code files as before the verifier and logs <code>local-config-removed</code> when there
+                  were any. After <code>verify-done</code> and any reset, and before the event of the outcome, each criterion logs a
+                  <code>gate-check</code> event with stage <code>verify</code>, its id as the item, its level and its result: pass, fail or
+                  unverifiable. As before the verifier, a result other than fail is logged once per claim and head.
+                  <code>verify-done</code> keeps the verifier's own verdict.
                 </td>
               </tr>
               <tr id="state-verified">
@@ -793,7 +800,7 @@
                 <td class="nowrap"><span class="badge role-verify">verifier</span></td>
                 <td>
                   <code>verify.md</code>: the SHA, the READY report, the recipe without steps that rewrite files, the brief and the recorded
-                  decisions after it, and after a FAIL the previous findings with the implementer's answers
+                  decisions after it, the project criteria, and after a FAIL the previous findings with the implementer's answers
                 </td>
                 <td>new, every time</td>
                 <td>Read, build and test. No edits, commits, pushes or GitHub writes.</td>
@@ -1071,8 +1078,10 @@
                 <td class="nowrap">verifier</td>
                 <td>
                   <code>verdict</code> (PASS or FAIL), <code>sha</code>, <code>summary</code>, <code>checklist</code> with pass, fail or
-                  unverifiable and evidence per item, <code>blocking</code>, <code>nonBlocking</code>, and <code>recheck</code> with
-                  resolved, open or wrong and evidence per finding to re-check, empty when there is none. All required.
+                  unverifiable and evidence per item, <code>blocking</code>, <code>nonBlocking</code>, <code>recheck</code> with resolved,
+                  open or wrong and evidence per finding to re-check, and <code>criteria</code> with pass, fail or unverifiable and evidence
+                  per project criterion. <code>recheck</code> and <code>criteria</code> are empty when there is nothing to report. All
+                  required.
                 </td>
               </tr>
               <tr>
@@ -1110,7 +1119,8 @@
         </p>
 
         <p>
-          After a verifier FAIL the note numbers the blocking findings F1, F2 and on, and the implementer answers each one in
+          After a verifier FAIL the note numbers the blocking findings F1, F2 and on, the verifier's own first, then each required
+          <a href="manifest.html#gates-verify-required">project criterion</a> that did not pass. The implementer answers each one in
           <code>addressed</code>: fixed, with the evidence, or disputed, with its reason. The driver keeps the answers of every READY report
           until the next verdict, so a CI fix in between loses none. The next verifier gets the findings and the answers after the brief and
           the decisions, as claims to check. It reports each one as resolved, open or wrong, and an open one blocks a PASS. When a finding

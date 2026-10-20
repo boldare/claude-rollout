@@ -78,11 +78,12 @@ test('recordVerdict keeps the latest verdict and the last 10', () => {
   assert.deepEqual(old.verdicts, [{ verdict: 'PASS' }])
 })
 
-test('freshPr has no hold, verdict history, handled feedback or findings', () => {
+test('freshPr has no hold, verdict history, handled feedback, findings or verify criteria', () => {
   assert.equal(freshPr().held, null)
   assert.deepEqual(freshPr().verdicts, [])
   assert.deepEqual(freshPr().feedbackHandled, [])
   assert.equal(freshPr().findings, null)
+  assert.equal(freshPr().verifyCriteria, null)
 })
 
 const FAILED_AT = '2026-09-01T10:00:00.000Z'

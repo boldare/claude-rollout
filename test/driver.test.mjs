@@ -2710,18 +2710,19 @@ function verifiableDriver({ gates, deviations, runCommand } = {}) {
   setup.gate.facts = { files: [{ status: 'modified', path: 'README.md' }] }
 
   if (gates) {
-    setup.manifest.gates = gates
+    setup.manifest.gates = { ...setup.manifest.gates, ...gates }
   }
 
   return { ...setup, pr, entry, agentCalls, prompts }
 }
 
 // Every stage with every key, as loadManifest fills them, with the given values.
-function gatesWith({ brief = {}, ready = {}, preVerify = {} } = {}) {
+function gatesWith({ brief = {}, ready = {}, preVerify = {}, verify = {} } = {}) {
   return {
     brief: { runChecks: false, required: [], recommended: [], ...brief },
     ready: { required: [], recommended: [], ...ready },
     preVerify: { scope: false, required: [], recommended: [], ...preVerify },
+    verify: { required: [], recommended: [], ...verify },
   }
 }
 
@@ -3950,6 +3951,292 @@ test('verified: a verdict without recheck is recorded with an empty one', async 
   assert.deepEqual(setup.entry.verdict.recheck, [])
   assert.equal(setup.entry.state, 'needs_fix')
   assert.deepEqual(setup.entry.findings.items, [{ id: 'F1', text: NEW_FINDING, answer: null }])
+})
+
+const BRANCH_TEST = 'A new branch in the code has a test that fails without it.'
+const NO_SEMICOLONS = 'No semicolons in prose.'
+const DOCS_ROW = 'Docs: every new option has its row.'
+const CRITERIA_GATE = gatesWith({ verify: { required: [BRANCH_TEST, NO_SEMICOLONS], recommended: [DOCS_ROW] } })
+const VERIFY_CRITERIA = [
+  { id: 'V1', level: 'required', text: BRANCH_TEST },
+  { id: 'V2', level: 'required', text: NO_SEMICOLONS },
+  { id: 'V3', level: 'recommended', text: DOCS_ROW },
+]
+
+// The next verifier's PASS on SHA, with `results` mapping each criterion id to its result.
+function criteriaVerdict(results, overrides = {}) {
+  return recheckVerdict(
+    { F1: 'resolved', F2: 'wrong' },
+    {
+      verdict: 'PASS',
+      checklist: [{ item: 'docs updated', status: 'pass', evidence: 'README.md:3' }],
+      blocking: [],
+      criteria: Object.entries(results).map(([id, result]) => ({ id, result, evidence: `${id} is ${result} at a1a1a1a.` })),
+      ...overrides,
+    },
+  )
+}
+
+function criterionRecord(index, result, evidence = `${VERIFY_CRITERIA[index].id} is ${result} at a1a1a1a.`) {
+  return { ...VERIFY_CRITERIA[index], result, evidence }
+}
+
+function criterionCheckEvent(record) {
+  const { id, level, result, evidence } = record
+
+  return { id: 'A1', kind: 'gate-check', stage: 'verify', item: id, level, result, sha: SHA.slice(0, 7), evidence }
+}
+
+test('checkClaim: the verifier starts with the project criteria fixed in the ledger and listed in its prompt', async () => {
+  const { driver, pr, entry, prompts } = verifiableDriver({ gates: CRITERIA_GATE })
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(entry.verifyCriteria, VERIFY_CRITERIA)
+  assert.equal(prompts.length, 1)
+  assert.ok(prompts[0].includes('\n## Project criteria\n\n'), prompts[0])
+  assert.ok(
+    prompts[0].includes(`\n\n- V1 (required): ${BRANCH_TEST}\n- V2 (required): ${NO_SEMICOLONS}\n- V3 (recommended): ${DOCS_ROW}\n`),
+    prompts[0],
+  )
+
+  const plain = verifiableDriver()
+
+  await plain.driver.advance(plain.pr)
+
+  assert.deepEqual(plain.entry.verifyCriteria, [])
+  assert.equal(plain.prompts[0].includes('\n## Project criteria\n'), false)
+})
+
+test('checkClaim: a pre-verify job does not fix the criteria, the verifier after it does', async () => {
+  const seam = commandSeam()
+  const setup = verifiableDriver({
+    gates: gatesWith({ preVerify: COMMANDS_GATE.preVerify, verify: CRITERIA_GATE.verify }),
+    runCommand: seam.runCommand,
+  })
+
+  const { driver, pr, entry, agentCalls, prompts } = setup
+
+  await preVerified(setup)
+
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
+  assert.deepEqual(agentCalls, [])
+  assert.equal(entry.verifyCriteria, null)
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(entry.verifyCriteria, VERIFY_CRITERIA)
+  assert.ok(prompts[0].includes(`- V1 (required): ${BRANCH_TEST}\n`), prompts[0])
+})
+
+test('verified: a PASS with a failed required criterion is recorded as a FAIL and goes to a fix run with the criterion as a finding', async () => {
+  const setup = recheckDriver({ verifyCriteria: VERIFY_CRITERIA })
+  const { manifest, entry } = setup
+  const finding = `V1 (required criterion): ${BRANCH_TEST} V1 is fail at a1a1a1a.`
+
+  await rechecked(setup, criteriaVerdict({ V1: 'fail', V2: 'pass', V3: 'pass' }))
+
+  assert.equal(entry.verdict.verdict, 'FAIL')
+  assert.deepEqual(entry.verdict.blocking, [finding])
+  assert.deepEqual(entry.verdict.criteria, [criterionRecord(0, 'fail'), criterionRecord(1, 'pass'), criterionRecord(2, 'pass')])
+  assert.equal(entry.verdict.summary, 'A finding is still open.')
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixReason, 'verifier findings')
+  assert.equal(entry.verified, null)
+  assert.deepEqual(entry.findings.items, [{ id: 'F1', text: finding, answer: null }])
+  assert.ok(entry.fixNote.includes(`Blocking findings:\n- F1: ${finding}\n`), entry.fixNote)
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ['verify-done', 'gate-check', 'gate-check', 'gate-check', 'needs-fix'],
+  )
+
+  assert.equal(events[0].result, 'PASS', "verify-done keeps the verifier's own verdict")
+  assert.deepEqual(events.slice(1, 4), entry.verdict.criteria.map(criterionCheckEvent))
+})
+
+test("verified: a criterion finding comes after the verifier's own findings, which keep F1 and on", async () => {
+  const setup = recheckDriver({ verifyCriteria: VERIFY_CRITERIA })
+  const { entry } = setup
+  const finding = `V2 (required criterion): ${NO_SEMICOLONS} V2 is fail at a1a1a1a.`
+
+  await rechecked(setup, criteriaVerdict({ V1: 'pass', V2: 'fail', V3: 'pass' }, { verdict: 'FAIL', blocking: [NEW_FINDING] }))
+
+  assert.equal(entry.verdict.verdict, 'FAIL')
+  assert.deepEqual(entry.verdict.blocking, [NEW_FINDING, finding])
+  assert.deepEqual(entry.findings.items, [
+    { id: 'F1', text: NEW_FINDING, answer: null },
+    { id: 'F2', text: finding, answer: null },
+  ])
+
+  assert.ok(entry.fixNote.includes(`Blocking findings:\n- F1: ${NEW_FINDING}\n- F2: ${finding}\n`), entry.fixNote)
+})
+
+test('verified: a required criterion the verifier left out or could not verify fails the PASS the same way', async () => {
+  const cases = [
+    {
+      name: 'left out',
+      results: { V2: 'pass', V3: 'pass' },
+      record: criterionRecord(0, 'fail', 'The verifier did not report it.'),
+      finding: `V1 (required criterion): ${BRANCH_TEST} The verifier did not report it.`,
+    },
+    {
+      name: 'unverifiable',
+      results: { V1: 'unverifiable', V2: 'pass', V3: 'pass' },
+      record: criterionRecord(0, 'unverifiable'),
+      finding: `V1 (required criterion): ${BRANCH_TEST} Unverifiable: V1 is unverifiable at a1a1a1a.`,
+    },
+  ]
+
+  for (const { name, results, record, finding } of cases) {
+    const setup = recheckDriver({ verifyCriteria: VERIFY_CRITERIA })
+    const { manifest, entry } = setup
+
+    await rechecked(setup, criteriaVerdict(results))
+
+    assert.equal(entry.verdict.verdict, 'FAIL', name)
+    assert.deepEqual(entry.verdict.criteria[0], record, name)
+    assert.equal(entry.state, 'needs_fix', name)
+    assert.equal(entry.fixReason, 'verifier findings', name)
+    assert.deepEqual(entry.findings.items, [{ id: 'F1', text: finding, answer: null }], name)
+    assert.deepEqual(eventsSince(manifest)[1], criterionCheckEvent(record), name)
+    assert.equal(kindsSince(manifest).at(-1), 'needs-fix', name)
+  }
+})
+
+test('verified: a PASS whose only failed criteria are recommended ends verified', async () => {
+  for (const result of ['fail', 'unverifiable']) {
+    const setup = recheckDriver({ verifyCriteria: VERIFY_CRITERIA })
+    const { manifest, entry } = setup
+
+    await rechecked(setup, criteriaVerdict({ V1: 'pass', V2: 'pass', V3: result }))
+
+    assert.equal(entry.state, 'verified', result)
+    assert.equal(entry.verdict.verdict, 'PASS', result)
+    assert.deepEqual(entry.verdict.blocking, [], result)
+    assert.deepEqual(entry.verdict.criteria[2], criterionRecord(2, result), result)
+    assert.equal(entry.findings, null, result)
+    assert.deepEqual(kindsSince(manifest), ['verify-done', 'gate-check', 'gate-check', 'gate-check', 'verified'], result)
+    assert.deepEqual(eventsSince(manifest)[3], criterionCheckEvent(criterionRecord(2, result)), result)
+  }
+})
+
+test('verified: the criteria gate-check events come after the reset and before the outcome, also when a dispute escalates', async () => {
+  const touched = recheckDriver({ verifyCriteria: VERIFY_CRITERIA })
+  const wt = worktreePath(touched.manifest, touched.pr)
+
+  mkdirSync(wt, { recursive: true })
+  writeFileSync(join(wt, 'CLAUDE.local.md'), 'notes\n')
+  touched.tools.answer([
+    { tool: 'git', args: 'status --porcelain', stdout: '?? CLAUDE.local.md' },
+    { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+    { tool: 'git', args: 'ls-files', stdout: '' },
+    { tool: 'git', args: 'reset', stdout: '' },
+    { tool: 'git', args: 'clean', stdout: '' },
+  ])
+
+  await rechecked(touched, criteriaVerdict({ V1: 'fail', V2: 'pass', V3: 'pass' }))
+
+  assert.equal(touched.entry.state, 'needs_fix', 'a FAIL is honoured from a touched tree')
+  assert.ok(touched.entry.fixNote.endsWith('(it has been reset):\n?? CLAUDE.local.md'), touched.entry.fixNote)
+  assert.deepEqual(kindsSince(touched.manifest), [
+    'verify-done',
+    'local-config-removed',
+    'gate-check',
+    'gate-check',
+    'gate-check',
+    'needs-fix',
+  ])
+
+  const disputed = recheckDriver({ verifyCriteria: VERIFY_CRITERIA })
+
+  await rechecked(
+    disputed,
+    criteriaVerdict({ V1: 'pass', V2: 'fail', V3: 'pass' }, { recheck: [{ id: 'F2', status: 'open', evidence: 'open' }] }),
+  )
+
+  assert.equal(disputed.entry.state, 'escalated')
+  assert.equal(disputed.entry.verdict.verdict, 'FAIL')
+  assert.deepEqual(kindsSince(disputed.manifest), ['verify-done', 'gate-check', 'gate-check', 'gate-check', 'escalated'])
+})
+
+test('verified: a verdict without criteria is judged as before and recorded with none', async () => {
+  const failing = recheckDriver()
+
+  await rechecked(
+    failing,
+    recheckVerdict({ F1: 'resolved', F2: 'wrong' }, { criteria: [{ id: 'V1', result: 'fail', evidence: 'made up' }] }),
+  )
+
+  assert.deepEqual(failing.entry.verdict.criteria, [])
+  assert.deepEqual(failing.entry.verdict.blocking, [NEW_FINDING])
+  assert.deepEqual(kindsSince(failing.manifest), ['verify-done', 'needs-fix'])
+
+  for (const verifyCriteria of [null, []]) {
+    const passing = recheckDriver({ verifyCriteria })
+    const { criteria: _, ...output } = criteriaVerdict({}).output
+
+    await rechecked(passing, agentResult({ output }))
+
+    assert.equal(passing.entry.state, 'verified')
+    assert.deepEqual(passing.entry.verdict.criteria, [])
+    assert.deepEqual(kindsSince(passing.manifest), ['verify-done', 'verified'])
+  }
+})
+
+test('verified: a manifest reload while the verifier runs changes nothing, the criteria fixed at its launch judge the verdict', async () => {
+  const pass = { verdict: 'PASS', sha: SHA, summary: 'Every item holds.', checklist: [], blocking: [], nonBlocking: [], recheck: [] }
+  const removed = verifiableDriver({ gates: gatesWith({ verify: { required: [BRANCH_TEST] } }) })
+
+  await removed.driver.advance(removed.pr)
+
+  assert.equal(removed.entry.state, 'verifying')
+
+  Object.assign(removed.manifest, { gates: gatesWith() })
+
+  await removed.driver.onDone(
+    removed.pr,
+    'verify',
+    agentResult({ output: { ...pass, criteria: [{ id: 'V1', result: 'fail', evidence: 'lib/a.mjs:12 adds a branch with no test.' }] } }),
+    { sha: SHA, run: 'A1-02-verify' },
+  )
+
+  assert.equal(removed.entry.state, 'needs_fix')
+  assert.equal(removed.entry.verdict.verdict, 'FAIL')
+  assert.deepEqual(removed.entry.findings.items, [
+    { id: 'F1', text: `V1 (required criterion): ${BRANCH_TEST} lib/a.mjs:12 adds a branch with no test.`, answer: null },
+  ])
+
+  const added = verifiableDriver()
+
+  await added.driver.advance(added.pr)
+
+  assert.equal(added.entry.state, 'verifying')
+
+  Object.assign(added.manifest, { gates: gatesWith({ verify: { required: [NO_SEMICOLONS] } }) })
+
+  await added.driver.onDone(added.pr, 'verify', agentResult({ output: { ...pass, criteria: [] } }), { sha: SHA, run: 'A1-02-verify' })
+
+  assert.equal(added.entry.state, 'verified')
+  assert.deepEqual(added.entry.verdict.criteria, [])
+})
+
+test('verified: after a criterion FAIL the next verifier re-checks the criterion finding', async () => {
+  const setup = recheckDriver({ verifyCriteria: VERIFY_CRITERIA })
+  const { manifest, pr, entry } = setup
+  const finding = `V1 (required criterion): ${BRANCH_TEST} V1 is fail at a1a1a1a.`
+
+  await rechecked(setup, criteriaVerdict({ V1: 'fail', V2: 'pass', V3: 'pass' }))
+
+  const text = verifyPrompt(manifest, pr, entry, SHA)
+  const section = text.indexOf('## Findings to re-check')
+
+  assert.ok(section > text.indexOf('## Project criteria'))
+  assert.ok(text.indexOf(`### F1\n\nFinding:\n\n${finding}\n\nNo answer from the implementer.`, section) > section, text.slice(section))
 })
 
 // A1 in a fix run after a FAIL whose findings are not answered yet.
