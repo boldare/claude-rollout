@@ -603,20 +603,50 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="small">-</td>
                     <td class="small"></td>
                   </tr>
-                  <tr class="waiting">
-                    <td class="toggle"><span class="row-toggle"></span></td>
+                  <tr class="waiting open">
+                    <td class="toggle"><span class="row-toggle open"></span></td>
                     <td class="id">P5</td>
                     <td class="small wrap">feat: plugin hooks</td>
-                    <td>
-                      <span class="badge state state-blocked">Blocked</span><span class="badge waiting">Needs you</span
-                      ><span class="fake-button primary">Answer</span>
-                    </td>
+                    <td><span class="badge state state-blocked">Blocked</span><span class="badge waiting">Needs you</span></td>
                     <td class="small">#45</td>
                     <td class="small">P1 <span class="badge state state-merged">Merged</span></td>
                     <td class="small num">0/1/0/0</td>
                     <td class="small num">$3.10</td>
                     <td class="small">8m ago</td>
                     <td class="small wrap info">needs-decision: Should a hook that throws stop the run?</td>
+                  </tr>
+                  <tr class="panel-row waiting">
+                    <td colspan="10">
+                      <div class="run-panel needs-you">
+                        <div class="facts">
+                          <span class="badge waiting">Needs you</span>
+                          <span><span class="label">Blocked</span><span>needs-decision</span></span>
+                          <span><span class="label">Asked by</span><span>P5-01-implement</span></span>
+                          <span><span class="label">Delegate</span><span>escalated, the plan does not decide</span></span>
+                          <span><span class="label">Waiting</span><span>8m</span></span>
+                        </div>
+                        <div class="panel-section">
+                          <p class="label">Question</p>
+                          <p class="question">Should a hook that throws stop the run?</p>
+                        </div>
+                        <div class="panel-section">
+                          <p class="label">Evidence</p>
+                          <p class="quiet">
+                            The plan calls hooks "best effort" in section 3 and "part of the stage" in the P5 section. A hook that throws
+                            either fails the stage, or is logged and skipped.
+                          </p>
+                        </div>
+                        <div class="answer">
+                          <p class="label">Your answer</p>
+                          <p class="fake-textarea">Write what the implementer should do. It goes to the agent as a note.</p>
+                        </div>
+                        <div class="panel-footer">
+                          <span class="fake-button primary">Send</span
+                          ><span class="muted">The implementer resumes with it on the driver's next tick.</span
+                          ><span class="end"><span class="fake-button">Retry</span><a href="#transcripts">Open the transcript</a></span>
+                        </div>
+                      </div>
+                    </td>
                   </tr>
                   <tr>
                     <td class="toggle"><span class="row-toggle"></span></td>
@@ -649,7 +679,12 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             an escalated one.
           </li>
           <li>
-            A blocked row has an <a href="#control-answer">Answer</a> button. It opens the agent's question and evidence above a text box.
+            A waiting row opens by itself, into a panel that asks you instead of showing the run. It names what blocked the PR, the run that
+            asked, or the driver when the driver blocked it, what the delegate did about the question, and how long the PR has waited. An
+            escalated PR names its escalation and the last run. The question and the agent's evidence follow, then a box for your
+            <a href="#control-answer">answer</a> with Send, and Retry. The box keeps what you type while the page updates. <kbd>⌘</kbd> or
+            <kbd>Ctrl</kbd> with <kbd>Enter</kbd> sends too. Once the server took the note the box empties and says it was sent, until the
+            driver applies it. A row you close stays closed.
           </li>
           <li>
             An <span class="badge answered">answered</span> badge appears once the driver has applied your answer, not when you press Send.
@@ -1141,9 +1176,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h2 id="controls">Controls <a class="anchor" href="#controls" aria-label="Link to this section">#</a></h2>
 
         <p>
-          The rollout controls sit on the right of the header, the PR controls on the PR page, and Answer also on a blocked row of the
-          board. Each one shows only when it makes sense, and the ones that are hard to undo ask first. In every confirmation Cancel has the
-          focus, so <kbd>Enter</kbd> never confirms by accident. The Note and Answer dialogs put the focus in their text box.
+          The rollout controls sit on the right of the header and the PR controls on the PR page. A waiting row of the board answers and
+          retries in its panel, and an open row releases a held PR or retries an interrupted one. Each one shows only when it makes sense,
+          and the ones that are hard to undo ask first. In every confirmation Cancel has the focus, so <kbd>Enter</kbd> never confirms by
+          accident. The Note and Answer dialogs put the focus in their text box.
         </p>
 
         <div class="scroll">
@@ -1213,7 +1249,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               </tr>
               <tr id="control-release">
                 <td>Release</td>
-                <td>PR page, in place of Hold while held.</td>
+                <td>PR page, in place of Hold while held, and the panel of a held row on the board.</td>
                 <td>no</td>
                 <td>
                   Queues <a href="commands.html#cmd-release"><code>release</code></a
@@ -1222,8 +1258,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               </tr>
               <tr id="control-answer">
                 <td>Answer</td>
-                <td>Board row and PR page, for a blocked PR.</td>
-                <td>a text box under the question and the evidence, Send stays off until you type</td>
+                <td>Board row and PR page, for a blocked PR. On the board also for an escalated one.</td>
+                <td>
+                  a text box under the question and the evidence, Send stays off until you type. On the board the box sits in the row's
+                  panel
+                </td>
                 <td>
                   Queues <a href="commands.html#cmd-note"><code>note</code></a> with your text, like <a href="#control-note">Note</a>.
                 </td>
@@ -1239,7 +1278,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               </tr>
               <tr id="control-retry">
                 <td>Retry</td>
-                <td>PR page, for an escalated, blocked or interrupted PR.</td>
+                <td>PR page and the panel of the board row, for an escalated, blocked or interrupted PR.</td>
                 <td>yes: <q>Its attempts start from zero.</q></td>
                 <td>
                   Queues <a href="commands.html#cmd-retry"><code>retry</code></a
@@ -1274,7 +1313,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <p>
           <code>rollout ui --read-only</code> is the UI for watching only. The terminal says <q>read-only: the controls are disabled</q>,
-          the header carries a <span class="badge read-only">read-only</span> badge, and no control is drawn.
+          the header carries a <span class="badge read-only">read-only</span> badge, and no control is drawn. A waiting row's panel shows
+          the question with the <code>rollout note</code> command to answer it from a terminal.
         </p>
 
         <p>

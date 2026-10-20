@@ -5,8 +5,18 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutView, runsFromEvents } from '../lib/view.mjs'
-import { COMMAND_LINES, commandLines, panelRun, resultTone, tookText } from '../ui/board-model.js'
-import { commandBody, commandNotice, dialogFor, prControls, rolloutControls, rowControls } from '../ui/commands.js'
+import {
+  COMMAND_LINES,
+  answerHint,
+  answerPlaceholder,
+  commandLines,
+  delegateText,
+  panelRun,
+  resultTone,
+  rowOpen,
+  tookText,
+} from '../ui/board-model.js'
+import { commandBody, commandNotice, dialogFor, panelControls, prControls, rolloutControls } from '../ui/commands.js'
 import { duration, money, sentence, stateLabel } from '../ui/format.js'
 import {
   ERROR_KINDS,
@@ -657,14 +667,52 @@ test('prControls: hold or release, note or answer, and retry for a stuck PR', ()
   assert.deepEqual(prControls(a1, true), [])
 })
 
-test('rowControls: answer only for a blocked row that is not read-only', () => {
-  assert.deepEqual(rowControls({ id: 'A2', state: 'blocked' }, false), ['answer'])
+test('panelControls: release for a held row, retry for a stuck one, nothing read-only or merged', () => {
+  assert.deepEqual(panelControls({ id: 'A2', state: 'blocked', held: null }, false), ['retry'])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'escalated', held: { at: at(1) } }, false), ['release', 'retry'])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'interrupted', held: null }, false), ['retry'])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'verified', held: { at: at(1) } }, false), ['release'])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'implementing', held: null }, false), [])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'merged', held: { at: at(1) } }, false), [])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'blocked', held: null }, true), [])
+})
 
-  for (const state of ['escalated', 'interrupted', 'implementing', 'merged']) {
-    assert.deepEqual(rowControls({ id: 'A2', state }, false), [], state)
-  }
+test('rowOpen: a waiting row opens by itself, any other on a click, and a choice sticks', () => {
+  const run = { run: 'A1-01-implement' }
+  const choices = new Map()
 
-  assert.deepEqual(rowControls({ id: 'A2', state: 'blocked' }, true), [])
+  assert.equal(rowOpen({ id: 'A1', state: 'blocked' }, run, choices), true)
+  assert.equal(rowOpen({ id: 'A1', state: 'escalated' }, null, choices), true)
+  assert.equal(rowOpen({ id: 'A1', state: 'implementing' }, run, choices), false)
+  assert.equal(rowOpen({ id: 'A1', state: 'pending' }, null, new Map([['A1', true]])), false, 'nothing to show')
+
+  choices.set('A1', false)
+  assert.equal(rowOpen({ id: 'A1', state: 'blocked' }, run, choices), false)
+
+  choices.set('A1', true)
+  assert.equal(rowOpen({ id: 'A1', state: 'implementing' }, run, choices), true)
+})
+
+test('delegateText, answerPlaceholder and answerHint: what the delegate did and who resumes', () => {
+  assert.equal(delegateText({ state: 'escalate', reason: 'the plan does not decide' }), 'escalated, the plan does not decide')
+  assert.equal(delegateText({ state: 'escalate', reason: '' }), 'escalated')
+  assert.equal(delegateText({ state: 'failed', reason: 'timeout' }), 'failed, timeout')
+  assert.equal(delegateText({ state: 'running', reason: '' }), 'running')
+  assert.equal(delegateText({ state: 'next', reason: '' }), 'answers first, on the next tick')
+  assert.equal(delegateText({ state: 'spent', reason: '2 of 2 runs' }), 'no runs left, 2 of 2 runs used')
+  assert.equal(delegateText({ state: 'skips', reason: '' }, 'gate'), 'does not take gate')
+  assert.equal(delegateText({ state: 'dropped', reason: '' }), 'its answer came after a note')
+  assert.equal(delegateText({ state: 'answer', reason: 'Use the old API.' }), 'answered')
+  assert.equal(delegateText({ state: 'future', reason: '' }), 'future')
+
+  const brief = { id: 'A1', state: 'blocked', blocked: { kind: 'brief-questions' } }
+  const decision = { id: 'A1', state: 'blocked', blocked: { kind: 'needs-decision' } }
+
+  assert.match(answerPlaceholder(brief), /brief writer/)
+  assert.match(answerPlaceholder(decision), /^Write what the implementer should do/)
+  assert.match(answerPlaceholder({ id: 'A1', state: 'escalated', blocked: null }), /implementer/)
+  assert.equal(answerHint(brief, true), "The brief writer resumes with it on the driver's next tick.")
+  assert.equal(answerHint(decision, false), 'The implementer resumes with it once the driver runs.')
 })
 
 test('dialogFor: answer shows the question and the evidence, never an empty section', () => {

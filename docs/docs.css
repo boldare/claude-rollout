@@ -1485,6 +1485,57 @@ dt::first-letter {
   box-shadow: inset 2px 0 0 var(--fail);
 }
 
+/* A waiting row's panel: the question, the evidence and the answer box. */
+
+.mock .run-panel.needs-you {
+  gap: 14px;
+}
+
+.mock .panel-section,
+.mock .answer {
+  display: grid;
+  gap: 4px;
+}
+
+.mock .answer {
+  gap: 8px;
+}
+
+.mock .panel-section > .label,
+.mock .answer > .label {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.mock .run-panel .question {
+  font-size: var(--text);
+}
+
+.mock .run-panel .quiet {
+  color: var(--ink-2);
+}
+
+.mock .fake-textarea {
+  min-height: 76px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink-3);
+}
+
+.mock .panel-footer .end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-left: auto;
+}
+
+.mock .panel-footer .end > a {
+  font-weight: 500;
+}
+
 /* The board's open rows: the toggle, drawn with two borders since a mask does not load from file://, and the run panel. */
 
 .mock td.toggle {
@@ -1599,6 +1650,7 @@ dt::first-letter {
 .mock .panel-footer {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px 16px;
 }
 

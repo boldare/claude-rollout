@@ -958,11 +958,91 @@ tr.open > td {
 .panel-footer {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px 16px;
+  font-size: var(--text-sm);
 }
 
-.panel-footer > a {
+.panel-footer > a,
+.panel-footer .end > a {
   font-weight: 500;
+}
+
+.panel-footer > .controls {
+  margin-left: auto;
+}
+
+/* A waiting row's panel asks the question and takes the answer, so the maintainer never leaves the board. */
+
+.run-panel.needs-you {
+  gap: 14px;
+  padding-bottom: 16px;
+}
+
+.panel-section {
+  display: grid;
+  gap: 4px;
+}
+
+.panel-section > .label,
+.answer > label {
+  display: block;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.run-panel .question {
+  max-width: 60rem;
+  font-size: var(--text);
+}
+
+.run-panel .quiet {
+  max-width: 60rem;
+  color: var(--ink-2);
+}
+
+.answer {
+  display: grid;
+  gap: 8px;
+}
+
+/* The box grows with its text, since a size dragged by hand would not survive the next rebuild. */
+.answer > textarea {
+  width: 100%;
+  min-height: 76px;
+  max-height: 40vh;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  field-sizing: content;
+  resize: none;
+}
+
+.answer > textarea::placeholder {
+  color: var(--ink-3);
+}
+
+.answer > textarea:focus {
+  border-color: var(--ring);
+  outline: none;
+}
+
+.panel-footer.actions {
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.panel-footer .end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-left: auto;
 }
 
 .event-log td:not(.detail) {

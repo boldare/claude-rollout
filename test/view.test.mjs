@@ -273,8 +273,86 @@ test('prRows: held goes outside approved, and a PR missing from the ledger is fr
     activeRun: null,
     gate: null,
     blocked: null,
+    waiting: null,
     answered: null,
   })
+})
+
+test('prRows: a waiting PR says since when, which run asked and what the delegate did', () => {
+  const manifest = loadManifest(makeRollout({ policy: { delegate: { kinds: ['needs-decision'], maxPerPr: 2 } } }))
+  const question = 'Should a hook that throws stop the run?'
+  const events = [
+    start('A1', 'implement', 'A1-01-implement', 0),
+    done('A1', 'implement', 'A1-01-implement', 30, { result: 'BLOCKED' }),
+    { at: at(30), id: 'A1', kind: 'blocked', reason: 'needs-decision' },
+    start('A1', 'delegate', 'A1-02-delegate', 31),
+    done('A1', 'delegate', 'A1-02-delegate', 35),
+    start('A2', 'verify', 'A2-01-verify', 0),
+    done('A2', 'verify', 'A2-01-verify', 10, { result: 'PASS' }),
+    { at: at(12), id: 'A2', kind: 'blocked', reason: 'gate' },
+    start('A3', 'fix', 'A3-03-fix', 40),
+    done('A3', 'fix', 'A3-03-fix', 50, { result: 'READY' }),
+    { at: at(51), id: 'A3', kind: 'escalated', role: 'fix' },
+  ]
+  const runs = runsFromEvents(events)
+  const escalate = {
+    at: at(35),
+    kind: 'needs-decision',
+    question,
+    decision: 'escalate',
+    reasoning: '  the plan does not decide ',
+    run: 'A1-02-delegate',
+  }
+  const prs = (a1) => ({
+    A1: { state: 'blocked', blocked: { kind: 'needs-decision', question, evidence: 'Two sections disagree.' }, ...a1 },
+    A2: { state: 'blocked', blocked: { kind: 'gate', question: 'a check failed', evidence: '' } },
+    A3: { state: 'escalated', escalation: 'fix attempts exhausted', lastError: 'fix attempts exhausted (3)' },
+  })
+  const waiting = (ledgerPrs, id, eventList = events, runList = runs) =>
+    prRows(manifest, { prs: ledgerPrs }, eventList, runList).find((row) => row.id === id).waiting
+
+  assert.deepEqual(waiting(prs({ delegate: { runs: 1, answers: [escalate] } }), 'A1'), {
+    since: at(30),
+    run: 'A1-01-implement',
+    byDriver: false,
+    escalation: null,
+    lastError: null,
+    delegate: { state: 'escalate', reason: 'the plan does not decide' },
+  })
+
+  const delegateOf = (a1, runList = runs) => waiting(prs(a1), 'A1', events, runList).delegate
+
+  assert.deepEqual(delegateOf({ delegate: { runs: 0, answers: [] } }), { state: 'next', reason: '' })
+  assert.deepEqual(delegateOf({ delegate: { runs: 2, answers: [] } }), { state: 'spent', reason: '2 of 2 runs' })
+  assert.deepEqual(delegateOf({ delegate: { runs: 1, answers: [{ ...escalate, question: 'an older one' }] } }), {
+    state: 'next',
+    reason: '',
+  })
+  assert.deepEqual(delegateOf({ delegate: { runs: 1, answers: [] } }, runsFromEvents(events.slice(0, 4), { driverRunning: true })), {
+    state: 'running',
+    reason: '',
+  })
+
+  assert.deepEqual(waiting(prs({}), 'A2'), {
+    since: at(12),
+    run: null,
+    byDriver: true,
+    escalation: null,
+    lastError: null,
+    delegate: { state: 'skips', reason: '' },
+  })
+
+  assert.deepEqual(waiting(prs({}), 'A3'), {
+    since: at(51),
+    run: 'A3-03-fix',
+    byDriver: false,
+    escalation: 'fix attempts exhausted',
+    lastError: 'fix attempts exhausted (3)',
+    delegate: null,
+  })
+
+  assert.equal(waiting(prs({}), 'A1', [], []).since, null)
+  assert.equal(prRows(loadManifest(makeRollout()), { prs: prs({}) }, events, runs)[0].waiting.delegate, null, 'no delegate policy')
 })
 
 test('prRows follows the manifest order and the CLI info rules', () => {

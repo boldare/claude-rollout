@@ -1,6 +1,6 @@
 import { apiGet, apiPost, followStream } from './api.js'
 import { renderBoard } from './board.js'
-import { PANEL_ITEMS, panelRun } from './board-model.js'
+import { PANEL_ITEMS, panelRun, rowOpen } from './board-model.js'
 import { commandNotice } from './commands.js'
 import { renderCosts } from './costs.js'
 import { renderDetail } from './detail.js'
@@ -8,7 +8,7 @@ import { element, link, wrap } from './dom.js'
 import { renderEvents } from './events.js'
 import { sentence } from './format.js'
 import { renderFooter, renderHeader, renderListHeader, renderTop, renderViewTabs, rolloutFacts } from './header.js'
-import { mergeEvents } from './model.js'
+import { isWaiting, mergeEvents } from './model.js'
 import { renderPlan } from './plan.js'
 import { renderTimeline } from './timeline.js'
 import { FOLLOW_MS, PAGE_SIZE, shouldFollow, transcriptRoute } from './transcript-model.js'
@@ -35,6 +35,7 @@ const sourceDocs = new Set()
 let route = parseRoute(location.hash)
 let stopped = false
 let pendingRender = false
+let composing = false
 let listing = null
 let listTimer = null
 let listTicket = 0
@@ -63,8 +64,10 @@ function freshSession(name) {
     detail: null,
     plan: null,
     transcript: null,
-    openRows: new Set(),
+    rowChoices: new Map(),
     panels: new Map(),
+    drafts: new Map(),
+    sent: new Set(),
     sending: false,
     notice: null,
   }
@@ -129,6 +132,7 @@ function showLine(text) {
   app.replaceChildren(element('p', text))
 }
 
+// A rebuild in the middle of a composed character would drop it, so the render waits for compositionend.
 function scheduleRender() {
   if (pendingRender) {
     return
@@ -137,7 +141,10 @@ function scheduleRender() {
   pendingRender = true
   requestAnimationFrame(() => {
     pendingRender = false
-    render()
+
+    if (!composing) {
+      render()
+    }
   })
 }
 
@@ -300,6 +307,7 @@ function follow(name) {
       loadDetail()
       loadPlan()
       recheckFollow({ fetchWhenStopped: true })
+      forgetSent()
       syncPanels()
       scheduleRender()
     },
@@ -345,10 +353,26 @@ async function send(current, command) {
     }
 
     showNotice(current, commandNotice(command, answer, current.state?.view?.driver))
+
+    return answer.status === 202
   } catch (error) {
     if (current === session) {
       showNotice(current, { text: `Cannot reach the server: ${error.message}`, error: true })
     }
+
+    return false
+  }
+}
+
+// The box empties once the server took the note. Until the driver applies it, the row says it was sent.
+async function sendAnswer(id, text) {
+  const current = session
+  const taken = await send(current, { cmd: 'note', id, text })
+
+  if (taken && current === session) {
+    current.drafts.delete(id)
+    current.sent.add(id)
+    scheduleRender()
   }
 }
 
@@ -569,7 +593,7 @@ function panelRuns() {
   }
 
   return view.rows
-    .filter((row) => session.openRows.has(row.id) && (!route.state || row.state === route.state))
+    .filter((row) => !isWaiting(row) && session.rowChoices.get(row.id) && (!route.state || row.state === route.state))
     .map((row) => panelRun(row, view.runs))
     .filter(Boolean)
 }
@@ -662,15 +686,29 @@ function syncPanels() {
   schedulePanelPoll()
 }
 
+// The toggle flips what the row shows now, whether that came from a click or from the default of a waiting row.
 function toggleRow(id) {
-  if (session.openRows.has(id)) {
-    session.openRows.delete(id)
-  } else {
-    session.openRows.add(id)
+  const view = session.state?.view
+  const row = view?.rows.find((item) => item.id === id)
+
+  if (!row) {
+    return
   }
 
+  session.rowChoices.set(id, !rowOpen(row, panelRun(row, view.runs), session.rowChoices))
   syncPanels()
   scheduleRender()
+}
+
+// A row that stopped waiting no longer says its note was sent.
+function forgetSent() {
+  const waiting = new Set((session.state?.view?.rows ?? []).filter(isWaiting).map((row) => row.id))
+
+  for (const id of session.sent) {
+    if (!waiting.has(id)) {
+      session.sent.delete(id)
+    }
+  }
 }
 
 function nearBottom() {
@@ -700,9 +738,12 @@ function context() {
     detail: session.detail,
     plan: session.plan,
     transcript: session.transcript,
-    openRows: session.openRows,
+    rowChoices: session.rowChoices,
     panels: session.panels,
+    drafts: session.drafts,
+    sent: session.sent,
     toggleRow,
+    sendAnswer,
     readOnly: session.state?.readOnly !== false,
     sending: session.sending,
     notice: session.notice,
@@ -746,6 +787,30 @@ function renderRollout() {
   app.replaceChildren(renderTop(header, renderViewTabs(ctx)), renderBody(ctx), renderFooter())
 }
 
+// The box being typed in, with its caret, so the rebuilt page puts both back.
+function keptFocus() {
+  const active = document.activeElement
+  const key = active?.dataset?.keep
+
+  if (!key) {
+    return null
+  }
+
+  return { key, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, scroll: active.scrollTop }
+}
+
+function restoreFocus(kept) {
+  const node = kept ? app.querySelector(`[data-keep="${CSS.escape(kept.key)}"]`) : null
+
+  if (!node) {
+    return
+  }
+
+  node.focus({ preventScroll: true })
+  node.setSelectionRange(kept.start, kept.end, kept.direction)
+  node.scrollTop = kept.scroll
+}
+
 function render() {
   if (stopped) {
     showLine(OPEN_THE_URL)
@@ -758,8 +823,10 @@ function render() {
   }
 
   const stick = following() && nearBottom()
+  const kept = keptFocus()
 
   renderRollout()
+  restoreFocus(kept)
 
   if (stick) {
     window.scrollTo(0, document.documentElement.scrollHeight)
@@ -813,6 +880,15 @@ function start() {
   }
 
   window.addEventListener('hashchange', onRoute)
+  document.addEventListener('compositionstart', () => {
+    composing = true
+  })
+
+  document.addEventListener('compositionend', () => {
+    composing = false
+    scheduleRender()
+  })
+
   setInterval(() => scheduleRender(), TICK_MS)
   onRoute()
 }

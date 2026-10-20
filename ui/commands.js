@@ -39,8 +39,19 @@ export function prControls(pr, readOnly) {
   return controls
 }
 
-export function rowControls(row, readOnly) {
-  return !readOnly && row.state === 'blocked' ? ['answer'] : []
+// The buttons in a board row's panel. A waiting row answers in its own box, so Answer and Note are not among them.
+export function panelControls(row, readOnly) {
+  if (readOnly || row.state === 'merged') {
+    return []
+  }
+
+  const controls = row.held ? ['release'] : []
+
+  if (RETRY_STATES.includes(row.state)) {
+    controls.push('retry')
+  }
+
+  return controls
 }
 
 function answerDialog(pr) {
