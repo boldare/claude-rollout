@@ -762,6 +762,229 @@ test('launch: the implementer hears of a dependency that changed after its brief
   assert.match(call.prompt, /- A3: the brief saw `c3c3c3c`\./)
 })
 
+const RULE = 'When the PR changes a rule or a behaviour, every file that states the old one is in Expected files.'
+const LEAN = 'The brief has no filler.'
+
+function briefOutput(overrides = {}) {
+  return {
+    brief: '# A1\n\nThe brief.\n',
+    questions: [],
+    notes: 'Checked every path.',
+    expectedFiles: ['lib/a.mjs'],
+    changesetBump: 'minor',
+    checks: [],
+    criteria: [],
+    ...overrides,
+  }
+}
+
+// A1 while its brief is written, with gates.brief as given or the default.
+function briefDoneDriver(brief, options = {}) {
+  const { manifest, driver } = driverFor({ A1: { state: 'briefing', attempts: { implement: 0, fix: 0, verify: 0, brief: 1 } } }, options)
+
+  if (brief) {
+    manifest.gates.brief = brief
+  }
+
+  const pr = manifest.all.find((item) => item.id === 'A1')
+
+  return { manifest, driver, pr, entry: driver.ledger.prs.A1, notes: pr.brief.replace(/\.md$/, '.review-notes.md') }
+}
+
+function briefCheckEvent(item, level, result, evidence, ahead = []) {
+  return { id: 'A1', kind: 'gate-check', stage: 'brief', item, level, result, ahead, evidence }
+}
+
+test('onBriefDone: a required brief criterion that does not pass blocks on brief-questions, and no brief is written', () => {
+  const notices = []
+  const { manifest, driver, pr, entry, notes } = briefDoneDriver(
+    { runChecks: false, required: [RULE], recommended: [LEAN] },
+    { notify: (_, message) => notices.push(message) },
+  )
+
+  const criteria = [
+    { id: 'B1', result: 'fail', evidence: 'docs/a.md states the old rule.' },
+    { id: 'B2', result: 'pass', evidence: 'Short.' },
+  ]
+
+  driver.onBriefDone(pr, agentResult({ output: briefOutput({ criteria }) }))
+
+  assert.equal(entry.state, 'blocked')
+  assert.equal(entry.blocked.kind, 'brief-questions')
+  assert.equal(entry.blocked.question, `B1 (required brief criterion, fail): ${RULE} Evidence: docs/a.md states the old rule.`)
+  assert.equal(entry.blocked.evidence, 'Checked every path.')
+  assert.equal(existsSync(pr.brief), false)
+  assert.equal(existsSync(notes), false)
+  assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'blocked'])
+  assert.equal(notices.length, 1)
+  assert.ok(notices[0].startsWith('A1: the brief needs your decision: B1 (required brief criterion, fail): When the PR'), notices[0])
+})
+
+test("onBriefDone: a reviewer question that names the failed criterion is not doubled, and the others follow the reviewer's own", () => {
+  const failed = [{ id: 'B1', result: 'unverifiable', evidence: 'The plan does not say.' }]
+  const named = briefDoneDriver({ runChecks: false, required: [RULE], recommended: [] })
+
+  named.driver.onBriefDone(
+    named.pr,
+    agentResult({ output: briefOutput({ questions: ['B1: does docs/a.md keep the old rule?'], criteria: failed }) }),
+  )
+
+  assert.equal(named.entry.state, 'blocked')
+  assert.equal(named.entry.blocked.question, 'B1: does docs/a.md keep the old rule?')
+
+  const other = briefDoneDriver({ runChecks: false, required: [RULE], recommended: [] })
+
+  other.driver.onBriefDone(other.pr, agentResult({ output: briefOutput({ questions: ['Which API?'], criteria: failed }) }))
+
+  assert.equal(
+    other.entry.blocked.question,
+    `Which API?\nB1 (required brief criterion, unverifiable): ${RULE} Evidence: The plan does not say.`,
+  )
+})
+
+test('onBriefDone: a check that cannot pass blocks, and one that can pass logs pass whatever its exit code', () => {
+  const { manifest, driver, pr, entry } = briefDoneDriver({ runChecks: true, required: [], recommended: [] })
+  const checks = [
+    { command: 'npm run build:docs', exitCode: 1, canPass: false, evidence: 'missing script: build:docs' },
+    { command: 'npm test', exitCode: 1, canPass: true, evidence: 'fails only on the test this PR adds' },
+  ]
+
+  driver.onBriefDone(pr, agentResult({ output: briefOutput({ checks }) }))
+
+  assert.equal(entry.state, 'blocked')
+  assert.equal(entry.blocked.kind, 'brief-questions')
+  assert.equal(
+    entry.blocked.question,
+    'The check `npm run build:docs` cannot pass after a change within the expected files (exit 1). Evidence: missing script: build:docs',
+  )
+
+  assert.equal(existsSync(pr.brief), false)
+  assert.deepEqual(eventsSince(manifest).slice(0, 2), [
+    briefCheckEvent('npm run build:docs', 'required', 'fail', 'exit 1: missing script: build:docs'),
+    briefCheckEvent('npm test', 'required', 'pass', 'exit 1: fails only on the test this PR adds'),
+  ])
+})
+
+test('onBriefDone: a recommended brief criterion that does not pass writes the brief and adds it to the review notes', () => {
+  const { manifest, driver, pr, entry, notes } = briefDoneDriver({ runChecks: false, required: [RULE], recommended: [LEAN] })
+  const criteria = [
+    { id: 'B1', result: 'pass', evidence: 'docs/a.md is listed.' },
+    { id: 'B2', result: 'unverifiable', evidence: 'No style guide.' },
+  ]
+
+  driver.onBriefDone(pr, agentResult({ output: briefOutput({ criteria }) }))
+
+  assert.equal(entry.state, 'pending')
+  assert.equal(readFileSync(pr.brief, 'utf8'), '# A1\n\nThe brief.\n')
+  assert.equal(
+    readFileSync(notes, 'utf8'),
+    'Checked every path.\n\n## Recommended brief criteria that did not pass\n\n- B2 (unverifiable): The brief has no filler. Evidence: No style guide.\n',
+  )
+
+  assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'brief-written'])
+})
+
+test('onBriefDone: one gate-check per check and criterion, with stage brief and the heads the brief saw instead of a SHA', () => {
+  const { manifest, driver, pr, entry } = briefDoneDriver({ runChecks: true, required: [RULE], recommended: [LEAN] })
+  const heads = [{ id: 'A3', sha: 'c3c3c3c3c3c3c3c3', patchId: 'patch-a3' }]
+  const notified = structuredClone(entry.notified)
+  const output = briefOutput({
+    checks: [{ command: 'npm test', exitCode: 0, canPass: true, evidence: 'x'.repeat(400) }],
+    criteria: [
+      { id: 'B1', result: 'pass', evidence: 'docs/a.md is listed.' },
+      { id: 'B2', result: 'fail', evidence: 'Two filler sentences in Goal.' },
+    ],
+  })
+
+  driver.onBriefDone(pr, agentResult({ output }), heads)
+
+  const events = eventsSince(manifest).filter((event) => event.kind === 'gate-check')
+
+  assert.deepEqual(events, [
+    briefCheckEvent('npm test', 'required', 'pass', `exit 0: ${'x'.repeat(292)}`, ['A3@c3c3c3c']),
+    briefCheckEvent('B1', 'required', 'pass', 'docs/a.md is listed.', ['A3@c3c3c3c']),
+    briefCheckEvent('B2', 'recommended', 'fail', 'Two filler sentences in Goal.', ['A3@c3c3c3c']),
+  ])
+
+  assert.ok(events.every((event) => !Object.hasOwn(event, 'sha')))
+  assert.deepEqual(entry.notified, notified, 'the preVerify dedupe is untouched')
+  assert.deepEqual(entry.briefHeads, heads)
+  assert.equal(entry.state, 'pending')
+})
+
+test('onBriefDone: without gates.brief the brief and its notes are written as before, with no gate-check', () => {
+  const legacy = {
+    brief: '# A1\n\nThe brief.\n',
+    questions: [],
+    notes: '  Checked every path.\n',
+    expectedFiles: ['lib/a.mjs'],
+    changesetBump: 'minor',
+  }
+
+  const reported = briefOutput({
+    notes: '  Checked every path.\n',
+    checks: [{ command: 'npm run build:docs', exitCode: 1, canPass: false, evidence: 'missing script' }],
+    criteria: [{ id: 'B1', result: 'fail', evidence: 'Not a criterion of this rollout.' }],
+  })
+
+  for (const output of [legacy, reported]) {
+    const { manifest, driver, pr, entry, notes } = briefDoneDriver(null)
+
+    assert.deepEqual(manifest.gates.brief, { runChecks: false, required: [], recommended: [] })
+
+    driver.onBriefDone(pr, agentResult({ output }))
+
+    assert.equal(entry.state, 'pending')
+    assert.equal(readFileSync(pr.brief, 'utf8'), '# A1\n\nThe brief.\n')
+    assert.equal(readFileSync(notes, 'utf8'), 'Checked every path.\n')
+    assert.deepEqual(kindsSince(manifest), ['brief-written'])
+  }
+})
+
+test('launch: a brief keeps the gates.brief it started with when the manifest changes while the writer runs', async () => {
+  let finishWriter
+  const writer = new Promise((resolve) => {
+    finishWriter = resolve
+  })
+
+  const review = briefOutput({
+    checks: [{ command: 'npm run build:docs', exitCode: 1, canPass: false, evidence: 'missing script' }],
+    criteria: [{ id: 'B1', result: 'pass', evidence: 'docs/a.md is listed.' }],
+  })
+
+  const setup = modelDriver(
+    { A1: { state: 'pending' } },
+    { result: (options) => (options.logName.endsWith('-write') ? writer : Promise.resolve(agentResult({ output: review }))) },
+  )
+
+  rmSync(setup.pr.brief)
+  setup.manifest.gates.brief = { runChecks: false, required: [RULE], recommended: [] }
+
+  const write = await launched(setup, 'brief')
+
+  assert.ok(write.prompt.includes(`- B1 (required): ${RULE}`))
+
+  setup.manifest.gates.brief = { runChecks: true, required: ['Every command exists.', RULE], recommended: [] }
+  finishWriter(agentResult({ output: briefOutput() }))
+  await waitFor(() => !setup.driver.running.has('A1'), 'the brief to finish')
+
+  const reviewer = setup.calls.at(-1)
+
+  assert.ok(reviewer.logName.endsWith('-review'))
+  assert.ok(reviewer.prompt.includes(`- B1 (required): ${RULE}`))
+  assert.equal(reviewer.prompt.includes('Every command exists.'), false)
+  assert.equal(reviewer.prompt.includes('Then run every verification command'), false)
+
+  assert.equal(setup.entry.state, 'pending')
+  assert.equal(readFileSync(setup.pr.brief, 'utf8'), '# A1\n\nThe brief.\n')
+  assert.deepEqual(
+    eventsSince(setup.manifest)
+      .filter((event) => event.kind === 'gate-check')
+      .map((event) => [event.item, event.result]),
+    [['B1', 'pass']],
+  )
+})
+
 test('onDone: a PR merged during the run stays merged and is cleaned up after the run', async () => {
   for (const result of [agentResult({ output: { verdict: 'PASS' } }), agentResult({ ok: false, error: 'error_during_execution' })]) {
     const cleaned = []
@@ -2494,8 +2717,9 @@ function verifiableDriver({ gates, deviations, runCommand } = {}) {
 }
 
 // Every stage with every key, as loadManifest fills them, with the given values.
-function gatesWith({ ready = {}, preVerify = {} } = {}) {
+function gatesWith({ brief = {}, ready = {}, preVerify = {} } = {}) {
   return {
+    brief: { runChecks: false, required: [], recommended: [], ...brief },
     ready: { required: [], recommended: [], ...ready },
     preVerify: { scope: false, required: [], recommended: [], ...preVerify },
   }

@@ -539,14 +539,23 @@
                   worktree of the base. A read-only reviewer checks it against the code and returns the final text. A dependency that is
                   verified but not merged yet is merged into a preview worktree, <code>&lt;id&gt;.brief</code> next to the PR worktrees, at
                   its verified head. So the brief is written while the dependency waits for approval. The preview is detached, refuses every
-                  push and is removed after the reviewer.
+                  push and is removed after the reviewer. The reviewer also sees your answers to earlier drafts. With
+                  <a href="manifest.html#gates-brief-required"><code>gates.brief</code></a> criteria, both see them and the reviewer reports
+                  each one. With <a href="manifest.html#gates-brief-runChecks"><code>gates.brief.runChecks</code></a
+                  >, the reviewer runs the draft's existing commands in that worktree and reports whether each can pass after a change
+                  within the expected files. The brief keeps the <code>gates.brief</code> it started with, also when the manifest changes
+                  meanwhile.
                 </td>
                 <td>
                   The driver writes the brief file and a <code>.review-notes.md</code> file next to it, and the PR goes back to
-                  <code>pending</code>. Open questions: <code>blocked</code>. A failed run: <code>pending</code>, after a backoff. Heads
-                  that do not merge cleanly in the preview: <code>pending</code> with the attempt given back (<code>brief-waits</code>),
-                  until a dependency merges or is verified at another head. A dependency that merged with another patch than the brief saw
-                  is named in the implementer's prompt, and the code wins over the brief there.
+                  <code>pending</code>. Open questions: <code>blocked</code>, and no brief is written. With <code>gates.brief</code>, a
+                  required criterion that does not pass and a check that cannot pass each add a question, unless the reviewer asked one that
+                  names the criterion's id or quotes the command. A recommended criterion that does not pass goes into the review notes.
+                  Each check and criterion logs a <code>gate-check</code> event with stage <code>brief</code>, its item, level, result and
+                  evidence, and <code>ahead</code>, the dependency heads the brief saw (empty on the base), instead of a SHA. A failed run:
+                  <code>pending</code>, after a backoff. Heads that do not merge cleanly in the preview: <code>pending</code> with the
+                  attempt given back (<code>brief-waits</code>), until a dependency merges or is verified at another head. A dependency that
+                  merged with another patch than the brief saw is named in the implementer's prompt, and the code wins over the brief there.
                 </td>
               </tr>
               <tr id="state-implementing">
@@ -735,16 +744,25 @@
             <tbody>
               <tr>
                 <td class="nowrap"><span class="badge role-brief">brief writer</span></td>
-                <td><code>brief-write.md</code>, the briefing sources for the PR, every earlier question with your answer</td>
+                <td>
+                  <code>brief-write.md</code>, the briefing sources for the PR, every earlier question with your answer, the
+                  <code>gates.brief</code> criteria
+                </td>
                 <td>new</td>
                 <td>Read the base branch. Edit, Write and NotebookEdit are denied.</td>
                 <td class="name">brief.json</td>
               </tr>
               <tr>
                 <td class="nowrap"><span class="badge role-brief">brief reviewer</span></td>
-                <td><code>brief-review.md</code>, the sources, the writer's brief without its questions and notes</td>
+                <td>
+                  <code>brief-review.md</code>, the sources, every earlier question with your answer, the <code>gates.brief</code> criteria,
+                  the writer's brief without its questions and notes
+                </td>
                 <td>new</td>
-                <td>The same as the writer.</td>
+                <td>
+                  The same as the writer. With <code>gates.brief.runChecks</code> it runs the draft's existing commands and leaves the
+                  worktree as it found it.
+                </td>
                 <td class="name">brief.json</td>
               </tr>
               <tr>
@@ -1062,7 +1080,10 @@
                 <td class="nowrap">brief writer, reviewer</td>
                 <td>
                   <code>brief</code> (markdown), <code>expectedFiles</code>, <code>changesetBump</code>, <code>questions</code>,
-                  <code>notes</code>. All required. The expected files become the PR's scope when the manifest has none.
+                  <code>notes</code>, <code>checks</code> with the command, exit code (-1 when it did not finish), whether it can pass and
+                  evidence per command the reviewer ran, and <code>criteria</code> with pass, fail or unverifiable and evidence per
+                  <code>gates.brief</code> criterion. All required. <code>checks</code> and <code>criteria</code> are empty when the prompt
+                  asks for none, and always from the writer. The expected files become the PR's scope when the manifest has none.
                 </td>
               </tr>
               <tr>

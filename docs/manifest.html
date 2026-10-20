@@ -120,8 +120,14 @@ policy:
   attempts: { implement: 2, fix: 4, verify: 3 }
   timeouts: { implement: 240, fix: 120, verify: 90 }
 
-<span class="dim"># Checks before the verifier, on top of CI, the policy and code scanning.</span>
+<span class="dim"># Checks on top of CI, the policy and code scanning: on each brief the driver writes, and before the verifier.</span>
 <span class="dim"># gates:</span>
+<span class="dim">#   brief:</span>
+<span class="dim">#     # The brief reviewer runs the draft's existing commands and reports whether each can pass.</span>
+<span class="dim">#     runChecks: true</span>
+<span class="dim">#     # The reviewer checks each brief against these. A required one that does not pass blocks the PR on a brief question.</span>
+<span class="dim">#     required:</span>
+<span class="dim">#       - When the PR changes a rule or a behaviour, every file that states the old one is in Expected files.</span>
 <span class="dim">#   ready:</span>
 <span class="dim">#     # The implementer runs these before READY, and the driver runs them again before the pre-verify commands. The install goes first.</span>
 <span class="dim">#     # A failed one sends the PR back.</span>
@@ -264,7 +270,10 @@ prs:
                 <td>object</td>
                 <td>none</td>
                 <td>no</td>
-                <td>Extra checks the driver runs before a stage of a PR. See <a href="#gates">gates</a>.</td>
+                <td>
+                  Extra checks before a stage of a PR, run by the driver or, for a brief, by the brief reviewer for the driver. See
+                  <a href="#gates">gates</a>.
+                </td>
               </tr>
               <tr id="manifest-prs">
                 <td>prs</td>
@@ -718,10 +727,11 @@ prs:
         <h2 id="gates">gates <a class="anchor" href="#gates" aria-label="Link to this section">#</a></h2>
 
         <p>
-          Every key is optional. Without <code>gates</code> the driver runs only its usual checks. <code>gates.ready</code> lists commands
-          the implementer runs in its self-check and the driver runs again. <code>gates.preVerify</code> holds checks only the driver runs:
-          the scope check, which runs before the ready commands, and the pre-verify commands, which run after them. Any other key under
-          <code>gates</code>, <code>gates.ready</code> or <code>gates.preVerify</code> fails validation.
+          Every key is optional. Without <code>gates</code> the driver runs only its usual checks. <code>gates.brief</code> holds checks the
+          brief reviewer makes for the driver on each brief the driver writes. <code>gates.ready</code> lists commands the implementer runs
+          in its self-check and the driver runs again. <code>gates.preVerify</code> holds checks only the driver runs: the scope check,
+          which runs before the ready commands, and the pre-verify commands, which run after them. Any other key under <code>gates</code>,
+          <code>gates.brief</code>, <code>gates.ready</code> or <code>gates.preVerify</code> fails validation.
         </p>
 
         <div class="scroll">
@@ -735,6 +745,47 @@ prs:
               </tr>
             </thead>
             <tbody>
+              <tr id="gates-brief-runChecks">
+                <td>brief.runChecks</td>
+                <td>boolean</td>
+                <td><code>false</code></td>
+                <td>
+                  The brief reviewer runs every verification and acceptance command of the draft that exists in the brief's worktree: the
+                  base, with the verified heads of unmerged dependencies merged in when there are any (see
+                  <a href="how-it-works.html#state-briefing">briefing</a>). It runs them one at a time inside its own run, so they count
+                  toward <a href="#policy-timeouts"><code>policy.timeouts.brief</code></a
+                  >. It skips a command the draft marks "new in this PR" and a command that rewrites tracked files. For each command it ran,
+                  it reports whether the command can pass after a change within the brief's expected files. A check that cannot pass becomes
+                  a brief question, unless the reviewer asked one that quotes the command. The PR then blocks on
+                  <code>brief-questions</code> and no brief is written. Each check logs a <code>gate-check</code> event with stage
+                  <code>brief</code>, level <code>required</code>, the exit code in its evidence and the dependency heads the brief saw
+                  (<code>ahead</code>) instead of a SHA. Only briefs the driver writes are checked. A hand-written brief never is.
+                </td>
+              </tr>
+              <tr id="gates-brief-required">
+                <td>brief.required</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>
+                  Criteria in prose that every brief the driver writes must meet. They get the ids <code>B1</code>, <code>B2</code> and on,
+                  the required ones first, then the recommended ones. The writer and the reviewer see them, and the reviewer reports each
+                  one as pass, fail or unverifiable, with evidence. A required criterion that does not pass, or that the reviewer leaves
+                  out, becomes a brief question, unless the reviewer asked one that names its id. The PR then blocks on
+                  <code>brief-questions</code> and no brief is written. Your answer reaches the writer and the reviewer of the next draft,
+                  and the <a href="#policy-delegate">delegate</a> may answer first when it takes <code>brief-questions</code>. Each
+                  criterion logs a <code>gate-check</code> event like a check, with its level. Hand-written briefs are never checked.
+                </td>
+              </tr>
+              <tr id="gates-brief-recommended">
+                <td>brief.recommended</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>
+                  Criteria that only inform, numbered after the required ones. One that does not pass never blocks. The driver writes the
+                  brief and lists the criterion under "Recommended brief criteria that did not pass" in
+                  <code>&lt;id&gt;.review-notes.md</code>, which the card and the PR page show.
+                </td>
+              </tr>
               <tr id="gates-ready-required">
                 <td>ready.required</td>
                 <td>list of strings</td>
@@ -1023,10 +1074,12 @@ prs:
           <li><code>repo.public</code>, when set, is a boolean.</li>
           <li><code>repo.baseQuietPaths</code>, when set, is a list of path globs.</li>
           <li>
-            <code>gates</code>, when set, is a mapping whose only keys are <code>ready</code> and <code>preVerify</code>.
-            <code>gates.ready</code>, when set, is a mapping with at most the keys <code>required</code> and <code>recommended</code>, each
-            a list of non-empty strings. <code>gates.preVerify</code>, when set, is a mapping with at most these keys: <code>scope</code>, a
-            boolean, and <code>required</code> and <code>recommended</code>, each a list of non-empty strings.
+            <code>gates</code>, when set, is a mapping whose only keys are <code>brief</code>, <code>ready</code> and
+            <code>preVerify</code>. <code>gates.brief</code>, when set, is a mapping with at most these keys: <code>runChecks</code>, a
+            boolean, and <code>required</code> and <code>recommended</code>, each a list of non-empty strings. <code>gates.ready</code>,
+            when set, is a mapping with at most the keys <code>required</code> and <code>recommended</code>, each a list of non-empty
+            strings. <code>gates.preVerify</code>, when set, is a mapping with at most these keys: <code>scope</code>, a boolean, and
+            <code>required</code> and <code>recommended</code>, each a list of non-empty strings.
           </li>
           <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
@@ -1105,7 +1158,10 @@ prs:
               <tr>
                 <td>briefs/&lt;id&gt;.review-notes.md</td>
                 <td>driver</td>
-                <td>The brief reviewer's notes, next to a brief the driver wrote.</td>
+                <td>
+                  The brief reviewer's notes, next to a brief the driver wrote, with the recommended
+                  <a href="#gates-brief-recommended">brief criteria</a> that did not pass.
+                </td>
               </tr>
               <tr>
                 <td>ledger.json</td>
