@@ -30,6 +30,7 @@ import { makeEnv, sh } from '../lib/sh.mjs'
 import { ghEnv } from '../lib/github.mjs'
 import {
   agentTokenCheck,
+  catalogCheck,
   claudeWrapperWarning,
   guardSelfTest,
   originCheck,
@@ -370,6 +371,14 @@ async function preflight(manifest) {
 
   await probe('gh auth', 'gh', ['auth', 'status'], { env: ghEnv(manifest) })
   await probe('git fetch', 'git', ['-C', manifest.repo.path, 'fetch', '--quiet', 'origin'])
+
+  const catalog = await catalogCheck(manifest)
+
+  for (const line of catalog.lines) {
+    console.log(line)
+  }
+
+  problems.push(...catalog.problems)
 
   const remote = await sh('git', ['-C', manifest.repo.path, 'remote', 'get-url', 'origin'], { env })
   const origin = await originCheck(manifest, remote.code === 0 ? remote.stdout.trim() : '', (host) => sshHostname(manifest, host))

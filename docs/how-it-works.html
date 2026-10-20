@@ -612,7 +612,9 @@
                   <code>needs_fix</code>. A new alert under
                   <a href="manifest.html#repo-codeScanning"><code>codeScanning.action: block</code></a
                   >: <code>blocked</code>. An alert from an analysis of an older commit: it stays here and waits for the analysis of the
-                  head.
+                  head. A <a href="manifest.html#criteria-catalog">criteria catalog</a> that is missing from
+                  <code>origin/&lt;base&gt;</code> or invalid when the verifier would start: it stays here with an <code>error</code> event,
+                  no verifier starts, and five erroring ticks in a row escalate it.
                 </td>
               </tr>
               <tr id="state-verifying">
@@ -622,8 +624,10 @@
                   <a href="commands.html#cmd-note">recorded decisions</a>. Where a decision conflicts with the brief, the decision wins.
                   With <a href="manifest.html#gates-verify-required"><code>gates.verify</code></a
                   >, it also checks the project criteria, which the driver fixes when it starts the verifier, and reports each one as pass,
-                  fail or unverifiable. After a FAIL it also re-checks <a href="#resume">the previous findings</a> and the implementer's
-                  answers to them, as claims.
+                  fail or unverifiable. With <a href="manifest.html#gates-verify-criteriaFrom"><code>gates.verify.criteriaFrom</code></a
+                  >, the catalog entries that apply to the PR join them as required criteria. The driver reads the catalog from
+                  <code>origin/&lt;base&gt;</code> each time a verifier starts. After a FAIL it also re-checks
+                  <a href="#resume">the previous findings</a> and the implementer's answers to them, as claims.
                 </td>
                 <td>
                   The driver first judges the verdict by those criteria. A required one that does not pass, or that the verifier does not

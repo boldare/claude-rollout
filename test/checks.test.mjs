@@ -6,8 +6,10 @@ import {
   commandResult,
   criteriaOutcome,
   inheritsParent,
+  parseCatalog,
   preVerifyOutcome,
   readyClaim,
+  selectCriteria,
   speaksForItself,
   summarizeChecks,
   verifyCriteria,
@@ -668,4 +670,235 @@ test('criteriaOutcome: a finding adds a period only to a criterion text without 
     'V2 (required criterion): A new branch in the code has a test that fails without it. lib/a.mjs:3',
     'V3 (required criterion): Does every export have a test? lib/a.mjs:3',
   ])
+})
+
+const DOCS_STALE = 'Unchanged text in an edited doc agrees with the change.'
+const UI_STATES = 'Every new UI control has an empty, loading and error state.'
+const CATALOG = [
+  '- id: docs-stale',
+  `  criterion: ${DOCS_STALE}`,
+  "  paths: ['docs/**', '*.md']   # optional: applies when the PR changes a matching file",
+  '- id: ui-states',
+  `  criterion: ${UI_STATES}`,
+  "  tags: [ui]                   # optional: applies when the PR's briefTags include one",
+  '- id: tests-fail-first',
+  `  criterion: ${BRANCH_TEST}`,
+  '',
+].join('\n')
+
+const ENTRIES = [
+  { id: 'docs-stale', criterion: DOCS_STALE, tags: [], paths: ['docs/**', '*.md'] },
+  { id: 'ui-states', criterion: UI_STATES, tags: ['ui'], paths: [] },
+  { id: 'tests-fail-first', criterion: BRANCH_TEST, tags: [], paths: [] },
+]
+
+function catalogErrors(text) {
+  const { entries, errors } = parseCatalog(text)
+
+  assert.deepEqual(entries, [], text)
+
+  return errors
+}
+
+test('parseCatalog: the example catalog gives three entries, with empty tags and paths where absent', () => {
+  assert.deepEqual(parseCatalog(CATALOG), { entries: ENTRIES, errors: [] })
+})
+
+test('parseCatalog: [] is an empty catalog, and a criterion is trimmed', () => {
+  assert.deepEqual(parseCatalog('[]\n'), { entries: [], errors: [] })
+  assert.deepEqual(parseCatalog('- id: docs-stale\n  criterion: "  Docs agree.  "\n').entries, [
+    { id: 'docs-stale', criterion: 'Docs agree.', tags: [], paths: [] },
+  ])
+})
+
+test('parseCatalog: invalid YAML gives the first line of the parser message and nothing else', () => {
+  const cases = [
+    ['- id: a\n  criterion: x\n  criterion: y\n', /^not valid YAML: Map keys must be unique/],
+    ['- id: a\n  criterion: x\n---\n- id: b\n  criterion: y\n', /^not valid YAML: Source contains multiple documents/],
+    ['- id: a\n  criterion: x\n  paths: [docs/**\n', /^not valid YAML: /],
+    ['- id: a\n  criterion: x\n  paths: [*.md]\n', /^not valid YAML: /],
+  ]
+
+  for (const [text, message] of cases) {
+    const errors = catalogErrors(text)
+
+    assert.equal(errors.length, 1, text)
+    assert.match(errors[0], message)
+    assert.equal(errors[0].includes('\n'), false, errors[0])
+  }
+})
+
+test('parseCatalog: the document must be a list, and an empty file says to write []', () => {
+  for (const text of ['', '# no criteria yet\n']) {
+    assert.deepEqual(catalogErrors(text), ['the catalog is empty: write [] for a catalog with no entries'], JSON.stringify(text))
+  }
+
+  for (const text of ['id: docs-stale\ncriterion: x\n', 'docs-stale\n', '42\n']) {
+    assert.deepEqual(catalogErrors(text), ['the catalog must be a list of entries'], text)
+  }
+})
+
+test('parseCatalog: an entry must be a mapping with only id, criterion, tags and paths', () => {
+  assert.deepEqual(catalogErrors('- docs-stale\n- [a]\n- null\n'), [
+    'entry 1: must be a mapping of id, criterion, tags and paths',
+    'entry 2: must be a mapping of id, criterion, tags and paths',
+    'entry 3: must be a mapping of id, criterion, tags and paths',
+  ])
+
+  assert.deepEqual(catalogErrors('- id: docs-stale\n  criterion: x\n  level: recommended\n'), ['entry 1 (docs-stale): unknown key level'])
+  assert.deepEqual(catalogErrors('- id: docs-stale\n  criterion: x\n  globs: [a]\n'), ['entry 1 (docs-stale): unknown key globs'])
+})
+
+test('parseCatalog: an id is a non-empty string', () => {
+  const cases = [
+    ['- criterion: x\n', 'entry 1: id must be a non-empty string'],
+    ['- id: ""\n  criterion: x\n', 'entry 1: id must be a non-empty string'],
+    ['- id: "  "\n  criterion: x\n', 'entry 1: id must be a non-empty string'],
+    ['- id: 42\n  criterion: x\n', 'entry 1: id must be a non-empty string'],
+    ['- id: [a]\n  criterion: x\n', 'entry 1: id must be a non-empty string'],
+  ]
+
+  for (const [text, error] of cases) {
+    assert.deepEqual(catalogErrors(text), [error], text)
+  }
+})
+
+test('parseCatalog: the second and later copies of an id fail', () => {
+  const text = [
+    '- id: a',
+    '  criterion: x',
+    '- id: b',
+    '  criterion: y',
+    '- id: a',
+    '  criterion: z',
+    '- id: a',
+    '  criterion: w',
+    '',
+  ].join('\n')
+
+  assert.deepEqual(catalogErrors(text), ['entry 3 (a): duplicate id', 'entry 4 (a): duplicate id'])
+})
+
+test("parseCatalog: V<n> and B<n> ids are the driver's own numbering", () => {
+  for (const id of ['V1', 'V12', 'B3']) {
+    assert.deepEqual(catalogErrors(`- id: ${id}\n  criterion: x\n`), [`entry 1 (${id}): V<n> and B<n> ids are the driver's own numbering`])
+  }
+
+  for (const id of ['V', 'v1', 'V1a', 'docs-V1', 'B-2']) {
+    assert.deepEqual(parseCatalog(`- id: ${id}\n  criterion: x\n`).errors, [], id)
+  }
+})
+
+test('parseCatalog: a criterion is a string that is not empty after trimming', () => {
+  for (const value of ['', '""', '"   "', '42', '[a]', 'null']) {
+    assert.deepEqual(catalogErrors(`- id: a\n  criterion: ${value}\n`), ['entry 1 (a): criterion must be a non-empty string'], value)
+  }
+})
+
+test('parseCatalog: tags and paths, when present, are non-empty lists of non-empty strings', () => {
+  for (const key of ['tags', 'paths']) {
+    for (const value of ['[]', 'ui', '[ui, ""]', '["  "]', '[42]', '[[ui]]', 'null']) {
+      assert.deepEqual(
+        catalogErrors(`- id: a\n  criterion: x\n  ${key}: ${value}\n`),
+        [`entry 1 (a): ${key} must be a non-empty list of non-empty strings`],
+        `${key}: ${value}`,
+      )
+    }
+  }
+})
+
+test('parseCatalog: every error is listed in file order, per entry unknown keys first, then id, criterion, tags and paths', () => {
+  const text = [
+    '- id: docs-stale',
+    '  criterion: x',
+    '- paths: []',
+    '  tags: []',
+    '  criterion: ""',
+    '  level: required',
+    '  id: 42',
+    '- id: docs-stale',
+    '  criterion: y',
+    '- ui-states',
+    '- id: B1',
+    '  criterion: z',
+    '  why: no',
+    '',
+  ].join('\n')
+
+  assert.deepEqual(catalogErrors(text), [
+    'entry 2: unknown key level',
+    'entry 2: id must be a non-empty string',
+    'entry 2: criterion must be a non-empty string',
+    'entry 2: tags must be a non-empty list of non-empty strings',
+    'entry 2: paths must be a non-empty list of non-empty strings',
+    'entry 3 (docs-stale): duplicate id',
+    'entry 4: must be a mapping of id, criterion, tags and paths',
+    'entry 5 (B1): unknown key why',
+    "entry 5 (B1): V<n> and B<n> ids are the driver's own numbering",
+  ])
+})
+
+function selectedIds(entries, scope) {
+  return selectCriteria(entries, scope).map((record) => record.id)
+}
+
+test('selectCriteria: an entry with neither tags nor paths always applies, as a required record', () => {
+  const always = [{ id: 'tests-fail-first', criterion: BRANCH_TEST, tags: [], paths: [] }]
+
+  assert.deepEqual(selectCriteria(always, { tags: [], files: [] }), [{ id: 'tests-fail-first', level: 'required', text: BRANCH_TEST }])
+  assert.deepEqual(selectedIds(always, { tags: ['ui'], files: ['lib/a.mjs'] }), ['tests-fail-first'])
+})
+
+test('selectCriteria: a tag applies only when it is in the tags', () => {
+  const tagged = [{ id: 'ui-states', criterion: UI_STATES, tags: ['ui', 'forms'], paths: [] }]
+
+  assert.deepEqual(selectedIds(tagged, { tags: ['forms'], files: [] }), ['ui-states'])
+  assert.deepEqual(selectedIds(tagged, { tags: ['api'], files: ['ui'] }), [])
+  assert.deepEqual(selectedIds(tagged, { tags: [], files: [] }), [])
+})
+
+test('selectCriteria: a path applies when one of its globs matches a file, ** across directories and * inside one', () => {
+  const docs = [{ id: 'docs-stale', criterion: DOCS_STALE, tags: [], paths: ['docs/**', '*.md'] }]
+
+  assert.deepEqual(selectedIds(docs, { tags: [], files: ['lib/a.mjs', 'docs/a/b.html'] }), ['docs-stale'])
+  assert.deepEqual(selectedIds(docs, { tags: [], files: ['README.md'] }), ['docs-stale'])
+  assert.deepEqual(selectedIds(docs, { tags: [], files: ['lib/a.md'] }), [])
+  assert.deepEqual(selectedIds(docs, { tags: ['docs'], files: ['lib/a.mjs'] }), [])
+})
+
+test("selectCriteria: a renamed file's previous path counts once the caller lists it", () => {
+  const docs = [{ id: 'docs-stale', criterion: DOCS_STALE, tags: [], paths: ['docs/**'] }]
+  const renamed = [{ status: 'renamed', path: 'guide/setup.html', previousPath: 'docs/setup.html' }]
+  const files = renamed.flatMap((file) => [file.path, file.previousPath].filter(Boolean))
+
+  assert.deepEqual(selectedIds(docs, { tags: [], files }), ['docs-stale'])
+})
+
+test('selectCriteria: the records keep catalog order', () => {
+  const { entries } = parseCatalog(CATALOG)
+
+  assert.deepEqual(selectedIds(entries, { tags: ['ui'], files: ['docs/manifest.html'] }), ['docs-stale', 'ui-states', 'tests-fail-first'])
+  assert.deepEqual(selectedIds(entries, { tags: [], files: ['README.md'] }), ['docs-stale', 'tests-fail-first'])
+  assert.deepEqual(selectedIds(entries, { tags: ['ui'], files: ['lib/a.mjs'] }), ['ui-states', 'tests-fail-first'])
+  assert.deepEqual(selectedIds([...entries].reverse(), { tags: ['ui'], files: [] }), ['tests-fail-first', 'ui-states'])
+})
+
+test('criteriaOutcome: a catalog criterion that fails is a required finding under its own id', () => {
+  const sent = [
+    ...verifyCriteria({ required: [NO_SEMICOLONS], recommended: [] }),
+    ...selectCriteria(ENTRIES, { tags: [], files: ['README.md'] }),
+  ]
+
+  const outcome = criteriaOutcome(sent, [
+    { id: 'V1', result: 'pass', evidence: 'grep finds none.' },
+    { id: 'docs-stale', result: 'fail', evidence: 'docs/manifest.html:40 still says every PR.' },
+    { id: 'tests-fail-first', result: 'pass', evidence: 'test/a.test.mjs:12' },
+  ])
+
+  assert.deepEqual(
+    outcome.failedRequired.map((record) => record.id),
+    ['docs-stale'],
+  )
+
+  assert.deepEqual(outcome.findings, [`docs-stale (required criterion): ${DOCS_STALE} docs/manifest.html:40 still says every PR.`])
 })

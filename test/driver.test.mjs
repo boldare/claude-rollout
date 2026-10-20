@@ -2673,7 +2673,8 @@ test('checkClaim: no new alert, or one below the threshold, goes on to verificat
 
 // A claimed A1 with green CI, a free slot and a worktree at its head, so checkClaim
 // can start the verifier. Its scope is lib/** and it changes README.md. The agent never finishes.
-function verifiableDriver({ gates, deviations, runCommand } = {}) {
+// `rules` answer before the others, and `answer` swaps them later.
+function verifiableDriver({ gates, deviations, runCommand, rules = [] } = {}) {
   const agentCalls = []
   const prompts = []
   const setup = tickDriver(
@@ -2697,13 +2698,18 @@ function verifiableDriver({ gates, deviations, runCommand } = {}) {
   mkdirSync(gitDir, { recursive: true })
   writeFileSync(join(wt, '.git'), `gitdir: ${gitDir}\n`)
   writeFileSync(join(gitDir, 'rollout-ready'), '')
-  setup.tools.answer([
-    viewRule(),
-    { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: GREEN_RUNS },
-    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
-    { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
-    { tool: 'git', args: '', stdout: '' },
-  ])
+
+  const answer = (first) =>
+    setup.tools.answer([
+      ...first,
+      viewRule(),
+      { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: GREEN_RUNS },
+      { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
+      { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+      { tool: 'git', args: '', stdout: '' },
+    ])
+
+  answer(rules)
 
   entry.briefScope = ['lib/**']
   entry.ready = { status: 'READY', deviations }
@@ -2713,7 +2719,7 @@ function verifiableDriver({ gates, deviations, runCommand } = {}) {
     setup.manifest.gates = { ...setup.manifest.gates, ...gates }
   }
 
-  return { ...setup, pr, entry, agentCalls, prompts }
+  return { ...setup, pr, entry, agentCalls, prompts, answer }
 }
 
 // Every stage with every key, as loadManifest fills them, with the given values.
@@ -2722,7 +2728,7 @@ function gatesWith({ brief = {}, ready = {}, preVerify = {}, verify = {} } = {})
     brief: { runChecks: false, required: [], recommended: [], ...brief },
     ready: { required: [], recommended: [], ...ready },
     preVerify: { scope: false, required: [], recommended: [], ...preVerify },
-    verify: { required: [], recommended: [], ...verify },
+    verify: { required: [], recommended: [], criteriaFrom: null, ...verify },
   }
 }
 
@@ -4029,6 +4035,179 @@ test('checkClaim: a pre-verify job does not fix the criteria, the verifier after
   assert.equal(entry.state, 'verifying')
   assert.deepEqual(entry.verifyCriteria, VERIFY_CRITERIA)
   assert.ok(prompts[0].includes(`- V1 (required): ${BRANCH_TEST}\n`), prompts[0])
+})
+
+const DOCS_STALE = 'Unchanged text in an edited doc agrees with the change.'
+const UI_STATES = 'Every new UI control has an empty, loading and error state.'
+const CATALOG = [
+  '- id: docs-stale',
+  `  criterion: ${DOCS_STALE}`,
+  "  paths: ['docs/**', '*.md']",
+  '- id: ui-states',
+  `  criterion: ${UI_STATES}`,
+  '  tags: [ui]',
+  '- id: tests-fail-first',
+  `  criterion: ${BRANCH_TEST}`,
+  '',
+].join('\n')
+
+const CATALOG_GATE = gatesWith({ verify: { ...CRITERIA_GATE.verify, criteriaFrom: 'criteria.yaml' } })
+const SHOW_CATALOG = 'show origin/main:criteria.yaml'
+const CATALOG_RULE = { tool: 'git', args: SHOW_CATALOG, stdout: CATALOG }
+const CATALOG_MISSING = {
+  tool: 'git',
+  args: SHOW_CATALOG,
+  code: 128,
+  stderr: "fatal: path 'criteria.yaml' does not exist in 'origin/main'\n",
+}
+
+const CATALOG_INVALID = { tool: 'git', args: SHOW_CATALOG, stdout: '- id: V1\n  criterion: A test per branch.\n' }
+const MISSING_ERROR =
+  "gates.verify.criteriaFrom criteria.yaml cannot be read from origin/main: fatal: path 'criteria.yaml' does not exist in 'origin/main'"
+
+const INVALID_ERROR =
+  "gates.verify.criteriaFrom criteria.yaml on origin/main is invalid: entry 1 (V1): V<n> and B<n> ids are the driver's own numbering"
+
+function catalogReads(tools) {
+  return tools.calls().filter((call) => call.tool === 'git' && call.args.includes('show'))
+}
+
+const criteriaIds = (entry) => entry.verifyCriteria.map((criterion) => criterion.id)
+
+test('checkClaim: the catalog entries that apply follow the manifest criteria, read from origin/<base> in repo.path', async () => {
+  const { manifest, driver, pr, entry, tools, prompts } = verifiableDriver({ gates: CATALOG_GATE, rules: [CATALOG_RULE] })
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(criteriaIds(entry), ['V1', 'V2', 'V3', 'docs-stale', 'tests-fail-first'])
+  assert.deepEqual(entry.verifyCriteria.slice(3), [
+    { id: 'docs-stale', level: 'required', text: DOCS_STALE },
+    { id: 'tests-fail-first', level: 'required', text: BRANCH_TEST },
+  ])
+
+  assert.deepEqual(catalogReads(tools), [{ tool: 'git', args: ['-C', manifest.repo.path, 'show', 'origin/main:criteria.yaml'] }])
+  assert.ok(
+    prompts[0].includes(
+      `- V3 (recommended): ${DOCS_ROW}\n- docs-stale (required): ${DOCS_STALE}\n- tests-fail-first (required): ${BRANCH_TEST}\n`,
+    ),
+    prompts[0],
+  )
+})
+
+test("checkClaim: the PR's briefTags pick the tagged catalog entries, in catalog order", async () => {
+  const { driver, pr, entry, prompts } = verifiableDriver({ gates: CATALOG_GATE, rules: [CATALOG_RULE] })
+  pr.briefTags = ['ui']
+
+  await driver.advance(pr)
+
+  assert.deepEqual(criteriaIds(entry), ['V1', 'V2', 'V3', 'docs-stale', 'ui-states', 'tests-fail-first'])
+  assert.ok(prompts[0].includes(`- docs-stale (required): ${DOCS_STALE}\n- ui-states (required): ${UI_STATES}\n`), prompts[0])
+})
+
+test('checkClaim: without criteriaFrom, set to null or absent, no git call reads a catalog', async () => {
+  for (const verify of [CRITERIA_GATE.verify, { required: [BRANCH_TEST], recommended: [] }]) {
+    const { driver, pr, entry, tools } = verifiableDriver({ gates: { verify } })
+
+    await driver.advance(pr)
+
+    assert.equal(entry.state, 'verifying', JSON.stringify(verify))
+    assert.deepEqual(catalogReads(tools), [], JSON.stringify(verify))
+  }
+})
+
+test('checkClaim: the advance that starts the pre-verify job reads no catalog, the one that starts the verifier does', async () => {
+  const seam = commandSeam()
+  const setup = verifiableDriver({
+    gates: gatesWith({ preVerify: COMMANDS_GATE.preVerify, verify: CATALOG_GATE.verify }),
+    rules: [CATALOG_RULE],
+    runCommand: seam.runCommand,
+  })
+
+  const { driver, pr, entry, tools } = setup
+
+  await preVerified(setup)
+
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
+  assert.deepEqual(catalogReads(tools), [])
+
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(criteriaIds(entry), ['V1', 'V2', 'V3', 'docs-stale', 'tests-fail-first'])
+  assert.equal(catalogReads(tools).length, 1)
+})
+
+test('tick: a missing or invalid catalog is an error of that PR, no verifier starts and the other PRs go on', async () => {
+  for (const [rule, message] of [
+    [CATALOG_MISSING, MISSING_ERROR],
+    [CATALOG_INVALID, INVALID_ERROR],
+  ]) {
+    const { manifest, driver, entry, agentCalls } = verifiableDriver({ gates: CATALOG_GATE, rules: [rule] })
+    const earlier = VERIFY_CRITERIA.slice(0, 1)
+    entry.verifyCriteria = earlier
+
+    await driver.tick()
+
+    const events = eventsSince(manifest)
+
+    assert.deepEqual(
+      agentCalls.filter((call) => call.role === 'verify'),
+      [],
+      message,
+    )
+
+    assert.equal(entry.state, 'ready_claimed')
+    assert.deepEqual(entry.attempts, CLAIMED.attempts)
+    assert.equal(entry.verifyCriteria, earlier)
+    assert.deepEqual(
+      events.filter((event) => event.id === 'A1' && event.kind === 'error'),
+      [{ id: 'A1', kind: 'error', error: message, count: 1 }],
+    )
+
+    assert.equal(entry.tickErrors, 1)
+    assert.equal(entry.lastError, message)
+    assert.ok(
+      events.some((event) => event.id === 'A3' && event.kind === 'brief-start'),
+      JSON.stringify(events),
+    )
+  }
+})
+
+test('tick: a catalog that stays missing escalates the PR after five erroring ticks in a row', async () => {
+  const { manifest, driver, entry, notices } = verifiableDriver({ gates: CATALOG_GATE, rules: [CATALOG_MISSING] })
+  entry.tickErrors = 4
+
+  await driver.tick()
+
+  assert.equal(entry.tickErrors, 5)
+  assert.equal(entry.state, 'escalated')
+  assert.equal(entry.escalation, 'repeated errors')
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind === 'escalated'),
+    [{ id: 'A1', kind: 'escalated', reason: 'repeated errors' }],
+  )
+
+  assert.ok(
+    notices.some((notice) => notice.startsWith('A1: repeated errors')),
+    JSON.stringify(notices),
+  )
+})
+
+test('checkClaim: once the catalog is fixed on the base, the next advance starts the verifier with its entries', async () => {
+  const { driver, pr, entry, agentCalls, answer } = verifiableDriver({ gates: CATALOG_GATE, rules: [CATALOG_MISSING] })
+
+  await assert.rejects(driver.advance(pr), { message: MISSING_ERROR })
+
+  assert.equal(entry.state, 'ready_claimed')
+  assert.deepEqual(agentCalls, [])
+
+  answer([CATALOG_RULE])
+  await driver.advance(pr)
+
+  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
+  assert.deepEqual(criteriaIds(entry), ['V1', 'V2', 'V3', 'docs-stale', 'tests-fail-first'])
 })
 
 test('verified: a PASS with a failed required criterion is recorded as a FAIL and goes to a fix run with the criterion as a finding', async () => {
