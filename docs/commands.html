@@ -260,8 +260,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li>The implementer's summary, its deviations, and expected against observed results.</li>
           <li>Changed CI and workflow files, to review before approving, and files outside the scope.</li>
           <li>
-            The verifier's verdict, checklist, blocking and non-blocking findings. After a FAIL, each previous finding it re-checked, with
-            its status, the implementer's answer and the evidence.
+            The verifier's verdict, checklist, blocking and non-blocking findings. With
+            <a href="manifest.html#gates-verify-required">project criteria</a>, each one with its id, level, text and result, and the
+            evidence of one that did not pass. A PASS with a required criterion that did not pass shows as FAIL, with the criterion among
+            the blocking findings. After a FAIL, each previous finding it re-checked, with its status, the implementer's answer and the
+            evidence.
           </li>
           <li>
             With <a href="manifest.html#gates-ready-required">ready</a> or

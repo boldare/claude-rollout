@@ -277,6 +277,14 @@ function card(manifest, id) {
       console.log(`  [${item.status}] ${item.item}`)
     }
 
+    for (const item of entry.verdict.criteria ?? []) {
+      console.log(`  criterion ${item.id} (${item.level}) [${item.result}]: ${item.text}`)
+
+      if (item.result !== 'pass') {
+        console.log(`    evidence: ${item.evidence}`)
+      }
+    }
+
     for (const item of entry.verdict.recheck ?? []) {
       console.log(`  re-check ${item.id} [${item.status}]: ${item.finding ?? '(unknown id)'}`)
 

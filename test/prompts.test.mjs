@@ -173,7 +173,7 @@ test('prompts: every step starts its own line and the recipe sits indented under
   const verify = verifyPrompt(manifest, pr, STATE, 'a1a1a1a')
 
   assert.deepEqual(stepNumbers(implement), [1, 2, 3, 4, 5, 6, 7, 8])
-  assert.deepEqual(stepNumbers(verify), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.deepEqual(stepNumbers(verify), [1, 2, 3, 4, 5, 6, 7, 8, 9])
   assert.ok(implement.includes('\n   1. `npm ci`\n   2. `npm test`\n'))
   assert.ok(verify.includes('\n   1. `npm ci`\n   2. `npm test`\n'))
   assert.ok(briefWritePrompt(manifest, pr, STATE).includes('\n  1. `npm ci`\n  2. `npm test`\n'))
@@ -503,9 +503,9 @@ test('prompts: the verifier re-checks the previous findings after the brief and 
   }
 
   for (const step of [
-    '\n4. When the prompt ends with findings to re-check, check each one yourself at this SHA and report its id in `recheck`, with evidence.',
-    '\n   - `open`: the defect is still there, whatever the answer says. An `open` finding also goes into `blocking`.\n',
-    '\n8. Verdict: PASS only when every checklist item passes, no re-checked finding is `open` and there is no blocking finding.',
+    '\n5. When the prompt ends with findings to re-check, check each one yourself at this SHA and report its id in `recheck`, with evidence.',
+    "\n   - `open`: the defect is still there, whatever the answer says. An `open` finding also goes into `blocking`, except one the driver added for a criterion this prompt lists. Such a finding starts with the criterion's id and `(required criterion)`. Report it through `criteria` only, so it is not counted twice. Its `recheck` entry stays.\n",
+    '\n9. Verdict: PASS only when every checklist item passes, every required project criterion passes, no re-checked finding is `open` and there is no blocking finding.',
   ]) {
     assert.ok(text.includes(step), step)
   }
@@ -752,6 +752,101 @@ test('prompts: the verifier gets no failed commands for another SHA, for passes 
     assert.equal(text.includes('\n## Recommended commands that failed\n'), false, JSON.stringify(entry.preVerify))
     assert.equal(text.includes('{{'), false)
   }
+})
+
+const CRITERIA = [
+  { id: 'V1', level: 'required', text: 'A new branch in the code has a test that fails without it.' },
+  { id: 'V2', level: 'required', text: 'No semicolons in prose.' },
+  { id: 'V3', level: 'recommended', text: 'Docs: every new option has its row.' },
+]
+
+test('prompts: the verifier gets the project criteria with their id and level, between the failed commands and the findings to re-check', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const preVerify = { sha: HEAD, at: '2026-09-01T10:00:00.000Z', results: [LINT_FAILED] }
+  const text = verifyPrompt(manifest, pr, answered({ ...STATE, noteHistory: NOTE_HISTORY, preVerify, verifyCriteria: CRITERIA }), HEAD)
+  const commands = text.indexOf('\n## Recommended commands that failed\n')
+  const section = text.indexOf('\n## Project criteria\n')
+  const findings = text.indexOf('## Findings to re-check')
+
+  assert.ok(commands > -1)
+  assert.ok(section > commands)
+  assert.ok(findings > section)
+  assert.equal(text.split('## Project criteria\n').length, 2)
+  assert.ok(text.trimEnd().endsWith('Answer (disputed):\n\nThe error is logged at cli.mjs:42.'), 'the findings stay last')
+
+  const block = [
+    '## Project criteria',
+    '',
+    'The maintainer set these criteria for every PR of the rollout. Report each one in `criteria` by its id. A required one that does not pass blocks the PR. A recommended one never does.',
+    '',
+    '- V1 (required): A new branch in the code has a test that fails without it.',
+    '- V2 (required): No semicolons in prose.',
+    '- V3 (recommended): Docs: every new option has its row.',
+    '',
+    '',
+    '## Findings to re-check',
+  ]
+
+  assert.ok(text.includes(block.join('\n')), text.slice(section))
+  assert.ok(
+    text.includes('`## Project criteria` lists them with their id, level and text, before the findings to re-check.'),
+    'the inputs name it',
+  )
+
+  assert.equal(text.includes('{{'), false)
+
+  const alone = verifyPrompt(manifest, pr, { ...STATE, verifyCriteria: CRITERIA.slice(2) }, HEAD)
+
+  assert.ok(alone.trimEnd().endsWith('\n\n- V3 (recommended): Docs: every new option has its row.'), 'last without findings')
+})
+
+test('prompts: without project criteria the verifier gets no such section', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+
+  manifest.gates.verify = { required: ['A new branch has a test.'], recommended: [] }
+
+  for (const entry of [STATE, freshPr(), { ...STATE, verifyCriteria: [] }, { ...STATE, verifyCriteria: null }]) {
+    const text = verifyPrompt(manifest, pr, entry, HEAD)
+
+    assert.equal(text.includes('\n## Project criteria\n'), false, JSON.stringify(entry.verifyCriteria))
+    assert.equal(text.includes('A new branch has a test.'), false, 'the prompt never reads the manifest')
+    assert.equal(text.includes('{{'), false)
+  }
+})
+
+test('prompts: the verifier reports each project criterion in criteria, never in blocking, and PASS needs every required one', () => {
+  const manifest = loadManifest(makeRollout())
+  const text = verifyPrompt(manifest, manifest.all[0], STATE, HEAD)
+  const checklist = text.indexOf("\n3. Go through the brief's acceptance checklist")
+  const criteria = text.indexOf('\n4. When the prompt lists project criteria, check each one against the whole PR at this SHA.')
+  const recheck = text.indexOf('\n5. When the prompt ends with findings to re-check')
+
+  assert.ok(checklist > -1)
+  assert.ok(criteria > checklist)
+  assert.ok(recheck > criteria)
+
+  for (const part of [
+    'Report each one in `criteria` by its id: `pass`, `fail` or `unverifiable`, with evidence (command output or file:line). Without project criteria, `criteria` is empty.',
+    '\n   - A criterion the PR gives no occasion for passes, with the reason as evidence. For example: the PR adds no branch to the code.\n',
+    '\n   - A criterion that does not pass goes only into `criteria`, never also into `blocking`. The driver adds the blocking finding itself.\n',
+    '\n9. Verdict: PASS only when every checklist item passes, every required project criterion passes, no re-checked finding is `open` and there is no blocking finding.',
+  ]) {
+    assert.ok(text.includes(part), part)
+  }
+})
+
+test('schemas/verdict.json: criteria is required, and each entry needs an id, a result of three values and evidence', () => {
+  const schema = JSON.parse(readFileSync(new URL('../schemas/verdict.json', import.meta.url), 'utf8'))
+  const criteria = schema.properties.criteria
+
+  assert.ok(schema.required.includes('criteria'))
+  assert.equal(criteria.type, 'array')
+  assert.deepEqual(criteria.items.required, ['id', 'result', 'evidence'])
+  assert.deepEqual(criteria.items.properties.result.enum, ['pass', 'fail', 'unverifiable'])
+  assert.match(criteria.description, /"Project criteria"/)
+  assert.match(schema.properties.blocking.description, /A project criterion that does not pass goes into criteria only\./)
 })
 
 test('preVerifyNote: every failed command with its summary and output, the reset it caused, and the two rules', () => {

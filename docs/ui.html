@@ -905,8 +905,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                 <td class="name">verifier</td>
                 <td>
                   The latest verdict, PASS or FAIL, with the sha, the summary, the checklist with evidence, and the blocking and
-                  non-blocking findings. After a FAIL, a table of the re-checked findings shows each previous finding with the implementer's
-                  answer, its status (resolved, open or wrong) and the evidence. With
+                  non-blocking findings. With <a href="manifest.html#gates-verify-required">project criteria</a>, a table shows each one
+                  with its level, its result (pass, fail or unverifiable) and the evidence. A recommended one that does not pass shows as a
+                  warning. The verdict is the one the driver judged: a PASS with a required criterion that did not pass shows as FAIL, with
+                  the criterion among the blocking findings. After a FAIL, a table of the re-checked findings shows each previous finding
+                  with the implementer's answer, its status (resolved, open or wrong) and the evidence. With
                   <a href="manifest.html#gates-ready-required">ready</a> or
                   <a href="manifest.html#gates-preVerify-required">pre-verify commands</a>, a table, commands the driver ran, shows its own
                   results for the claimed head: each command with its stage, its level, its result, and as evidence its summary and the end

@@ -4,11 +4,13 @@ import {
   briefGates,
   briefOutcome,
   commandResult,
+  criteriaOutcome,
   inheritsParent,
   preVerifyOutcome,
   readyClaim,
   speaksForItself,
   summarizeChecks,
+  verifyCriteria,
 } from '../lib/checks.mjs'
 import { globToRegExp, matchesAny } from '../lib/glob.mjs'
 import { raiseEffort, validateManifest } from '../lib/manifest.mjs'
@@ -560,5 +562,110 @@ test('briefOutcome: a report without checks or criteria reads as empty lists', (
   assert.deepEqual(briefOutcome(briefGates({ runChecks: true, required: [RULES], recommended: [] }), legacy).questions, [
     'Which API?',
     `B1 (required brief criterion, fail): ${RULES} Evidence: not reported by the reviewer`,
+  ])
+})
+
+const BRANCH_TEST = 'A new branch in the code has a test that fails without it.'
+const NO_SEMICOLONS = 'No semicolons in prose'
+const DOCS_ROW = 'Docs: every new option has its row.'
+
+test('verifyCriteria: required first, then recommended, numbered across both', () => {
+  assert.deepEqual(verifyCriteria({ required: [BRANCH_TEST, NO_SEMICOLONS], recommended: [DOCS_ROW] }), [
+    { id: 'V1', level: 'required', text: BRANCH_TEST },
+    { id: 'V2', level: 'required', text: NO_SEMICOLONS },
+    { id: 'V3', level: 'recommended', text: DOCS_ROW },
+  ])
+
+  assert.deepEqual(verifyCriteria({ required: [], recommended: [DOCS_ROW] }), [{ id: 'V1', level: 'recommended', text: DOCS_ROW }])
+  assert.deepEqual(verifyCriteria({ required: [], recommended: [] }), [])
+})
+
+const SENT = verifyCriteria({ required: [BRANCH_TEST, NO_SEMICOLONS], recommended: [DOCS_ROW] })
+
+test('criteriaOutcome: every sent criterion passes, nothing failed and no finding', () => {
+  const allPass = [
+    { id: 'V3', result: 'pass', evidence: 'docs/manifest.html:12' },
+    { id: 'V1', result: 'pass', evidence: 'The PR adds no branch to the code.' },
+    { id: 'V2', result: 'pass', evidence: 'grep finds none.' },
+  ]
+
+  assert.deepEqual(criteriaOutcome(SENT, allPass), {
+    results: [
+      { ...SENT[0], result: 'pass', evidence: 'The PR adds no branch to the code.' },
+      { ...SENT[1], result: 'pass', evidence: 'grep finds none.' },
+      { ...SENT[2], result: 'pass', evidence: 'docs/manifest.html:12' },
+    ],
+    failedRequired: [],
+    failedRecommended: [],
+    findings: [],
+  })
+
+  assert.deepEqual(criteriaOutcome([], allPass), { results: [], failedRequired: [], failedRecommended: [], findings: [] })
+})
+
+test('criteriaOutcome: a failed, an unverifiable and a missing required criterion each fail with a finding', () => {
+  const outcome = criteriaOutcome(SENT, [
+    { id: 'V1', result: 'fail', evidence: 'lib/a.mjs:12 adds a branch with no test.' },
+    { id: 'V3', result: 'pass', evidence: 'docs/manifest.html:12' },
+  ])
+
+  assert.deepEqual(outcome.results[1], { ...SENT[1], result: 'fail', evidence: 'The verifier did not report it.' })
+  assert.deepEqual(outcome.failedRequired, outcome.results.slice(0, 2))
+  assert.deepEqual(outcome.failedRecommended, [])
+  assert.deepEqual(outcome.findings, [
+    'V1 (required criterion): A new branch in the code has a test that fails without it. lib/a.mjs:12 adds a branch with no test.',
+    'V2 (required criterion): No semicolons in prose. The verifier did not report it.',
+  ])
+
+  const unverifiable = criteriaOutcome(SENT.slice(0, 1), [{ id: 'V1', result: 'unverifiable', evidence: 'The tests do not run here' }])
+
+  assert.equal(unverifiable.failedRequired.length, 1)
+  assert.deepEqual(unverifiable.findings, [
+    'V1 (required criterion): A new branch in the code has a test that fails without it. Unverifiable: The tests do not run here',
+  ])
+})
+
+test('criteriaOutcome: a recommended criterion that does not pass fails no required one and makes no finding', () => {
+  for (const result of ['fail', 'unverifiable']) {
+    const outcome = criteriaOutcome(SENT, [
+      { id: 'V1', result: 'pass', evidence: 'lib/a.mjs:12 has its test.' },
+      { id: 'V2', result: 'pass', evidence: 'grep finds none.' },
+      { id: 'V3', result, evidence: 'docs/manifest.html has no row for retries.' },
+    ])
+
+    assert.deepEqual(outcome.failedRecommended, [{ ...SENT[2], result, evidence: 'docs/manifest.html has no row for retries.' }])
+    assert.deepEqual(outcome.failedRequired, [])
+    assert.deepEqual(outcome.findings, [])
+  }
+
+  const missing = criteriaOutcome(SENT.slice(2), [])
+
+  assert.deepEqual(missing.failedRecommended, [{ ...SENT[2], result: 'fail', evidence: 'The verifier did not report it.' }])
+  assert.deepEqual(missing.findings, [])
+})
+
+test('criteriaOutcome: an id that was not sent is ignored, the first entry of an id counts and a missing evidence is empty', () => {
+  const outcome = criteriaOutcome(SENT.slice(0, 1), [
+    { id: 'V9', result: 'fail', evidence: 'made up' },
+    { id: 'V1', result: 'pass' },
+    { id: 'V1', result: 'fail', evidence: 'a second opinion' },
+  ])
+
+  assert.deepEqual(outcome, {
+    results: [{ ...SENT[0], result: 'pass', evidence: '' }],
+    failedRequired: [],
+    failedRecommended: [],
+    findings: [],
+  })
+})
+
+test('criteriaOutcome: a finding adds a period only to a criterion text without its own', () => {
+  const sent = verifyCriteria({ required: [NO_SEMICOLONS, BRANCH_TEST, 'Does every export have a test?'], recommended: [] })
+  const allFail = sent.map(({ id }) => ({ id, result: 'fail', evidence: 'lib/a.mjs:3' }))
+
+  assert.deepEqual(criteriaOutcome(sent, allFail).findings, [
+    'V1 (required criterion): No semicolons in prose. lib/a.mjs:3',
+    'V2 (required criterion): A new branch in the code has a test that fails without it. lib/a.mjs:3',
+    'V3 (required criterion): Does every export have a test? lib/a.mjs:3',
   ])
 })

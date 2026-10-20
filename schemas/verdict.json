@@ -19,7 +19,7 @@
     "blocking": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Real defects or unmet checklist items, each with file:line or command evidence."
+      "description": "Real defects or unmet checklist items, each with file:line or command evidence. A project criterion that does not pass goes into criteria only."
     },
     "nonBlocking": { "type": "array", "items": { "type": "string" } },
     "recheck": {
@@ -34,7 +34,20 @@
         },
         "required": ["id", "status", "evidence"]
       }
+    },
+    "criteria": {
+      "type": "array",
+      "description": "One entry per criterion listed under \"Project criteria\", empty when the prompt lists none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "result": { "type": "string", "enum": ["pass", "fail", "unverifiable"] },
+          "evidence": { "type": "string" }
+        },
+        "required": ["id", "result", "evidence"]
+      }
     }
   },
-  "required": ["verdict", "sha", "summary", "checklist", "blocking", "nonBlocking", "recheck"]
+  "required": ["verdict", "sha", "summary", "checklist", "blocking", "nonBlocking", "recheck", "criteria"]
 }

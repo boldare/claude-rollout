@@ -120,7 +120,7 @@ policy:
   attempts: { implement: 2, fix: 4, verify: 3 }
   timeouts: { implement: 240, fix: 120, verify: 90 }
 
-<span class="dim"># Checks on top of CI, the policy and code scanning: on each brief the driver writes, and before the verifier.</span>
+<span class="dim"># Checks on top of CI, the policy and code scanning: on each brief the driver writes, before the verifier, and by it.</span>
 <span class="dim"># gates:</span>
 <span class="dim">#   brief:</span>
 <span class="dim">#     # The brief reviewer runs the draft's existing commands and reports whether each can pass.</span>
@@ -141,6 +141,13 @@ policy:
 <span class="dim">#     required: [pnpm build]</span>
 <span class="dim">#     # A failed one sends nothing back. The card, the PR page and the verifier see it.</span>
 <span class="dim">#     recommended: [pnpm size]</span>
+<span class="dim">#   verify:</span>
+<span class="dim">#     # The verifier checks each one. A required one that does not pass blocks the PR.</span>
+<span class="dim">#     required:</span>
+<span class="dim">#       - A new branch in the code has a test that fails without it.</span>
+<span class="dim">#     # One that does not pass blocks nothing. The card and the PR page show it.</span>
+<span class="dim">#     recommended:</span>
+<span class="dim">#       - Every new option has its row in the docs.</span>
 
 prs:
   - id: P1
@@ -271,8 +278,8 @@ prs:
                 <td>none</td>
                 <td>no</td>
                 <td>
-                  Extra checks before a stage of a PR, run by the driver or, for a brief, by the brief reviewer for the driver. See
-                  <a href="#gates">gates</a>.
+                  Extra checks before a stage of a PR, run by the driver or, for a brief, by the brief reviewer for the driver, and criteria
+                  the verifier checks. See <a href="#gates">gates</a>.
                 </td>
               </tr>
               <tr id="manifest-prs">
@@ -730,8 +737,9 @@ prs:
           Every key is optional. Without <code>gates</code> the driver runs only its usual checks. <code>gates.brief</code> holds checks the
           brief reviewer makes for the driver on each brief the driver writes. <code>gates.ready</code> lists commands the implementer runs
           in its self-check and the driver runs again. <code>gates.preVerify</code> holds checks only the driver runs: the scope check,
-          which runs before the ready commands, and the pre-verify commands, which run after them. Any other key under <code>gates</code>,
-          <code>gates.brief</code>, <code>gates.ready</code> or <code>gates.preVerify</code> fails validation.
+          which runs before the ready commands, and the pre-verify commands, which run after them. <code>gates.verify</code> lists criteria
+          the verifier checks. Any other key under <code>gates</code>, <code>gates.brief</code>, <code>gates.ready</code>,
+          <code>gates.preVerify</code> or <code>gates.verify</code> fails validation.
         </p>
 
         <div class="scroll">
@@ -861,6 +869,33 @@ prs:
                   Pre-verify commands that only inform. They run the same way, after the required ones, when no required command failed. A
                   failed one never sends the PR back. It shows as a <code>gate-check</code> event, on the card, on the PR page and in the
                   verifier's prompt, and the verifier judges any real defect it shows.
+                </td>
+              </tr>
+              <tr id="gates-verify-required">
+                <td>verify.required</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>
+                  Criteria in prose that the verifier checks against the whole PR, such as "A new branch in the code has a test that fails
+                  without it." Its prompt lists them under "Project criteria" with the ids <code>V1</code>, <code>V2</code> and on, the
+                  required ones first, and it reports each one as <code>pass</code>, <code>fail</code> or <code>unverifiable</code>, with
+                  evidence. They come from the manifest, so a PR cannot change them. The driver fixes the list when the verifier starts and
+                  judges its verdict by that list, so a reload changes the next verification only. A required criterion that does not pass,
+                  or that the verifier does not report, becomes a blocking finding such as <code>V1 (required criterion): ...</code>, after
+                  the verifier's own findings. A PASS with one counts as a FAIL. The send-back counts toward
+                  <code>policy.attempts.fix</code>, and the next verifier re-checks the finding like any other. The results are
+                  <code>gate-check</code> events with stage <code>verify</code> (see
+                  <a href="how-it-works.html#state-verifying">verifying</a>).
+                </td>
+              </tr>
+              <tr id="gates-verify-recommended">
+                <td>verify.recommended</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>
+                  Criteria that only inform. The verifier checks them the same way, numbered after the required ones. One that does not pass
+                  never blocks the PR. It shows on the card, on the PR page and as a <code>gate-check</code> event with stage
+                  <code>verify</code>.
                 </td>
               </tr>
             </tbody>
@@ -1074,12 +1109,14 @@ prs:
           <li><code>repo.public</code>, when set, is a boolean.</li>
           <li><code>repo.baseQuietPaths</code>, when set, is a list of path globs.</li>
           <li>
-            <code>gates</code>, when set, is a mapping whose only keys are <code>brief</code>, <code>ready</code> and
-            <code>preVerify</code>. <code>gates.brief</code>, when set, is a mapping with at most these keys: <code>runChecks</code>, a
-            boolean, and <code>required</code> and <code>recommended</code>, each a list of non-empty strings. <code>gates.ready</code>,
+            <code>gates</code>, when set, is a mapping whose only keys are <code>brief</code>, <code>ready</code>,
+            <code>preVerify</code> and <code>verify</code>. <code>gates.brief</code>, when set, is a mapping with at most these keys:
+            <code>runChecks</code>, a boolean, and <code>required</code> and <code>recommended</code>, each a list of non-empty strings.
+            <code>gates.ready</code>, when set, is a mapping with at most the keys <code>required</code> and <code>recommended</code>, each
+            a list of non-empty strings. <code>gates.preVerify</code>, when set, is a mapping with at most these keys: <code>scope</code>, a
+            boolean, and <code>required</code> and <code>recommended</code>, each a list of non-empty strings. <code>gates.verify</code>,
             when set, is a mapping with at most the keys <code>required</code> and <code>recommended</code>, each a list of non-empty
-            strings. <code>gates.preVerify</code>, when set, is a mapping with at most these keys: <code>scope</code>, a boolean, and
-            <code>required</code> and <code>recommended</code>, each a list of non-empty strings.
+            strings.
           </li>
           <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
@@ -1175,8 +1212,8 @@ prs:
                 <td>events.jsonl</td>
                 <td>driver</td>
                 <td>
-                  One JSON line per event: runs, the result of each check before the verifier, gate decisions, merges, errors, rejected
-                  commands.
+                  One JSON line per event: runs, the result of each check before the verifier and of each project criterion, gate decisions,
+                  merges, errors, rejected commands.
                 </td>
               </tr>
               <tr>
