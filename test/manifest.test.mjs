@@ -265,11 +265,13 @@ function gatesErrors(gates) {
   return validateManifest(raw)
 }
 
-test('validateManifest: gates, when set, is a mapping of preVerify, a mapping of a boolean scope and the required and recommended commands', () => {
+test('validateManifest: gates, when set, is a mapping of ready and preVerify, each a mapping of its keys', () => {
   const cases = [
     [{ preVerify: { scope: true } }, []],
     [{ preVerify: { scope: false } }, []],
     [{ preVerify: {} }, []],
+    [{ ready: {} }, []],
+    [{ ready: { required: ['npm ci'], recommended: ['npm run lint'] }, preVerify: { scope: true } }, []],
     [{}, []],
     [null, ['gates must be a mapping']],
     [[], ['gates must be a mapping']],
@@ -283,9 +285,13 @@ test('validateManifest: gates, when set, is a mapping of preVerify, a mapping of
     [{ preVerify: { scope: 'yes' } }, ['gates.preVerify.scope must be true or false']],
     [{ preVerify: { scope: null } }, ['gates.preVerify.scope must be true or false']],
     [{ preVerify: { scope: 1 } }, ['gates.preVerify.scope must be true or false']],
+    [{ ready: null }, ['gates.ready must be a mapping']],
+    [{ ready: [] }, ['gates.ready must be a mapping']],
+    [{ ready: 'npm test' }, ['gates.ready must be a mapping']],
+    [{ ready: { required: ['npm test'], scope: true } }, ['gates.ready: unknown key scope']],
     [
-      { ready: {}, preVerify: { scope: 'on', brief: true } },
-      ['gates: unknown key ready', 'gates.preVerify: unknown key brief', 'gates.preVerify.scope must be true or false'],
+      { deploy: {}, preVerify: { scope: 'on', brief: true } },
+      ['gates: unknown key deploy', 'gates.preVerify: unknown key brief', 'gates.preVerify.scope must be true or false'],
     ],
   ]
 
@@ -294,21 +300,23 @@ test('validateManifest: gates, when set, is a mapping of preVerify, a mapping of
   }
 })
 
-test('validateManifest: gates.preVerify.required and recommended are lists of non-empty strings', () => {
+test('validateManifest: gates.ready and gates.preVerify required and recommended are lists of non-empty strings', () => {
   const valid = [['npm ci', 'npm test'], ['npm run lint'], [' npm test '], []]
   const invalid = [null, 'npm test', ['npm test', ''], ['  '], ['npm test', 3], [null], { test: 'npm test' }, true]
 
-  for (const key of ['required', 'recommended']) {
-    for (const commands of valid) {
-      assert.deepEqual(gatesErrors({ preVerify: { [key]: commands } }), [], `${key}: ${JSON.stringify(commands)}`)
-    }
+  for (const stage of ['ready', 'preVerify']) {
+    for (const key of ['required', 'recommended']) {
+      for (const commands of valid) {
+        assert.deepEqual(gatesErrors({ [stage]: { [key]: commands } }), [], `${stage}.${key}: ${JSON.stringify(commands)}`)
+      }
 
-    for (const commands of invalid) {
-      assert.deepEqual(
-        gatesErrors({ preVerify: { [key]: commands } }),
-        [`gates.preVerify.${key} must be a list of non-empty strings`],
-        `${key}: ${JSON.stringify(commands)}`,
-      )
+      for (const commands of invalid) {
+        assert.deepEqual(
+          gatesErrors({ [stage]: { [key]: commands } }),
+          [`gates.${stage}.${key} must be a list of non-empty strings`],
+          `${stage}.${key}: ${JSON.stringify(commands)}`,
+        )
+      }
     }
   }
 })
@@ -319,10 +327,13 @@ test('validateManifest: unknown stages first, then per stage its unknown keys an
       verify: { criteriaFrom: 'plan' },
       preVerify: { recommended: 'lint', tests: ['npm test'], required: [''], scope: 'on' },
       brief: {},
+      ready: { required: 'npm test', tests: [] },
     }),
     [
       'gates: unknown key verify',
       'gates: unknown key brief',
+      'gates.ready: unknown key tests',
+      'gates.ready.required must be a list of non-empty strings',
       'gates.preVerify: unknown key tests',
       'gates.preVerify.scope must be true or false',
       'gates.preVerify.required must be a list of non-empty strings',
@@ -330,26 +341,40 @@ test('validateManifest: unknown stages first, then per stage its unknown keys an
     ],
   )
 
-  assert.deepEqual(gatesErrors({ ready: { required: ['npm test'] }, preVerify: 'npm test' }), [
-    'gates: unknown key ready',
+  assert.deepEqual(gatesErrors({ deploy: { required: ['npm test'] }, preVerify: 'npm test' }), [
+    'gates: unknown key deploy',
     'gates.preVerify must be a mapping',
   ])
 })
 
 test('loadManifest: every gates key gets its default, and set values are kept', () => {
-  const defaults = { preVerify: { scope: false, required: [], recommended: [] } }
+  const ready = { required: [], recommended: [] }
+  const defaults = { ready, preVerify: { scope: false, required: [], recommended: [] } }
   const set = { scope: true, required: ['npm ci', 'npm test'], recommended: ['npm run lint'] }
 
   assert.deepEqual(loadManifest(makeRollout()).gates, defaults)
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: {} } })).gates, defaults)
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: {} } } })).gates, defaults)
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { ready: {} } } })).gates, defaults)
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: { scope: true } } } })).gates, {
+    ready,
     preVerify: { scope: true, required: [], recommended: [] },
   })
 
-  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: set } } })).gates, { preVerify: set })
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: set } } })).gates, { ready, preVerify: set })
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: { recommended: ['npm run lint'] } } } })).gates, {
+    ready,
     preVerify: { scope: false, required: [], recommended: ['npm run lint'] },
+  })
+
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { ready: { required: ['npm ci', 'npm test'] } } } })).gates, {
+    ready: { required: ['npm ci', 'npm test'], recommended: [] },
+    preVerify: { scope: false, required: [], recommended: [] },
+  })
+
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { ready: { recommended: ['npm run lint'] } } } })).gates, {
+    ready: { required: [], recommended: ['npm run lint'] },
+    preVerify: { scope: false, required: [], recommended: [] },
   })
 })
 

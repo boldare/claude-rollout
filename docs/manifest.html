@@ -122,13 +122,19 @@ policy:
 
 <span class="dim"># Checks before the verifier, on top of CI, the policy and code scanning.</span>
 <span class="dim"># gates:</span>
-<span class="dim">#   preVerify:</span>
-<span class="dim">#     # Sends back files outside a PR's scope that its READY report does not list in deviations.</span>
-<span class="dim">#     scope: true</span>
-<span class="dim">#     # The driver runs these itself, the install first. A failed one sends the PR back.</span>
+<span class="dim">#   ready:</span>
+<span class="dim">#     # The implementer runs these before READY, and the driver runs them again first, the install first.</span>
+<span class="dim">#     # A failed one sends the PR back.</span>
 <span class="dim">#     required: [pnpm install --frozen-lockfile, pnpm test]</span>
 <span class="dim">#     # A failed one sends nothing back. The card, the PR page and the verifier see it.</span>
 <span class="dim">#     recommended: [pnpm lint]</span>
+<span class="dim">#   preVerify:</span>
+<span class="dim">#     # Sends back files outside a PR's scope that its READY report does not list in deviations.</span>
+<span class="dim">#     scope: true</span>
+<span class="dim">#     # The driver runs these itself, after the ready commands. A failed one sends the PR back.</span>
+<span class="dim">#     required: [pnpm build]</span>
+<span class="dim">#     # A failed one sends nothing back. The card, the PR page and the verifier see it.</span>
+<span class="dim">#     recommended: [pnpm size]</span>
 
 prs:
   - id: P1
@@ -575,8 +581,8 @@ prs:
                 <td><code>2</code></td>
                 <td>
                   Agents that run at once. A brief, writer and reviewer together, takes one slot, and so does a verifier. The
-                  <a href="#gates-preVerify-required">pre-verify commands</a> of a claim take one slot too, all of them together. The other
-                  checks, rebases and merges take none.
+                  <a href="#gates-ready-required">ready</a> and <a href="#gates-preVerify-required">pre-verify commands</a> of a claim take
+                  one slot too, all of them together. The other checks, rebases and merges take none.
                 </td>
               </tr>
               <tr id="policy-merge">
@@ -712,8 +718,9 @@ prs:
         <h2 id="gates">gates <a class="anchor" href="#gates" aria-label="Link to this section">#</a></h2>
 
         <p>
-          Every key is optional. Without <code>gates</code> the driver runs only its usual checks. Any other key under <code>gates</code> or
-          <code>gates.preVerify</code> fails validation.
+          Every key is optional. Without <code>gates</code> the driver runs only its usual checks. <code>gates.ready</code> lists commands
+          the implementer runs in its self-check and the driver runs again. <code>gates.preVerify</code> lists checks only the driver runs,
+          after them. Any other key under <code>gates</code>, <code>gates.ready</code> or <code>gates.preVerify</code> fails validation.
         </p>
 
         <div class="scroll">
@@ -727,6 +734,33 @@ prs:
               </tr>
             </thead>
             <tbody>
+              <tr id="gates-ready-required">
+                <td>ready.required</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>
+                  Commands the implementer runs in its self-check before READY and reports, each with its exit code and the end of its
+                  output, in the <code>gates</code> array of its READY report. The driver runs them again, first in the same job as the
+                  <a href="#gates-preVerify-required">pre-verify commands</a>, with the same environment, timeout and clean-tree rule, and
+                  its result decides, whatever the report says. A failed required one sends the PR back to the implementer as
+                  <code>ready check</code> and ends the job, so no command after it runs. The note shows the command's exit code and the end
+                  of its output, and what the READY report claimed for it at that head. The send-back counts toward
+                  <code>policy.attempts.fix</code>. Each result is a <code>gate-check</code> event with stage <code>ready</code>. The driver
+                  installs nothing, and the ready commands run first. So with ready commands, a project that needs an install lists it first
+                  here.
+                </td>
+              </tr>
+              <tr id="gates-ready-recommended">
+                <td>ready.recommended</td>
+                <td>list of strings</td>
+                <td><code>[]</code></td>
+                <td>
+                  Ready commands that only inform. The implementer runs and reports them after the required ones. The driver runs them after
+                  the required ready commands, when none of those failed, and before the pre-verify commands. A failed one never sends the
+                  PR back and does not stop the pre-verify commands. It shows as a <code>gate-check</code> event, on the card, on the PR
+                  page and in the verifier's prompt, and the verifier judges any real defect it shows.
+                </td>
+              </tr>
               <tr id="gates-preVerify-scope">
                 <td>preVerify.scope</td>
                 <td>boolean</td>
@@ -751,17 +785,20 @@ prs:
                   Pre-verify commands that must pass. After CI and the rollout policy pass, code scanning raises no new alert and, when it
                   is on, the scope check passes, the driver runs the pre-verify commands itself before the verifier starts, in a
                   <a href="#policy-concurrency">slot</a>. Each runs with <code>sh -c</code> in the PR's worktree at the claimed head, one at
-                  a time, the required ones first, with the <a href="security.html#environment">read-only agents' environment</a> and ten
-                  minutes of awake time each. The driver installs nothing before them, so a project that needs an install lists that command
-                  first. A command fails on an exit code other than 0, a timeout, tracked changes it leaves or a moved HEAD. After tracked
-                  changes or a moved HEAD the driver resets the worktree to the claimed head at once, and after the last command it removes
-                  untracked files the same way. Ignored output stays. When a stop, a crash or an error cuts the commands short, the driver
-                  cleans the worktree the same way on the PR's next step, before an agent or a command works there. A failed required
-                  command sends the PR back to the implementer as <code>pre-verify check</code>, with its exit code and the end of its
-                  output, and the commands after it do not run. The send-back counts toward <code>policy.attempts.fix</code>. The results
-                  are <code>gate-check</code> events (see <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>). The
-                  implementer's prompt lists the commands, but only the driver's own run decides. A run with no failed required command lets
-                  the verifier start, and it holds for that head until the driver restarts or the commands change.
+                  a time, after the <a href="#gates-ready-required">ready commands</a>, the required ones first, with the
+                  <a href="security.html#environment">read-only agents' environment</a> and ten minutes of awake time each. The ready
+                  commands run the same way. The driver installs nothing before them. So a project that needs an install lists that command
+                  first in <code>gates.ready.required</code>, or here when it has no ready commands. A command fails on an exit code other
+                  than 0, a timeout, tracked changes it leaves or a moved HEAD. After tracked changes or a moved HEAD the driver resets the
+                  worktree to the claimed head at once, and after the last command it removes untracked files the same way. Ignored output
+                  stays. When a stop, a crash or an error cuts the commands short, the driver cleans the worktree the same way on the PR's
+                  next step, before an agent or a command works there. A failed required command sends the PR back to the implementer as
+                  <code>pre-verify check</code>, with its exit code and the end of its output, and the commands after it do not run. A
+                  failed required ready command ends the job before any pre-verify command runs. The send-back counts toward
+                  <code>policy.attempts.fix</code>. The results are <code>gate-check</code> events (see
+                  <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>). The implementer's prompt lists the commands, but only
+                  the driver's own run decides. A run with no failed required command lets the verifier start, and it holds for that head
+                  until the driver restarts or the ready or pre-verify commands change.
                 </td>
               </tr>
               <tr id="gates-preVerify-recommended">
@@ -769,8 +806,8 @@ prs:
                 <td>list of strings</td>
                 <td><code>[]</code></td>
                 <td>
-                  Pre-verify commands that only inform. They run the same way, after the required ones, when none of those failed. A failed
-                  one never sends the PR back. It shows as a <code>gate-check</code> event, on the card, on the PR page and in the
+                  Pre-verify commands that only inform. They run the same way, after the required ones, when no required command failed. A
+                  failed one never sends the PR back. It shows as a <code>gate-check</code> event, on the card, on the PR page and in the
                   verifier's prompt, and the verifier judges any real defect it shows.
                 </td>
               </tr>
@@ -985,9 +1022,10 @@ prs:
           <li><code>repo.public</code>, when set, is a boolean.</li>
           <li><code>repo.baseQuietPaths</code>, when set, is a list of path globs.</li>
           <li>
-            <code>gates</code>, when set, is a mapping whose only key is <code>preVerify</code>. <code>gates.preVerify</code>, when set, is
-            a mapping with at most these keys: <code>scope</code>, a boolean, and <code>required</code> and <code>recommended</code>, each a
-            list of non-empty strings.
+            <code>gates</code>, when set, is a mapping whose only keys are <code>ready</code> and <code>preVerify</code>.
+            <code>gates.ready</code>, when set, is a mapping with at most the keys <code>required</code> and <code>recommended</code>, each
+            a list of non-empty strings. <code>gates.preVerify</code>, when set, is a mapping with at most these keys: <code>scope</code>, a
+            boolean, and <code>required</code> and <code>recommended</code>, each a list of non-empty strings.
           </li>
           <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
@@ -1124,7 +1162,7 @@ prs:
               <tr>
                 <td>.npmrc-agents</td>
                 <td>driver</td>
-                <td>An npm config without credentials for the agents, <code>repo.install</code> and the pre-verify commands.</td>
+                <td>An npm config without credentials for the agents, <code>repo.install</code> and the ready and pre-verify commands.</td>
               </tr>
             </tbody>
           </table>

@@ -58,13 +58,19 @@ policy:
 
 # Checks before the verifier, on top of CI, the policy and code scanning.
 # gates:
-#   preVerify:
-#     # Sends back files outside a PR's scope that its READY report does not list in deviations.
-#     scope: true
-#     # The driver runs these itself, the install first. A failed one sends the PR back.
+#   ready:
+#     # The implementer runs these before READY, and the driver runs them again first, the install first.
+#     # A failed one sends the PR back.
 #     required: [pnpm install --frozen-lockfile, pnpm test]
 #     # A failed one sends nothing back. The card, the PR page and the verifier see it.
 #     recommended: [pnpm lint]
+#   preVerify:
+#     # Sends back files outside a PR's scope that its READY report does not list in deviations.
+#     scope: true
+#     # The driver runs these itself, after the ready commands. A failed one sends the PR back.
+#     required: [pnpm build]
+#     # A failed one sends nothing back. The card, the PR page and the verifier see it.
+#     recommended: [pnpm size]
 
 prs:
   - id: P1

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { commandResult, inheritsParent, preVerifyOutcome, speaksForItself, summarizeChecks } from '../lib/checks.mjs'
+import { commandResult, inheritsParent, preVerifyOutcome, readyClaim, speaksForItself, summarizeChecks } from '../lib/checks.mjs'
 import { globToRegExp, matchesAny } from '../lib/glob.mjs'
 import { raiseEffort, validateManifest } from '../lib/manifest.mjs'
 
@@ -205,7 +205,7 @@ test('changeset none is a valid manifest value', () => {
 const HEAD = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
 const MOVED = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2'
 const UNTOUCHED = { clean: true, status: '', head: HEAD }
-const TESTS = { command: 'npm test', level: 'required' }
+const TESTS = { command: 'npm test', stage: 'preVerify', level: 'required' }
 
 // What runCommand resolves with for a command that passed.
 function finished(overrides = {}) {
@@ -215,6 +215,7 @@ function finished(overrides = {}) {
 test('commandResult: exit 0 on an untouched tree passes, and the record keeps what the run reported', () => {
   assert.deepEqual(commandResult(TESTS, finished(), UNTOUCHED, HEAD), {
     command: 'npm test',
+    stage: 'preVerify',
     level: 'required',
     result: 'pass',
     summary: 'exit 0',
@@ -225,6 +226,11 @@ test('commandResult: exit 0 on an untouched tree passes, and the record keeps wh
     tail: 'tests 12, pass 12\n',
     changes: [],
   })
+
+  const ready = commandResult({ ...TESTS, stage: 'ready' }, finished(), UNTOUCHED, HEAD)
+
+  assert.equal(ready.stage, 'ready')
+  assert.deepEqual(Object.keys(ready).slice(0, 3), ['command', 'stage', 'level'])
 })
 
 test('commandResult: an exit code other than 0, a signal, a timeout or a spawn error fails, and the summary names the first that applies', () => {
@@ -267,7 +273,7 @@ test('commandResult: tracked changes or a moved HEAD fail a command that exited 
   assert.equal(moved.summary, 'exit 0, left tracked changes: HEAD moved to b2b2b2b')
 
   const both = commandResult(
-    { command: 'npm run build', level: 'recommended' },
+    { command: 'npm run build', stage: 'preVerify', level: 'recommended' },
     finished({ exitCode: 2 }),
     {
       clean: false,
@@ -283,17 +289,67 @@ test('commandResult: tracked changes or a moved HEAD fail a command that exited 
 })
 
 test('preVerifyOutcome: the failed records of each level, and nothing failed when every command passed', () => {
+  const lint = { command: 'npm run lint', stage: 'preVerify', level: 'recommended' }
   const failedTests = commandResult(TESTS, finished({ exitCode: 1 }), UNTOUCHED, HEAD)
-  const failedLint = commandResult({ command: 'npm run lint', level: 'recommended' }, finished({ exitCode: 1 }), UNTOUCHED, HEAD)
-  const passedBuild = commandResult({ command: 'npm run build', level: 'required' }, finished(), UNTOUCHED, HEAD)
-  const passedDocs = commandResult({ command: 'npm run docs', level: 'recommended' }, finished(), UNTOUCHED, HEAD)
+  const failedLint = commandResult(lint, finished({ exitCode: 1 }), UNTOUCHED, HEAD)
+  const passedBuild = commandResult({ command: 'npm run build', stage: 'preVerify', level: 'required' }, finished(), UNTOUCHED, HEAD)
+  const passedDocs = commandResult({ command: 'npm run docs', stage: 'preVerify', level: 'recommended' }, finished(), UNTOUCHED, HEAD)
 
   assert.deepEqual(preVerifyOutcome([passedBuild, failedTests, failedLint, passedDocs]), {
     failedRequired: [failedTests],
     failedRecommended: [failedLint],
+    reason: 'pre-verify check',
   })
 
-  assert.deepEqual(preVerifyOutcome([passedBuild, failedLint]), { failedRequired: [], failedRecommended: [failedLint] })
-  assert.deepEqual(preVerifyOutcome([passedBuild, passedDocs]), { failedRequired: [], failedRecommended: [] })
-  assert.deepEqual(preVerifyOutcome([]), { failedRequired: [], failedRecommended: [] })
+  assert.deepEqual(preVerifyOutcome([passedBuild, failedLint]), { failedRequired: [], failedRecommended: [failedLint], reason: null })
+  assert.deepEqual(preVerifyOutcome([passedBuild, passedDocs]), { failedRequired: [], failedRecommended: [], reason: null })
+  assert.deepEqual(preVerifyOutcome([]), { failedRequired: [], failedRecommended: [], reason: null })
+})
+
+test('preVerifyOutcome: the reason follows the stage of the first failed required record, and a record without a stage is a pre-verify one', () => {
+  const failed = finished({ exitCode: 1 })
+  const readyRequired = commandResult({ command: 'npm ci', stage: 'ready', level: 'required' }, failed, UNTOUCHED, HEAD)
+  const readyRecommended = commandResult({ command: 'npm run lint', stage: 'ready', level: 'recommended' }, failed, UNTOUCHED, HEAD)
+  const preVerifyRequired = commandResult(TESTS, failed, UNTOUCHED, HEAD)
+  const { stage: _, ...old } = preVerifyRequired
+
+  assert.equal(preVerifyOutcome([readyRequired]).reason, 'ready check')
+  assert.equal(preVerifyOutcome([readyRecommended, preVerifyRequired]).reason, 'pre-verify check')
+  assert.equal(preVerifyOutcome([readyRequired, preVerifyRequired]).reason, 'ready check')
+  assert.equal(preVerifyOutcome([preVerifyRequired, readyRequired]).reason, 'pre-verify check')
+  assert.equal(preVerifyOutcome([old]).reason, 'pre-verify check')
+  assert.equal(preVerifyOutcome([readyRecommended]).reason, null)
+})
+
+const READY_TESTS = commandResult({ command: 'npm test', stage: 'ready', level: 'required' }, finished({ exitCode: 1 }), UNTOUCHED, HEAD)
+
+function report(gates, headSha = HEAD) {
+  return { status: 'READY', headSha, gates }
+}
+
+test('readyClaim: nothing for a pre-verify record, without a report, or for a report about another head', () => {
+  const gates = [{ command: 'npm test', exitCode: 0, tail: '' }]
+
+  assert.equal(readyClaim(commandResult(TESTS, finished({ exitCode: 1 }), UNTOUCHED, HEAD), report(gates), HEAD), null)
+  assert.equal(readyClaim(READY_TESTS, undefined, HEAD), null)
+  assert.equal(readyClaim(READY_TESTS, null, HEAD), null)
+  assert.equal(readyClaim(READY_TESTS, report(gates, MOVED), HEAD), null)
+})
+
+test('readyClaim: not listed when no entry of gates has the command, and a missing gates counts as empty', () => {
+  assert.deepEqual(readyClaim(READY_TESTS, report([{ command: 'npm run lint', exitCode: 0, tail: '' }]), HEAD), { listed: false })
+  assert.deepEqual(readyClaim(READY_TESTS, report([]), HEAD), { listed: false })
+  assert.deepEqual(readyClaim(READY_TESTS, { status: 'READY', headSha: HEAD }, HEAD), { listed: false })
+})
+
+test('readyClaim: the exit code of the first entry with the same command, both sides trimmed', () => {
+  const gates = [
+    { command: 'npm run lint', exitCode: 2, tail: '' },
+    { command: '  npm test ', exitCode: 0, tail: 'tests 12, pass 12' },
+    { command: 'npm test', exitCode: 1, tail: '' },
+  ]
+
+  assert.deepEqual(readyClaim(READY_TESTS, report(gates), HEAD), { listed: true, exitCode: 0 })
+  assert.deepEqual(readyClaim({ ...READY_TESTS, command: ' npm test  ' }, report(gates.slice(2)), HEAD), { listed: true, exitCode: 1 })
+  assert.deepEqual(readyClaim(READY_TESTS, report([{ command: 'npm test', exitCode: 3, tail: '' }]), HEAD), { listed: true, exitCode: 3 })
 })

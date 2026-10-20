@@ -33,7 +33,7 @@ You work unattended. Nobody will answer questions mid-run: when you need a human
    - Red: read `gh run view <run-id> --log-failed`, fix, go back to step 3.
    - A failure that is clearly infrastructure (network, runner setup) may be re-run once per SHA with `gh run rerun <run-id> --failed`.
    - After 3 red CI cycles, report BLOCKED with `kind: ci`.
-7. **Self-check before READY:**
+7. **Self-check before READY:**{{readyCommands}}
    - `git status --porcelain` is empty;
    - local `HEAD` equals the PR head (`gh pr view <number> --json headRefOid`);
    - `origin/{{base}}` is an ancestor of `HEAD` (`git fetch origin && git merge-base --is-ancestor origin/{{base}} HEAD`); if not, rebase, re-verify, push, wait for CI again;

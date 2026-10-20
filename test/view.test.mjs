@@ -650,12 +650,27 @@ test('card: every re-checked finding with its status, the answer and the evidenc
 })
 
 // A required command that passed and a recommended one that failed, on A1's head.
+// A ready record, a pre-verify one and one from before ready commands, without a stage.
 const PRE_VERIFY = {
   sha: 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
   at: at(79),
   results: [
     {
+      command: 'npm ci',
+      stage: 'ready',
+      level: 'required',
+      result: 'pass',
+      summary: 'exit 0',
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      seconds: 20,
+      tail: 'added 300 packages\n',
+      changes: [],
+    },
+    {
       command: 'npm test',
+      stage: 'preVerify',
       level: 'required',
       result: 'pass',
       summary: 'exit 0',
@@ -691,15 +706,16 @@ test('prDetail: the pre-verify results of the claimed head, and none for another
   assert.equal(detail({}), null)
 })
 
-test('card: the pre-verify results after the verifier, with the last lines of output of a failed command', () => {
+test('card: the commands the driver ran after the verifier, each with its stage, and the last lines of output of a failed command', () => {
   const dir = makeRollout({ prs: { A1: { ...samplePrs().A1, preVerify: PRE_VERIFY } } })
   const card = cli('card', 'A1', '--dir', dir)
   const block = [
     '  [pass] tests pass',
     '',
-    'pre-verify commands at a1a1a1a:',
-    '  [pass] required: npm test (exit 0)',
-    '  [fail] recommended: npm run lint (exit 1)',
+    'commands the driver ran at a1a1a1a:',
+    '  [pass] ready required: npm ci (exit 0)',
+    '  [pass] preVerify required: npm test (exit 0)',
+    '  [fail] preVerify recommended: npm run lint (exit 1)',
     '    line 2',
     '    line 3',
     '    line 4',
@@ -711,12 +727,12 @@ test('card: the pre-verify results after the verifier, with the last lines of ou
 
   assert.equal(card.status, 0, card.stderr)
   assert.ok(card.stdout.includes(block.join('\n')), card.stdout)
-  assert.doesNotMatch(card.stdout, /tests 12, pass 12/)
+  assert.doesNotMatch(card.stdout, /tests 12, pass 12|added 300 packages/)
 
   const moved = makeRollout({
     prs: { A1: { ...samplePrs().A1, claimedSha: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', preVerify: PRE_VERIFY } },
   })
 
-  assert.doesNotMatch(cli('card', 'A1', '--dir', moved).stdout, /pre-verify commands/)
-  assert.doesNotMatch(cli('card', 'A1', '--dir', makeRollout()).stdout, /pre-verify commands/)
+  assert.doesNotMatch(cli('card', 'A1', '--dir', moved).stdout, /commands the driver ran/)
+  assert.doesNotMatch(cli('card', 'A1', '--dir', makeRollout()).stdout, /commands the driver ran/)
 })
