@@ -421,6 +421,10 @@ figcaption::first-letter {
   font-weight: 600;
 }
 
+.fact > .label + span.live {
+  color: var(--accent);
+}
+
 .fact:has(.driver) > span:not(.badge, .warning, .error) {
   color: var(--ink-3);
 }
@@ -671,7 +675,8 @@ figcaption::first-letter {
 
 .state-interrupted,
 .held,
-.driver-paused {
+.driver-paused,
+.verdict-warn {
   --tone: var(--warn);
 }
 
@@ -748,6 +753,11 @@ td.info {
   font-size: var(--text-sm);
 }
 
+/* Narrower than an event's detail, so the board with its toggle column still fits a 1440 px window. */
+.board td.info {
+  min-width: 13rem;
+}
+
 tr.clickable {
   cursor: pointer;
 }
@@ -779,9 +789,9 @@ tr.waiting td:first-child {
   vertical-align: middle;
 }
 
-.board td:first-child a,
-.board td:nth-child(4) a,
-.board td:nth-child(5) a,
+.board td.id a,
+.board td.github a,
+.board td.deps a,
 .runs td:first-child,
 .plan td:first-child,
 a.lane-label {
@@ -789,22 +799,170 @@ a.lane-label {
   font-size: var(--mono);
 }
 
-.board td:first-child a,
+.board td.id a,
 .plan td:first-child a {
   font-weight: 600;
 }
 
-.board td:nth-child(5) > span {
+.board td.deps > span {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin: 2px 8px 2px 0;
 }
 
-.board td:nth-child(8) {
+.board td.age {
   color: var(--ink-3);
   font-size: var(--text-sm);
   white-space: nowrap;
+}
+
+/* A row opens on its toggle into a panel below it: the run in progress or the last one, with its last commands.
+   The panel is a row of its own, so a click in it never opens the PR page. */
+
+.board td.toggle {
+  width: 32px;
+  padding: 10px 0 0 12px;
+}
+
+.board th:first-child {
+  padding: 0;
+}
+
+.row-toggle {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+}
+
+.row-toggle::before {
+  width: 10px;
+  height: 6px;
+  background: currentColor;
+  content: '';
+  mask: url('chevron.svg') center / contain no-repeat;
+  transform: rotate(-90deg);
+}
+
+.row-toggle[aria-expanded='true']::before {
+  transform: none;
+}
+
+button.row-toggle:hover:not(:disabled) {
+  border: 0;
+  background: var(--hover);
+  color: var(--ink);
+}
+
+tr.open > td {
+  border-bottom-color: transparent;
+}
+
+.panel-row > td {
+  padding: 0 14px 16px 104px;
+}
+
+.run-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--well);
+}
+
+.run-panel > .facts {
+  gap: 6px 16px;
+}
+
+.run-panel p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.run-name {
+  font-family: var(--font-mono);
+  font-size: var(--mono);
+  font-weight: 600;
+}
+
+.commands-head {
+  display: flex;
+  gap: 8px;
+  color: var(--ink-3);
+}
+
+.commands-head > .label {
+  font-weight: 500;
+}
+
+/* One grid for every line, so the targets line up behind the longest tool name. */
+.commands {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.commands > li {
+  display: contents;
+}
+
+.commands strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.commands code {
+  overflow: hidden;
+  padding: 0;
+  background: none;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commands .outcome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.commands .outcome .badge {
+  margin: 0;
+}
+
+.commands > li.message {
+  display: -webkit-box;
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.panel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.panel-footer > a {
+  font-weight: 500;
 }
 
 .event-log td:not(.detail) {

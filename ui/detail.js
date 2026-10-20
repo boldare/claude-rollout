@@ -6,7 +6,7 @@ import { renderTranscript } from './transcript.js'
 import { estimateNote } from './transcript-model.js'
 
 const TABS = ['overview', 'runs', 'verifier', 'review', 'plan', 'brief']
-const RUN_HEADINGS = ['run', 'role', 'effort', 'start', 'duration', 'cost', 'result', 'denials', 'error']
+const RUN_HEADINGS = ['run', 'role', 'effort', 'model', 'start', 'duration', 'cost', 'result', 'denials', 'error']
 const CHECK_HEADINGS = ['item', 'status', 'evidence']
 const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
 const RECHECK_CLASSES = { resolved: 'check-pass', open: 'check-fail', wrong: 'check-unverifiable' }
@@ -232,6 +232,7 @@ function runRow(run, ctx) {
     cell(runName(run, ctx)),
     cell(role),
     cell(run.effort ?? '-'),
+    cell(run.model ?? '-'),
     cell(clock(run.startedAt, now)),
     cell(duration(runSeconds(run, now)), `number ${live}`),
     costCell(run),
