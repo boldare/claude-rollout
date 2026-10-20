@@ -10,6 +10,7 @@ const RUN_HEADINGS = ['run', 'role', 'effort', 'start', 'duration', 'cost', 'res
 const CHECK_HEADINGS = ['item', 'status', 'evidence']
 const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
 const RECHECK_CLASSES = { resolved: 'check-pass', open: 'check-fail', wrong: 'check-unverifiable' }
+const PRE_VERIFY_HEADINGS = ['command', 'level', 'result', 'evidence']
 
 function short(sha) {
   return typeof sha === 'string' && sha ? sha.slice(0, 7) : '-'
@@ -311,12 +312,41 @@ function historyEntry(pr, verdict, ctx) {
   return details
 }
 
-function renderVerifier(pr, ctx) {
-  if (!pr.verdict) {
-    return element('p', 'No verdict yet.', 'muted')
+// A failed recommended command blocks nothing, so it reads as a warning, not as a failure.
+function preVerifyResultClass(record) {
+  if (record.result === 'pass') {
+    return 'check-pass'
   }
 
-  const section = wrap('div', element('h3', 'latest verdict'), verdictBody(pr.verdict))
+  return record.level === 'recommended' ? 'warning' : 'check-fail'
+}
+
+function preVerifyRow(record) {
+  const evidence = [record.summary, record.tail?.trim()].filter(Boolean).join('\n')
+
+  return wrap(
+    'tr',
+    cell(record.command, 'text'),
+    cell(record.level),
+    cell(record.result, preVerifyResultClass(record)),
+    cell(evidence, 'text'),
+  )
+}
+
+function preVerifyTable(preVerify) {
+  if (!preVerify) {
+    return []
+  }
+
+  return [element('h3', 'pre-verify commands'), table(PRE_VERIFY_HEADINGS, preVerify.results.map(preVerifyRow), 'checklist')]
+}
+
+function renderVerifier(pr, ctx) {
+  if (!pr.verdict) {
+    return wrap('div', element('p', 'No verdict yet.', 'muted'), ...preVerifyTable(pr.preVerify))
+  }
+
+  const section = wrap('div', element('h3', 'latest verdict'), verdictBody(pr.verdict), ...preVerifyTable(pr.preVerify))
   const history = [...(pr.verdicts ?? [])].reverse()
 
   section.append(element('h3', 'history'), ...history.map((verdict) => historyEntry(pr, verdict, ctx)))

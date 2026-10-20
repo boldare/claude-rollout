@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { inheritsParent, speaksForItself, summarizeChecks } from '../lib/checks.mjs'
+import { commandResult, inheritsParent, preVerifyOutcome, speaksForItself, summarizeChecks } from '../lib/checks.mjs'
 import { globToRegExp, matchesAny } from '../lib/glob.mjs'
 import { raiseEffort, validateManifest } from '../lib/manifest.mjs'
 
@@ -200,4 +200,100 @@ test('changeset none is a valid manifest value', () => {
   const plain = structuredClone(base)
   plain.prs[0].changeset = 'none'
   assert.deepEqual(validateManifest(plain), [])
+})
+
+const HEAD = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+const MOVED = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2'
+const UNTOUCHED = { clean: true, status: '', head: HEAD }
+const TESTS = { command: 'npm test', level: 'required' }
+
+// What runCommand resolves with for a command that passed.
+function finished(overrides = {}) {
+  return { exitCode: 0, signal: null, timedOut: false, stopped: false, tail: 'tests 12, pass 12\n', seconds: 4, ...overrides }
+}
+
+test('commandResult: exit 0 on an untouched tree passes, and the record keeps what the run reported', () => {
+  assert.deepEqual(commandResult(TESTS, finished(), UNTOUCHED, HEAD), {
+    command: 'npm test',
+    level: 'required',
+    result: 'pass',
+    summary: 'exit 0',
+    exitCode: 0,
+    signal: null,
+    timedOut: false,
+    seconds: 4,
+    tail: 'tests 12, pass 12\n',
+    changes: [],
+  })
+})
+
+test('commandResult: an exit code other than 0, a signal, a timeout or a spawn error fails, and the summary names the first that applies', () => {
+  const cases = [
+    [{ exitCode: 1 }, 'exit 1'],
+    [{ exitCode: 3 }, 'exit 3'],
+    [{ exitCode: null, signal: 'SIGKILL' }, 'killed by SIGKILL'],
+    [{ exitCode: null, signal: 'SIGTERM', timedOut: true }, 'timed out'],
+    [{ exitCode: 0, timedOut: true }, 'timed out'],
+    [{ exitCode: null, tail: 'spawn sh ENOENT' }, 'did not start'],
+  ]
+
+  for (const [overrides, summary] of cases) {
+    const record = commandResult(TESTS, finished(overrides), UNTOUCHED, HEAD)
+
+    assert.equal(record.result, 'fail', summary)
+    assert.equal(record.summary, summary)
+    assert.deepEqual(record.changes, [], summary)
+    assert.equal(record.tail, overrides.tail ?? 'tests 12, pass 12\n', summary)
+  }
+})
+
+test('commandResult: tracked changes or a moved HEAD fail a command that exited 0, and untracked files alone do not', () => {
+  const tracked = commandResult(TESTS, finished(), { clean: false, status: 'M lib/a.mjs\n D README.md\n?? coverage/', head: HEAD }, HEAD)
+
+  assert.equal(tracked.result, 'fail')
+  assert.deepEqual(tracked.changes, ['M lib/a.mjs', 'D README.md'])
+  assert.equal(tracked.summary, 'exit 0, left tracked changes: M lib/a.mjs, D README.md')
+
+  const untracked = commandResult(TESTS, finished(), { clean: false, status: '?? coverage/\n?? notes.txt', head: HEAD }, HEAD)
+
+  assert.equal(untracked.result, 'pass')
+  assert.deepEqual(untracked.changes, [])
+  assert.equal(untracked.summary, 'exit 0')
+
+  const moved = commandResult(TESTS, finished(), { clean: true, status: '', head: MOVED }, HEAD)
+
+  assert.equal(moved.result, 'fail')
+  assert.deepEqual(moved.changes, ['HEAD moved to b2b2b2b'])
+  assert.equal(moved.summary, 'exit 0, left tracked changes: HEAD moved to b2b2b2b')
+
+  const both = commandResult(
+    { command: 'npm run build', level: 'recommended' },
+    finished({ exitCode: 2 }),
+    {
+      clean: false,
+      status: 'M dist/index.js',
+      head: MOVED,
+    },
+    HEAD,
+  )
+
+  assert.equal(both.level, 'recommended')
+  assert.equal(both.result, 'fail')
+  assert.equal(both.summary, 'exit 2, left tracked changes: M dist/index.js, HEAD moved to b2b2b2b')
+})
+
+test('preVerifyOutcome: the failed records of each level, and nothing failed when every command passed', () => {
+  const failedTests = commandResult(TESTS, finished({ exitCode: 1 }), UNTOUCHED, HEAD)
+  const failedLint = commandResult({ command: 'npm run lint', level: 'recommended' }, finished({ exitCode: 1 }), UNTOUCHED, HEAD)
+  const passedBuild = commandResult({ command: 'npm run build', level: 'required' }, finished(), UNTOUCHED, HEAD)
+  const passedDocs = commandResult({ command: 'npm run docs', level: 'recommended' }, finished(), UNTOUCHED, HEAD)
+
+  assert.deepEqual(preVerifyOutcome([passedBuild, failedTests, failedLint, passedDocs]), {
+    failedRequired: [failedTests],
+    failedRecommended: [failedLint],
+  })
+
+  assert.deepEqual(preVerifyOutcome([passedBuild, failedLint]), { failedRequired: [], failedRecommended: [failedLint] })
+  assert.deepEqual(preVerifyOutcome([passedBuild, passedDocs]), { failedRequired: [], failedRecommended: [] })
+  assert.deepEqual(preVerifyOutcome([]), { failedRequired: [], failedRecommended: [] })
 })

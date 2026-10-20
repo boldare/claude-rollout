@@ -176,10 +176,11 @@
                 <td class="nowrap">The agent environment</td>
                 <td>
                   The bot's <code>GH_TOKEN</code>, an empty <code>gh</code> config directory, <code>GH_REPO</code> pinned to
-                  <code>repo.github</code>, no <code>GH_HOST</code>, an empty npmrc and empty npm tokens. <code>repo.install</code> runs
-                  with the same environment. <a href="#environment">Details</a>.
+                  <code>repo.github</code>, no <code>GH_HOST</code>, an empty npmrc and empty npm tokens. <code>repo.install</code> and the
+                  pre-verify commands, with <code>ROLLOUT_ROLE=gate</code>, run with the same environment.
+                  <a href="#environment">Details</a>.
                 </td>
-                <td class="name">lib/identity.mjs<br />lib/spawn.mjs<br />lib/worktree.mjs</td>
+                <td class="name">lib/identity.mjs<br />lib/spawn.mjs<br />lib/worktree.mjs<br />lib/runner.mjs</td>
               </tr>
               <tr>
                 <td class="nowrap">The CLI's role check</td>
@@ -511,9 +512,11 @@
         </p>
 
         <p>
-          <code>repo.install</code> runs scripts from a worktree an agent may have written, so it gets the same environment from
-          <code>readOnlyEnv</code>, with <code>ROLLOUT_ROLE=install</code>, an empty <code>ROLLOUT_BRANCH</code> and none of the
-          <code>CLAUDE_CODE_*</code> variables <code>runAgent</code> adds.
+          <code>repo.install</code> and the <a href="manifest.html#gates-preVerify-required">pre-verify commands</a> run scripts from a
+          worktree an agent may have written, so they get the same environment from <code>readOnlyEnv</code>, with
+          <code>ROLLOUT_ROLE=install</code> or <code>ROLLOUT_ROLE=gate</code>, an empty <code>ROLLOUT_BRANCH</code> and none of the
+          <code>CLAUDE_CODE_*</code> variables <code>runAgent</code> adds. The guard reads only the agents' tool calls, so it never sees
+          what the install or a pre-verify command runs.
         </p>
 
         <div class="scroll">
@@ -566,14 +569,14 @@
               </tr>
               <tr>
                 <td>ROLLOUT_BRANCH</td>
-                <td>the PR branch, empty for read-only roles and <code>repo.install</code></td>
+                <td>the PR branch, empty for read-only roles, <code>repo.install</code> and the pre-verify commands</td>
                 <td>The one branch the guard lets a worker push.</td>
               </tr>
               <tr>
                 <td>ROLLOUT_ROLE, _ID, _DIR, _HOME, _NAME, _REPO</td>
                 <td>
-                  role (<code>install</code> for <code>repo.install</code>), PR id, rollout directory, skill directory, rollout name,
-                  <code>repo.github</code>
+                  role (<code>install</code> for <code>repo.install</code>, <code>gate</code> for the pre-verify commands), PR id, rollout
+                  directory, skill directory, rollout name, <code>repo.github</code>
                 </td>
                 <td>The guard's context, and the CLI's refusal to take orders from an agent.</td>
               </tr>
@@ -598,10 +601,10 @@
 
         <p>
           Everything else passes through, <code>HOME</code> and your Claude login included. That is why the limit under
-          <a href="#boundaries">Hard boundaries</a> holds. Without <code>repo.agentToken</code> the bot's variables are not set, agents and
-          <code>repo.install</code> act on GitHub as you, and preflight warns about it. <code>GH_REPO</code> is still set and
-          <code>GH_HOST</code> is still removed. The install still runs as your OS user and can read your files, so its environment is a
-          seatbelt, not a boundary.
+          <a href="#boundaries">Hard boundaries</a> holds. Without <code>repo.agentToken</code> the bot's variables are not set, agents,
+          <code>repo.install</code> and the pre-verify commands act on GitHub as you, and preflight warns about it. <code>GH_REPO</code> is
+          still set and <code>GH_HOST</code> is still removed. The install and the pre-verify commands still run as your OS user and can
+          read your files, so their environment is a seatbelt, not a boundary.
         </p>
 
         <h3 id="cli-role">The CLI refuses agents</h3>

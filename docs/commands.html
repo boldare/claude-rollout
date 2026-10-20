@@ -177,8 +177,9 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           </li>
           <li>When every PR of the run has merged, it reports the release PR for you to merge and exits.</li>
           <li>
-            Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents, waits up to 15 s for them, saves and exits. A second
-            signal exits at once. The next <code>run</code> resumes the implementers' sessions. Verifications and briefs start over.
+            Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents and any pre-verify commands, waits up to 15 s for them,
+            saves and exits. A second signal exits at once. The next <code>run</code> resumes the implementers' sessions. Verifications,
+            briefs and pre-verify commands start over.
           </li>
         </ul>
 
@@ -209,10 +210,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <p>
           Sends <code>SIGTERM</code> to the pid in <code>driver.lock</code> and waits up to 30 s for the lock to go. It signals only a live
-          pid above 1, with the same check as the UI's <a href="ui.html#control-stop">Stop</a>. The driver stops its agents with
-          <code>SIGTERM</code>, then <code>SIGKILL</code> after 5 s. The next <code>run</code> resumes the implementers' sessions, and
-          verifications and briefs start over. Without a driver it prints <code>no driver is running</code>, and a lock with pid 0 or -1
-          counts as no driver. Any other refusal prints the reason and exits 1.
+          pid above 1, with the same check as the UI's <a href="ui.html#control-stop">Stop</a>. The driver stops its agents and any
+          pre-verify commands with <code>SIGTERM</code>, then <code>SIGKILL</code> after 5 s. The next <code>run</code> resumes the
+          implementers' sessions, and verifications, briefs and pre-verify commands start over. Without a driver it prints
+          <code>no driver is running</code>, and a lock with pid 0 or -1 counts as no driver. Any other refusal prints the reason and exits
+          1.
         </p>
 
         <h2 id="watching">Watch <a class="anchor" href="#watching" aria-label="Link to this section">#</a></h2>
@@ -260,6 +262,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li>
             The verifier's verdict, checklist, blocking and non-blocking findings. After a FAIL, each previous finding it re-checked, with
             its status, the implementer's answer and the evidence.
+          </li>
+          <li>
+            With <a href="manifest.html#gates-preVerify-required">pre-verify commands</a>, the driver's own results for the claimed head:
+            each command with its result, level and summary, and the last lines of output of a failed one.
           </li>
           <li>
             For a verified PR, how to approve it: the GitHub link or the <code>approve</code> command. Under <code>merge: manual</code> and
@@ -732,20 +738,22 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               </tr>
               <tr>
                 <td>ROLLOUT_ROLE</td>
-                <td>the driver, for agents and <code>repo.install</code></td>
+                <td>the driver, for agents, <code>repo.install</code> and the pre-verify commands</td>
                 <td>
-                  The agent's role, or <code>install</code> for <code>repo.install</code>. While it is set, the CLI refuses every command
+                  The agent's role, <code>install</code> for <code>repo.install</code> or <code>gate</code> for the
+                  <a href="manifest.html#gates-preVerify-required">pre-verify commands</a>. While it is set, the CLI refuses every command
                   but <code>status</code>, <code>card</code> and <code>help</code>.
                 </td>
               </tr>
               <tr>
                 <td>ROLLOUT_ID, ROLLOUT_BRANCH, ROLLOUT_NAME, ROLLOUT_HOME, ROLLOUT_REPO</td>
-                <td>the driver, for agents and <code>repo.install</code></td>
+                <td>the driver, for agents, <code>repo.install</code> and the pre-verify commands</td>
                 <td>
-                  The PR, its branch (empty for the verifier, brief and delegate roles and for <code>repo.install</code>), the rollout, the
-                  skill's directory and <code>repo.github</code>. The Bash guard reads all of them but <code>ROLLOUT_ID</code>. It refuses
-                  gh calls that name another repository than <code>ROLLOUT_REPO</code>. Agents and the install also get
-                  <code>ROLLOUT_DIR</code>, so <code>status</code> and <code>card</code> work for them without flags.
+                  The PR, its branch (empty for the verifier, brief and delegate roles, for <code>repo.install</code> and for the pre-verify
+                  commands), the rollout, the skill's directory and <code>repo.github</code>. The Bash guard reads all of them but
+                  <code>ROLLOUT_ID</code>. It refuses gh calls that name another repository than <code>ROLLOUT_REPO</code>. Agents, the
+                  install and the pre-verify commands also get <code>ROLLOUT_DIR</code>, so <code>status</code> and <code>card</code> work
+                  for them without flags.
                 </td>
               </tr>
               <tr>

@@ -287,7 +287,7 @@ export function makeRollout(overrides = {}) {
 // so a read would hang.
 function fakeTool(tool) {
   return `#!/usr/bin/env node
-const { appendFileSync, readFileSync } = require('node:fs')
+const { appendFileSync, readFileSync, writeFileSync } = require('node:fs')
 const { join } = require('node:path')
 const tool = ${JSON.stringify(tool)}
 const args = process.argv.slice(2)
@@ -309,6 +309,10 @@ if (!rule) {
     process.stderr.write(rule.stderr)
   }
 
+  if (rule.next !== undefined) {
+    writeFileSync(join(__dirname, 'rules.json'), JSON.stringify(rule.next))
+  }
+
   process.exitCode = rule.code ?? 0
 }
 `
@@ -316,9 +320,10 @@ if (!rule) {
 
 // A fake gh and git for a rollout made by makeRollout, first on the PATH of
 // every manifest load, so a test never reaches the real tools or GitHub.
-// Call it before loadManifest. A rule is { tool, args, stdout, stderr, code }:
+// Call it before loadManifest. A rule is { tool, args, stdout, stderr, code, next }:
 // the first whose args the call's arguments contain answers it, and a call
-// no rule matches fails.
+// no rule matches fails. A rule with `next` puts those rules in place once it
+// answers, so a call can change what later calls see, as a reset cleans the tree.
 export function fakeTools(dir, rules = []) {
   const bin = join(dir, 'fake-bin')
   const file = join(dir, 'manifest.yaml')

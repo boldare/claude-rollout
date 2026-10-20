@@ -12,6 +12,7 @@ import {
   findingsNote,
   fixPrompt,
   implementPrompt,
+  preVerifyNote,
   resumeFreshPrompt,
   verifyPrompt,
   verifyRecipe,
@@ -502,4 +503,162 @@ test('prompts: with no findings to re-check the verifier gets no such section', 
     assert.equal(text.includes('## Findings to re-check'), false)
     assert.equal(text.includes('{{'), false)
   }
+})
+
+const HEAD = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+
+// One record of a pre-verify command, as commandResult makes it: a pass unless overridden.
+function commandRecord(overrides = {}) {
+  return {
+    command: 'npm test',
+    level: 'required',
+    result: 'pass',
+    summary: 'exit 0',
+    exitCode: 0,
+    signal: null,
+    timedOut: false,
+    seconds: 3,
+    tail: 'tests 12, pass 12\n',
+    changes: [],
+    ...overrides,
+  }
+}
+
+const LINT_FAILED = commandRecord({
+  command: 'npm run lint',
+  level: 'recommended',
+  result: 'fail',
+  summary: 'exit 1',
+  exitCode: 1,
+  tail: 'lib/a.mjs\n  3:7  error  Expected blank line before this statement\n',
+})
+
+function withCommands(manifest, required, recommended) {
+  manifest.gates = { preVerify: { scope: false, required, recommended } }
+
+  return manifest
+}
+
+test('prompts: the implementer learns which commands the driver runs after READY, by level', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const both = implementPrompt(withCommands(manifest, ['npm ci', 'npm test'], ['npm run lint']), pr, STATE)
+  const section = both.indexOf('## Commands the driver runs after READY')
+
+  assert.ok(section > both.indexOf('Or `status: BLOCKED` with `blocked`.'), 'after step 8')
+  assert.ok(section < both.indexOf('## Writing'), 'before the writing rules')
+  assert.deepEqual(stepNumbers(both), [1, 2, 3, 4, 5, 6, 7, 8])
+
+  for (const part of [
+    'After your READY report, the driver runs these commands itself in this worktree at the head you reported, one at a time. Its own result decides, whatever your report says.',
+    'Required. A failure sends the PR back to you with the exit code and the end of the output:\n\n- `npm ci`\n- `npm test`\n\n',
+    'Recommended. A failure never sends the PR back, and the verifier sees it:\n\n- `npm run lint`\n\n## Writing',
+  ]) {
+    assert.ok(both.includes(part), part)
+  }
+
+  const required = implementPrompt(withCommands(manifest, ['npm test'], []), pr, STATE)
+
+  assert.ok(
+    required.includes(
+      'Required. A failure sends the PR back to you with the exit code and the end of the output:\n\n- `npm test`\n\n## Writing',
+    ),
+  )
+
+  assert.equal(required.includes('Recommended. A failure'), false)
+
+  const recommended = implementPrompt(withCommands(manifest, [], ['npm run lint']), pr, STATE)
+
+  assert.ok(recommended.includes('whatever your report says.\n\nRecommended. A failure never sends the PR back'))
+  assert.equal(recommended.includes('Required. A failure'), false)
+
+  const resumed = resumeFreshPrompt(manifest, pr, STATE, { reason: 'session missing', note: 'n' })
+
+  assert.ok(resumed.includes('## Commands the driver runs after READY\n\n'))
+  assertFilled({ both, required, recommended, resumed })
+})
+
+test('prompts: without pre-verify commands the implementer gets no such section', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+
+  for (const text of [implementPrompt(manifest, pr, STATE), implementPrompt(withCommands(manifest, [], []), pr, STATE)]) {
+    assert.equal(text.includes('Commands the driver runs'), false)
+    assert.ok(text.includes('Or `status: BLOCKED` with `blocked`.\n\n\n\n## Writing'))
+    assert.equal(text.includes('{{'), false)
+  }
+})
+
+test('prompts: the verifier sees the recommended commands that failed at its SHA, between the decisions and the findings to re-check', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const preVerify = { sha: HEAD, at: '2026-09-01T10:00:00.000Z', results: [commandRecord(), LINT_FAILED] }
+  const text = verifyPrompt(manifest, pr, answered({ ...STATE, noteHistory: NOTE_HISTORY, preVerify }), HEAD)
+  const decisions = text.indexOf('## Decisions after the brief')
+  const section = text.indexOf('\n## Recommended commands that failed\n')
+  const findings = text.indexOf('## Findings to re-check')
+
+  assert.ok(decisions > -1)
+  assert.ok(section > decisions)
+  assert.ok(findings > section)
+  assert.ok(text.trimEnd().endsWith('Answer (disputed):\n\nThe error is logged at cli.mjs:42.'), 'the findings stay last')
+  assert.ok(text.includes('`## Recommended commands that failed` follows the decisions'), 'the inputs name the section')
+
+  for (const part of [
+    'The driver ran these recommended commands itself at this SHA, and they failed. These are its own results, not claims. A failure alone does not block the PR.',
+    '### `npm run lint`\n\nexit 1\n\n```\nlib/a.mjs\n  3:7  error  Expected blank line before this statement\n```\n',
+  ]) {
+    assert.ok(text.indexOf(part, section) > section, part)
+  }
+
+  assert.equal(text.includes('### `npm test`'), false, 'a command that passed is not listed')
+  assert.equal(text.includes('{{'), false)
+})
+
+test('prompts: the verifier gets no failed commands for another SHA, for passes only or for a failed required command', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const at = '2026-09-01T10:00:00.000Z'
+  const requiredFailed = commandRecord({ result: 'fail', summary: 'exit 1', exitCode: 1 })
+  const entries = [
+    { ...STATE, preVerify: { sha: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', at, results: [LINT_FAILED] } },
+    { ...STATE, preVerify: { sha: HEAD, at, results: [commandRecord()] } },
+    { ...STATE, preVerify: { sha: HEAD, at, results: [requiredFailed] } },
+    STATE,
+    freshPr(),
+  ]
+
+  for (const entry of entries) {
+    const text = verifyPrompt(manifest, pr, entry, HEAD)
+
+    assert.equal(text.includes('\n## Recommended commands that failed\n'), false, JSON.stringify(entry.preVerify))
+    assert.equal(text.includes('{{'), false)
+  }
+})
+
+test('preVerifyNote: every failed command with its summary and output, the reset it caused, and the two rules', () => {
+  const failed = commandRecord({ result: 'fail', summary: 'exit 1', exitCode: 1, tail: 'not ok 3 - parses an empty list\n' })
+  const changed = commandRecord({
+    command: 'npm run build',
+    result: 'fail',
+    summary: 'exit 0, left tracked changes: M dist/index.js',
+    tail: 'built in 2s\n',
+    changes: ['M dist/index.js'],
+  })
+
+  assert.equal(
+    preVerifyNote(HEAD, [failed, changed]),
+    [
+      'The driver ran the required pre-verify commands at `a1a1a1a`. These failed:',
+      '### `npm test`\n\nexit 1\n\n```\nnot ok 3 - parses an empty list\n```',
+      '### `npm run build`\n\nexit 0, left tracked changes: M dist/index.js\n\n```\nbuilt in 2s\n```\n\nThe driver reset the worktree to that head.',
+      '- The driver runs every command again on the new head.\n- Never weaken, skip or delete tests or checks to get green.',
+    ].join('\n\n'),
+  )
+})
+
+test('preVerifyNote: output with a code fence of its own gets a longer fence', () => {
+  const failed = commandRecord({ result: 'fail', summary: 'exit 1', exitCode: 1, tail: 'expected:\n```\n{}\n```\n' })
+
+  assert.ok(preVerifyNote(HEAD, [failed]).includes('exit 1\n\n````\nexpected:\n```\n{}\n```\n````'))
 })
