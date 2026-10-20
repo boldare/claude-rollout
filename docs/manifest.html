@@ -123,7 +123,7 @@ policy:
 <span class="dim"># Checks before the verifier, on top of CI, the policy and code scanning.</span>
 <span class="dim"># gates:</span>
 <span class="dim">#   ready:</span>
-<span class="dim">#     # The implementer runs these before READY, and the driver runs them again first, the install first.</span>
+<span class="dim">#     # The implementer runs these before READY, and the driver runs them again before the pre-verify commands. The install goes first.</span>
 <span class="dim">#     # A failed one sends the PR back.</span>
 <span class="dim">#     required: [pnpm install --frozen-lockfile, pnpm test]</span>
 <span class="dim">#     # A failed one sends nothing back. The card, the PR page and the verifier see it.</span>
@@ -719,8 +719,9 @@ prs:
 
         <p>
           Every key is optional. Without <code>gates</code> the driver runs only its usual checks. <code>gates.ready</code> lists commands
-          the implementer runs in its self-check and the driver runs again. <code>gates.preVerify</code> lists checks only the driver runs,
-          after them. Any other key under <code>gates</code>, <code>gates.ready</code> or <code>gates.preVerify</code> fails validation.
+          the implementer runs in its self-check and the driver runs again. <code>gates.preVerify</code> holds checks only the driver runs:
+          the scope check, which runs before the ready commands, and the pre-verify commands, which run after them. Any other key under
+          <code>gates</code>, <code>gates.ready</code> or <code>gates.preVerify</code> fails validation.
         </p>
 
         <div class="scroll">

@@ -59,7 +59,7 @@ policy:
 # Checks before the verifier, on top of CI, the policy and code scanning.
 # gates:
 #   ready:
-#     # The implementer runs these before READY, and the driver runs them again first, the install first.
+#     # The implementer runs these before READY, and the driver runs them again before the pre-verify commands. The install goes first.
 #     # A failed one sends the PR back.
 #     required: [pnpm install --frozen-lockfile, pnpm test]
 #     # A failed one sends nothing back. The card, the PR page and the verifier see it.
