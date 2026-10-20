@@ -1039,7 +1039,9 @@
                 <td>ready.json</td>
                 <td class="nowrap">implementer, fixer</td>
                 <td>
-                  <code>status</code> (READY or BLOCKED) and <code>summary</code> are required. READY also needs <code>pr</code> and
+                  <code>status</code> (READY or BLOCKED), <code>summary</code> and <code>gates</code> are required. <code>gates</code> has
+                  one entry per <a href="manifest.html#gates-ready-required">ready command</a> of the self-check, with the command, its exit
+                  code and the end of its output, and is empty without ready commands. READY also needs <code>pr</code> and
                   <code>headSha</code>, which the driver checks, not the schema. <code>blocked</code> with a kind, a question and evidence
                   for BLOCKED. Optional: <code>checks</code>, <code>localVerification</code>, <code>checklist</code>, <code>expected</code>,
                   <code>filesChanged</code>, <code>changeset</code>, <code>deviations</code>, and <code>addressed</code> for review comments
