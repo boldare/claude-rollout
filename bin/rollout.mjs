@@ -188,16 +188,17 @@ function printDelegate(delegate) {
   }
 }
 
-// Only a failed command shows its output, the end of it.
+// Only a failed command shows its output, the end of it. A record from before
+// ready commands has no stage and is a pre-verify one.
 function printPreVerify(preVerify) {
   if (!preVerify) {
     return
   }
 
-  console.log(`\npre-verify commands at ${preVerify.sha.slice(0, 7)}:`)
+  console.log(`\ncommands the driver ran at ${preVerify.sha.slice(0, 7)}:`)
 
   for (const record of preVerify.results) {
-    console.log(`  [${record.result}] ${record.level}: ${record.command} (${record.summary})`)
+    console.log(`  [${record.result}] ${record.stage ?? 'preVerify'} ${record.level}: ${record.command} (${record.summary})`)
 
     if (record.result !== 'fail') {
       continue

@@ -107,6 +107,25 @@
         "required": ["file", "reason"]
       }
     },
+    "gates": {
+      "type": "array",
+      "description": "One entry per ready command of the self-check (step 7), in that order, with the command exactly as listed, its exit code and the last lines of its output, 20 at most. It is empty when step 7 lists none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "exitCode": {
+            "type": "integer"
+          },
+          "tail": {
+            "type": "string"
+          }
+        },
+        "required": ["command", "exitCode", "tail"]
+      }
+    },
     "blocked": {
       "type": "object",
       "description": "Required for BLOCKED.",
@@ -145,5 +164,5 @@
       }
     }
   },
-  "required": ["status", "summary"]
+  "required": ["status", "summary", "gates"]
 }

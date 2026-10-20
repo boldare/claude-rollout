@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { freshPr, recordAnswers, recordFindings } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
@@ -507,10 +507,11 @@ test('prompts: with no findings to re-check the verifier gets no such section', 
 
 const HEAD = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
 
-// One record of a pre-verify command, as commandResult makes it: a pass unless overridden.
+// One record of a command the driver ran, as commandResult makes it: a pre-verify pass unless overridden.
 function commandRecord(overrides = {}) {
   return {
     command: 'npm test',
+    stage: 'preVerify',
     level: 'required',
     result: 'pass',
     summary: 'exit 0',
@@ -534,10 +535,107 @@ const LINT_FAILED = commandRecord({
 })
 
 function withCommands(manifest, required, recommended) {
-  manifest.gates = { preVerify: { scope: false, required, recommended } }
+  manifest.gates = { ready: { required: [], recommended: [] }, preVerify: { scope: false, required, recommended } }
 
   return manifest
 }
+
+function withReady(manifest, required, recommended) {
+  manifest.gates = { ready: { required, recommended }, preVerify: { scope: false, required: [], recommended: [] } }
+
+  return manifest
+}
+
+function selfCheck(text) {
+  return text.slice(text.indexOf('7. **Self-check before READY:**'), text.indexOf('8. **Report**'))
+}
+
+const READY_RULES =
+  '   - Run each command below in this worktree at the `HEAD` you will report, one at a time and in the order listed, before the other checks of this step. Report each one in `gates`, with the command as written, its exit code and the last lines of its output. Fix a failing required one before READY, as you would a red check: fix the cause and go back to step 3. A failing recommended one never sends the PR back. Report it like the others. After READY the driver runs every one again, and its own result decides, whatever the report says. It also fails a command that leaves tracked changes.'
+
+const SELF_CHECKS = [
+  '   - `git status --porcelain` is empty;',
+  '   - local `HEAD` equals the PR head (`gh pr view <number> --json headRefOid`);',
+  '   - `origin/main` is an ancestor of `HEAD` (`git fetch origin && git merge-base --is-ancestor origin/main HEAD`); if not, rebase, re-verify, push, wait for CI again;',
+  '   - every check on that SHA passed.',
+]
+
+test('schemas/ready.json: every report has gates, and each entry requires the command, its exit code and the tail of its output', () => {
+  const schema = JSON.parse(readFileSync(new URL('../schemas/ready.json', import.meta.url), 'utf8'))
+  const { gates } = schema.properties
+
+  assert.ok(schema.required.includes('gates'))
+  assert.equal(gates.type, 'array')
+  assert.deepEqual(gates.items.required, ['command', 'exitCode', 'tail'])
+  assert.equal(gates.items.properties.command.type, 'string')
+  assert.equal(gates.items.properties.exitCode.type, 'integer')
+  assert.equal(gates.items.properties.tail.type, 'string')
+})
+
+test('prompts: without ready commands step 7 of the implementer reads as it always did', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const expected = `${['7. **Self-check before READY:**', ...SELF_CHECKS].join('\n')}\n`
+
+  for (const text of [implementPrompt(manifest, pr, STATE), implementPrompt(withReady(manifest, [], []), pr, STATE)]) {
+    assert.equal(selfCheck(text), expected)
+    assert.deepEqual(stepNumbers(text), [1, 2, 3, 4, 5, 6, 7, 8])
+    assert.equal(text.includes('{{'), false)
+  }
+})
+
+test('prompts: the ready commands are the first item of step 7, required ones first', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const both = implementPrompt(withReady(manifest, ['npm ci', 'npm test'], ['npm run lint']), pr, STATE)
+
+  assert.equal(
+    selfCheck(both),
+    `${[
+      '7. **Self-check before READY:**',
+      READY_RULES,
+      '     - required: `npm ci`',
+      '     - required: `npm test`',
+      '     - recommended: `npm run lint`',
+      ...SELF_CHECKS,
+    ].join('\n')}\n`,
+  )
+
+  assert.deepEqual(stepNumbers(both), [1, 2, 3, 4, 5, 6, 7, 8])
+
+  const required = implementPrompt(withReady(manifest, ['npm test'], []), pr, STATE)
+
+  assert.equal(
+    selfCheck(required),
+    `${['7. **Self-check before READY:**', READY_RULES, '     - required: `npm test`', ...SELF_CHECKS].join('\n')}\n`,
+  )
+
+  assert.deepEqual(stepNumbers(required), [1, 2, 3, 4, 5, 6, 7, 8])
+
+  const recommended = implementPrompt(withReady(manifest, [], ['npm run lint']), pr, STATE)
+
+  assert.equal(
+    selfCheck(recommended),
+    `${['7. **Self-check before READY:**', READY_RULES, '     - recommended: `npm run lint`', ...SELF_CHECKS].join('\n')}\n`,
+  )
+
+  assert.deepEqual(stepNumbers(recommended), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.equal(both.includes('## Commands the driver runs after READY'), false, 'the ready commands are not pre-verify commands')
+  assertFilled({ both, required, recommended })
+})
+
+test('prompts: a fresh implementer gets the ready commands in its step 7, and a fix run goes back to step 7', () => {
+  const manifest = withReady(loadManifest(makeRollout()), ['npm test'], ['npm run lint'])
+  const pr = manifest.all[0]
+  const resumed = resumeFreshPrompt(manifest, pr, STATE, { reason: 'session missing', note: 'n' })
+  const fix = fixPrompt(manifest, pr, STATE, { reason: 'ready check', note: 'n', head: 'abc' })
+
+  assert.ok(selfCheck(resumed).includes(`${READY_RULES}\n     - required: \`npm test\`\n     - recommended: \`npm run lint\`\n`))
+  assert.ok(selfCheck(resumed).indexOf('required: `npm test`') < selfCheck(resumed).indexOf('`git status --porcelain` is empty'))
+  assert.deepEqual(stepNumbers(resumed), [1, 2, 3, 4, 5, 6, 7, 8])
+  assert.ok(fix.includes('run the self-check (step 7)'))
+  assertFilled({ resumed, fix })
+})
 
 test('prompts: the implementer learns which commands the driver runs after READY, by level', () => {
   const manifest = loadManifest(makeRollout())
@@ -649,7 +747,7 @@ test('preVerifyNote: every failed command with its summary and output, the reset
   assert.equal(
     preVerifyNote(HEAD, [failed, changed]),
     [
-      'The driver ran the required pre-verify commands at `a1a1a1a`. These failed:',
+      'The driver ran the required commands at `a1a1a1a`. These failed:',
       '### `npm test`\n\nexit 1\n\n```\nnot ok 3 - parses an empty list\n```',
       '### `npm run build`\n\nexit 0, left tracked changes: M dist/index.js\n\n```\nbuilt in 2s\n```\n\nThe driver reset the worktree to that head.',
       '- The driver runs every command again on the new head.\n- Never weaken, skip or delete tests or checks to get green.',
@@ -661,4 +759,66 @@ test('preVerifyNote: output with a code fence of its own gets a longer fence', (
   const failed = commandRecord({ result: 'fail', summary: 'exit 1', exitCode: 1, tail: 'expected:\n```\n{}\n```\n' })
 
   assert.ok(preVerifyNote(HEAD, [failed]).includes('exit 1\n\n````\nexpected:\n```\n{}\n```\n````'))
+})
+
+const READY_FAILED = commandRecord({
+  stage: 'ready',
+  result: 'fail',
+  summary: 'exit 1',
+  exitCode: 1,
+  tail: 'not ok 3 - parses an empty list\n',
+})
+
+const READY_OUTPUT = '### `npm test`\n\nexit 1\n\n```\nnot ok 3 - parses an empty list\n```'
+
+function readyReport(gates, headSha = HEAD) {
+  return { status: 'READY', headSha, gates }
+}
+
+test('preVerifyNote: a failed ready command says what the READY report claimed for it at this head', () => {
+  const ready = 'This is a ready command of your self-check (step 7).'
+  const cases = [
+    [
+      readyReport([{ command: 'npm test', exitCode: 0, tail: '' }]),
+      `${ready} Your READY report says it exited 0 at this head. The driver's run decides.`,
+    ],
+    [readyReport([{ command: ' npm test', exitCode: 2, tail: '' }]), `${ready} Your READY report says it exited 2 at this head.`],
+    [readyReport([{ command: 'npm run lint', exitCode: 0, tail: '' }]), `${ready} Your READY report does not list it in \`gates\`.`],
+    [readyReport([]), `${ready} Your READY report does not list it in \`gates\`.`],
+    [{ status: 'READY', headSha: HEAD }, `${ready} Your READY report does not list it in \`gates\`.`],
+    [readyReport([{ command: 'npm test', exitCode: 0, tail: '' }], 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2'), ready],
+    [undefined, ready],
+  ]
+
+  for (const [report, paragraph] of cases) {
+    assert.equal(
+      preVerifyNote(HEAD, [READY_FAILED], report),
+      [
+        'The driver ran the required commands at `a1a1a1a`. These failed:',
+        READY_OUTPUT,
+        paragraph,
+        '- The driver runs every command again on the new head.\n- Never weaken, skip or delete tests or checks to get green.',
+      ].join('\n\n'),
+      JSON.stringify(report),
+    )
+  }
+})
+
+test('preVerifyNote: the claim follows the reset of a ready command, and a pre-verify command gets no claim', () => {
+  const changed = { ...READY_FAILED, summary: 'exit 0, left tracked changes: M dist/index.js', exitCode: 0, changes: ['M dist/index.js'] }
+  const report = readyReport([{ command: 'npm test', exitCode: 0, tail: '' }])
+
+  assert.ok(
+    preVerifyNote(HEAD, [changed], report).includes(
+      "\n\nThe driver reset the worktree to that head.\n\nThis is a ready command of your self-check (step 7). Your READY report says it exited 0 at this head. The driver's run decides.\n\n",
+    ),
+  )
+
+  const preVerify = preVerifyNote(HEAD, [{ ...READY_FAILED, stage: 'preVerify' }], report)
+  const old = preVerifyNote(HEAD, [{ ...READY_FAILED, stage: undefined }], report)
+
+  for (const text of [preVerify, old]) {
+    assert.equal(text.includes('ready command'), false)
+    assert.ok(text.includes(`${READY_OUTPUT}\n\n- The driver runs every command again on the new head.`))
+  }
 })

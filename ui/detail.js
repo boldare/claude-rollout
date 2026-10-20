@@ -10,7 +10,7 @@ const RUN_HEADINGS = ['run', 'role', 'effort', 'start', 'duration', 'cost', 'res
 const CHECK_HEADINGS = ['item', 'status', 'evidence']
 const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
 const RECHECK_CLASSES = { resolved: 'check-pass', open: 'check-fail', wrong: 'check-unverifiable' }
-const PRE_VERIFY_HEADINGS = ['command', 'level', 'result', 'evidence']
+const PRE_VERIFY_HEADINGS = ['command', 'stage', 'level', 'result', 'evidence']
 
 function short(sha) {
   return typeof sha === 'string' && sha ? sha.slice(0, 7) : '-'
@@ -321,12 +321,14 @@ function preVerifyResultClass(record) {
   return record.level === 'recommended' ? 'warning' : 'check-fail'
 }
 
+// A record from before ready commands has no stage and is a pre-verify one.
 function preVerifyRow(record) {
   const evidence = [record.summary, record.tail?.trim()].filter(Boolean).join('\n')
 
   return wrap(
     'tr',
     cell(record.command, 'text'),
+    cell(record.stage ?? 'preVerify'),
     cell(record.level),
     cell(record.result, preVerifyResultClass(record)),
     cell(evidence, 'text'),
@@ -338,7 +340,7 @@ function preVerifyTable(preVerify) {
     return []
   }
 
-  return [element('h3', 'pre-verify commands'), table(PRE_VERIFY_HEADINGS, preVerify.results.map(preVerifyRow), 'checklist')]
+  return [element('h3', 'commands the driver ran'), table(PRE_VERIFY_HEADINGS, preVerify.results.map(preVerifyRow), 'checklist')]
 }
 
 function renderVerifier(pr, ctx) {
