@@ -1,6 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { commandResult, inheritsParent, preVerifyOutcome, readyClaim, speaksForItself, summarizeChecks } from '../lib/checks.mjs'
+import {
+  briefGates,
+  briefOutcome,
+  commandResult,
+  inheritsParent,
+  preVerifyOutcome,
+  readyClaim,
+  speaksForItself,
+  summarizeChecks,
+} from '../lib/checks.mjs'
 import { globToRegExp, matchesAny } from '../lib/glob.mjs'
 import { raiseEffort, validateManifest } from '../lib/manifest.mjs'
 
@@ -352,4 +361,204 @@ test('readyClaim: the exit code of the first entry with the same command, both s
   assert.deepEqual(readyClaim(READY_TESTS, report(gates), HEAD), { listed: true, exitCode: 0 })
   assert.deepEqual(readyClaim({ ...READY_TESTS, command: ' npm test  ' }, report(gates.slice(2)), HEAD), { listed: true, exitCode: 1 })
   assert.deepEqual(readyClaim(READY_TESTS, report([{ command: 'npm test', exitCode: 3, tail: '' }]), HEAD), { listed: true, exitCode: 3 })
+})
+
+const RULES = 'When the PR changes a rule, every file that states the old one is in Expected files.'
+const COMMANDS = 'Every verification command exists or is marked new in this PR.'
+const LEAN = 'The brief has no filler.'
+const GATES = briefGates({ runChecks: true, required: [RULES, COMMANDS], recommended: [LEAN] })
+
+function briefReport(overrides = {}) {
+  return {
+    brief: '# A1\n',
+    questions: [],
+    notes: 'Checked.',
+    expectedFiles: ['lib/a.mjs'],
+    changesetBump: 'minor',
+    checks: [],
+    criteria: [
+      { id: 'B1', result: 'pass', evidence: 'docs/a.md is listed.' },
+      { id: 'B2', result: 'pass', evidence: 'npm test exists.' },
+      { id: 'B3', result: 'pass', evidence: 'Short.' },
+    ],
+    ...overrides,
+  }
+}
+
+function reported(id, result, evidence) {
+  return briefReport().criteria.map((item) => (item.id === id ? { id, result, evidence } : item))
+}
+
+test('briefGates: ids B1 and on across both lists, the required ones first', () => {
+  assert.deepEqual(briefGates({ runChecks: true, required: [RULES, COMMANDS], recommended: [LEAN] }), {
+    runChecks: true,
+    criteria: [
+      { id: 'B1', level: 'required', text: RULES },
+      { id: 'B2', level: 'required', text: COMMANDS },
+      { id: 'B3', level: 'recommended', text: LEAN },
+    ],
+  })
+
+  assert.deepEqual(briefGates({ runChecks: false, required: [], recommended: [LEAN, RULES] }).criteria, [
+    { id: 'B1', level: 'recommended', text: LEAN },
+    { id: 'B2', level: 'recommended', text: RULES },
+  ])
+
+  assert.deepEqual(briefGates({ runChecks: false, required: [], recommended: [] }), { runChecks: false, criteria: [] })
+})
+
+test('briefOutcome: every criterion passed and every check can pass adds nothing', () => {
+  const checks = [
+    { command: 'npm test', exitCode: 0, canPass: true, evidence: '676 pass' },
+    { command: 'npm run lint', exitCode: 1, canPass: true, evidence: 'fails only on the file this PR adds' },
+  ]
+
+  const outcome = briefOutcome(GATES, briefReport({ checks }))
+
+  assert.deepEqual(outcome.questions, [])
+  assert.deepEqual(outcome.failedRecommended, [])
+  assert.deepEqual(outcome.checks, [
+    { ...checks[0], result: 'pass' },
+    { ...checks[1], result: 'pass' },
+  ])
+
+  assert.deepEqual(outcome.criteria, [
+    { id: 'B1', level: 'required', text: RULES, result: 'pass', evidence: 'docs/a.md is listed.' },
+    { id: 'B2', level: 'required', text: COMMANDS, result: 'pass', evidence: 'npm test exists.' },
+    { id: 'B3', level: 'recommended', text: LEAN, result: 'pass', evidence: 'Short.' },
+  ])
+})
+
+test("briefOutcome: a required criterion that failed, is unverifiable or was not reported adds a question after the reviewer's own", () => {
+  const failed = briefOutcome(GATES, briefReport({ questions: ['Which API?'], criteria: reported('B1', 'fail', 'README.md is missing.') }))
+
+  assert.deepEqual(failed.questions, ['Which API?', `B1 (required brief criterion, fail): ${RULES} Evidence: README.md is missing.`])
+
+  const unverifiable = briefOutcome(GATES, briefReport({ criteria: reported('B2', 'unverifiable', 'No package.json.') }))
+
+  assert.deepEqual(unverifiable.questions, [`B2 (required brief criterion, unverifiable): ${COMMANDS} Evidence: No package.json.`])
+
+  const missing = briefOutcome(GATES, briefReport({ criteria: briefReport().criteria.filter((item) => item.id !== 'B2') }))
+
+  assert.deepEqual(missing.questions, [`B2 (required brief criterion, fail): ${COMMANDS} Evidence: not reported by the reviewer`])
+  assert.deepEqual(missing.criteria[1], {
+    id: 'B2',
+    level: 'required',
+    text: COMMANDS,
+    result: 'fail',
+    evidence: 'not reported by the reviewer',
+  })
+})
+
+test('briefOutcome: a reviewer question that names the id as a whole word is not asked again, and B20 does not name B2', () => {
+  const gates = briefGates({ runChecks: false, required: [RULES, COMMANDS], recommended: [] })
+  const criteria = [
+    { id: 'B1', result: 'pass', evidence: 'Listed.' },
+    { id: 'B2', result: 'fail', evidence: 'build:docs does not exist.' },
+  ]
+
+  for (const question of ['B2: keep build:docs?', 'About B2, keep build:docs?', 'Keep build:docs (B2)?']) {
+    assert.deepEqual(briefOutcome(gates, briefReport({ questions: [question], criteria })).questions, [question], question)
+  }
+
+  for (const question of ['B20: keep build:docs?', 'AB2 or not?', 'B2x is fine?']) {
+    assert.deepEqual(
+      briefOutcome(gates, briefReport({ questions: [question], criteria })).questions,
+      [question, `B2 (required brief criterion, fail): ${COMMANDS} Evidence: build:docs does not exist.`],
+      question,
+    )
+  }
+})
+
+test('briefOutcome: a check that cannot pass adds a question unless the reviewer quoted its command, and canPass alone decides', () => {
+  const checks = [
+    { command: 'npm run build:docs', exitCode: 127, canPass: false, evidence: 'missing script: build:docs' },
+    { command: 'npm test', exitCode: 1, canPass: true, evidence: 'fails on the test this PR fixes' },
+    { command: 'npm run slow', exitCode: -1, canPass: false, evidence: 'did not finish in 10 minutes' },
+  ]
+
+  const outcome = briefOutcome(GATES, briefReport({ checks }))
+
+  assert.deepEqual(
+    outcome.checks.map((check) => check.result),
+    ['fail', 'pass', 'fail'],
+  )
+
+  assert.deepEqual(outcome.questions, [
+    'The check `npm run build:docs` cannot pass after a change within the expected files (exit 127). Evidence: missing script: build:docs',
+    'The check `npm run slow` cannot pass after a change within the expected files (exit -1). Evidence: did not finish in 10 minutes',
+  ])
+
+  const quoted = briefOutcome(GATES, briefReport({ checks, questions: ['Should `npm run build:docs` become npm run docs?'] }))
+
+  assert.deepEqual(quoted.questions, [
+    'Should `npm run build:docs` become npm run docs?',
+    'The check `npm run slow` cannot pass after a change within the expected files (exit -1). Evidence: did not finish in 10 minutes',
+  ])
+})
+
+test('briefOutcome: without runChecks the reported checks are ignored', () => {
+  const gates = briefGates({ runChecks: false, required: [RULES], recommended: [] })
+  const checks = [{ command: 'npm run build:docs', exitCode: 127, canPass: false, evidence: 'missing script' }]
+  const outcome = briefOutcome(gates, briefReport({ checks, criteria: [{ id: 'B1', result: 'pass', evidence: 'Listed.' }] }))
+
+  assert.deepEqual(outcome.checks, [])
+  assert.deepEqual(outcome.questions, [])
+})
+
+test('briefOutcome: the first report of an id counts, and ids that were not sent are ignored', () => {
+  const criteria = [
+    { id: 'B9', result: 'fail', evidence: 'Not a criterion.' },
+    { id: 'B1', result: 'pass', evidence: 'First.' },
+    { id: 'B1', result: 'fail', evidence: 'Second.' },
+    { id: 'B2', result: 'pass', evidence: 'Exists.' },
+    { id: 'B3', result: 'pass', evidence: 'Short.' },
+  ]
+
+  const outcome = briefOutcome(GATES, briefReport({ criteria }))
+
+  assert.deepEqual(
+    outcome.criteria.map((record) => [record.id, record.result, record.evidence]),
+    [
+      ['B1', 'pass', 'First.'],
+      ['B2', 'pass', 'Exists.'],
+      ['B3', 'pass', 'Short.'],
+    ],
+  )
+
+  assert.deepEqual(outcome.questions, [])
+})
+
+test('briefOutcome: a recommended criterion that does not pass goes to failedRecommended and asks nothing', () => {
+  for (const [result, evidence] of [
+    ['fail', 'Three filler sentences in Goal.'],
+    ['unverifiable', 'No style guide.'],
+  ]) {
+    const outcome = briefOutcome(GATES, briefReport({ criteria: reported('B3', result, evidence) }))
+
+    assert.deepEqual(outcome.questions, [])
+    assert.deepEqual(outcome.failedRecommended, [{ id: 'B3', level: 'recommended', text: LEAN, result, evidence }])
+  }
+
+  const missing = briefOutcome(GATES, briefReport({ criteria: briefReport().criteria.slice(0, 2) }))
+
+  assert.deepEqual(missing.failedRecommended, [
+    { id: 'B3', level: 'recommended', text: LEAN, result: 'fail', evidence: 'not reported by the reviewer' },
+  ])
+})
+
+test('briefOutcome: a report without checks or criteria reads as empty lists', () => {
+  const legacy = { brief: '# A1\n', questions: ['Which API?'], notes: '', expectedFiles: [], changesetBump: 'minor' }
+
+  assert.deepEqual(briefOutcome(briefGates({ runChecks: true, required: [], recommended: [] }), legacy), {
+    checks: [],
+    criteria: [],
+    questions: ['Which API?'],
+    failedRecommended: [],
+  })
+
+  assert.deepEqual(briefOutcome(briefGates({ runChecks: true, required: [RULES], recommended: [] }), legacy).questions, [
+    'Which API?',
+    `B1 (required brief criterion, fail): ${RULES} Evidence: not reported by the reviewer`,
+  ])
 })

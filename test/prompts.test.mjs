@@ -2,9 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { briefGates } from '../lib/checks.mjs'
 import { freshPr, recordAnswers, recordFindings } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import {
+  briefReviewNotes,
   briefReviewPrompt,
   briefWritePrompt,
   codeScanningNote,
@@ -106,7 +108,7 @@ test('prompts: a private repo without a denylist gets neither rule', () => {
   assertFilled(prompts)
 })
 
-test('prompts: the brief writer sees every earlier answer, oldest first, under one heading', () => {
+test('prompts: the brief writer and the reviewer see every earlier answer, oldest first, under one heading', () => {
   const manifest = loadManifest(makeRollout())
   const pr = manifest.all[0]
   const briefAnswers = [
@@ -115,28 +117,46 @@ test('prompts: the brief writer sees every earlier answer, oldest first, under o
     { question: null, answer: 'The plan moved to a new file.' },
   ]
 
-  const text = briefWritePrompt(manifest, pr, { ...STATE, briefAnswers })
-  const order = [
-    'Which default for the delay?',
-    '120 seconds.',
-    'Keep the old flag?',
-    'Yes, as an alias.',
-    'The plan moved to a new file.',
-  ].map((part) => text.indexOf(part))
+  const entry = { ...STATE, briefAnswers }
+  const prompts = {
+    write: briefWritePrompt(manifest, pr, entry),
+    review: briefReviewPrompt(manifest, pr, entry, '# A1\n\n## Goal\n\nRename the flag.'),
+  }
 
-  assert.equal(text.split('## Answers from the maintainer').length, 2)
-  assert.ok(order.every((index) => index > -1))
-  assert.deepEqual(
-    order,
-    [...order].sort((left, right) => left - right),
-  )
+  for (const [name, text] of Object.entries(prompts)) {
+    const order = [
+      'Which default for the delay?',
+      '120 seconds.',
+      'Keep the old flag?',
+      'Yes, as an alias.',
+      'The plan moved to a new file.',
+    ].map((part) => text.indexOf(part))
 
-  assert.ok(text.includes('A note from the maintainer:\n\nThe plan moved to a new file.'))
+    assert.equal(text.split('## Answers from the maintainer').length, 2, name)
+    assert.ok(
+      order.every((index) => index > -1),
+      name,
+    )
 
-  const fresh = briefWritePrompt(manifest, pr, freshPr())
+    assert.deepEqual(
+      order,
+      [...order].sort((left, right) => left - right),
+      name,
+    )
 
-  assert.equal(fresh.includes('## Answers from the maintainer'), false)
-  assert.equal(fresh.includes('{{'), false)
+    assert.ok(text.includes('A note from the maintainer:\n\nThe plan moved to a new file.'), name)
+  }
+
+  const answers = prompts.review.indexOf('\n## Answers from the maintainer\n')
+
+  assert.ok(answers > prompts.review.indexOf('\n## Sources\n'), 'the reviewer gets the answers after the sources')
+  assert.ok(answers < prompts.review.indexOf('\n## Draft brief\n'), 'and before the draft, whose own sections would swallow them')
+  assert.ok(prompts.review.trimEnd().endsWith('## Draft brief\n\n# A1\n\n## Goal\n\nRename the flag.'))
+
+  for (const fresh of [briefWritePrompt(manifest, pr, freshPr()), briefReviewPrompt(manifest, pr, freshPr(), '# A1')]) {
+    assert.equal(fresh.includes('## Answers from the maintainer'), false)
+    assert.equal(fresh.includes('{{'), false)
+  }
 })
 
 function stepNumbers(text) {
@@ -821,4 +841,156 @@ test('preVerifyNote: the claim follows the reset of a ready command, and a pre-v
     assert.equal(text.includes('ready command'), false)
     assert.ok(text.includes(`${READY_OUTPUT}\n\n- The driver runs every command again on the new head.`))
   }
+})
+
+const STEP_2 =
+  '2. Check that verification commands exist (package.json scripts at the root and in `examples/`, `scripts/`), or are marked "new in this PR".'
+
+function briefManifest(brief) {
+  return loadManifest(makeRollout({ manifest: { gates: { brief } } }))
+}
+
+function stepLine(text, number) {
+  return text.split('\n').find((line) => line.startsWith(`${number}. `))
+}
+
+test('prompts: without runChecks step 2 of the brief review only checks that the commands exist', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const checked = briefManifest({ runChecks: true })
+  const texts = {
+    default: briefReviewPrompt(manifest, pr, STATE, '# draft'),
+    criteria: briefReviewPrompt(briefManifest({ required: ['Rule one.'] }), pr, STATE, '# draft'),
+    launched: briefReviewPrompt(checked, pr, STATE, '# draft', [], briefGates({ runChecks: false, required: [], recommended: [] })),
+  }
+
+  for (const [name, text] of Object.entries(texts)) {
+    assert.equal(stepLine(text, 2), STEP_2, name)
+    assert.ok(text.includes(`${STEP_2}\n3. Check completeness`), name)
+    assert.deepEqual(stepNumbers(text), [1, 2, 3, 4, 5, 6], name)
+    assert.equal(text.includes('Then run every verification command'), false, name)
+  }
+
+  assertFilled(texts)
+})
+
+test('prompts: with runChecks step 2 of the brief review runs the existing commands, judges whether each can pass and reports them in checks', () => {
+  const manifest = briefManifest({ runChecks: true })
+  const pr = manifest.all[0]
+  const text = briefReviewPrompt(manifest, pr, STATE, '# draft')
+  const step = stepLine(text, 2)
+
+  assert.ok(step.startsWith(`${STEP_2} Then run every verification command and every acceptance command of the draft`), step)
+  assert.deepEqual(stepNumbers(text), [1, 2, 3, 4, 5, 6])
+
+  for (const part of [
+    'that exists in this worktree, one at a time, in the foreground.',
+    'A command that a dependency merged into this worktree adds exists.',
+    'Skip a command marked "new in this PR" and a command that rewrites tracked files, and leave the worktree as you found it.',
+    "For each command you ran, decide whether it can pass after a change within the brief's expected files.",
+    'One that fails here only because the PR is not written yet can still pass.',
+    'When you cannot fix it, ask a question that quotes the command.',
+    'Report in `checks` each command you ran as it stands in your final brief.',
+  ]) {
+    assert.ok(step.includes(part), part)
+  }
+
+  assert.ok(text.includes('the `checks` and `criteria` results (each empty when this prompt asks for none), and notes on what you changed'))
+
+  assert.equal(text.includes('## Project criteria'), false)
+  assert.equal(briefWritePrompt(manifest, pr, STATE).includes('Then run every verification command'), false, 'the writer runs nothing')
+  assertFilled({ text })
+})
+
+test('prompts: with criteria the brief reviewer gets a Project criteria section before the sources, and the writer a rule that lists them', () => {
+  const manifest = briefManifest({ required: ['Rule one.', 'Rule two.'], recommended: ['Rule three.'] })
+  const pr = manifest.all[0]
+  const review = briefReviewPrompt(manifest, pr, STATE, '# draft')
+  const write = briefWritePrompt(manifest, pr, STATE)
+  const section = review.indexOf('\n## Project criteria\n')
+
+  assert.ok(section > review.indexOf('Return the corrected, complete brief'), 'after the return paragraph')
+  assert.ok(section < review.indexOf('\n## Sources\n'), 'before the sources')
+  assert.ok(
+    review.includes('## Project criteria\n\nCheck the draft against each criterion and fix the brief until every required one passes.'),
+  )
+
+  for (const part of [
+    'A criterion that does not apply to this PR passes, and the evidence says why.',
+    'An answer from the maintainer that settles a criterion is evidence for it.',
+    'Report each one in `criteria` with its id, `pass`, `fail` or `unverifiable`, and the evidence.',
+    'When a required one cannot pass, ask a question that names its id.',
+    'The driver asks the maintainer about every required criterion that does not pass, and adds every recommended one that does not pass to the review notes.',
+    '\n\n- B1 (required): Rule one.\n- B2 (required): Rule two.\n- B3 (recommended): Rule three.\n\n## Sources',
+  ]) {
+    assert.ok(review.indexOf(part) > section, part)
+  }
+
+  assert.ok(
+    write.includes(
+      'with a command or a file:line.\n- **Project criteria.** The reviewer checks the brief against these. A required one that does not pass becomes a question to the maintainer.\n  - B1 (required): Rule one.\n  - B2 (required): Rule two.\n  - B3 (recommended): Rule three.\n- If a real product decision is missing',
+    ),
+  )
+
+  assertFilled({ review, write })
+})
+
+test('prompts: without criteria neither brief prompt lists any', () => {
+  const pr = loadManifest(makeRollout()).all[0]
+  const texts = {}
+
+  for (const [name, manifest] of Object.entries({ default: loadManifest(makeRollout()), checks: briefManifest({ runChecks: true }) })) {
+    texts[`${name} review`] = briefReviewPrompt(manifest, pr, STATE, '# draft')
+    texts[`${name} write`] = briefWritePrompt(manifest, pr, STATE)
+  }
+
+  const launched = briefManifest({ required: ['Rule one.'] })
+
+  texts['launched review'] = briefReviewPrompt(launched, pr, STATE, '# draft', [], briefGates())
+  texts['launched write'] = briefWritePrompt(launched, pr, STATE, [], briefGates())
+
+  for (const [name, text] of Object.entries(texts)) {
+    assert.equal(text.includes('Project criteria'), false, name)
+    assert.equal(text.includes('(required): '), false, name)
+  }
+
+  assert.ok(texts['default review'].includes('what is still uncertain.\n\n\n\n## Sources'))
+  assertFilled(texts)
+})
+
+test('briefReviewNotes: the notes alone, or with the recommended criteria that did not pass after a blank line', () => {
+  const failed = [
+    { id: 'B3', level: 'recommended', text: 'Rule three.', result: 'unverifiable', evidence: 'No style guide.' },
+    { id: 'B4', level: 'recommended', text: 'Rule four.', result: 'fail', evidence: 'not reported by the reviewer' },
+  ]
+
+  const section = [
+    '## Recommended brief criteria that did not pass',
+    '',
+    '- B3 (unverifiable): Rule three. Evidence: No style guide.',
+    '- B4 (fail): Rule four. Evidence: not reported by the reviewer',
+  ].join('\n')
+
+  assert.equal(briefReviewNotes('  Checked every path.\n', []), 'Checked every path.')
+  assert.equal(briefReviewNotes('', []), '')
+  assert.equal(briefReviewNotes('Checked every path.\n', failed), `Checked every path.\n\n${section}`)
+  assert.equal(briefReviewNotes(' \n', failed), section)
+})
+
+test('schemas/brief.json: every report has checks and criteria, with every field of their items required', () => {
+  const schema = JSON.parse(readFileSync(new URL('../schemas/brief.json', import.meta.url), 'utf8'))
+  const { checks, criteria } = schema.properties
+
+  function types(items) {
+    return Object.fromEntries(Object.entries(items.properties).map(([key, value]) => [key, value.type]))
+  }
+
+  assert.deepEqual(schema.required, ['brief', 'expectedFiles', 'changesetBump', 'questions', 'notes', 'checks', 'criteria'])
+  assert.equal(checks.type, 'array')
+  assert.deepEqual(types(checks.items), { command: 'string', exitCode: 'integer', canPass: 'boolean', evidence: 'string' })
+  assert.deepEqual(checks.items.required, ['command', 'exitCode', 'canPass', 'evidence'])
+  assert.equal(criteria.type, 'array')
+  assert.deepEqual(types(criteria.items), { id: 'string', result: 'string', evidence: 'string' })
+  assert.deepEqual(criteria.items.properties.result.enum, ['pass', 'fail', 'unverifiable'])
+  assert.deepEqual(criteria.items.required, ['id', 'result', 'evidence'])
 })

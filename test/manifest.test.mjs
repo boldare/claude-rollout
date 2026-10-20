@@ -265,7 +265,7 @@ function gatesErrors(gates) {
   return validateManifest(raw)
 }
 
-test('validateManifest: gates, when set, is a mapping of ready and preVerify, each a mapping of its keys', () => {
+test('validateManifest: gates, when set, is a mapping of brief, ready and preVerify, each a mapping of its keys', () => {
   const cases = [
     [{ preVerify: { scope: true } }, []],
     [{ preVerify: { scope: false } }, []],
@@ -321,17 +321,57 @@ test('validateManifest: gates.ready and gates.preVerify required and recommended
   }
 })
 
+test('validateManifest: gates.brief is a mapping of a boolean runChecks and the required and recommended criteria', () => {
+  const criterion = 'When the PR changes a rule, every file that states the old one is in Expected files.'
+  const cases = [
+    [{ brief: {} }, []],
+    [{ brief: { runChecks: true } }, []],
+    [{ brief: { runChecks: false, required: [criterion], recommended: ['The checklist names a command.'] } }, []],
+    [{ brief: null }, ['gates.brief must be a mapping']],
+    [{ brief: ['B1'] }, ['gates.brief must be a mapping']],
+    [{ brief: { runChecks: 'yes' } }, ['gates.brief.runChecks must be true or false']],
+    [{ brief: { runChecks: null } }, ['gates.brief.runChecks must be true or false']],
+    [{ brief: { runChecks: true, scope: true } }, ['gates.brief: unknown key scope']],
+    [{ brief: { criteria: [criterion] } }, ['gates.brief: unknown key criteria']],
+  ]
+
+  for (const [gates, errors] of cases) {
+    assert.deepEqual(gatesErrors(gates), errors, JSON.stringify(gates))
+  }
+
+  const valid = [[criterion], [criterion, 'The checklist names a command.'], [' padded '], []]
+  const invalid = [null, criterion, [criterion, ''], ['  '], [criterion, 3], [null], { B1: criterion }, true]
+
+  for (const key of ['required', 'recommended']) {
+    for (const criteria of valid) {
+      assert.deepEqual(gatesErrors({ brief: { [key]: criteria } }), [], `${key}: ${JSON.stringify(criteria)}`)
+    }
+
+    for (const criteria of invalid) {
+      assert.deepEqual(
+        gatesErrors({ brief: { [key]: criteria } }),
+        [`gates.brief.${key} must be a list of non-empty strings`],
+        `${key}: ${JSON.stringify(criteria)}`,
+      )
+    }
+  }
+})
+
 test('validateManifest: unknown stages first, then per stage its unknown keys and its type errors in table order', () => {
   assert.deepEqual(
     gatesErrors({
       verify: { criteriaFrom: 'plan' },
       preVerify: { recommended: 'lint', tests: ['npm test'], required: [''], scope: 'on' },
-      brief: {},
+      merge: {},
+      brief: { required: 'B1', checks: true, runChecks: 'on' },
       ready: { required: 'npm test', tests: [] },
     }),
     [
       'gates: unknown key verify',
-      'gates: unknown key brief',
+      'gates: unknown key merge',
+      'gates.brief: unknown key checks',
+      'gates.brief.runChecks must be true or false',
+      'gates.brief.required must be a list of non-empty strings',
       'gates.ready: unknown key tests',
       'gates.ready.required must be a list of non-empty strings',
       'gates.preVerify: unknown key tests',
@@ -348,45 +388,70 @@ test('validateManifest: unknown stages first, then per stage its unknown keys an
 })
 
 test('loadManifest: every gates key gets its default, and set values are kept', () => {
+  const brief = { runChecks: false, required: [], recommended: [] }
   const ready = { required: [], recommended: [] }
-  const defaults = { ready, preVerify: { scope: false, required: [], recommended: [] } }
+  const defaults = { brief, ready, preVerify: { scope: false, required: [], recommended: [] } }
   const set = { scope: true, required: ['npm ci', 'npm test'], recommended: ['npm run lint'] }
+  const briefSet = {
+    runChecks: true,
+    required: ['Every changed rule is in Expected files.'],
+    recommended: ['The checklist names a command.'],
+  }
 
   assert.deepEqual(loadManifest(makeRollout()).gates, defaults)
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: {} } })).gates, defaults)
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: {} } } })).gates, defaults)
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { ready: {} } } })).gates, defaults)
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { brief: {} } } })).gates, defaults)
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: { scope: true } } } })).gates, {
+    brief,
     ready,
     preVerify: { scope: true, required: [], recommended: [] },
   })
 
-  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: set } } })).gates, { ready, preVerify: set })
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: set } } })).gates, { brief, ready, preVerify: set })
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { preVerify: { recommended: ['npm run lint'] } } } })).gates, {
+    brief,
     ready,
     preVerify: { scope: false, required: [], recommended: ['npm run lint'] },
   })
 
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { ready: { required: ['npm ci', 'npm test'] } } } })).gates, {
+    brief,
     ready: { required: ['npm ci', 'npm test'], recommended: [] },
     preVerify: { scope: false, required: [], recommended: [] },
   })
 
   assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { ready: { recommended: ['npm run lint'] } } } })).gates, {
+    brief,
     ready: { required: [], recommended: ['npm run lint'] },
     preVerify: { scope: false, required: [], recommended: [] },
+  })
+
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { brief: briefSet } } })).gates, {
+    brief: briefSet,
+    ready,
+    preVerify: defaults.preVerify,
+  })
+
+  assert.deepEqual(loadManifest(makeRollout({ manifest: { gates: { brief: { runChecks: true } } } })).gates.brief, {
+    runChecks: true,
+    required: [],
+    recommended: [],
   })
 })
 
 test('loadManifest: each default list is a new array', () => {
-  const first = loadManifest(makeRollout()).gates.preVerify
-  const second = loadManifest(makeRollout()).gates.preVerify
+  for (const stage of ['brief', 'ready', 'preVerify']) {
+    const first = loadManifest(makeRollout()).gates[stage]
+    const second = loadManifest(makeRollout()).gates[stage]
 
-  assert.notEqual(first.required, first.recommended)
-  assert.notEqual(first.required, second.required)
-  first.required.push('npm test')
-  assert.deepEqual(second.required, [])
-  assert.deepEqual(first.recommended, [])
+    assert.notEqual(first.required, first.recommended, stage)
+    assert.notEqual(first.required, second.required, stage)
+    first.required.push('npm test')
+    assert.deepEqual(second.required, [], stage)
+    assert.deepEqual(first.recommended, [], stage)
+  }
 })
 
 function named(rollout, edit) {

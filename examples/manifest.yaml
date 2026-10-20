@@ -56,8 +56,14 @@ policy:
   attempts: { implement: 2, fix: 4, verify: 3 }
   timeouts: { implement: 240, fix: 120, verify: 90 }
 
-# Checks before the verifier, on top of CI, the policy and code scanning.
+# Checks on top of CI, the policy and code scanning: on each brief the driver writes, and before the verifier.
 # gates:
+#   brief:
+#     # The brief reviewer runs the draft's existing commands and reports whether each can pass.
+#     runChecks: true
+#     # The reviewer checks each brief against these. A required one that does not pass blocks the PR on a brief question.
+#     required:
+#       - When the PR changes a rule or a behaviour, every file that states the old one is in Expected files.
 #   ready:
 #     # The implementer runs these before READY, and the driver runs them again before the pre-verify commands. The install goes first.
 #     # A failed one sends the PR back.

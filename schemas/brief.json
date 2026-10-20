@@ -13,7 +13,37 @@
       "items": { "type": "string" },
       "description": "Product decisions the plan does not make and the code cannot answer. Empty when the brief is complete."
     },
-    "notes": { "type": "string", "description": "What you checked, changed or are unsure about (for the maintainer, not the implementer)." }
+    "notes": {
+      "type": "string",
+      "description": "What you checked, changed or are unsure about (for the maintainer, not the implementer)."
+    },
+    "checks": {
+      "type": "array",
+      "description": "The draft's commands the reviewer ran when its prompt asks for it, empty otherwise. Always empty from the writer.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string" },
+          "exitCode": { "type": "integer", "description": "-1 when the command did not finish." },
+          "canPass": { "type": "boolean", "description": "Whether the command can pass after a change within the expected files." },
+          "evidence": { "type": "string" }
+        },
+        "required": ["command", "exitCode", "canPass", "evidence"]
+      }
+    },
+    "criteria": {
+      "type": "array",
+      "description": "One entry per project criterion the prompt lists, empty when it lists none. Always empty from the writer.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "result": { "type": "string", "enum": ["pass", "fail", "unverifiable"] },
+          "evidence": { "type": "string" }
+        },
+        "required": ["id", "result", "evidence"]
+      }
+    }
   },
-  "required": ["brief", "expectedFiles", "changesetBump", "questions", "notes"]
+  "required": ["brief", "expectedFiles", "changesetBump", "questions", "notes", "checks", "criteria"]
 }

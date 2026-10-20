@@ -25,6 +25,7 @@ The plan is authoritative for scope and decisions. Its decisions and defaults wi
 - **Verification** uses commands that exist on this worktree (package.json scripts, `scripts/`), or says "new in this PR". Every repo PR runs this recipe:
   {{verify}}
 - **Acceptance checklist.** 5 to 12 items, each objectively checkable by the verifier with a command or a file:line.
+{{briefCriteria}}
 - If a real product decision is missing (not a detail you can decide from the plan's intent), put it in `questions` instead of guessing. Keep `questions` empty otherwise.
 
 ## Brief format (markdown)
