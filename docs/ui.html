@@ -469,7 +469,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <p>
           The default view. Chips on top filter by state and count the PRs in each. One row per PR, in manifest order. Click a row to open
-          the PR page. A click on a link or a button in the row does not.
+          the PR page. A click on a link or a button in the row does not. The arrow in front of a row opens it into a panel with the PR's
+          run in progress, or its last run.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of the board">
@@ -483,6 +484,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <table>
                 <thead>
                   <tr>
+                    <th></th>
                     <th>PR</th>
                     <th>title</th>
                     <th>state</th>
@@ -496,6 +498,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                 </thead>
                 <tbody>
                   <tr>
+                    <td class="toggle"><span class="row-toggle"></span></td>
                     <td class="id">P1</td>
                     <td class="small wrap">feat: config loader</td>
                     <td><span class="badge state state-merged">Merged</span></td>
@@ -506,7 +509,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="small">2h 36m ago</td>
                     <td class="small wrap info">merged as 3f2a9c1</td>
                   </tr>
-                  <tr>
+                  <tr class="open">
+                    <td class="toggle"><span class="row-toggle open"></span></td>
                     <td class="id">P2</td>
                     <td class="small wrap">feat: cli flags</td>
                     <td><span class="badge state state-verified">Verified</span></td>
@@ -517,7 +521,28 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="small">19m ago</td>
                     <td class="small wrap info">wait: awaiting a maintainer review on GitHub (approve PR #42)</td>
                   </tr>
-                  <tr>
+                  <tr class="panel-row">
+                    <td colspan="10">
+                      <div class="run-panel">
+                        <div class="facts">
+                          <span class="run-name">P2-02-verify</span><span class="badge verdict-pass">PASS</span>
+                          <span><span class="label">Role</span><span>verify</span></span>
+                          <span><span class="label">Effort</span><span>xhigh</span></span>
+                          <span><span class="label">Model</span><span>claude-opus-5-5</span></span>
+                          <span><span class="label">Took</span><span>21m · $1.84 · 0 denials</span></span>
+                        </div>
+                        <p class="commands-head"><span class="label">Last commands</span><span>96 items in the log</span></p>
+                        <ul class="commands">
+                          <li><strong>Bash</strong><code>npm test</code><span class="outcome">214 lines</span></li>
+                          <li><strong>Bash</strong><code>node bin/rollout.mjs --help</code><span class="outcome">38 lines</span></li>
+                          <li class="message">PASS: all 14 flags parse, win over the file and show in --help.</li>
+                        </ul>
+                        <p class="panel-footer"><a href="#transcripts">Open the transcript</a></p>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr class="open">
+                    <td class="toggle"><span class="row-toggle open"></span></td>
                     <td class="id">P3</td>
                     <td class="small wrap">docs: config reference</td>
                     <td>
@@ -530,7 +555,41 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="small">34m ago</td>
                     <td class="small"></td>
                   </tr>
+                  <tr class="panel-row">
+                    <td colspan="10">
+                      <div class="run-panel">
+                        <div class="facts">
+                          <span class="badge active-run">P3-01-implement</span>
+                          <span><span class="label">Role</span><span>implement</span></span>
+                          <span><span class="label">Effort</span><span>xhigh</span></span>
+                          <span><span class="label">Model</span><span>claude-opus-5-5</span></span>
+                          <span><span class="label">Running</span><span class="live">34m</span></span>
+                        </div>
+                        <p class="commands-head"><span class="label">Last commands</span><span>142 items in the log</span></p>
+                        <ul class="commands">
+                          <li><strong>Read</strong><code>lib/config/schema.mjs</code><span class="outcome">148 lines</span></li>
+                          <li>
+                            <strong>Bash</strong><code>node scripts/config-docs.mjs --out docs/config.md</code
+                            ><span class="outcome">2 lines</span>
+                          </li>
+                          <li><strong>Edit</strong><code>docs/config.md</code><span class="outcome">1 line</span></li>
+                          <li>
+                            <strong>Bash</strong><code>npm test -- test/docs.test.mjs</code
+                            ><span class="outcome"><span class="badge result-error">Error</span>38 lines</span>
+                          </li>
+                          <li class="message">
+                            One flag in the reference has no key in the schema yet, --watch. P4 adds it, so I leave it out and say so in the
+                            PR.
+                          </li>
+                        </ul>
+                        <p class="panel-footer">
+                          <a href="#transcripts">Open the transcript</a><span class="muted">Follows the run every 3 s while open</span>
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
                   <tr>
+                    <td class="toggle"></td>
                     <td class="id">P4</td>
                     <td class="small wrap">feat: watch mode</td>
                     <td><span class="badge state state-pending">Pending</span></td>
@@ -545,6 +604,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="small"></td>
                   </tr>
                   <tr class="waiting">
+                    <td class="toggle"><span class="row-toggle"></span></td>
                     <td class="id">P5</td>
                     <td class="small wrap">feat: plugin hooks</td>
                     <td>
@@ -559,6 +619,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="small wrap info">needs-decision: Should a hook that throws stop the run?</td>
                   </tr>
                   <tr>
+                    <td class="toggle"><span class="row-toggle"></span></td>
                     <td class="id">P6</td>
                     <td class="small wrap">fix: retry on timeout</td>
                     <td>
@@ -600,6 +661,14 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             in the plan, without markdown, so you can tell which slice of the plan the PR is. Headings, code, rules and a remark in
             parentheses after the bold, like the deps in <code>**P3 …** (P1)</code>, are skipped. Hover it for the source and the section
             heading. See <a href="#view-plan">Plan</a> for how a section is found.
+          </li>
+          <li>
+            <strong>The panel</strong> under an open row names the run, its role, effort and model, and how long it has run, or for a
+            finished run its result, time, cost and denials. Below are the run's last five lines: each tool call with its target and how it
+            ended (the line count of its result, a short answer like <q>ok</q>, an <span class="badge result-error">error</span> or a
+            <span class="badge refused">refused</span> badge when the guard said no), and the agent's own text. The log has no times, so the
+            lines have none. A running run is read again every 3&nbsp;s while its row is open. Open the transcript leads to the whole run on
+            the PR page. Which rows are open lasts until you reload the page.
           </li>
           <li><strong>GitHub</strong> links to the PR once the implementer opened it.</li>
           <li><strong>deps</strong> lists the dependencies with their own state.</li>
@@ -919,7 +988,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <tr>
                 <td class="name">runs</td>
                 <td>
-                  Every agent run of the PR: run name, role, effort, start, duration, cost, result, permission denials and error. An
+                  Every agent run of the PR: run name, role, effort, model, start, duration, cost, result, permission denials and error. An
                   estimated cost is marked <q>≈ est.</q>. Click a run to open its transcript below the table.
                 </td>
               </tr>
@@ -974,6 +1043,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <th>run</th>
                     <th>role</th>
                     <th>effort</th>
+                    <th>model</th>
                     <th>start</th>
                     <th>duration</th>
                     <th>cost</th>
@@ -987,6 +1057,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">P2-01-brief-write</td>
                     <td class="small">brief write</td>
                     <td class="small">xhigh</td>
+                    <td class="small">claude-opus-5-5</td>
                     <td class="small">10:25</td>
                     <td class="small num">7m</td>
                     <td class="small num">$1.30</td>
@@ -998,6 +1069,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">P2-01-brief-review</td>
                     <td class="small">brief review</td>
                     <td class="small">xhigh</td>
+                    <td class="small">claude-opus-5-5</td>
                     <td class="small">10:32</td>
                     <td class="small num">8m</td>
                     <td class="small num">$1.45</td>
@@ -1009,6 +1081,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">P2-01-implement</td>
                     <td class="small">implement</td>
                     <td class="small">high</td>
+                    <td class="small">claude-opus-5-5</td>
                     <td class="small">10:41</td>
                     <td class="small num">-</td>
                     <td class="small num"><em>≈$1.12 est.</em></td>
@@ -1020,6 +1093,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">P2-01-fix</td>
                     <td class="small">fix</td>
                     <td class="small">high</td>
+                    <td class="small">claude-opus-5-5</td>
                     <td class="small">11:33</td>
                     <td class="small num">29m</td>
                     <td class="small num">$5.10</td>
@@ -1031,6 +1105,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">P2-02-verify</td>
                     <td class="small">verify</td>
                     <td class="small">high</td>
+                    <td class="small">claude-opus-5-5</td>
                     <td class="small">12:04</td>
                     <td class="small num">21m</td>
                     <td class="small num">$1.84</td>

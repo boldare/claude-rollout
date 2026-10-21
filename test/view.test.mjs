@@ -15,6 +15,7 @@ import {
   prRows,
   readEvents,
   readTranscript,
+  transcriptParser,
   rolloutView,
   runsFromEvents,
 } from '../lib/view.mjs'
@@ -78,9 +79,9 @@ test('readEvents reads events.jsonl and is empty without it', () => {
   assert.deepEqual(readEvents(loadManifest(makeRollout({ events: null }))), [])
 })
 
-test('runsFromEvents pairs starts and dones by run id', () => {
+test('runsFromEvents pairs starts and dones by run id, with the model the start names', () => {
   const runs = runsFromEvents([
-    start('A1', 'implement', 'A1-01-implement', 0),
+    start('A1', 'implement', 'A1-01-implement', 0, { model: 'claude-opus-5-5' }),
     start('A2', 'implement', 'A2-01-implement', 1),
     done('A2', 'implement', 'A2-01-implement', 5, { result: 'READY', cost: 2 }),
     done('A1', 'implement', 'A1-01-implement', 9, { result: 'READY', cost: 3, seconds: 540, denials: 2 }),
@@ -92,6 +93,7 @@ test('runsFromEvents pairs starts and dones by run id', () => {
     role: 'implement',
     step: null,
     effort: 'high',
+    model: 'claude-opus-5-5',
     startedAt: at(0),
     endedAt: at(9),
     seconds: 540,
@@ -104,6 +106,7 @@ test('runsFromEvents pairs starts and dones by run id', () => {
   })
 
   assert.deepEqual(statuses(runs), ['A1-01-implement:ok', 'A2-01-implement:ok'])
+  assert.equal(runs[1].model, null, 'a start from before runs named their model')
 })
 
 test('runsFromEvents pairs old events by log name, PR and role', () => {
@@ -536,6 +539,34 @@ test('parseTranscript: the last result wins, and without one there is no final',
   assert.equal(parseTranscript(jsonLines([failed, passed])).final.ok, true)
   assert.equal(parseTranscript(jsonLines([{ ...passed, structured_output: undefined }])).final.ok, false)
   assert.deepEqual(parseTranscript(jsonLines(sampleTranscript().slice(0, 3))).final, null)
+})
+
+test('transcriptParser: fed line by line, it reads what parseTranscript reads, and keeps reading', () => {
+  for (const lines of [sampleTranscript(), interruptedTranscript().slice(0, -1)]) {
+    const parser = transcriptParser()
+
+    for (const line of lines) {
+      parser.push(line)
+    }
+
+    assert.deepEqual(parser.result(), parseTranscript(jsonLines(lines)))
+  }
+
+  const parser = transcriptParser()
+  const [init, ...rest] = sampleTranscript()
+
+  parser.push(init)
+  assert.deepEqual(parser.result().items, [{ kind: 'init', model: 'opus', sessionId: 'session-1' }])
+  assert.equal(parser.result().final, null)
+
+  for (const line of rest) {
+    parser.push(line)
+  }
+
+  assert.equal(parser.result().items.length, 8)
+  assert.equal(parser.result().final.costUsd, 4.25)
+  parser.push({ type: 'system', subtype: 'init', model: 'haiku', session_id: 'session-9' })
+  assert.equal(parser.result().model, 'opus')
 })
 
 test('readTranscript reads logs/<run>.jsonl and refuses names outside it', () => {

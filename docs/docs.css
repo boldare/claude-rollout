@@ -19,6 +19,7 @@
   --panel: #ffffff;
   --raised: #ffffff;
   --well: #f2f2f2;
+  --sunken: #f2f2f2;
 
   --ink: #242424;
   --ink-2: #4f4f4f;
@@ -65,6 +66,7 @@
     --panel: #2c2c2c;
     --raised: #333333;
     --well: #1e1e1e;
+    --sunken: #191919;
 
     --ink: #f8f8f8;
     --ink-2: #c9c9c9;
@@ -822,14 +824,16 @@ ol.steps > li > strong:first-child {
 .state-blocked,
 .state-escalated,
 .driver-halted,
-.verdict-fail {
+.verdict-fail,
+.result-error {
   --tone: var(--fail);
 }
 
 .state-interrupted,
 .held,
 .driver-paused,
-.alpha {
+.alpha,
+.refused {
   --tone: var(--warn);
 }
 
@@ -1480,6 +1484,127 @@ dt::first-letter {
 
 .mock tr.waiting td:first-child {
   box-shadow: inset 2px 0 0 var(--fail);
+}
+
+/* The board's open rows: the toggle, drawn with two borders since a mask does not load from file://, and the run panel. */
+
+.mock td.toggle {
+  width: 32px;
+  padding: 12px 0 0 14px;
+}
+
+.mock .row-toggle {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+  transform: rotate(-45deg);
+}
+
+.mock .row-toggle.open {
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.mock tr.open > td {
+  border-bottom-color: transparent;
+}
+
+.mock .panel-row > td {
+  padding: 0 14px 16px 104px;
+}
+
+/* As wide as the visible part of the board, which scrolls sideways in the narrow docs column. */
+.mock .run-panel {
+  display: grid;
+  gap: 12px;
+  max-width: 35rem;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  font-size: var(--text-sm);
+  white-space: normal;
+}
+
+.mock .run-panel p {
+  margin: 0;
+}
+
+.mock .run-panel .facts {
+  gap: 6px 16px;
+}
+
+.mock .run-name {
+  font-family: var(--font-mono);
+  font-size: var(--mono);
+  font-weight: 600;
+}
+
+.mock .run-panel .live {
+  color: var(--accent);
+}
+
+.mock .commands-head {
+  display: flex;
+  gap: 8px;
+  color: var(--ink-3);
+}
+
+.mock .commands-head > .label {
+  font-weight: 500;
+}
+
+.mock .commands {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mock .commands > li {
+  display: contents;
+}
+
+.mock .commands strong {
+  font-weight: 600;
+}
+
+.mock .commands code {
+  overflow: hidden;
+  padding: 0;
+  background: none;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mock .commands .outcome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.mock .commands > li.message {
+  display: block;
+  grid-column: 1 / -1;
+  color: var(--ink-2);
+}
+
+.mock .panel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.mock .panel-footer > a {
+  font-weight: 500;
 }
 
 .mock .total,

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -18,7 +18,7 @@ import {
   watchRollout,
   withEstimates,
 } from '../lib/rollouts.mjs'
-import { START, at, interruptedTranscript, jsonLines, makeRollout, makeRolloutRoot, sampleEvents } from './fixtures.mjs'
+import { START, at, interruptedTranscript, jsonLines, makeRollout, makeRolloutRoot, sampleEvents, sampleTranscript } from './fixtures.mjs'
 
 async function waitFor(check, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs
@@ -412,6 +412,51 @@ test('transcriptPage: pages of display items with their index in the log', () =>
   for (const item of whole.items) {
     assert.equal('input' in item, false, item.kind)
   }
+})
+
+test('transcriptPage: a growing log is read on from where it stopped, a half line waits for the rest', () => {
+  const manifest = demoRollout()
+  const file = join(manifest.dir, 'logs', 'A2-01-implement.jsonl')
+  const whole = jsonLines(sampleTranscript())
+  const cut = whole.indexOf('"tool-2"')
+  const page = () => transcriptPage(manifest, 'A2-01-implement', { from: 'end', limit: 200 })
+
+  writeFileSync(file, whole.slice(0, cut))
+  assert.deepEqual(
+    page().items.map((item) => item.kind),
+    ['init', 'text', 'tool', 'tool-result'],
+  )
+
+  appendFileSync(file, whole.slice(cut))
+  assert.equal(page().total, 8)
+  assert.equal(page().bytes, Buffer.byteLength(whole))
+  assert.equal(page().final.costUsd, 4.25, 'the last line counts without its newline')
+  assert.deepEqual(page().items, transcriptPage(demoRollout(), 'A1-01-implement').items)
+})
+
+test('transcriptPage: a log that shrank or changed in place is read again from the start', () => {
+  const manifest = demoRollout()
+  const file = join(manifest.dir, 'logs', 'A2-01-implement.jsonl')
+  const page = () => transcriptPage(manifest, 'A2-01-implement')
+  const text = (value) => ({ type: 'assistant', message: { content: [{ type: 'text', text: value }] } })
+
+  writeFileSync(file, jsonLines([text('one'), text('two'), text('three')]))
+  assert.equal(page().total, 3)
+
+  writeFileSync(file, jsonLines([text('four')]))
+  assert.deepEqual(
+    page().items.map((item) => item.text),
+    ['four'],
+  )
+
+  const { mtime } = statSync(file)
+
+  writeFileSync(file, jsonLines([text('five')]))
+  utimesSync(file, mtime, new Date(mtime.getTime() + 5000))
+  assert.deepEqual(
+    page().items.map((item) => item.text),
+    ['five'],
+  )
 })
 
 test('transcriptPage: long fields are cut, and a refusal past the cut still counts', () => {

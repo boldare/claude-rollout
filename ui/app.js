@@ -1,5 +1,6 @@
 import { apiGet, apiPost, followStream } from './api.js'
 import { renderBoard } from './board.js'
+import { PANEL_ITEMS, panelRun } from './board-model.js'
 import { commandNotice } from './commands.js'
 import { renderCosts } from './costs.js'
 import { renderDetail } from './detail.js'
@@ -44,7 +45,11 @@ let transcriptBusy = false
 let followTimer = null
 let followed = false
 let noticeTimer = null
+let panelTicket = 0
+let panelTimer = null
 let session = freshSession(null)
+
+const panelsBusy = new Set()
 
 function freshSession(name) {
   return {
@@ -58,6 +63,8 @@ function freshSession(name) {
     detail: null,
     plan: null,
     transcript: null,
+    openRows: new Set(),
+    panels: new Map(),
     sending: false,
     notice: null,
   }
@@ -137,6 +144,7 @@ function scheduleRender() {
 function stopAll() {
   stopped = true
   stopList()
+  stopPanels()
   closeStream()
   detailTicket += 1
   planTicket += 1
@@ -259,6 +267,7 @@ function stopList() {
 function closeStream() {
   session.stream?.close()
   invalidateTranscript()
+  stopPanels()
   followed = false
   session = freshSession(null)
 }
@@ -291,6 +300,7 @@ function follow(name) {
       loadDetail()
       loadPlan()
       recheckFollow({ fetchWhenStopped: true })
+      syncPanels()
       scheduleRender()
     },
     onEvents(update) {
@@ -550,6 +560,119 @@ function recheckFollow({ fetchWhenStopped }) {
   followed = now
 }
 
+// The runs the open rows of the board show. Each panel reads the end of its run's log.
+function panelRuns() {
+  const view = session.state?.view
+
+  if (!view || route.pr || route.view !== 'board') {
+    return []
+  }
+
+  return view.rows
+    .filter((row) => session.openRows.has(row.id) && (!route.state || row.state === route.state))
+    .map((row) => panelRun(row, view.runs))
+    .filter(Boolean)
+}
+
+async function fetchPanel(run, ticket) {
+  const current = session
+  const path = `${apiPath(route.r, 'runs', run.run)}?from=end&limit=${PANEL_ITEMS}`
+  let tail
+
+  panelsBusy.add(run.run)
+
+  try {
+    const { status, body } = await apiGet(token, path)
+
+    tail = { status, body, runStatus: run.status }
+  } catch (error) {
+    tail = { status: 0, body: { error: `Cannot reach the server: ${error.message}` }, runStatus: run.status }
+  }
+
+  panelsBusy.delete(run.run)
+
+  if (ticket !== panelTicket || current !== session) {
+    return
+  }
+
+  if (tail.status === 401) {
+    stopAll()
+    return
+  }
+
+  session.panels.set(run.run, tail)
+  scheduleRender()
+}
+
+function stopPanels() {
+  panelTicket += 1
+  clearTimeout(panelTimer)
+  panelTimer = null
+  panelsBusy.clear()
+}
+
+// A timeout chain, like the transcript's, so a slow answer never piles up requests.
+function schedulePanelPoll() {
+  if (panelTimer || !panelRuns().some((run) => run.status === 'running')) {
+    return
+  }
+
+  const ticket = panelTicket
+
+  panelTimer = setTimeout(() => {
+    panelTimer = null
+
+    if (ticket !== panelTicket) {
+      return
+    }
+
+    for (const run of panelRuns().filter((item) => item.status === 'running' && !panelsBusy.has(item.run))) {
+      fetchPanel(run, ticket)
+    }
+
+    schedulePanelPoll()
+  }, FOLLOW_MS)
+}
+
+// Reads a run an open row has not read yet, or again once it ended, and drops the rest.
+function syncPanels() {
+  const wanted = panelRuns()
+  const names = new Set(wanted.map((run) => run.run))
+
+  for (const name of session.panels.keys()) {
+    if (!names.has(name)) {
+      session.panels.delete(name)
+    }
+  }
+
+  for (const run of wanted) {
+    const known = session.panels.get(run.run)
+
+    if (panelsBusy.has(run.run) || known?.runStatus === run.status) {
+      continue
+    }
+
+    if (!known) {
+      session.panels.set(run.run, { status: null, body: null, runStatus: run.status })
+    }
+
+    fetchPanel(run, panelTicket)
+  }
+
+  schedulePanelPoll()
+}
+
+function toggleRow(id) {
+  if (session.openRows.has(id)) {
+    session.openRows.delete(id)
+  } else {
+    session.openRows.add(id)
+  }
+
+  syncPanels()
+  scheduleRender()
+}
+
 function nearBottom() {
   return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - STICK_PX
 }
@@ -577,6 +700,9 @@ function context() {
     detail: session.detail,
     plan: session.plan,
     transcript: session.transcript,
+    openRows: session.openRows,
+    panels: session.panels,
+    toggleRow,
     readOnly: session.state?.readOnly !== false,
     sending: session.sending,
     notice: session.notice,
@@ -676,6 +802,7 @@ function onRoute() {
   }
 
   recheckFollow({ fetchWhenStopped: false })
+  syncPanels()
   render()
 }
 
