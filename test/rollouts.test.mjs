@@ -60,10 +60,12 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
   assert.match(broken.error, /invalid manifest/)
   assert.deepEqual(
     { ...broken, error: null },
-    { name: 'broken', rollout: null, started: false, driver: null, merged: 0, total: 0, costUsd: 0, error: null },
+    { name: 'broken', rollout: null, started: false, driver: null, merge: null, merged: 0, total: 0, costUsd: 0, errors: 0, error: null },
   )
 
   assert.equal(demo.rollout, 'demo')
+  assert.equal(demo.merge, 'human')
+  assert.equal(demo.errors, 0)
   assert.equal(demo.started, true)
   assert.equal(demo.merged, 0)
   assert.equal(demo.total, 3)
@@ -78,6 +80,21 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
   assert.equal(fresh.total, 3)
   assert.equal(fresh.costUsd, 0)
   assert.deepEqual(fresh.driver, { running: false, pid: null, heartbeatAgeSeconds: null, heartbeatNote: '', paused: false, halted: null })
+})
+
+test('listRollouts: the error count follows the event log, and a rollout without one has none', () => {
+  const root = makeRolloutRoot()
+  const events = join(root, 'demo', 'events.jsonl')
+  const errors = () => listRollouts(root).find((rollout) => rollout.name === 'demo').errors
+
+  appendFileSync(events, `\n${JSON.stringify({ at: at(90), id: '-', kind: 'tick-error', error: 'gh failed' })}\n`)
+  assert.equal(errors(), 1)
+
+  appendFileSync(events, `${JSON.stringify({ at: at(91), id: 'A2', kind: 'fetch-failed', error: 'offline' })}\n`)
+  appendFileSync(events, `${JSON.stringify({ at: at(92), id: 'A2', kind: 'implement-start', run: 'A2-02-implement' })}\n`)
+  assert.equal(errors(), 2)
+
+  assert.equal(listRollouts(root).find((rollout) => rollout.name === 'fresh').errors, 0)
 })
 
 test('listRollouts: a missing root is empty', () => {

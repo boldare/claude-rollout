@@ -56,12 +56,14 @@ function planBody(plan, ctx) {
   }
 
   const { prs, sources } = plan.body
+  const found = prs.filter((pr) => pr.plan.length > 0).length
   const blocks =
     sources.length === 0
       ? [element('p', 'The manifest has no briefing sources.', 'muted')]
       : sources.map((source) => sourceBlock(source, ctx))
 
   return [
+    element('p', `${found} of ${prs.length} PRs have a section in the plan`, 'total'),
     element('h2', 'PRs and their sections'),
     table(
       HEADINGS,
