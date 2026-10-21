@@ -1,4 +1,5 @@
 import { duration, money } from './format.js'
+import { isWaiting } from './model.js'
 import { resultPreview } from './transcript-model.js'
 
 // The open part of a board row: the run in progress, or else the PR's last
@@ -12,6 +13,17 @@ const MESSAGE_LENGTH = 300
 const PASSING = ['PASS', 'READY', 'BRIEF', 'ok']
 const FAILING = ['FAIL', 'BLOCKED', 'failed']
 
+const DELEGATE_TEXTS = {
+  running: () => 'running',
+  escalate: ({ reason }) => (reason ? `escalated, ${reason}` : 'escalated'),
+  failed: ({ reason }) => (reason ? `failed, ${reason}` : 'failed'),
+  answer: () => 'answered',
+  dropped: () => 'its answer came after a note',
+  skips: (_, kind) => `does not take ${kind}`,
+  spent: ({ reason }) => `no runs left, ${reason} used`,
+  next: () => 'answers first, on the next tick',
+}
+
 export function panelRun(row, runs) {
   const own = (runs ?? []).filter((run) => run.id === row.id && run.run)
 
@@ -20,6 +32,41 @@ export function panelRun(row, runs) {
 
 function lineCount(lines) {
   return lines === 1 ? '1 line' : `${lines} lines`
+}
+
+// A waiting row opens by itself, any other row when the maintainer opens it,
+// and their choice sticks either way. A row with nothing to show stays shut.
+export function rowOpen(row, run, choices) {
+  if (!run && !isWaiting(row)) {
+    return false
+  }
+
+  return choices.get(row.id) ?? isWaiting(row)
+}
+
+export function delegateText(delegate, kind) {
+  const text = DELEGATE_TEXTS[delegate.state]
+
+  return text ? text(delegate, kind) : delegate.state
+}
+
+function answerer(row) {
+  return row.blocked?.kind === 'brief-questions' ? 'brief writer' : 'implementer'
+}
+
+export function answerPlaceholder(row) {
+  if (answerer(row) === 'brief writer') {
+    return 'Answer the questions for the brief writer. It goes to the agent as a note.'
+  }
+
+  return 'Write what the implementer should do. It goes to the agent as a note.'
+}
+
+// The driver applies a note on its next tick, so a stopped driver applies it when it starts.
+export function answerHint(row, driverRunning) {
+  const when = driverRunning ? "on the driver's next tick" : 'once the driver runs'
+
+  return `The ${answerer(row)} resumes with it ${when}.`
 }
 
 // A one-line answer, like ok, reads better than its line count.

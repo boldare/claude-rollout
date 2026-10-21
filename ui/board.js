@@ -1,7 +1,7 @@
 import { badge, cell, element, externalLink, link, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
 import { ago, duration, money, stateLabel } from './format.js'
-import { renderRowControls } from './controls.js'
-import { commandLines, panelRun, resultTone, tookText } from './board-model.js'
+import { renderPanelControls } from './controls.js'
+import { answerHint, answerPlaceholder, commandLines, delegateText, panelRun, resultTone, rowOpen, tookText } from './board-model.js'
 import { answeredText, isWaiting, stateCounts } from './model.js'
 
 const HEADINGS = ['', 'PR', 'title', 'state', 'GitHub', 'deps', 'attempts b/i/f/v', 'cost', 'last event', 'info']
@@ -23,7 +23,7 @@ function stateChips(rows, ctx) {
   return chips
 }
 
-function stateCell(row, ctx) {
+function stateCell(row) {
   const node = wrap('td', stateBadge(row.state))
 
   if (row.held) {
@@ -42,12 +42,6 @@ function stateCell(row, ctx) {
 
   if (answered) {
     node.append(badge(answered, 'answered'))
-  }
-
-  const controls = renderRowControls(row, ctx)
-
-  if (controls) {
-    node.append(controls)
   }
 
   return node
@@ -89,15 +83,16 @@ function titleCell(row) {
 function toggleCell(row, run, open, ctx) {
   const node = element('td', undefined, 'toggle')
 
-  if (!run) {
+  if (!run && !isWaiting(row)) {
     return node
   }
 
   const button = element('button', undefined, 'row-toggle')
+  const what = isWaiting(row) ? 'the question' : 'the last run'
 
   button.type = 'button'
   button.setAttribute('aria-expanded', String(open))
-  button.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} the last run of ${row.id}`)
+  button.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} ${what} of ${row.id}`)
   button.addEventListener('click', () => ctx.toggleRow(row.id))
   node.append(button)
 
@@ -110,7 +105,7 @@ function boardRow(row, run, open, ctx) {
     toggleCell(row, run, open, ctx),
     cell(link(ctx.linkWith({ pr: row.id, tab: null }), row.id), 'id'),
     titleCell(row),
-    stateCell(row, ctx),
+    stateCell(row),
     cell(row.pr ? externalLink(row.url, `#${row.pr}`) : '-', 'github'),
     depsCell(row, ctx),
     cell(attempts(row), 'number'),
@@ -209,21 +204,159 @@ function commandsPart(run, ctx) {
   return [withClass(head, 'commands-head'), withClass(wrap('ul', ...lines.map(commandLine)), 'commands')]
 }
 
-function panelFooter(row, run, ctx) {
+function transcriptLink(row, run, ctx) {
   const running = run.status === 'running'
-  const target = ctx.linkWith({ pr: row.id, tab: 'runs', run: run.run, from: running ? 'end' : null })
-  const footer = wrap('p', link(target, 'Open the transcript'))
 
-  if (running) {
+  return link(ctx.linkWith({ pr: row.id, tab: 'runs', run: run.run, from: running ? 'end' : null }), 'Open the transcript')
+}
+
+// A held row releases here and a stuck one retries, as on the PR page.
+function panelFooter(row, run, ctx) {
+  const footer = wrap('div', transcriptLink(row, run, ctx))
+
+  if (run.status === 'running') {
     footer.append(element('span', 'Follows the run every 3 s while open', 'muted'))
+  }
+
+  const controls = renderPanelControls(row, ctx)
+
+  if (controls) {
+    footer.append(controls)
   }
 
   return withClass(footer, 'panel-footer')
 }
 
+function runPanel(row, run, ctx) {
+  return wrap('div', runFacts(run, ctx), ...commandsPart(run, ctx), panelFooter(row, run, ctx))
+}
+
+function waitingFacts(row, ctx) {
+  const { waiting } = row
+  const facts = wrap('div', badge('needs you', 'waiting'))
+  const asker = waiting.byDriver ? 'the driver' : waiting.run
+
+  if (row.state === 'blocked') {
+    facts.append(runFact('blocked', row.blocked?.kind ?? '-'))
+  } else {
+    facts.append(runFact('escalated', waiting.escalation ?? '-'))
+  }
+
+  if (asker) {
+    facts.append(runFact(row.state === 'blocked' ? 'asked by' : 'last run', asker))
+  }
+
+  if (waiting.delegate) {
+    facts.append(runFact('delegate', delegateText(waiting.delegate, row.blocked?.kind)))
+  }
+
+  if (waiting.since) {
+    facts.append(runFact('waiting', duration(secondsSince(waiting.since, ctx.now))))
+  }
+
+  return withClass(facts, 'facts')
+}
+
+function panelSection(label, text, className = 'text') {
+  return withClass(wrap('div', element('p', label, 'label'), element('p', text, className)), 'panel-section')
+}
+
+// What the maintainer is asked, in the agent's own words.
+function waitingSections(row) {
+  const { waiting, blocked } = row
+
+  // "fix attempts exhausted (3)" only repeats the escalation, a dispute or a repeated error says more.
+  if (row.state !== 'blocked') {
+    const { escalation, lastError } = waiting
+    const repeated = !lastError || Boolean(escalation && lastError.startsWith(escalation))
+
+    return repeated ? [] : [panelSection('last error', lastError, 'text quiet')]
+  }
+
+  const sections = [panelSection('question', blocked?.question || '-', 'text question')]
+
+  if (blocked?.evidence) {
+    sections.push(panelSection('evidence', blocked.evidence, 'text quiet'))
+  }
+
+  return sections
+}
+
+function readOnlyAnswer(row) {
+  const line = wrap('p', 'Read-only: answer in a terminal with ', element('code', `rollout note ${row.id} "…"`), '.')
+
+  return withClass(line, 'muted')
+}
+
+// The draft lives in ctx.drafts and the box keeps its focus and caret, because every update rebuilds the page.
+function answerBox(row, ctx) {
+  const id = `answer-${row.id}`
+  const label = element('label', 'your answer', 'label')
+  const box = element('textarea')
+  const send = element('button', 'Send', 'primary')
+  const ready = () => box.value.trim() !== '' && !ctx.sending
+
+  label.htmlFor = id
+  box.id = id
+  box.rows = 3
+  box.placeholder = answerPlaceholder(row)
+  box.value = ctx.drafts.get(row.id) ?? ''
+  box.dataset.keep = id
+  send.type = 'button'
+  send.disabled = !ready()
+
+  function submit() {
+    if (ready()) {
+      ctx.sendAnswer(row.id, box.value)
+    }
+  }
+
+  box.addEventListener('input', () => {
+    ctx.drafts.set(row.id, box.value)
+    send.disabled = !ready()
+  })
+
+  box.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      submit()
+    }
+  })
+
+  send.addEventListener('click', submit)
+
+  const hint = ctx.sent.has(row.id) ? 'Sent. It shows here until the driver applies it.' : answerHint(row, ctx.view.driver?.running)
+
+  return [withClass(wrap('div', label, box), 'answer'), wrap('div', send, element('span', hint, 'muted'))]
+}
+
+function waitingActions(row, run, ctx) {
+  const [answer, actions] = ctx.readOnly ? [readOnlyAnswer(row), element('div')] : answerBox(row, ctx)
+  const end = element('span', undefined, 'end')
+  const controls = renderPanelControls(row, ctx)
+
+  if (controls) {
+    end.append(controls)
+  }
+
+  if (run) {
+    end.append(transcriptLink(row, run, ctx))
+  }
+
+  actions.append(end)
+
+  return [answer, withClass(actions, 'panel-footer actions')]
+}
+
+function needsYouPanel(row, run, ctx) {
+  const asked = (ctx.view.runs ?? []).find((item) => item.run === row.waiting.run) ?? run
+
+  return wrap('div', waitingFacts(row, ctx), ...waitingSections(row), ...waitingActions(row, asked, ctx))
+}
+
 function panelRow(row, run, ctx) {
-  const panel = wrap('div', runFacts(run, ctx), ...commandsPart(run, ctx), panelFooter(row, run, ctx))
-  const content = wrap('td', withClass(panel, 'run-panel'))
+  const panel = isWaiting(row) && row.waiting ? needsYouPanel(row, run, ctx) : runPanel(row, run, ctx)
+  const content = wrap('td', withClass(panel, isWaiting(row) && row.waiting ? 'run-panel needs-you' : 'run-panel'))
 
   content.colSpan = HEADINGS.length
 
@@ -232,7 +365,7 @@ function panelRow(row, run, ctx) {
 
 function boardRows(row, ctx) {
   const run = panelRun(row, ctx.view.runs)
-  const open = Boolean(run) && ctx.openRows.has(row.id)
+  const open = rowOpen(row, run, ctx.rowChoices)
   const rows = [boardRow(row, run, open, ctx)]
 
   if (open) {

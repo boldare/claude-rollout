@@ -1,4 +1,4 @@
-import { commandBody, dialogFor, prControls, rolloutControls, rowControls } from './commands.js'
+import { commandBody, dialogFor, panelControls, prControls, rolloutControls } from './commands.js'
 import { ask } from './dialog.js'
 import { element } from './dom.js'
 
@@ -61,6 +61,6 @@ export function renderPrControls(pr, ctx) {
   return controls(prControls(pr, ctx.readOnly), pr, ctx)
 }
 
-export function renderRowControls(row, ctx) {
-  return controls(rowControls(row, ctx.readOnly), row, ctx)
+export function renderPanelControls(row, ctx) {
+  return controls(panelControls(row, ctx.readOnly), row, ctx)
 }
