@@ -23,6 +23,7 @@
   --panel: #ffffff;
   --raised: #ffffff;
   --well: #f2f2f2;
+  --sunken: #f2f2f2;
 
   --ink: #242424;
   --ink-2: #4f4f4f;
@@ -69,6 +70,7 @@
     --panel: #2c2c2c;
     --raised: #333333;
     --well: #1e1e1e;
+    --sunken: #191919;
 
     --ink: #f8f8f8;
     --ink-2: #c9c9c9;
@@ -878,13 +880,14 @@ tr.open > td {
   padding: 0 14px 16px 104px;
 }
 
+/* Sunken below the table, darker than a code well on the dark scheme, so the panel stands apart from its row. */
 .run-panel {
   display: grid;
   gap: 12px;
   padding: 14px 16px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--line);
   border-radius: var(--r-md);
-  background: var(--well);
+  background: var(--sunken);
 }
 
 .run-panel > .facts {
