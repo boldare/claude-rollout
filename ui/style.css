@@ -23,6 +23,7 @@
   --panel: #ffffff;
   --raised: #ffffff;
   --well: #f2f2f2;
+  --sunken: #f2f2f2;
 
   --ink: #242424;
   --ink-2: #4f4f4f;
@@ -60,6 +61,7 @@
 
   --shadow-sm: 0 1px 2px rgba(36, 36, 36, 0.05);
   --shadow-md: 0 1px 2px rgba(36, 36, 36, 0.05), 0 6px 16px -6px rgba(36, 36, 36, 0.14);
+  --shadow-bar: 0 4px 12px -6px rgba(36, 36, 36, 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -68,6 +70,7 @@
     --panel: #2c2c2c;
     --raised: #333333;
     --well: #1e1e1e;
+    --sunken: #191919;
 
     --ink: #f8f8f8;
     --ink-2: #c9c9c9;
@@ -97,6 +100,7 @@
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 20px -8px rgba(0, 0, 0, 0.6);
+    --shadow-bar: 0 4px 12px -4px rgba(0, 0, 0, 0.55);
   }
 }
 
@@ -303,6 +307,7 @@ figcaption::first-letter {
   position: sticky;
   top: 0;
   z-index: 10;
+  box-shadow: var(--shadow-bar);
 }
 
 .rollouts {
@@ -455,20 +460,20 @@ figcaption::first-letter {
   flex-basis: 100%;
 }
 
-/* The views are a band under the header, part of the top bar. On a PR page the view it was opened from stays marked. */
+/* The views are a band under the header, part of the top bar. On a PR page the view it was opened from stays marked.
+   Only the colour marks a tab, so the tabs keep no padding and the first one lines up with the page below. */
 
 .views {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 4px 32px;
   padding: 12px 24px;
   border-bottom: 1px solid var(--line);
   background: var(--hover);
 }
 
 .views > .tab {
-  padding: 2px 24px;
-  border-radius: var(--r-lg);
+  padding: 2px 0;
 }
 
 .views > .tab.active {
@@ -500,10 +505,10 @@ figcaption::first-letter {
   text-decoration: none;
 }
 
+/* The selected tab and chip keep the weight of the others, so switching never moves them. */
 .tabs > .tab.active {
   background: var(--accent);
   color: var(--on-accent);
-  font-weight: 700;
   box-shadow: var(--shadow-sm);
 }
 
@@ -534,7 +539,6 @@ figcaption::first-letter {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--on-accent);
-  font-weight: 700;
 }
 
 /* Footer: Boldare and the year on the left, Boldare and the repository on the right, all in the grey of the labels. The marks
@@ -590,11 +594,12 @@ figcaption::first-letter {
   mask: url('github.svg') center / contain no-repeat;
 }
 
-/* Badges: a tinted pill. The text mixes the tone with ink, so it reads in both schemes. */
+/* Badges: a tinted pill. The text mixes the tone with ink, so it reads in both schemes. The text also gives a badge
+   its baseline and the dot sits in the middle, so a state badge lines up with one without a dot. */
 
 .badge {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   margin-right: 6px;
   padding: 1px 10px;
@@ -608,8 +613,15 @@ figcaption::first-letter {
   vertical-align: baseline;
 }
 
+/* Badges that wrap in a table cell keep a gap between their lines. */
+td > .badge {
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
 .badge.state::before,
 .badge.driver::before {
+  align-self: center;
   content: '';
   flex: none;
   width: 6px;
@@ -777,7 +789,7 @@ tr.selected td:first-child {
 
 /* A PR that waits for the maintainer stands out from running work. */
 tr.waiting td {
-  background: color-mix(in srgb, var(--fail) 6%, transparent);
+  background: color-mix(in srgb, var(--fail) 10%, transparent);
 }
 
 tr.waiting td:first-child {
@@ -868,13 +880,14 @@ tr.open > td {
   padding: 0 14px 16px 104px;
 }
 
+/* Sunken below the table, darker than a code well on the dark scheme, so the panel stands apart from its row. */
 .run-panel {
   display: grid;
   gap: 12px;
   padding: 14px 16px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--line);
   border-radius: var(--r-md);
-  background: var(--well);
+  background: var(--sunken);
 }
 
 .run-panel > .facts {
