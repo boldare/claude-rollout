@@ -641,7 +641,7 @@ test('tookText and resultTone: a finished run in one line, and the tone of its r
   }
 })
 
-test('rolloutControls: pause or resume, unhalt when halted, stop or start', () => {
+test('rolloutControls: pause or resume, unhalt when halted, stop or start, and no driver controls in a demo', () => {
   const { view } = demo()
 
   assert.deepEqual(rolloutControls(view, false), ['pause', 'stop'])
@@ -649,6 +649,9 @@ test('rolloutControls: pause or resume, unhalt when halted, stop or start', () =
   assert.deepEqual(rolloutControls(null, false), ['start'])
   assert.deepEqual(rolloutControls(view, true), [])
   assert.deepEqual(rolloutControls(null, true), [])
+  assert.deepEqual(rolloutControls(view, false, true), ['pause'], 'a demo has no driver to stop')
+  assert.deepEqual(rolloutControls(viewWith({ halted: 'main is red', running: false }), false, true), ['pause', 'unhalt'])
+  assert.deepEqual(rolloutControls(null, false, true), [])
 })
 
 test('prControls: hold or release, note or answer, and retry for a stuck PR', () => {

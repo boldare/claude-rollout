@@ -101,9 +101,22 @@ function streamLine(ctx) {
   return parts
 }
 
-export function renderListHeader() {
+function demoBadge() {
+  const node = badge('demo', 'demo')
+  node.title = 'Made-up rollouts from rollout ui --demo'
+
+  return node
+}
+
+export function renderListHeader(demo = false) {
   const header = element('header', undefined, 'header')
-  header.append(withClass(wrap('div', element('h1', 'Rollouts')), 'title'))
+  const title = wrap('div', element('h1', 'Rollouts'))
+
+  if (demo) {
+    title.append(demoBadge())
+  }
+
+  header.append(withClass(title, 'title'))
 
   return header
 }
@@ -114,6 +127,10 @@ export function renderHeader(ctx) {
   const title = wrap('div', element('h1', name), link(ctx.linkTo({}), 'All rollouts'))
 
   document.title = name
+
+  if (ctx.state?.demo) {
+    title.append(demoBadge())
+  }
 
   if (ctx.state?.readOnly) {
     title.append(badge('read-only', 'read-only'))

@@ -660,7 +660,8 @@ td > .badge {
 .state-implementing,
 .state-verifying,
 .state-fixing,
-.active-run {
+.active-run,
+.demo {
   --tone: var(--implement);
 }
 

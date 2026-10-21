@@ -7,6 +7,7 @@ import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { makeDemoRoot, removeDemoRoot } from '../lib/demo.mjs'
 import { createDriver } from '../lib/driver.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { BATTERY_WARNING } from '../lib/machine.mjs'
@@ -1190,6 +1191,84 @@ test('commands: a default server sends readOnly false', async (context) => {
 
   const stream = await openStream(context, server, 'demo')
   assert.equal((await stream.next((message) => message.event === 'state')).data.readOnly, false)
+})
+
+test('demo: the page and the list say demo, Start and Stop are refused, the inbox commands go through', async (context) => {
+  const root = makeDemoRoot({ dir: join(mkdtempSync(join(tmpdir(), 'rollout-demo-server-')), 'root') })
+  const calls = []
+  const { server } = await serve(context, { root, demo: true, driverCommand: refusedDriver(calls) })
+
+  context.after(() => removeDemoRoot(root))
+
+  assert.equal((await get(server, '/api/rollouts')).json().demo, true)
+
+  const stream = await openStream(context, server, 'my-lib-1.2.0')
+  const state = await stream.next()
+
+  assert.equal(state.data.demo, true)
+  assert.equal(state.data.readOnly, false)
+
+  for (const [name, cmd] of [
+    ['my-lib-1.1.0', 'start'],
+    ['my-lib-1.2.0', 'stop'],
+  ]) {
+    const refused = await post(server, name, { cmd })
+
+    assert.equal(refused.status, 409, cmd)
+    assert.deepEqual(refused.json, { error: 'the demo has no driver to start or stop' })
+  }
+
+  const note = await post(server, 'my-lib-1.2.0', { cmd: 'note', id: 'P5', text: 'Log it and go on.' })
+
+  assert.equal(note.status, 202)
+  assert.equal(inboxFiles(join(root, 'my-lib-1.2.0')).length, 1)
+  assert.deepEqual(calls, [])
+  assert.equal(alive(process.pid), true, 'the server is still here')
+})
+
+test('demo: off unless asked for', async (context) => {
+  const { server } = await serve(context)
+  const stream = await openStream(context, server, 'demo')
+
+  assert.equal((await get(server, '/api/rollouts')).json().demo, false)
+  assert.equal((await stream.next()).data.demo, false)
+})
+
+test('cli: ui --demo serves the demo rollouts and removes them on exit, and takes no --root', async (context) => {
+  const temp = mkdtempSync(join(tmpdir(), 'rollout-demo-cli-'))
+  const child = spawn(process.execPath, [BIN, 'ui', '--demo', '--port', '0', '--no-open'], {
+    env: { ...cliEnv(), TMPDIR: temp },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+
+  context.after(() => child.kill())
+
+  const [first, second] = await lines(child.stdout, 2)
+  const url = /^rollout ui: (\S+)/.exec(first)[1]
+  const root = /^demo: made-up rollouts in (\S+), removed on exit/.exec(second)[1]
+  const token = new URL(url).hash.slice('#t='.length)
+  const listing = await (await fetch(new URL('/api/rollouts', url), { headers: { authorization: `Bearer ${token}` } })).json()
+
+  assert.ok(root.startsWith(temp), root)
+  assert.equal(listing.demo, true)
+  assert.deepEqual(
+    listing.rollouts.map((rollout) => rollout.name),
+    ['edge-states', 'my-lib-1.1.0', 'my-lib-1.2.0', 'notes-site'],
+  )
+
+  const exited = once(child, 'exit')
+  child.kill('SIGTERM')
+  assert.deepEqual(await exited, [0, null])
+  assert.equal(existsSync(root), false)
+
+  const both = spawnSync(process.execPath, [BIN, 'ui', '--demo', '--root', temp, '--no-open'], {
+    encoding: 'utf8',
+    env: cliEnv(),
+    timeout: 10_000,
+  })
+
+  assert.equal(both.status, 1)
+  assert.match(both.stderr, /--demo makes its own root, so it takes no --root/)
 })
 
 test('commands: start and stop a fake driver through the API', async (context) => {

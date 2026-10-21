@@ -54,7 +54,7 @@ function controls(commands, pr, ctx) {
 }
 
 export function renderRolloutControls(ctx) {
-  return controls(rolloutControls(ctx.view, ctx.readOnly), null, ctx)
+  return controls(rolloutControls(ctx.view, ctx.readOnly, ctx.demo), null, ctx)
 }
 
 export function renderPrControls(pr, ctx) {

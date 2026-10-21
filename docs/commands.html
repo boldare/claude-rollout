@@ -285,13 +285,17 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <h3 id="cmd-ui">ui <a class="anchor" href="#cmd-ui" aria-label="Link to this command">#</a></h3>
 
-        <pre><code>node $R ui [--root ROOT] [--port N] [--no-open] [--read-only]</code></pre>
+        <pre><code>node $R ui [--root ROOT] [--port N] [--no-open] [--read-only] [--demo]</code></pre>
 
         <ul>
           <li>Serves the web UI over every rollout under the root. It needs no <code>--dir</code> and no manifest.</li>
           <li>Listens on 127.0.0.1 only, on a random port unless <code>--port</code> is given.</li>
           <li>Prints a URL with a token in its fragment and, on macOS and Linux, opens it in the browser unless <code>--no-open</code>.</li>
           <li><code>--read-only</code> disables every control.</li>
+          <li>
+            <code>--demo</code> serves made-up rollouts from a temp directory instead of a root, to show the UI without a real rollout. The
+            directory goes when the server stops.
+          </li>
           <li>Runs until Ctrl-C, so start it in a terminal of your own.</li>
           <li>Agents cannot run it, because the printed URL carries the token.</li>
         </ul>
@@ -723,6 +727,15 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>off</td>
                 <td>ui</td>
                 <td>Disables every control. The server refuses every command.</td>
+              </tr>
+              <tr id="flag-demo">
+                <td>--demo</td>
+                <td>off</td>
+                <td>ui</td>
+                <td>
+                  Serves made-up rollouts from a new temp directory, removed on exit, and takes no <code>--root</code>. Start and Stop are
+                  off, the other commands land in the demo's inbox.
+                </td>
               </tr>
             </tbody>
           </table>

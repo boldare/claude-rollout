@@ -803,6 +803,7 @@ ol.steps > li > strong:first-child {
 .state-verifying,
 .state-fixing,
 .active-run,
+.demo,
 .where-ui {
   --tone: var(--implement);
 }

@@ -220,7 +220,7 @@ function renderList() {
 
   const items = element('ul', undefined, 'rollouts')
   items.append(...rollouts.map(rolloutItem))
-  app.replaceChildren(renderTop(renderListHeader()), items, renderFooter())
+  app.replaceChildren(renderTop(renderListHeader(listing.body.demo === true)), items, renderFooter())
 }
 
 // Resolves to whether another refresh makes sense.
@@ -745,6 +745,7 @@ function context() {
     toggleRow,
     sendAnswer,
     readOnly: session.state?.readOnly !== false,
+    demo: session.state?.demo === true,
     sending: session.sending,
     notice: session.notice,
     send: (command) => send(current, command),

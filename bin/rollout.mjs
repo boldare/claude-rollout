@@ -11,9 +11,10 @@
 //   rollout.mjs pause | resume | unhalt [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
-//   rollout.mjs ui        [--root ROOT] [--port N] [--no-open] [--read-only]
+//   rollout.mjs ui        [--root ROOT] [--port N] [--no-open] [--read-only] [--demo]
 //                         (serves a local web UI over the rollouts in ROOT, default $ROLLOUT_ROOT or ~/.rollouts)
 //                         (--read-only disables the controls)
+//                         (--demo serves made-up rollouts from a temp directory, removed on exit)
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -41,6 +42,7 @@ import {
 } from '../lib/preflight.mjs'
 import { agentSettings, contextArgs, contextEnv } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
+import { keepDemoAlive, makeDemoRoot, removeDemoRoot } from '../lib/demo.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
 import { execFile } from 'node:child_process'
 
@@ -57,6 +59,7 @@ const CLI_OPTIONS = {
     port: { type: 'string' },
     open: { type: 'boolean', default: true },
     'read-only': { type: 'boolean', default: false },
+    demo: { type: 'boolean', default: false },
   },
 }
 
@@ -565,8 +568,21 @@ function openBrowser(url) {
   }
 }
 
+// The demo's directory goes when the server does, also when it dies without a signal.
+function demoRoot() {
+  const root = makeDemoRoot()
+  const stopDemo = keepDemoAlive(root)
+
+  process.once('exit', () => {
+    stopDemo()
+    removeDemoRoot(root)
+  })
+
+  return root
+}
+
 async function ui() {
-  const root = rolloutRoot(values.root)
+  const demo = values.demo
   const port = values.port ?? '0'
 
   if (!/^\d+$/.test(port) || Number(port) > 65535) {
@@ -574,9 +590,19 @@ async function ui() {
     process.exit(1)
   }
 
+  if (demo && values.root) {
+    console.error('rollout ui: --demo makes its own root, so it takes no --root')
+    process.exit(1)
+  }
+
+  const root = demo ? demoRoot() : rolloutRoot(values.root)
   const readOnly = values['read-only']
-  const server = await startServer({ root, port: Number(port), readOnly })
+  const server = await startServer({ root, port: Number(port), readOnly, demo })
   console.log(`rollout ui: ${server.url} (Ctrl-C stops it)`)
+
+  if (demo) {
+    console.log(`demo: made-up rollouts in ${root}, removed on exit. Start and Stop are off.`)
+  }
 
   if (readOnly) {
     console.log('read-only: the controls are disabled')

@@ -4,13 +4,14 @@ const RETRY_STATES = ['escalated', 'blocked', 'interrupted']
 const PR_COMMANDS = ['hold', 'release', 'retry']
 const LOSES_VERIFICATION = ['verified', 'ready_claimed']
 
-export function rolloutControls(view, readOnly) {
+// A demo has no driver to stop or start, only the inbox commands.
+export function rolloutControls(view, readOnly, demo = false) {
   if (readOnly) {
     return []
   }
 
   if (!view) {
-    return ['start']
+    return demo ? [] : ['start']
   }
 
   const { driver } = view
@@ -20,7 +21,9 @@ export function rolloutControls(view, readOnly) {
     controls.push('unhalt')
   }
 
-  controls.push(driver.running ? 'stop' : 'start')
+  if (!demo) {
+    controls.push(driver.running ? 'stop' : 'start')
+  }
 
   return controls
 }

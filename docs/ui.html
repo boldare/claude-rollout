@@ -134,6 +134,17 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                 <td>off</td>
                 <td>Turns every control off. See <a href="#read-only">Read-only mode</a>.</td>
               </tr>
+              <tr>
+                <td><a href="commands.html#flag-demo">--demo</a></td>
+                <td>off</td>
+                <td>
+                  Shows the UI on made-up data, for a demo or a screenshot: a running rollout with the PRs of the mockups below, a finished
+                  one, one with every state that waits or stops, and one whose manifest does not load. The data lives in a temp directory
+                  that goes when the server stops. Heartbeats stay fresh and the running P3 goes on for a few steps, so its open panel
+                  moves. A <span class="badge demo">demo</span> badge sits next to the title, Start and Stop are off, and the other commands
+                  only land in the demo's inbox, since no driver reads it.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
