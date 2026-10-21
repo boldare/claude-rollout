@@ -294,6 +294,7 @@ test('prRows: a waiting PR says since when, which run asked and what the delegat
     done('A3', 'fix', 'A3-03-fix', 50, { result: 'READY' }),
     { at: at(51), id: 'A3', kind: 'escalated', role: 'fix' },
   ]
+
   const runs = runsFromEvents(events)
   const escalate = {
     at: at(35),
@@ -303,11 +304,13 @@ test('prRows: a waiting PR says since when, which run asked and what the delegat
     reasoning: '  the plan does not decide ',
     run: 'A1-02-delegate',
   }
+
   const prs = (a1) => ({
     A1: { state: 'blocked', blocked: { kind: 'needs-decision', question, evidence: 'Two sections disagree.' }, ...a1 },
     A2: { state: 'blocked', blocked: { kind: 'gate', question: 'a check failed', evidence: '' } },
     A3: { state: 'escalated', escalation: 'fix attempts exhausted', lastError: 'fix attempts exhausted (3)' },
   })
+
   const waiting = (ledgerPrs, id, eventList = events, runList = runs) =>
     prRows(manifest, { prs: ledgerPrs }, eventList, runList).find((row) => row.id === id).waiting
 
@@ -328,6 +331,7 @@ test('prRows: a waiting PR says since when, which run asked and what the delegat
     state: 'next',
     reason: '',
   })
+
   assert.deepEqual(delegateOf({ delegate: { runs: 1, answers: [] } }, runsFromEvents(events.slice(0, 4), { driverRunning: true })), {
     state: 'running',
     reason: '',
