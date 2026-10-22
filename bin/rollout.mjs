@@ -4,6 +4,8 @@
 //   rollout.mjs run       [--dir D] [--only A1,A6] [--dry-run]
 //   rollout.mjs status    [--dir D]
 //   rollout.mjs card      <id> [--dir D]
+//   rollout.mjs wait      [--dir D] [--since ISO] [--ready-within MIN]
+//                         (blocks until something needs you, prints it and exits, 2 when no driver runs)
 //   rollout.mjs approve   <id> [--dir D]
 //   rollout.mjs note      <id> "<answer>" [--dir D]
 //   rollout.mjs retry     <id> [--dir D]
@@ -42,6 +44,7 @@ import {
 import { agentSettings, contextArgs, contextEnv } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
+import { formatItem, manifestForWait, parseReadyWithin, parseSince, shellWord, waitForAttention } from '../lib/wait.mjs'
 import { execFile } from 'node:child_process'
 
 const CLI_OPTIONS = {
@@ -57,6 +60,8 @@ const CLI_OPTIONS = {
     port: { type: 'string' },
     open: { type: 'boolean', default: true },
     'read-only': { type: 'boolean', default: false },
+    since: { type: 'string' },
+    'ready-within': { type: 'string' },
   },
 }
 
@@ -310,6 +315,46 @@ function card(manifest, id) {
   if (entry.state === 'verified') {
     console.log(`\n${approveHint(manifest, entry, id)}`)
   }
+}
+
+// Exit code by assignment, never process.exit: on macOS a pipe to stdout is
+// asynchronous, and the items must reach the session that reads them.
+async function wait() {
+  let since
+  let readyWithin
+  let loaded
+
+  try {
+    since = parseSince(values.since)
+    readyWithin = parseReadyWithin(values['ready-within'])
+    loaded = manifestForWait(values.dir)
+  } catch (error) {
+    console.error(`rollout wait: ${error.message}`)
+    process.exitCode = 1
+    return
+  }
+
+  const { manifest, warning } = loaded
+
+  if (warning) {
+    console.error(`rollout wait: ${warning}`)
+  }
+
+  const result = await waitForAttention(manifest, { since, readyWithinMs: readyWithin * 60_000 })
+
+  for (const item of result.items) {
+    console.log(formatItem(item))
+  }
+
+  if (result.message) {
+    console.error(`rollout wait: ${result.message}`)
+  }
+
+  const sinceFlag = result.cursor === null ? '' : ` --since ${new Date(result.cursor).toISOString()}`
+  const readyWithinFlag = values['ready-within'] === undefined ? '' : ` --ready-within ${readyWithin}`
+
+  console.log(`next: rollout.mjs wait --dir ${shellWord(manifest.dir)}${sinceFlag}${readyWithinFlag}`)
+  process.exitCode = result.exit
 }
 
 async function preflight(manifest) {
@@ -618,6 +663,12 @@ async function main() {
   // are refused above because the printed URL carries the token.
   if (command === 'ui') {
     await ui()
+    return
+  }
+
+  // Before currentManifest() too: wait follows a driver past an invalid manifest.yaml.
+  if (command === 'wait') {
+    await wait()
     return
   }
 

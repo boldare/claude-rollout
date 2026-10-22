@@ -1023,7 +1023,10 @@ test('approve is refused under manual and auto, and accepted under human', () =>
     const { manifest, driver } = driverFor(ledger, { notify: (_, message) => notices.push(message) })
     manifest.policy.merge = merge
 
-    assert.deepEqual(apply(manifest, driver, { cmd: 'approve', id: 'A1', sha, patchId }), [{ id: 'A1', kind: 'approval-rejected', reason }])
+    assert.deepEqual(apply(manifest, driver, { cmd: 'approve', id: 'A1', sha, patchId }), [
+      { id: 'A1', kind: 'approval-rejected', reason, notified: true },
+    ])
+
     assert.equal(driver.ledger.prs.A1.approved, null)
     assert.equal(notices.length, 1, merge)
     assert.ok(notices[0].startsWith('A1: approval rejected: '), notices[0])
@@ -1033,7 +1036,7 @@ test('approve is refused under manual and auto, and accepted under human', () =>
   const { manifest, driver } = driverFor(ledger, { notify: (_, message) => notices.push(message) })
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'approve', id: 'A1', sha, patchId }), [
-    { id: 'A1', kind: 'approved', sha: sha.slice(0, 7), channel: 'inbox' },
+    { id: 'A1', kind: 'approved', sha: sha.slice(0, 7), channel: 'inbox', notified: true },
   ])
 
   assert.equal(driver.ledger.prs.A1.approved.channel, 'inbox')
@@ -1052,11 +1055,13 @@ test('an inbox approve without a valid at is rejected, and one posted before the
     noValidAt,
     noValidAt,
     noValidAt,
-    { id: 'A1', kind: 'approval-rejected', reason: 'it was posted before the verification finished' },
+    { id: 'A1', kind: 'approval-rejected', reason: 'it was posted before the verification finished', notified: true },
   ])
 
   assert.equal(driver.ledger.prs.A1.approved, null)
-  assert.deepEqual(apply(manifest, driver, approve), [{ id: 'A1', kind: 'approved', sha: sha.slice(0, 7), channel: 'inbox' }])
+  assert.deepEqual(apply(manifest, driver, approve), [
+    { id: 'A1', kind: 'approved', sha: sha.slice(0, 7), channel: 'inbox', notified: true },
+  ])
 })
 
 test('a GitHub approval is noticed once, and the merge delay counts from when the driver first saw it', async () => {
@@ -1438,7 +1443,7 @@ test('tick: six ticks of HTTP 502 escalate nothing, and an outage of 30 minutes 
   const before = readEvents(manifest).length
   await driver.tick()
 
-  assert.deepEqual(eventsSince(manifest, before), [{ id: '-', kind: 'github-back', minutes: 31 }])
+  assert.deepEqual(eventsSince(manifest, before), [{ id: '-', kind: 'github-back', minutes: 31, notified: true }])
   assert.deepEqual(notices.slice(1), ['-: GitHub answers again after 31 minutes'])
   assert.equal(driver.ledger.data.githubUnavailable, null)
 
@@ -1622,6 +1627,11 @@ test('runTick: a failed tick never rejects, and the fifth in a row notifies once
 
   assert.match(tickErrors()[0].error, /disk full/)
   assert.deepEqual(notices, ['5 ticks in a row failed: disk full'])
+  assert.deepEqual(
+    tickErrors().map((event) => event.notified ?? false),
+    [false, false, false, false, true],
+  )
+
   assert.match(readFileSync(join(manifest.dir, 'heartbeat'), 'utf8'), / tick-error disk full$/)
 
   await driver.runTick()
@@ -1880,7 +1890,7 @@ test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sy
   assert.equal(driver.ledger.data.lastMerge.sha, MERGE_SHA)
   assert.deepEqual(cleaned, ['A1'])
   assert.deepEqual(notices, ['A1: merged PR #11'])
-  assert.deepEqual(eventsSince(manifest, events.length), [{ id: 'A1', kind: 'merged', pr: 11 }])
+  assert.deepEqual(eventsSince(manifest, events.length), [{ id: 'A1', kind: 'merged', pr: 11, notified: true }])
 })
 
 test('mergeCandidate: a PR merged on GitHub while the gate reads it waits for sync, with no notification', async () => {
@@ -2189,6 +2199,7 @@ test('delegate: an answer to needs-decision sends the PR to a fix run with the a
     run: 'A1-01-delegate',
     blocked: 'needs-decision',
     planRefs: ['Decisions: flags'],
+    notified: true,
   })
 
   assert.deepEqual(notices, [ANSWERED])
@@ -2212,7 +2223,14 @@ test('delegate: an escalation keeps the PR blocked, notifies once, and the same 
   assert.equal(calls.length, 1)
   assert.equal(entry.state, 'blocked')
   assert.deepEqual(eventsSince(manifest).slice(2), [
-    { id: 'A1', kind: 'delegate-escalated', run: 'A1-01-delegate', blocked: 'needs-decision', reason: 'The plan is silent on the flag.' },
+    {
+      id: 'A1',
+      kind: 'delegate-escalated',
+      run: 'A1-01-delegate',
+      blocked: 'needs-decision',
+      reason: 'The plan is silent on the flag.',
+      notified: true,
+    },
   ])
 
   assert.deepEqual(notices, [
@@ -2253,7 +2271,7 @@ test('delegate: at maxPerPr it starts nothing and notifies once', async () => {
   await advanced(driver, pr)
 
   assert.deepEqual(calls, [])
-  assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'delegate-limit', runs: 2, maxPerPr: 2 }])
+  assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'delegate-limit', runs: 2, maxPerPr: 2, notified: true }])
   assert.equal(notices.length, 1)
   assert.ok(notices[0].includes('policy.delegate.maxPerPr'), notices[0])
   assert.equal(entry.delegate.limitNotified, true)
@@ -2300,6 +2318,7 @@ test('delegate: a question it takes notifies once, through its answer or escalat
     await driver.onDone(pr, 'fix', blockedReport(DECISION), { run: 'A1-02-fix' })
 
     assert.deepEqual(kindsSince(manifest), ['fix-done', 'blocked'])
+    assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'blocked', reason: 'needs-decision', delegate: true })
     assert.deepEqual(notices, [])
 
     await advanced(driver, pr)
@@ -2312,7 +2331,7 @@ test('delegate: a question it takes notifies once, through its answer or escalat
 
   driver.onBriefDone(pr, agentResult({ output: questions }))
 
-  assert.deepEqual(kindsSince(manifest), ['blocked'])
+  assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'blocked', reason: 'brief-questions', delegate: true }])
   assert.deepEqual(notices, [])
 
   await advanced(driver, pr)
@@ -2329,10 +2348,11 @@ test('delegate: blocked still notifies when the delegate will not take the quest
   ]
 
   for (const { state, policy } of cases) {
-    const { driver, pr, notices, calls } = delegateDriver({ state: 'fixing', pr: 11, blocked: null, ...state }, { policy })
+    const { manifest, driver, pr, notices, calls } = delegateDriver({ state: 'fixing', pr: 11, blocked: null, ...state }, { policy })
 
     await driver.onDone(pr, 'fix', blockedReport(DECISION), { run: 'A1-02-fix' })
 
+    assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'blocked', reason: 'needs-decision', notified: true })
     assert.deepEqual(notices, [notice])
     assert.deepEqual(calls, [])
   }
@@ -2611,7 +2631,7 @@ test('checkClaim: with action block, a new alert blocks the PR for the maintaine
     gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     gateCheckEvent('code-scanning', 'fail', ALERT_REASON),
-    { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
+    { id: 'A1', kind: 'blocked', reason: 'code-scanning', notified: true },
   ])
 
   assert.deepEqual(notices, [`A1: blocked (code-scanning): ${ALERT_REASON.slice(0, 120)}`])
@@ -2960,7 +2980,7 @@ test('checkClaim: a claim resumed after a fail, with no new READY, logs every ch
     gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
     gateCheckEvent('code-scanning', 'fail', ALERT_REASON),
-    { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
+    { id: 'A1', kind: 'blocked', reason: 'code-scanning', notified: true },
   ]
 
   manifest.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
@@ -3655,7 +3675,7 @@ test('mergeCandidate: with action block, a new code scanning alert blocks and dr
   assert.equal(entry.verified, null)
   assert.deepEqual(eventsSince(manifest), [
     { id: 'A1', kind: 'gate-block', reasons: [ALERT_REASON] },
-    { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
+    { id: 'A1', kind: 'blocked', reason: 'code-scanning', notified: true },
   ])
 
   assert.deepEqual(notices, [`A1: blocked (code-scanning): ${ALERT_REASON.slice(0, 120)}`])
@@ -3831,7 +3851,14 @@ test('verified: a disputed finding the next verifier still finds open escalates 
   )
 
   assert.deepEqual(kindsSince(manifest), ['verify-done', 'escalated'])
-  assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'escalated', reason: 'disputed finding', findings: ['F2'] })
+  assert.deepEqual(eventsSince(manifest).at(-1), {
+    id: 'A1',
+    kind: 'escalated',
+    reason: 'disputed finding',
+    findings: ['F2'],
+    notified: true,
+  })
+
   assert.equal(notices.length, 1)
   assert.match(notices[0], /^A1: the verifier still finds F2 open, which the implementer disputed\. /)
   assert.ok(notices[0].includes('rollout note A1') && notices[0].includes('rollout retry A1'), notices[0])
@@ -4185,7 +4212,7 @@ test('tick: a catalog that stays missing escalates the PR after five erroring ti
   assert.equal(entry.escalation, 'repeated errors')
   assert.deepEqual(
     eventsSince(manifest).filter((event) => event.kind === 'escalated'),
-    [{ id: 'A1', kind: 'escalated', reason: 'repeated errors' }],
+    [{ id: 'A1', kind: 'escalated', reason: 'repeated errors', notified: true }],
   )
 
   assert.ok(
@@ -4556,4 +4583,96 @@ test('retry: a PR escalated over a dispute goes to a fix run with the findings',
   assert.equal(entry.fixNote, findings)
   assert.equal(entry.interruptedRole, null)
   assert.deepEqual(entry.attempts, { implement: 0, fix: 0, verify: 0, brief: 0 })
+})
+
+// What rollout wait relies on: every notice leaves a notified mark on its event.
+
+test('sync: under merge: manual a merge of the PR the gate calls ready is the maintainer merge, with no notice', async () => {
+  const merged = [FETCH, { tool: 'gh', args: '--json state,mergeCommit', stdout: { state: 'MERGED', mergeCommit: { oid: MERGE_SHA } } }]
+  const ready = { ...samplePrs().A1, held: null, gate: { action: 'ready', reasons: ['ready: merge it on GitHub'], sha: SHA, at: at(83) } }
+  const maintainer = tickDriver({ A1: ready }, { policy: { merge: 'manual' }, rules: [...merged, viewRule({ state: 'MERGED' })] })
+
+  await maintainer.driver.tick()
+
+  assert.deepEqual(
+    eventsSince(maintainer.manifest).filter((event) => event.kind.startsWith('merged')),
+    [{ id: 'A1', kind: 'merged', pr: 11, by: 'maintainer' }],
+  )
+
+  assert.deepEqual(maintainer.notices, [])
+
+  // A "ready" from before the last verification is no verdict on this head.
+  const stale = { ...ready, gate: { ...ready.gate, at: at(79) } }
+  const outside = tickDriver({ A1: stale }, { policy: { merge: 'manual' }, rules: [...merged, viewRule({ state: 'MERGED' })] })
+
+  await outside.driver.tick()
+
+  assert.deepEqual(
+    eventsSince(outside.manifest).filter((event) => event.kind.startsWith('merged')),
+    [{ id: 'A1', kind: 'merged-outside-driver', pr: 11 }],
+  )
+})
+
+test('mergeCandidate: GitHub refusing the merge on every tick notifies once per head', async () => {
+  const refused = {
+    tool: 'gh',
+    args: 'pr merge 11',
+    code: 1,
+    stderr: 'GraphQL: Repository rule violations found. base branch policy prohibits the merge',
+  }
+
+  const { manifest, driver, gate, notices } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto' }, rules: [refused] },
+  )
+
+  const pr = manifest.prs.find((item) => item.id === 'A1')
+  const refusals = () => eventsSince(manifest).filter((event) => event.kind === 'merge-refused')
+
+  await driver.mergeCandidate(pr)
+  await driver.mergeCandidate(pr)
+
+  assert.deepEqual(
+    refusals().map((event) => event.notified ?? false),
+    [true, false],
+  )
+
+  assert.deepEqual(notices, ['A1: GitHub refused to merge PR #11; check its ruleset requirements'])
+
+  gate.pr = { headRefOid: MERGE_SHA }
+  driver.ledger.prs.A1.gate = null
+  await driver.mergeCandidate(pr)
+
+  assert.equal(refusals().at(-1).notified, true)
+  assert.equal(notices.length, 2)
+})
+
+test('mergeCandidate: under merge: human the wait for your approval is an event the driver notifies, once per patch', async () => {
+  const { manifest, driver, notices } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null, approved: null } },
+    { policy: { merge: 'human' } },
+  )
+
+  const pr = manifest.prs.find((item) => item.id === 'A1')
+
+  await driver.mergeCandidate(pr)
+  await driver.mergeCandidate(pr)
+
+  const awaiting = eventsSince(manifest).filter((event) => event.kind === 'awaiting-approval')
+
+  assert.equal(awaiting.length, 1)
+  assert.equal(awaiting[0].notified, true)
+  assert.match(awaiting[0].reason, /awaiting|approve PR/)
+  assert.deepEqual(notices, [`A1: PR #11 is verified; ${awaiting[0].reason}`])
+})
+
+test('mergeNext: the gate verdict of a queued PR names the PR it waits for', async () => {
+  const { manifest, driver } = twoReady()
+
+  await driver.mergeNext()
+
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.id === 'A3' && event.kind.startsWith('gate-')),
+    [{ id: 'A3', kind: 'gate-wait', reasons: [driver.ledger.prs.A3.gate.reasons[0]], after: 11 }],
+  )
 })
