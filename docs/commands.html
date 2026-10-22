@@ -290,51 +290,61 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <h3 id="cmd-wait">wait <a class="anchor" href="#cmd-wait" aria-label="Link to this command">#</a></h3>
 
-        <pre><code>node $R wait --dir D [--since N|ISO] [--ready-within MIN]</code></pre>
+        <pre><code>node $R wait --dir D [--since ISO] [--ready-within MIN]</code></pre>
 
         <p>
           Blocks until the rollout needs someone, prints what and exits. It prints nothing while it waits, so a Claude session can run it in
           the background and wake only when there is something to do, instead of polling <code>status</code> or watching
-          <code>events.jsonl</code> with a script of its own.
+          <code>events.jsonl</code> with a script of its own. The session brings what it printed to you, and sends <code>note</code>,
+          <code>retry</code> or <code>approve</code> only with your answer.
         </p>
 
         <ul>
           <li>
-            Without <code>--since</code> it first looks at the state: a PR blocked or escalated, a PR ready to merge, under
-            <code>merge: human</code> a verified PR without your approval, a halt or a pause, and the timed cases below. Any of them is
-            printed at once, and so is a waking event the driver wrote after it last saved the ledger. A PR with a command still in the
-            inbox counts as answered, and a PR outside the driver's current run is left out.
+            It wakes on what the driver tells you about. Every event that comes with a notification carries <code>notified: true</code>, so
+            the driver alone decides, and a new kind of notice wakes it with no change to <code>wait</code>. Progress the driver notifies
+            about does not wake it: <code>approved</code>, <code>merged</code>, <code>verified</code>, <code>delegate-answered</code>,
+            <code>head-moved-reverify</code>, <code>verifier-touched-tree</code> and <code>github-back</code>. Two events wake it without a
+            notification: <code>command-rejected</code>, because whoever sent the command expects it to apply, and
+            <code>merged-outside-driver</code>, a merge of a PR that was not ready. A failure the driver retries wakes it only when the
+            driver notifies, at the fifth in a row, and GitHub refusing a merge once per head.
           </li>
           <li>
-            Then it waits for an event that needs someone: <code>ready-to-merge</code>, <code>would-merge</code>, <code>blocked</code>,
-            <code>delegate-escalated</code>, <code>escalated</code>, <code>halted</code>, <code>finished</code>,
-            <code>merged-outside-driver</code>, <code>command-rejected</code>, <code>approval-rejected</code>,
-            <code>manifest-rejected</code>, the first <code>error</code> of a streak, a <code>paused</code> for an account limit, and under
-            <code>merge: human</code> <code>verified</code>. A question the delegate takes does not wake it, its escalation does. Every
-            other event, progress or a failure the driver retries and escalates by itself, does not wake it either.
+            Without <code>--since</code> it first waits until the driver that holds the lock has logged its start, so nothing it reports
+            comes from the run before. Then it looks at the state: a PR blocked or escalated, a PR ready to merge, under
+            <code>merge: human</code> a verified PR without your approval, a PR of a narrowed run whose dependency outside the run is not
+            merged, a halt or a pause, and the timed cases below. Any of them is printed at once, and so is a waking event the driver wrote
+            after it last saved the ledger. An <code>approve</code>, <code>note</code> or <code>retry</code> still in the inbox, or one the
+            driver took and has not saved yet, answers its PR. A PR outside the driver's current run is left out.
           </li>
           <li>
             Two cases wake it once when <code>--ready-within</code> minutes (15) pass: <code>verified-stalled</code>, a verified PR that has
             not reached ready-to-merge, usually a red base branch or a check that never reports, and <code>delegate-idle</code>, a question
-            the delegate took with no delegate run working on it, for example while every slot is busy (not while paused or held). A PR
+            the delegate took with no delegate run working on it, for example while every slot is busy or after the driver died in one. A PR
             held, queued behind the ready one, already merging or, under <code>merge: human</code>, without your approval does not stall.
-            The window is judged when it ends, so a PR that was queued then and stuck later does not wake it.
+            Nothing counts while the rollout is paused, and no stall while it is halted. Every poll judges every window that ended after
+            <code>--since</code>, or any window without it, leaving out a PR whose answer waits in the inbox or is not saved yet, so a
+            moment where the PR was merging does not lose it. The window starts again once the PR can move: with your approval, a retry, a
+            release, a rebase, the end of its queue, a resume, an unhalt, a driver start or a sleep of the machine.
           </li>
           <li>
             It prints every item it found in the same read, one line each: time, PR id, kind and the event's fields. The last line is
-            <code>next: rollout.mjs wait --dir D --since &lt;ISO time&gt;</code>. Start the next wait with that <code>--since</code>: it
-            replays the events after that time instead of looking at the state again, so nothing between two waits is lost and nothing the
-            last one printed comes back. It reads an event once it is a second old, because the driver stamps an event before it writes it.
-          </li>
-          <li>
-            <code>--since</code> also takes a count of lines of <code>events.jsonl</code> to skip, for example the count a script of your
-            own has read.
+            <code>next: rollout.mjs wait --dir D --since &lt;ISO time&gt;</code>, with <code>--ready-within</code> when you gave it and the
+            directory quoted when the shell needs it. Run that line for the next wait: it replays the events after that time instead of
+            looking at the state again, so nothing between two waits is lost and nothing the last one printed comes back. It reads an event
+            once it is a second old, because the driver stamps an event before it writes it.
           </li>
           <li>
             It exits 0 with the items, 1 when the directory has no manifest or a flag is wrong, and 2 with a message when no driver runs and
-            the rollout has not finished. A driver that stops after <code>finished</code> ends the wait with that event, exit 0, and a later
-            wait prints it again. A driver that is starting gets 15 s to take its lock. A driver whose heartbeat has not changed for 30
-            minutes of awake time, or three ticks when that is longer, counts as hung and exits 2 too. A sleep of the machine never counts.
+            the rollout has not finished, when the driver is older than <code>wait</code> and does not mark its notices, or when it hangs.
+            An exit 2 before the first report prints no <code>--since</code>, so the next wait looks at the state again. A driver that stops
+            after <code>finished</code> ends the wait with that event, exit 0, and a later wait prints it again. A driver that is starting
+            gets 15 s to take its lock, unless the last run finished with every PR merged. A driver whose heartbeat has not changed for 30
+            minutes of awake time, or three ticks when that is longer, counts as hung. A sleep of the machine never counts.
+          </li>
+          <li>
+            An invalid edit of <code>manifest.yaml</code> does not stop it. The driver keeps its last good manifest, and <code>wait</code>
+            goes on with the PRs, merge mode and tick the driver logged, and says so on stderr.
           </li>
         </ul>
 
@@ -774,13 +784,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>Prints the URL without opening the browser.</td>
               </tr>
               <tr id="flag-since">
-                <td>--since N|ISO</td>
+                <td>--since ISO</td>
                 <td>the current state</td>
                 <td>wait</td>
-                <td>
-                  Replays the events after that line count or time instead of reporting what already waits. Use the one the last wait
-                  printed.
-                </td>
+                <td>Replays the events after that time instead of reporting what already waits. Use the one the last wait printed.</td>
               </tr>
               <tr id="flag-ready-within">
                 <td>--ready-within MIN</td>
