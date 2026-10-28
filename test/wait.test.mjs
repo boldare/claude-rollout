@@ -255,6 +255,12 @@ test('wait: a ready gate from before the last verification is no ready-to-merge'
   assert.deepEqual(standing({ A1: stale }), [])
 })
 
+test('wait: while the rollout is halted a ready PR is no ready-to-merge', () => {
+  const ready = verifiedPr({ action: 'ready', reasons: ['ready: merge it on GitHub'] })
+
+  assert.deepEqual(idKinds(standing({ A1: ready }, { extra: { halted: 'main is red after merging A0' } })), ['- halted'])
+})
+
 test('wait: at start, approve, note and retry in the inbox answer their PR, hold and release do not', () => {
   const prs = { A1: { state: 'blocked', blocked: { kind: 'ci', question: 'Red.' } }, A2: { state: 'escalated' } }
   const answered = [{ cmd: 'note', id: 'A1', text: 'Rerun it.' }, { cmd: 'retry', id: 'A2' }, { cmd: 'unhalt' }]
@@ -711,6 +717,28 @@ test('wait: a new driver that holds the lock is followed from its own start, nev
   assert.deepEqual(kinds(result), ['A2 ready-to-merge'])
 })
 
+test('wait: a driver that has just come back starts the windows over, though its driver-start is younger than the settle', async () => {
+  const prs = { A1: verifiedPr({ action: 'wait', reasons: ['CI pending'] }, { at: NOON - 40 * MINUTE }) }
+  const rollout = waiting({ prs, events: [{ ...RUN[0], pid: 1 }] })
+
+  rollout.script.push(() => rollout.append({ id: '-', kind: 'driver-start', prs: ['A1', 'A2'], pid: process.pid, noticeMarks: true }))
+  rollout.idle(3)
+  rollout.script.push(() => rollout.append({ id: 'A2', kind: 'ready-to-merge', pr: 12, notified: true }))
+
+  assert.deepEqual(kinds(await rollout.run({ since: NOON - 30 * MINUTE })), ['A2 ready-to-merge'])
+})
+
+test('wait: with no driver the downtime is no stall, the wait exits 2', async () => {
+  const prs = { A1: verifiedPr({ action: 'wait', reasons: ['CI pending'] }, { at: NOON - 40 * MINUTE }) }
+
+  for (const since of [null, NOON - 30 * MINUTE]) {
+    const result = await waiting({ prs, lock: false }).run({ since })
+
+    assert.equal(result.exit, 2, String(since))
+    assert.deepEqual(result.items, [])
+  }
+})
+
 test('wait: a driver older than the notified marks cannot be followed, and the next wait reports the state', async () => {
   const result = await waiting({ events: [{ ...RUN[0], noticeMarks: undefined }] }).run()
 
@@ -851,8 +879,16 @@ test('wait: a fresh heartbeat keeps a long wait going', async () => {
   assert.equal(result.items[0].kind, 'halted')
 })
 
+// The CLI as the maintainer runs it. npm test may run inside a rollout, as a
+// gate or an agent, where ROLLOUT_ROLE would refuse wait.
 function cli(...args) {
-  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', cwd: dirname(BIN), timeout: 30_000 })
+  const env = { ...process.env }
+
+  delete env.ROLLOUT_ROLE
+  delete env.ROLLOUT_ROOT
+  delete env.ROLLOUT_DIR
+
+  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', cwd: dirname(BIN), env, timeout: 30_000 })
 }
 
 function deadPid() {

@@ -4611,6 +4611,60 @@ test('sync: under merge: manual a merge of the PR the gate calls ready is the ma
     eventsSince(outside.manifest).filter((event) => event.kind.startsWith('merged')),
     [{ id: 'A1', kind: 'merged-outside-driver', pr: 11 }],
   )
+
+  // Nor is it a verdict on a head pushed after the verification.
+  const pushed = tickDriver(
+    { A1: ready },
+    { policy: { merge: 'manual' }, rules: [...merged, viewRule({ state: 'MERGED', headRefOid: MERGE_SHA })] },
+  )
+
+  await pushed.driver.tick()
+
+  assert.deepEqual(
+    eventsSince(pushed.manifest).filter((event) => event.kind.startsWith('merged')),
+    [{ id: 'A1', kind: 'merged-outside-driver', pr: 11 }],
+  )
+})
+
+test('mergeCandidate: a PR back from a fix run on the same head is announced ready again', async () => {
+  const { manifest, driver, notices } = tickDriver({ A1: { ...samplePrs().A1, held: null } }, { policy: { merge: 'manual' } })
+  const pr = manifest.prs.find((item) => item.id === 'A1')
+  const entry = driver.ledger.prs.A1
+  const verified = { ...entry.verified }
+
+  await driver.mergeCandidate(pr)
+  apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Why is the flag on?' })
+
+  assert.equal(entry.state, 'needs_fix')
+
+  // The fix run answers without a commit, and the PR is verified again on the same head.
+  entry.state = 'verified'
+  entry.verified = { ...verified, at: new Date().toISOString() }
+  await driver.mergeCandidate(pr)
+
+  assert.deepEqual(
+    kindsSince(manifest).filter((kind) => kind === 'ready-to-merge'),
+    ['ready-to-merge', 'ready-to-merge'],
+  )
+
+  assert.equal(notices.length, 2)
+})
+
+test('mergeCandidate: a running check named like an approval is no wait for your approval', async () => {
+  const pending = { state: 'pending', missing: [], pending: ['Auto approve PR', 'awaiting-deploy'], failing: [], runs: [] }
+  const { manifest, driver, gate, notices } = tickDriver({ A1: { ...samplePrs().A1, held: null } }, { policy: { merge: 'auto' } })
+  const pr = manifest.prs.find((item) => item.id === 'A1')
+
+  gate.facts = { checks: pending }
+  await driver.mergeCandidate(pr)
+
+  assert.match(driver.ledger.prs.A1.gate.reasons.join(), /running: Auto approve PR, awaiting-deploy/)
+  assert.deepEqual(
+    kindsSince(manifest).filter((kind) => kind === 'awaiting-approval'),
+    [],
+  )
+
+  assert.deepEqual(notices, [])
 })
 
 test('mergeCandidate: GitHub refusing the merge on every tick notifies once per head', async () => {

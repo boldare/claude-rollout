@@ -341,9 +341,9 @@
           </li>
           <li>
             <strong>Sync every PR with GitHub.</strong> A merge or a close made on GitHub wins. Under <code>merge: manual</code> the merge
-            of the PR the gate called ready is logged as <code>merged</code> by the maintainer, any other merge made on GitHub as
-            <code>merged-outside-driver</code>. A head that moved after verification is checked again. Then look for new maintainer feedback
-            on the PR.
+            of the PR the gate called ready, at the head it verified, is logged as <code>merged</code> by the maintainer, any other merge
+            made on GitHub as <code>merged-outside-driver</code>. A head that moved after verification is checked again. Then look for new
+            maintainer feedback on the PR.
           </li>
           <li>
             <strong>Run the gate.</strong> Verified PRs go through the gate in priority order, then manifest order. PRs with an agent

@@ -311,21 +311,22 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           </li>
           <li>
             Without <code>--since</code> it first waits until the driver that holds the lock has logged its start, so nothing it reports
-            comes from the run before. Then it looks at the state: a PR blocked or escalated, a PR ready to merge, under
-            <code>merge: human</code> a verified PR without your approval, a PR of a narrowed run whose dependency outside the run is not
-            merged, a halt or a pause, and the timed cases below. Any of them is printed at once, and so is a waking event the driver wrote
-            after it last saved the ledger. An <code>approve</code>, <code>note</code> or <code>retry</code> still in the inbox, or one the
-            driver took and has not saved yet, answers its PR. A PR outside the driver's current run is left out.
+            comes from the run before. Then it looks at the state: a PR blocked or escalated, a PR ready to merge unless the rollout is
+            halted, under <code>merge: human</code> a verified PR without your approval, a PR of a narrowed run whose dependency outside the
+            run is not merged, a halt or a pause, and the timed cases below. Any of them is printed at once, and so is a waking event the
+            driver wrote after it last saved the ledger. An <code>approve</code>, <code>note</code> or <code>retry</code> still in the
+            inbox, or one the driver took and has not saved yet, answers its PR. A PR outside the driver's current run is left out.
           </li>
           <li>
             Two cases wake it once when <code>--ready-within</code> minutes (15) pass: <code>verified-stalled</code>, a verified PR that has
             not reached ready-to-merge, usually a red base branch or a check that never reports, and <code>delegate-idle</code>, a question
             the delegate took with no delegate run working on it, for example while every slot is busy or after the driver died in one. A PR
             held, queued behind the ready one, already merging or, under <code>merge: human</code>, without your approval does not stall.
-            Nothing counts while the rollout is paused, and no stall while it is halted. Every poll judges every window that ended after
-            <code>--since</code>, or any window without it, leaving out a PR whose answer waits in the inbox or is not saved yet, so a
-            moment where the PR was merging does not lose it. The window starts again once the PR can move: with your approval, a retry, a
-            release, a rebase, the end of its queue, a resume, an unhalt, a driver start or a sleep of the machine.
+            Nothing counts while the rollout is paused, no stall while it is halted, and no timed case at all while no driver runs. Every
+            poll judges every window that ended after <code>--since</code>, or any window without it, leaving out a PR whose answer waits in
+            the inbox or is not saved yet, so a moment where the PR was merging does not lose it. The window starts again once the PR can
+            move: with your approval, a retry, a release, a rebase, the end of its queue, a resume, an unhalt, a driver start or a sleep of
+            the machine.
           </li>
           <li>
             It prints every item it found in the same read, one line each: time, PR id, kind and the event's fields. The last line is

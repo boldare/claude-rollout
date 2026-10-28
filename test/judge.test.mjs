@@ -320,6 +320,20 @@ test('github approval: none, stale, non-maintainer or changes requested waits', 
   }
 })
 
+test('a wait for an approval is marked as one, a request for changes and a pending check are not', () => {
+  const changes = [{ user: 'maint', state: 'CHANGES_REQUESTED', commit: 'abc1234def', at: '2026-09-27T10:00:00Z' }]
+  const pending = { state: 'pending', missing: [], pending: ['Auto approve PR'], failing: [], runs: [] }
+
+  assert.equal(judge(manifest, pr, { verified: { patchId: PATCH }, approved: null }, facts()).kind, 'approval')
+  assert.equal(judge(GM, pr, onVerified, botFacts([])).kind, 'approval')
+  assert.equal(judge(GM, pr, onVerified, botFacts(changes)).kind, undefined)
+
+  const ci = judge(manifest, pr, verifiedAndApproved, facts({ checks: pending }))
+
+  assert.match(ci.reasons.join(), /running: Auto approve PR/)
+  assert.equal(ci.kind, undefined)
+})
+
 test('github approval: an inbox approval does not replace a GitHub review for agent PRs', () => {
   assert.equal(judge(GM, pr, { ...onVerified, approved: { patchId: PATCH } }, botFacts([])).action, 'wait')
 })
