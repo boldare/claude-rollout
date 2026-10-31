@@ -6,7 +6,7 @@ import { renderTranscript } from './transcript.js'
 import { estimateNote } from './transcript-model.js'
 
 const TABS = ['overview', 'runs', 'verifier', 'review', 'plan', 'brief']
-const RUN_HEADINGS = ['run', 'role', 'effort', 'start', 'duration', 'cost', 'result', 'denials', 'error']
+const RUN_HEADINGS = ['run', 'role', 'effort', 'model', 'start', 'duration', 'cost', 'result', 'denials', 'error']
 const CHECK_HEADINGS = ['item', 'status', 'evidence']
 const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
 const RECHECK_CLASSES = { resolved: 'check-pass', open: 'check-fail', wrong: 'check-unverifiable' }
@@ -155,11 +155,29 @@ function depsField(pr, ctx) {
   return field('deps', namedList(deps, 'inline'))
 }
 
+// The board's info line repeats the gate, the question and the stamps below, so the page shows only the part of it
+// that has no field of its own.
+function stateFields(pr) {
+  if (pr.state === 'merged' && pr.mergeSha) {
+    return [field('merged as', short(pr.mergeSha))]
+  }
+
+  if (['needs_fix', 'fixing'].includes(pr.state) && pr.fixReason) {
+    return [field('fix reason', element('span', pr.fixReason, 'text'))]
+  }
+
+  if (['escalated', 'interrupted'].includes(pr.state) && pr.lastError) {
+    return [field('last error', element('span', pr.lastError, 'text'))]
+  }
+
+  return []
+}
+
 function renderOverview(pr, ctx) {
   const heldField = pr.held ? [field('held', `since ${clock(pr.held.at)}`)] : []
 
   return fields(
-    field('info', element('span', pr.info || '-', 'text')),
+    stateFields(pr),
     gateFields(pr.gate),
     blockedFields(pr.blocked),
     delegateFields(pr),
@@ -214,6 +232,7 @@ function runRow(run, ctx) {
     cell(runName(run, ctx)),
     cell(role),
     cell(run.effort ?? '-'),
+    cell(run.model ?? '-'),
     cell(clock(run.startedAt, now)),
     cell(duration(runSeconds(run, now)), `number ${live}`),
     costCell(run),

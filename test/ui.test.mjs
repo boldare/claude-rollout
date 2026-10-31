@@ -5,7 +5,18 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutView, runsFromEvents } from '../lib/view.mjs'
-import { commandBody, commandNotice, dialogFor, prControls, rolloutControls, rowControls } from '../ui/commands.js'
+import {
+  COMMAND_LINES,
+  answerHint,
+  answerPlaceholder,
+  commandLines,
+  delegateText,
+  panelRun,
+  resultTone,
+  rowOpen,
+  tookText,
+} from '../ui/board-model.js'
+import { commandBody, commandNotice, dialogFor, panelControls, prControls, rolloutControls } from '../ui/commands.js'
 import { duration, money, sentence, stateLabel } from '../ui/format.js'
 import {
   ERROR_KINDS,
@@ -556,6 +567,80 @@ function viewWith(driver) {
   return { ...view, driver: { ...view.driver, ...driver } }
 }
 
+test('panelRun: the run in progress, else the last run of the PR, else none', () => {
+  const runs = [
+    { run: 'A1-01-implement', id: 'A1', status: 'ok' },
+    { run: 'A2-01-implement', id: 'A2', status: 'ok' },
+    { run: 'A1-02-verify', id: 'A1', status: 'running' },
+    { run: 'A2-02-verify', id: 'A2', status: 'failed' },
+    { run: null, id: 'A2', status: 'ok' },
+  ]
+
+  assert.equal(panelRun({ id: 'A1' }, runs).run, 'A1-02-verify')
+  assert.equal(panelRun({ id: 'A2' }, runs).run, 'A2-02-verify')
+  assert.equal(panelRun({ id: 'A3' }, runs), null)
+  assert.equal(panelRun({ id: 'A1' }, undefined), null)
+})
+
+test('commandLines: tool calls with how they ended, the agent text, newest last', () => {
+  const tool = (id, name, summary) => ({ kind: 'tool', id, name, summary, command: name === 'Bash' ? summary : null })
+  const result = (id, text, extra = {}) => ({ kind: 'tool-result', toolUseId: id, text, isError: false, refused: false, ...extra })
+  const items = [
+    { kind: 'init', model: 'opus' },
+    tool('t1', 'Read', 'lib/a.mjs'),
+    result('t1', 'one\ntwo\nthree'),
+    tool('t2', 'Edit', 'lib/a.mjs'),
+    result('t2', 'ok'),
+    tool('t3', 'Bash', 'npm test'),
+    result('t3', '# fail 1\nnot ok 3', { isError: true }),
+    tool('t4', 'Bash', 'gh pr merge 11'),
+    result('t4', 'rollout guard: the driver merges PRs', { isError: true, refused: true }),
+    tool('t5', 'Edit', 'lib/b.mjs'),
+    result('t5', 'The file lib/b.mjs has been updated successfully.'),
+    tool('t6', 'Write', 'empty.txt'),
+    result('t6', ''),
+    { kind: 'text', text: '  Two flags\n\nare left.  ' },
+    tool('t7', 'Bash', 'npm test'),
+  ]
+
+  assert.equal(COMMAND_LINES, 5)
+  assert.deepEqual(commandLines(items, { running: true, count: 99 }), [
+    { kind: 'tool', name: 'Read', target: 'lib/a.mjs', outcome: { tag: null, text: '3 lines' } },
+    { kind: 'tool', name: 'Edit', target: 'lib/a.mjs', outcome: { tag: null, text: 'ok' } },
+    { kind: 'tool', name: 'Bash', target: 'npm test', outcome: { tag: 'error', text: '2 lines' } },
+    { kind: 'tool', name: 'Bash', target: 'gh pr merge 11', outcome: { tag: 'refused', text: '1 line' } },
+    { kind: 'tool', name: 'Edit', target: 'lib/b.mjs', outcome: { tag: null, text: '1 line' } },
+    { kind: 'tool', name: 'Write', target: 'empty.txt', outcome: { tag: null, text: 'empty' } },
+    { kind: 'text', text: 'Two flags are left.' },
+    { kind: 'tool', name: 'Bash', target: 'npm test', outcome: { tag: null, text: 'running…' } },
+  ])
+
+  const last = commandLines(items)
+  assert.equal(last.length, 5)
+  assert.deepEqual(last.at(-1).outcome, { tag: null, text: 'no result' })
+  assert.deepEqual(commandLines([{ kind: 'text', text: 'x'.repeat(400) }])[0].text.length, 300)
+  assert.deepEqual(commandLines([{ kind: 'text', text: '   ' }]), [])
+})
+
+test('tookText and resultTone: a finished run in one line, and the tone of its result', () => {
+  assert.equal(tookText({ seconds: 1260, costUsd: 1.84, denials: 0 }), '21m · $1.84 · 0 denials')
+  assert.equal(tookText({ seconds: 40, costUsd: 0, estimateUsd: 1.12, denials: 1 }), '40s · ≈$1.12 est. · 1 denial')
+  assert.equal(tookText({ seconds: null, costUsd: null, denials: null }), '- · -')
+
+  for (const [result, tone] of [
+    ['PASS', 'pass'],
+    ['READY', 'pass'],
+    ['FAIL', 'fail'],
+    ['BLOCKED', 'fail'],
+    ['failed', 'fail'],
+    ['interrupted', 'warn'],
+    ['ESCALATED', 'none'],
+    [null, 'none'],
+  ]) {
+    assert.equal(resultTone(result), tone, String(result))
+  }
+})
+
 test('rolloutControls: pause or resume, unhalt when halted, stop or start', () => {
   const { view } = demo()
 
@@ -582,14 +667,52 @@ test('prControls: hold or release, note or answer, and retry for a stuck PR', ()
   assert.deepEqual(prControls(a1, true), [])
 })
 
-test('rowControls: answer only for a blocked row that is not read-only', () => {
-  assert.deepEqual(rowControls({ id: 'A2', state: 'blocked' }, false), ['answer'])
+test('panelControls: release for a held row, retry for a stuck one, nothing read-only or merged', () => {
+  assert.deepEqual(panelControls({ id: 'A2', state: 'blocked', held: null }, false), ['retry'])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'escalated', held: { at: at(1) } }, false), ['release', 'retry'])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'interrupted', held: null }, false), ['retry'])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'verified', held: { at: at(1) } }, false), ['release'])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'implementing', held: null }, false), [])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'merged', held: { at: at(1) } }, false), [])
+  assert.deepEqual(panelControls({ id: 'A2', state: 'blocked', held: null }, true), [])
+})
 
-  for (const state of ['escalated', 'interrupted', 'implementing', 'merged']) {
-    assert.deepEqual(rowControls({ id: 'A2', state }, false), [], state)
-  }
+test('rowOpen: a waiting row opens by itself, any other on a click, and a choice sticks', () => {
+  const run = { run: 'A1-01-implement' }
+  const choices = new Map()
 
-  assert.deepEqual(rowControls({ id: 'A2', state: 'blocked' }, true), [])
+  assert.equal(rowOpen({ id: 'A1', state: 'blocked' }, run, choices), true)
+  assert.equal(rowOpen({ id: 'A1', state: 'escalated' }, null, choices), true)
+  assert.equal(rowOpen({ id: 'A1', state: 'implementing' }, run, choices), false)
+  assert.equal(rowOpen({ id: 'A1', state: 'pending' }, null, new Map([['A1', true]])), false, 'nothing to show')
+
+  choices.set('A1', false)
+  assert.equal(rowOpen({ id: 'A1', state: 'blocked' }, run, choices), false)
+
+  choices.set('A1', true)
+  assert.equal(rowOpen({ id: 'A1', state: 'implementing' }, run, choices), true)
+})
+
+test('delegateText, answerPlaceholder and answerHint: what the delegate did and who resumes', () => {
+  assert.equal(delegateText({ state: 'escalate', reason: 'the plan does not decide' }), 'escalated, the plan does not decide')
+  assert.equal(delegateText({ state: 'escalate', reason: '' }), 'escalated')
+  assert.equal(delegateText({ state: 'failed', reason: 'timeout' }), 'failed, timeout')
+  assert.equal(delegateText({ state: 'running', reason: '' }), 'running')
+  assert.equal(delegateText({ state: 'next', reason: '' }), 'answers first, on the next tick')
+  assert.equal(delegateText({ state: 'spent', reason: '2 of 2 runs' }), 'no runs left, 2 of 2 runs used')
+  assert.equal(delegateText({ state: 'skips', reason: '' }, 'gate'), 'does not take gate')
+  assert.equal(delegateText({ state: 'dropped', reason: '' }), 'its answer came after a note')
+  assert.equal(delegateText({ state: 'answer', reason: 'Use the old API.' }), 'answered')
+  assert.equal(delegateText({ state: 'future', reason: '' }), 'future')
+
+  const brief = { id: 'A1', state: 'blocked', blocked: { kind: 'brief-questions' } }
+  const decision = { id: 'A1', state: 'blocked', blocked: { kind: 'needs-decision' } }
+
+  assert.match(answerPlaceholder(brief), /brief writer/)
+  assert.match(answerPlaceholder(decision), /^Write what the implementer should do/)
+  assert.match(answerPlaceholder({ id: 'A1', state: 'escalated', blocked: null }), /implementer/)
+  assert.equal(answerHint(brief, true), "The brief writer resumes with it on the driver's next tick.")
+  assert.equal(answerHint(decision, false), 'The implementer resumes with it once the driver runs.')
 })
 
 test('dialogFor: answer shows the question and the evidence, never an empty section', () => {

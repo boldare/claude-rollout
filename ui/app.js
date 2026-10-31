@@ -1,13 +1,14 @@
 import { apiGet, apiPost, followStream } from './api.js'
 import { renderBoard } from './board.js'
+import { PANEL_ITEMS, panelRun, rowOpen } from './board-model.js'
 import { commandNotice } from './commands.js'
 import { renderCosts } from './costs.js'
 import { renderDetail } from './detail.js'
 import { element, link, wrap } from './dom.js'
 import { renderEvents } from './events.js'
-import { money, sentence } from './format.js'
-import { renderHeader, renderListHeader, renderViewTabs } from './header.js'
-import { driverStatus, mergeEvents } from './model.js'
+import { sentence } from './format.js'
+import { renderFooter, renderHeader, renderListHeader, renderTop, renderViewTabs, rolloutFacts } from './header.js'
+import { isWaiting, mergeEvents } from './model.js'
 import { renderPlan } from './plan.js'
 import { renderTimeline } from './timeline.js'
 import { FOLLOW_MS, PAGE_SIZE, shouldFollow, transcriptRoute } from './transcript-model.js'
@@ -34,6 +35,7 @@ const sourceDocs = new Set()
 let route = parseRoute(location.hash)
 let stopped = false
 let pendingRender = false
+let composing = false
 let listing = null
 let listTimer = null
 let listTicket = 0
@@ -44,7 +46,11 @@ let transcriptBusy = false
 let followTimer = null
 let followed = false
 let noticeTimer = null
+let panelTicket = 0
+let panelTimer = null
 let session = freshSession(null)
+
+const panelsBusy = new Set()
 
 function freshSession(name) {
   return {
@@ -58,6 +64,10 @@ function freshSession(name) {
     detail: null,
     plan: null,
     transcript: null,
+    rowChoices: new Map(),
+    panels: new Map(),
+    drafts: new Map(),
+    sent: new Set(),
     sending: false,
     notice: null,
   }
@@ -122,6 +132,7 @@ function showLine(text) {
   app.replaceChildren(element('p', text))
 }
 
+// A rebuild in the middle of a composed character would drop it, so the render waits for compositionend.
 function scheduleRender() {
   if (pendingRender) {
     return
@@ -130,13 +141,17 @@ function scheduleRender() {
   pendingRender = true
   requestAnimationFrame(() => {
     pendingRender = false
-    render()
+
+    if (!composing) {
+      render()
+    }
   })
 }
 
 function stopAll() {
   stopped = true
   stopList()
+  stopPanels()
   closeStream()
   detailTicket += 1
   planTicket += 1
@@ -144,6 +159,24 @@ function stopAll() {
   showLine(OPEN_THE_URL)
 }
 
+function rolloutSummary(rollout) {
+  if (!rollout.started && !rollout.driver?.running) {
+    return element('span', 'Not started: no ledger yet', 'facts')
+  }
+
+  return rolloutFacts({
+    driver: rollout.driver,
+    heartbeatAgeSeconds: rollout.driver?.heartbeatAgeSeconds ?? null,
+    merge: rollout.merge,
+    costUsd: rollout.costUsd,
+    merged: rollout.merged,
+    total: rollout.total,
+    errors: rollout.errors > 0 ? rollout.errors : null,
+    errorsHref: linkTo({ r: rollout.name, view: 'events', kind: 'errors' }),
+  })
+}
+
+// The whole row opens the rollout, as a board row opens its PR. A click on a link in it follows the link.
 function rolloutItem(rollout) {
   const item = element('li', undefined, 'rollout')
 
@@ -152,12 +185,15 @@ function rolloutItem(rollout) {
     return item
   }
 
-  item.append(
-    wrap('strong', link(linkTo({ r: rollout.name }), rollout.name)),
-    element('span', driverStatus(rollout.driver)),
-    element('span', `${rollout.merged}/${rollout.total} merged`),
-    element('span', money(rollout.costUsd)),
-  )
+  const target = linkTo({ r: rollout.name })
+
+  item.className = 'rollout clickable'
+  item.append(wrap('strong', link(target, rollout.name)), rolloutSummary(rollout))
+  item.addEventListener('click', (event) => {
+    if (!event.target.closest('a, button')) {
+      go(target)
+    }
+  })
 
   return item
 }
@@ -184,7 +220,7 @@ function renderList() {
 
   const items = element('ul', undefined, 'rollouts')
   items.append(...rollouts.map(rolloutItem))
-  app.replaceChildren(renderListHeader(), items)
+  app.replaceChildren(renderTop(renderListHeader()), items, renderFooter())
 }
 
 // Resolves to whether another refresh makes sense.
@@ -238,6 +274,7 @@ function stopList() {
 function closeStream() {
   session.stream?.close()
   invalidateTranscript()
+  stopPanels()
   followed = false
   session = freshSession(null)
 }
@@ -270,6 +307,8 @@ function follow(name) {
       loadDetail()
       loadPlan()
       recheckFollow({ fetchWhenStopped: true })
+      forgetSent()
+      syncPanels()
       scheduleRender()
     },
     onEvents(update) {
@@ -314,10 +353,26 @@ async function send(current, command) {
     }
 
     showNotice(current, commandNotice(command, answer, current.state?.view?.driver))
+
+    return answer.status === 202
   } catch (error) {
     if (current === session) {
       showNotice(current, { text: `Cannot reach the server: ${error.message}`, error: true })
     }
+
+    return false
+  }
+}
+
+// The box empties once the server took the note. Until the driver applies it, the row says it was sent.
+async function sendAnswer(id, text) {
+  const current = session
+  const taken = await send(current, { cmd: 'note', id, text })
+
+  if (taken && current === session) {
+    current.drafts.delete(id)
+    current.sent.add(id)
+    scheduleRender()
   }
 }
 
@@ -529,6 +584,133 @@ function recheckFollow({ fetchWhenStopped }) {
   followed = now
 }
 
+// The runs the open rows of the board show. Each panel reads the end of its run's log.
+function panelRuns() {
+  const view = session.state?.view
+
+  if (!view || route.pr || route.view !== 'board') {
+    return []
+  }
+
+  return view.rows
+    .filter((row) => !isWaiting(row) && session.rowChoices.get(row.id) && (!route.state || row.state === route.state))
+    .map((row) => panelRun(row, view.runs))
+    .filter(Boolean)
+}
+
+async function fetchPanel(run, ticket) {
+  const current = session
+  const path = `${apiPath(route.r, 'runs', run.run)}?from=end&limit=${PANEL_ITEMS}`
+  let tail
+
+  panelsBusy.add(run.run)
+
+  try {
+    const { status, body } = await apiGet(token, path)
+
+    tail = { status, body, runStatus: run.status }
+  } catch (error) {
+    tail = { status: 0, body: { error: `Cannot reach the server: ${error.message}` }, runStatus: run.status }
+  }
+
+  panelsBusy.delete(run.run)
+
+  if (ticket !== panelTicket || current !== session) {
+    return
+  }
+
+  if (tail.status === 401) {
+    stopAll()
+    return
+  }
+
+  session.panels.set(run.run, tail)
+  scheduleRender()
+}
+
+function stopPanels() {
+  panelTicket += 1
+  clearTimeout(panelTimer)
+  panelTimer = null
+  panelsBusy.clear()
+}
+
+// A timeout chain, like the transcript's, so a slow answer never piles up requests.
+function schedulePanelPoll() {
+  if (panelTimer || !panelRuns().some((run) => run.status === 'running')) {
+    return
+  }
+
+  const ticket = panelTicket
+
+  panelTimer = setTimeout(() => {
+    panelTimer = null
+
+    if (ticket !== panelTicket) {
+      return
+    }
+
+    for (const run of panelRuns().filter((item) => item.status === 'running' && !panelsBusy.has(item.run))) {
+      fetchPanel(run, ticket)
+    }
+
+    schedulePanelPoll()
+  }, FOLLOW_MS)
+}
+
+// Reads a run an open row has not read yet, or again once it ended, and drops the rest.
+function syncPanels() {
+  const wanted = panelRuns()
+  const names = new Set(wanted.map((run) => run.run))
+
+  for (const name of session.panels.keys()) {
+    if (!names.has(name)) {
+      session.panels.delete(name)
+    }
+  }
+
+  for (const run of wanted) {
+    const known = session.panels.get(run.run)
+
+    if (panelsBusy.has(run.run) || known?.runStatus === run.status) {
+      continue
+    }
+
+    if (!known) {
+      session.panels.set(run.run, { status: null, body: null, runStatus: run.status })
+    }
+
+    fetchPanel(run, panelTicket)
+  }
+
+  schedulePanelPoll()
+}
+
+// The toggle flips what the row shows now, whether that came from a click or from the default of a waiting row.
+function toggleRow(id) {
+  const view = session.state?.view
+  const row = view?.rows.find((item) => item.id === id)
+
+  if (!row) {
+    return
+  }
+
+  session.rowChoices.set(id, !rowOpen(row, panelRun(row, view.runs), session.rowChoices))
+  syncPanels()
+  scheduleRender()
+}
+
+// A row that stopped waiting no longer says its note was sent.
+function forgetSent() {
+  const waiting = new Set((session.state?.view?.rows ?? []).filter(isWaiting).map((row) => row.id))
+
+  for (const id of session.sent) {
+    if (!waiting.has(id)) {
+      session.sent.delete(id)
+    }
+  }
+}
+
 function nearBottom() {
   return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - STICK_PX
 }
@@ -556,6 +738,12 @@ function context() {
     detail: session.detail,
     plan: session.plan,
     transcript: session.transcript,
+    rowChoices: session.rowChoices,
+    panels: session.panels,
+    drafts: session.drafts,
+    sent: session.sent,
+    toggleRow,
+    sendAnswer,
     readOnly: session.state?.readOnly !== false,
     sending: session.sending,
     notice: session.notice,
@@ -587,16 +775,40 @@ function renderRollout() {
   const header = renderHeader(ctx)
 
   if (!ctx.state) {
-    app.replaceChildren(header, element('p', ctx.problem ? 'No state yet.' : 'Loading…', 'muted'))
+    app.replaceChildren(renderTop(header), element('p', ctx.problem ? 'No state yet.' : 'Loading…', 'muted'))
     return
   }
 
   if (!ctx.view) {
-    app.replaceChildren(header, ...(ctx.route.pr ? [] : [renderPlan(ctx)]))
+    app.replaceChildren(renderTop(header), ...(ctx.route.pr ? [] : [renderPlan(ctx)]), renderFooter())
     return
   }
 
-  app.replaceChildren(header, renderViewTabs(ctx), renderBody(ctx))
+  app.replaceChildren(renderTop(header, renderViewTabs(ctx)), renderBody(ctx), renderFooter())
+}
+
+// The box being typed in, with its caret, so the rebuilt page puts both back.
+function keptFocus() {
+  const active = document.activeElement
+  const key = active?.dataset?.keep
+
+  if (!key) {
+    return null
+  }
+
+  return { key, start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, scroll: active.scrollTop }
+}
+
+function restoreFocus(kept) {
+  const node = kept ? app.querySelector(`[data-keep="${CSS.escape(kept.key)}"]`) : null
+
+  if (!node) {
+    return
+  }
+
+  node.focus({ preventScroll: true })
+  node.setSelectionRange(kept.start, kept.end, kept.direction)
+  node.scrollTop = kept.scroll
 }
 
 function render() {
@@ -611,8 +823,10 @@ function render() {
   }
 
   const stick = following() && nearBottom()
+  const kept = keptFocus()
 
   renderRollout()
+  restoreFocus(kept)
 
   if (stick) {
     window.scrollTo(0, document.documentElement.scrollHeight)
@@ -655,6 +869,7 @@ function onRoute() {
   }
 
   recheckFollow({ fetchWhenStopped: false })
+  syncPanels()
   render()
 }
 
@@ -665,6 +880,15 @@ function start() {
   }
 
   window.addEventListener('hashchange', onRoute)
+  document.addEventListener('compositionstart', () => {
+    composing = true
+  })
+
+  document.addEventListener('compositionend', () => {
+    composing = false
+    scheduleRender()
+  })
+
   setInterval(() => scheduleRender(), TICK_MS)
   onRoute()
 }

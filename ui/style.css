@@ -3,12 +3,13 @@
 /* Tokens from the Boldare palette (bldr-graphics): paper, white and ink for surfaces, the yellow for highlights.
    States and roles use the five brand hues as they are on the dark scheme. On the light one each hue is darker,
    so its text and bars still read on white. merged and delegate stay neutral: the palette has five hues for seven
-   meanings. TT Commons is the brand typeface and is licensed, so no font file ships: it shows where it is installed.
-   Its x-height is small, so the scale runs larger than for system-ui. docs/docs.css copies the tokens. */
+   meanings. Figtree ships in fonts/ under the OFL, so every machine shows the same face. Mono stays the system one.
+   The accent marks what is selected and the yellow the one action that answers the maintainer's question.
+   docs/docs.css copies the tokens. */
 
 :root {
   color-scheme: light dark;
-  --font-ui: 'TT Commons', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-ui: 'Figtree', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   --text-sm: 14px;
@@ -22,6 +23,7 @@
   --panel: #ffffff;
   --raised: #ffffff;
   --well: #f2f2f2;
+  --sunken: #f2f2f2;
 
   --ink: #242424;
   --ink-2: #4f4f4f;
@@ -33,6 +35,7 @@
 
   --highlight: #f2da3a;
   --on-highlight: #242424;
+  --on-accent: #ffffff;
 
   --accent: #6a57e0;
   --pass: #038075;
@@ -58,6 +61,7 @@
 
   --shadow-sm: 0 1px 2px rgba(36, 36, 36, 0.05);
   --shadow-md: 0 1px 2px rgba(36, 36, 36, 0.05), 0 6px 16px -6px rgba(36, 36, 36, 0.14);
+  --shadow-bar: 0 4px 12px -6px rgba(36, 36, 36, 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -66,6 +70,7 @@
     --panel: #2c2c2c;
     --raised: #333333;
     --well: #1e1e1e;
+    --sunken: #191919;
 
     --ink: #f8f8f8;
     --ink-2: #c9c9c9;
@@ -74,6 +79,8 @@
     --line: #3d3d3d;
     --line-soft: #343434;
     --hover: #383838;
+
+    --on-accent: #242424;
 
     --accent: #a497f0;
     --pass: #5acbbc;
@@ -93,52 +100,55 @@
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 20px -8px rgba(0, 0, 0, 0.6);
+    --shadow-bar: 0 4px 12px -4px rgba(0, 0, 0, 0.55);
   }
 }
 
-/* TT Commons comes from the faces installed on the machine. Its ascent is 0.7em and its descent 0.3em, which
-   puts a label about 1px above the middle of a button or a pill. These faces move the baseline down by 0.07em,
-   so capitals sit as far above the middle as the x-height sits below. */
+/* Figtree is a variable font: one file per script covers every weight. latin-ext holds the Polish and other accented
+   letters, so a page in plain English loads only the latin files. */
 
 @font-face {
-  font-family: 'TT Commons';
-  font-weight: 400;
-  src: local('TT Commons Regular'), local('TTCommons-Regular');
-  ascent-override: 77%;
-  descent-override: 23%;
+  font-family: 'Figtree';
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('fonts/figtree-latin-wght-normal.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
-  font-family: 'TT Commons';
+  font-family: 'Figtree';
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('fonts/figtree-latin-ext-wght-normal.woff2') format('woff2');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Figtree';
   font-style: italic;
-  font-weight: 400;
-  src: local('TT Commons Italic'), local('TTCommons-Italic');
-  ascent-override: 77%;
-  descent-override: 23%;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('fonts/figtree-latin-wght-italic.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
-  font-family: 'TT Commons';
-  font-weight: 500;
-  src: local('TT Commons Medium'), local('TTCommons-Medium');
-  ascent-override: 77%;
-  descent-override: 23%;
-}
-
-@font-face {
-  font-family: 'TT Commons';
-  font-weight: 600;
-  src: local('TT Commons DemiBold'), local('TTCommons-DemiBold');
-  ascent-override: 77%;
-  descent-override: 23%;
-}
-
-@font-face {
-  font-family: 'TT Commons';
-  font-weight: 700;
-  src: local('TT Commons Bold'), local('TTCommons-Bold');
-  ascent-override: 77%;
-  descent-override: 23%;
+  font-family: 'Figtree';
+  font-style: italic;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('fonts/figtree-latin-ext-wght-italic.woff2') format('woff2');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 /* Base */
@@ -275,28 +285,32 @@ figcaption::first-letter {
   text-transform: uppercase;
 }
 
-/* Page frame: a header bar across the top, everything else inset below it. */
+/* Page frame: the header and the view tabs stay at the top of the window, the content is inset below them and the
+   footer closes the page. Long briefs, plans and transcripts scroll under the top bar. */
 
 #app {
-  padding-bottom: 64px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
-#app > :not(.header) {
+#app > :not(.top, .footer) {
   margin-right: 24px;
   margin-left: 24px;
 }
 
-#app > .tabs {
+#app > :nth-child(2) {
   margin-top: 24px;
-  margin-bottom: 20px;
 }
 
-#app > .rollouts {
-  margin-top: 24px;
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  box-shadow: var(--shadow-bar);
 }
 
 .rollouts {
-  max-width: 52rem;
   margin: 0;
   padding: 0;
   overflow: hidden;
@@ -308,7 +322,6 @@ figcaption::first-letter {
 
 .rollout {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px 24px;
   padding: 14px 20px;
@@ -321,14 +334,30 @@ figcaption::first-letter {
   border-bottom: 0;
 }
 
+.rollout.clickable {
+  cursor: pointer;
+}
+
+.rollout.clickable:hover {
+  background: var(--hover);
+}
+
 .rollout strong {
-  min-width: 14rem;
+  flex: none;
+  width: 14rem;
+  overflow-wrap: anywhere;
   font-size: var(--text);
   font-weight: 700;
 }
 
 .rollout strong a {
   color: var(--ink);
+}
+
+.rollout > .facts,
+.rollout > .error {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Header bar */
@@ -356,18 +385,9 @@ figcaption::first-letter {
   font-weight: 500;
 }
 
-/* The logo is a mask filled with the ink, so one file serves both schemes. */
-.logo {
-  flex: none;
-  width: 117px;
-  height: 14px;
-  background: var(--ink);
-  mask: url('boldare.svg') left center / contain no-repeat;
-}
-
-.logo + h1 {
-  padding-left: 14px;
-  border-left: 1px solid var(--line);
+.title > h1:not(:last-child) {
+  padding-right: 14px;
+  border-right: 1px solid var(--line);
 }
 
 .facts {
@@ -402,7 +422,12 @@ figcaption::first-letter {
 }
 
 .fact > .label + span {
+  color: var(--ink);
   font-weight: 600;
+}
+
+.fact > .label + span.live {
+  color: var(--accent);
 }
 
 .fact:has(.driver) > span:not(.badge, .warning, .error) {
@@ -415,6 +440,10 @@ figcaption::first-letter {
 
 .header > .controls {
   margin: 0 0 0 auto;
+}
+
+.header > .controls button {
+  padding: 3px 16px;
 }
 
 .banner {
@@ -431,19 +460,40 @@ figcaption::first-letter {
   flex-basis: 100%;
 }
 
-/* A segmented control, not a row of loose links. */
+/* The views are a band under the header, part of the top bar. On a PR page the view it was opened from stays marked.
+   Only the colour marks a tab, so the tabs keep no padding and the first one lines up with the page below. */
+
+.views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 32px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line);
+  background: var(--hover);
+}
+
+.views > .tab {
+  padding: 2px 0;
+}
+
+.views > .tab.active {
+  color: var(--accent);
+}
+
+/* The PR tabs are a segmented control, not a row of loose links. */
 
 .tabs {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 4px;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--hover);
+  background: var(--bg);
 }
 
 .tab {
-  padding: 6px 16px;
+  padding: 3px 16px;
   border-radius: 7px;
   color: var(--ink-2);
   font-size: var(--text);
@@ -455,10 +505,10 @@ figcaption::first-letter {
   text-decoration: none;
 }
 
-.tab.active {
-  background: var(--highlight);
-  color: var(--on-highlight);
-  font-weight: 700;
+/* The selected tab and chip keep the weight of the others, so switching never moves them. */
+.tabs > .tab.active {
+  background: var(--accent);
+  color: var(--on-accent);
   box-shadow: var(--shadow-sm);
 }
 
@@ -470,7 +520,7 @@ figcaption::first-letter {
 }
 
 .chip {
-  padding: 5px 14px;
+  padding: 3px 15px;
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   color: var(--ink-2);
@@ -486,17 +536,70 @@ figcaption::first-letter {
 }
 
 .chip.active {
-  border-color: var(--highlight);
-  background: var(--highlight);
-  color: var(--on-highlight);
-  font-weight: 700;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
-/* Badges: a tinted pill. The text mixes the tone with ink, so it reads in both schemes. */
+/* Footer: Boldare and the year on the left, Boldare and the repository on the right, all in the grey of the labels. The marks
+   are masks filled with the text colour, so one file serves both schemes and a hover lights them up with the ink. */
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: auto;
+  padding: 48px 24px 36px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.footer > span {
+  flex: 1;
+}
+
+.footer > a {
+  display: flex;
+  flex: none;
+  align-items: center;
+  color: var(--ink-3);
+}
+
+.footer > a:hover,
+.footer > a:focus-visible {
+  color: var(--ink);
+}
+
+.footer > a + a {
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+}
+
+.mark {
+  display: block;
+  background: currentColor;
+}
+
+.mark.logo {
+  width: 117px;
+  height: 14px;
+  mask: url('boldare.svg') left center / contain no-repeat;
+}
+
+.mark.github {
+  width: 20px;
+  height: 20px;
+  mask: url('github.svg') center / contain no-repeat;
+}
+
+/* Badges: a tinted pill. The text mixes the tone with ink, so it reads in both schemes. The text also gives a badge
+   its baseline and the dot sits in the middle, so a state badge lines up with one without a dot. */
 
 .badge {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   margin-right: 6px;
   padding: 1px 10px;
@@ -510,8 +613,15 @@ figcaption::first-letter {
   vertical-align: baseline;
 }
 
+/* Badges that wrap in a table cell keep a gap between their lines. */
+td > .badge {
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
 .badge.state::before,
 .badge.driver::before {
+  align-self: center;
   content: '';
   flex: none;
   width: 6px;
@@ -577,7 +687,8 @@ figcaption::first-letter {
 
 .state-interrupted,
 .held,
-.driver-paused {
+.driver-paused,
+.verdict-warn {
   --tone: var(--warn);
 }
 
@@ -654,6 +765,11 @@ td.info {
   font-size: var(--text-sm);
 }
 
+/* Narrower than an event's detail, so the board with its toggle column still fits a 1440 px window. */
+.board td.info {
+  min-width: 13rem;
+}
+
 tr.clickable {
   cursor: pointer;
 }
@@ -673,7 +789,7 @@ tr.selected td:first-child {
 
 /* A PR that waits for the maintainer stands out from running work. */
 tr.waiting td {
-  background: color-mix(in srgb, var(--fail) 6%, transparent);
+  background: color-mix(in srgb, var(--fail) 10%, transparent);
 }
 
 tr.waiting td:first-child {
@@ -685,9 +801,9 @@ tr.waiting td:first-child {
   vertical-align: middle;
 }
 
-.board td:first-child a,
-.board td:nth-child(4) a,
-.board td:nth-child(5) a,
+.board td.id a,
+.board td.github a,
+.board td.deps a,
 .runs td:first-child,
 .plan td:first-child,
 a.lane-label {
@@ -695,22 +811,251 @@ a.lane-label {
   font-size: var(--mono);
 }
 
-.board td:first-child a,
+.board td.id a,
 .plan td:first-child a {
   font-weight: 600;
 }
 
-.board td:nth-child(5) > span {
+.board td.deps > span {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin: 2px 8px 2px 0;
 }
 
-.board td:nth-child(8) {
+.board td.age {
   color: var(--ink-3);
   font-size: var(--text-sm);
   white-space: nowrap;
+}
+
+/* A row opens on its toggle into a panel below it: the run in progress or the last one, with its last commands.
+   The panel is a row of its own, so a click in it never opens the PR page. */
+
+.board td.toggle {
+  width: 32px;
+  padding: 10px 0 0 12px;
+}
+
+.board th:first-child {
+  padding: 0;
+}
+
+.row-toggle {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+}
+
+.row-toggle::before {
+  width: 10px;
+  height: 6px;
+  background: currentColor;
+  content: '';
+  mask: url('chevron.svg') center / contain no-repeat;
+  transform: rotate(-90deg);
+}
+
+.row-toggle[aria-expanded='true']::before {
+  transform: none;
+}
+
+button.row-toggle:hover:not(:disabled) {
+  border: 0;
+  background: var(--hover);
+  color: var(--ink);
+}
+
+tr.open > td {
+  border-bottom-color: transparent;
+}
+
+.panel-row > td {
+  padding: 0 14px 16px 104px;
+}
+
+/* Sunken below the table, darker than a code well on the dark scheme, so the panel stands apart from its row. */
+.run-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+}
+
+.run-panel > .facts {
+  gap: 6px 16px;
+}
+
+.run-panel p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.run-name {
+  font-family: var(--font-mono);
+  font-size: var(--mono);
+  font-weight: 600;
+}
+
+.commands-head {
+  display: flex;
+  gap: 8px;
+  color: var(--ink-3);
+}
+
+.commands-head > .label {
+  font-weight: 500;
+}
+
+/* One grid for every line, so the targets line up behind the longest tool name. */
+.commands {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.commands > li {
+  display: contents;
+}
+
+.commands strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.commands code {
+  overflow: hidden;
+  padding: 0;
+  background: none;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commands .outcome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.commands .outcome .badge {
+  margin: 0;
+}
+
+.commands > li.message {
+  display: -webkit-box;
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.panel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  font-size: var(--text-sm);
+}
+
+.panel-footer > a,
+.panel-footer .end > a {
+  font-weight: 500;
+}
+
+.panel-footer > .controls {
+  margin-left: auto;
+}
+
+/* A waiting row's panel asks the question and takes the answer, so the maintainer never leaves the board. */
+
+.run-panel.needs-you {
+  gap: 14px;
+  padding-bottom: 16px;
+}
+
+.panel-section {
+  display: grid;
+  gap: 4px;
+}
+
+.panel-section > .label,
+.answer > label {
+  display: block;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.run-panel .question {
+  max-width: 60rem;
+  font-size: var(--text);
+}
+
+.run-panel .quiet {
+  max-width: 60rem;
+  color: var(--ink-2);
+}
+
+.answer {
+  display: grid;
+  gap: 8px;
+}
+
+/* The box grows with its text, since a size dragged by hand would not survive the next rebuild. */
+.answer > textarea {
+  width: 100%;
+  min-height: 76px;
+  max-height: 40vh;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  field-sizing: content;
+  resize: none;
+}
+
+.answer > textarea::placeholder {
+  color: var(--ink-3);
+}
+
+.answer > textarea:focus {
+  border-color: var(--ring);
+  outline: none;
+}
+
+.panel-footer.actions {
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.panel-footer .end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-left: auto;
 }
 
 .event-log td:not(.detail) {
@@ -1110,23 +1455,39 @@ figcaption {
 
 /* PR detail */
 
+/* The PR controls sit at the end of the title line, the way the rollout controls end the header. */
 .detail-header {
   display: grid;
-  justify-items: start;
-  gap: 12px;
+  grid-template-areas: 'back controls' 'title controls' 'facts facts';
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 24px;
   margin-bottom: 20px;
 }
 
 .detail-header > a {
+  grid-area: back;
+  justify-self: start;
   color: var(--ink-3);
   font-size: var(--text-sm);
   font-weight: 500;
 }
 
 .detail-header h2 {
+  grid-area: title;
   margin: 0;
   font-size: var(--text-xl);
   letter-spacing: -0.02em;
+}
+
+.detail-header > .facts {
+  grid-area: facts;
+}
+
+.detail-header > .controls {
+  grid-area: controls;
+  align-self: end;
+  justify-content: flex-end;
 }
 
 .detail-header h2 .muted {
@@ -1176,9 +1537,19 @@ dd li::marker {
   color: var(--ink-3);
 }
 
+/* The card spans the page, and long text keeps a line short enough to read. */
 .detail > dl {
-  max-width: 60rem;
   padding: 6px 20px;
+}
+
+.detail dd > .text,
+.detail dd > div,
+.detail dd > ul {
+  max-width: 60rem;
+}
+
+.detail dd > span.text {
+  display: block;
 }
 
 ul.inline {
@@ -1390,15 +1761,19 @@ td.estimate {
 }
 
 button {
-  padding: 6px 14px;
+  padding: 7px 15px;
   border: 1px solid var(--line);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   background: var(--raised);
   color: var(--ink);
   font: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
+}
+
+button {
+  line-height: 20px;
 }
 
 button:hover:not(:disabled) {

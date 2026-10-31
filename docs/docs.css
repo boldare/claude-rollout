@@ -1,11 +1,11 @@
-/* Styles of the docs site. No scripts, no inline styles, no web fonts: the same rules as the UI.
-   TT Commons shows where it is installed, like in the UI. */
+/* Styles of the docs site. No scripts, no inline styles, nothing from elsewhere: the same rules as the UI.
+   Figtree ships in fonts/, a copy of the UI's, so the docs and the UI use the same face. */
 
 /* Tokens, copied from ui/style.css so the docs and the UI feel like one family. test/docs.test.mjs keeps them equal. */
 
 :root {
   color-scheme: light dark;
-  --font-ui: 'TT Commons', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-ui: 'Figtree', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   --text-sm: 14px;
@@ -19,6 +19,7 @@
   --panel: #ffffff;
   --raised: #ffffff;
   --well: #f2f2f2;
+  --sunken: #f2f2f2;
 
   --ink: #242424;
   --ink-2: #4f4f4f;
@@ -30,6 +31,7 @@
 
   --highlight: #f2da3a;
   --on-highlight: #242424;
+  --on-accent: #ffffff;
 
   --accent: #6a57e0;
   --pass: #038075;
@@ -55,6 +57,7 @@
 
   --shadow-sm: 0 1px 2px rgba(36, 36, 36, 0.05);
   --shadow-md: 0 1px 2px rgba(36, 36, 36, 0.05), 0 6px 16px -6px rgba(36, 36, 36, 0.14);
+  --shadow-bar: 0 4px 12px -6px rgba(36, 36, 36, 0.18);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -63,6 +66,7 @@
     --panel: #2c2c2c;
     --raised: #333333;
     --well: #1e1e1e;
+    --sunken: #191919;
 
     --ink: #f8f8f8;
     --ink-2: #c9c9c9;
@@ -71,6 +75,8 @@
     --line: #3d3d3d;
     --line-soft: #343434;
     --hover: #383838;
+
+    --on-accent: #242424;
 
     --accent: #a497f0;
     --pass: #5acbbc;
@@ -90,52 +96,55 @@
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 20px -8px rgba(0, 0, 0, 0.6);
+    --shadow-bar: 0 4px 12px -4px rgba(0, 0, 0, 0.55);
   }
 }
 
-/* TT Commons comes from the faces installed on the machine. Its ascent is 0.7em and its descent 0.3em, which
-   puts a label about 1px above the middle of a button or a pill. These faces move the baseline down by 0.07em,
-   so capitals sit as far above the middle as the x-height sits below. */
+/* Figtree is a variable font: one file per script covers every weight. latin-ext holds the Polish and other accented
+   letters, so a page in plain English loads only the latin files. */
 
 @font-face {
-  font-family: 'TT Commons';
-  font-weight: 400;
-  src: local('TT Commons Regular'), local('TTCommons-Regular');
-  ascent-override: 77%;
-  descent-override: 23%;
+  font-family: 'Figtree';
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('fonts/figtree-latin-wght-normal.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
-  font-family: 'TT Commons';
+  font-family: 'Figtree';
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('fonts/figtree-latin-ext-wght-normal.woff2') format('woff2');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Figtree';
   font-style: italic;
-  font-weight: 400;
-  src: local('TT Commons Italic'), local('TTCommons-Italic');
-  ascent-override: 77%;
-  descent-override: 23%;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('fonts/figtree-latin-wght-italic.woff2') format('woff2');
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191,
+    U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
-  font-family: 'TT Commons';
-  font-weight: 500;
-  src: local('TT Commons Medium'), local('TTCommons-Medium');
-  ascent-override: 77%;
-  descent-override: 23%;
-}
-
-@font-face {
-  font-family: 'TT Commons';
-  font-weight: 600;
-  src: local('TT Commons DemiBold'), local('TTCommons-DemiBold');
-  ascent-override: 77%;
-  descent-override: 23%;
-}
-
-@font-face {
-  font-family: 'TT Commons';
-  font-weight: 700;
-  src: local('TT Commons Bold'), local('TTCommons-Bold');
-  ascent-override: 77%;
-  descent-override: 23%;
+  font-family: 'Figtree';
+  font-style: italic;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('fonts/figtree-latin-ext-wght-italic.woff2') format('woff2');
+  unicode-range:
+    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 /* Base */
@@ -737,7 +746,7 @@ ol.steps > li > strong:first-child {
 
 .badge {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   margin-right: 6px;
   padding: 1px 10px;
@@ -754,6 +763,7 @@ ol.steps > li > strong:first-child {
 
 .badge.state::before,
 .badge.driver::before {
+  align-self: center;
   content: '';
   flex: none;
   width: 6px;
@@ -814,14 +824,16 @@ ol.steps > li > strong:first-child {
 .state-blocked,
 .state-escalated,
 .driver-halted,
-.verdict-fail {
+.verdict-fail,
+.result-error {
   --tone: var(--fail);
 }
 
 .state-interrupted,
 .held,
 .driver-paused,
-.alpha {
+.alpha,
+.refused {
   --tone: var(--warn);
 }
 
@@ -906,6 +918,11 @@ ol.steps > li > strong:first-child {
   letter-spacing: -0.01em;
 }
 
+.mock .title > .name:not(:last-child) {
+  padding-right: 14px;
+  border-right: 1px solid var(--line);
+}
+
 .mock .controls {
   display: flex;
   flex-wrap: wrap;
@@ -926,6 +943,10 @@ ol.steps > li > strong:first-child {
   padding: 10px 14px;
 }
 
+.mock td > strong {
+  white-space: nowrap;
+}
+
 .mock td.id {
   font-family: var(--font-mono);
   font-size: var(--mono);
@@ -942,11 +963,58 @@ ol.steps > li > strong:first-child {
   margin-bottom: 16px;
 }
 
+/* The UI's view tabs: a band under the header, the current view in the accent. */
+.mock .views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 32px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--hover);
+}
+
+.mock .views > .tab {
+  padding: 2px 0;
+}
+
+.mock .views > .tab.active {
+  background: none;
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.mock .footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.mock .footer > span:first-child {
+  flex: 1;
+}
+
+.mock .footer > .divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+}
+
+/* Pictures, as for the docs logo: a mask does not load from file://. Dimmed to the grey of the UI's footer. */
+.mock .footer img {
+  display: block;
+  opacity: 0.65;
+}
+
 .fake-button {
   display: inline-block;
-  padding: 6px 14px;
+  padding: 7px 15px;
   border: 1px solid var(--line);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   background: var(--raised);
   color: var(--ink);
   font-size: var(--text-sm);
@@ -966,19 +1034,24 @@ ol.steps > li > strong:first-child {
   color: var(--fail);
 }
 
+.mock .header .fake-button {
+  padding: 3px 16px;
+}
+
 /* A segmented control, not a row of loose links. */
 
 .tabs {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 4px;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--hover);
+  background: var(--bg);
 }
 
 .tab {
-  padding: 6px 16px;
+  padding: 3px 16px;
   border-radius: 7px;
   color: var(--ink-2);
   font-size: var(--text);
@@ -987,9 +1060,8 @@ ol.steps > li > strong:first-child {
 }
 
 .tab.active {
-  background: var(--highlight);
-  color: var(--on-highlight);
-  font-weight: 700;
+  background: var(--accent);
+  color: var(--on-accent);
   box-shadow: var(--shadow-sm);
 }
 
@@ -1001,7 +1073,7 @@ ol.steps > li > strong:first-child {
 }
 
 .chip {
-  padding: 5px 14px;
+  padding: 3px 15px;
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
   color: var(--ink-2);
@@ -1012,10 +1084,9 @@ ol.steps > li > strong:first-child {
 }
 
 .chip.active {
-  border-color: var(--highlight);
-  background: var(--highlight);
-  color: var(--on-highlight);
-  font-weight: 700;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
 /* Labels start with a capital, as in the UI. A badge, a legend item or a fact in a mockup carries its capital in the
@@ -1408,11 +1479,184 @@ dt::first-letter {
 }
 
 .mock tr.waiting td {
-  background: color-mix(in srgb, var(--fail) 6%, transparent);
+  background: color-mix(in srgb, var(--fail) 10%, transparent);
 }
 
 .mock tr.waiting td:first-child {
   box-shadow: inset 2px 0 0 var(--fail);
+}
+
+/* A waiting row's panel: the question, the evidence and the answer box. */
+
+.mock .run-panel.needs-you {
+  gap: 14px;
+}
+
+.mock .panel-section,
+.mock .answer {
+  display: grid;
+  gap: 4px;
+}
+
+.mock .answer {
+  gap: 8px;
+}
+
+.mock .panel-section > .label,
+.mock .answer > .label {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.mock .run-panel .question {
+  font-size: var(--text);
+}
+
+.mock .run-panel .quiet {
+  color: var(--ink-2);
+}
+
+.mock .fake-textarea {
+  min-height: 76px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink-3);
+}
+
+.mock .panel-footer .end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-left: auto;
+}
+
+.mock .panel-footer .end > a {
+  font-weight: 500;
+}
+
+/* The board's open rows: the toggle, drawn with two borders since a mask does not load from file://, and the run panel. */
+
+.mock td.toggle {
+  width: 32px;
+  padding: 12px 0 0 14px;
+}
+
+.mock .row-toggle {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--ink-3);
+  border-bottom: 1.5px solid var(--ink-3);
+  transform: rotate(-45deg);
+}
+
+.mock .row-toggle.open {
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.mock tr.open > td {
+  border-bottom-color: transparent;
+}
+
+.mock .panel-row > td {
+  padding: 0 14px 16px 104px;
+}
+
+/* As wide as the visible part of the board, which scrolls sideways in the narrow docs column. */
+.mock .run-panel {
+  display: grid;
+  gap: 12px;
+  max-width: 35rem;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+  font-size: var(--text-sm);
+  white-space: normal;
+}
+
+.mock .run-panel p {
+  margin: 0;
+}
+
+.mock .run-panel .facts {
+  gap: 6px 16px;
+}
+
+.mock .run-name {
+  font-family: var(--font-mono);
+  font-size: var(--mono);
+  font-weight: 600;
+}
+
+.mock .run-panel .live {
+  color: var(--accent);
+}
+
+.mock .commands-head {
+  display: flex;
+  gap: 8px;
+  color: var(--ink-3);
+}
+
+.mock .commands-head > .label {
+  font-weight: 500;
+}
+
+.mock .commands {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mock .commands > li {
+  display: contents;
+}
+
+.mock .commands strong {
+  font-weight: 600;
+}
+
+.mock .commands code {
+  overflow: hidden;
+  padding: 0;
+  background: none;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mock .commands .outcome {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.mock .commands > li.message {
+  display: block;
+  grid-column: 1 / -1;
+  color: var(--ink-2);
+}
+
+.mock .panel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+}
+
+.mock .panel-footer > a {
+  font-weight: 500;
 }
 
 .mock .total,
@@ -1430,7 +1674,23 @@ dt::first-letter {
 }
 
 .mock .pr-facts {
-  margin: 6px 0 10px;
+  margin: 6px 0 16px;
+}
+
+/* The PR controls end the title line, as in the UI. */
+.mock .detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+}
+
+.mock .detail-head > .detail-title {
+  margin: 0;
+}
+
+.mock .detail-head > .controls {
+  margin: 0 0 0 auto;
 }
 
 .mock .chips {

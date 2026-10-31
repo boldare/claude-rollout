@@ -15,6 +15,7 @@ import {
   prRows,
   readEvents,
   readTranscript,
+  transcriptParser,
   rolloutView,
   runsFromEvents,
 } from '../lib/view.mjs'
@@ -78,9 +79,9 @@ test('readEvents reads events.jsonl and is empty without it', () => {
   assert.deepEqual(readEvents(loadManifest(makeRollout({ events: null }))), [])
 })
 
-test('runsFromEvents pairs starts and dones by run id', () => {
+test('runsFromEvents pairs starts and dones by run id, with the model the start names', () => {
   const runs = runsFromEvents([
-    start('A1', 'implement', 'A1-01-implement', 0),
+    start('A1', 'implement', 'A1-01-implement', 0, { model: 'claude-opus-5-5' }),
     start('A2', 'implement', 'A2-01-implement', 1),
     done('A2', 'implement', 'A2-01-implement', 5, { result: 'READY', cost: 2 }),
     done('A1', 'implement', 'A1-01-implement', 9, { result: 'READY', cost: 3, seconds: 540, denials: 2 }),
@@ -92,6 +93,7 @@ test('runsFromEvents pairs starts and dones by run id', () => {
     role: 'implement',
     step: null,
     effort: 'high',
+    model: 'claude-opus-5-5',
     startedAt: at(0),
     endedAt: at(9),
     seconds: 540,
@@ -104,6 +106,7 @@ test('runsFromEvents pairs starts and dones by run id', () => {
   })
 
   assert.deepEqual(statuses(runs), ['A1-01-implement:ok', 'A2-01-implement:ok'])
+  assert.equal(runs[1].model, null, 'a start from before runs named their model')
 })
 
 test('runsFromEvents pairs old events by log name, PR and role', () => {
@@ -270,8 +273,90 @@ test('prRows: held goes outside approved, and a PR missing from the ledger is fr
     activeRun: null,
     gate: null,
     blocked: null,
+    waiting: null,
     answered: null,
   })
+})
+
+test('prRows: a waiting PR says since when, which run asked and what the delegate did', () => {
+  const manifest = loadManifest(makeRollout({ policy: { delegate: { kinds: ['needs-decision'], maxPerPr: 2 } } }))
+  const question = 'Should a hook that throws stop the run?'
+  const events = [
+    start('A1', 'implement', 'A1-01-implement', 0),
+    done('A1', 'implement', 'A1-01-implement', 30, { result: 'BLOCKED' }),
+    { at: at(30), id: 'A1', kind: 'blocked', reason: 'needs-decision' },
+    start('A1', 'delegate', 'A1-02-delegate', 31),
+    done('A1', 'delegate', 'A1-02-delegate', 35),
+    start('A2', 'verify', 'A2-01-verify', 0),
+    done('A2', 'verify', 'A2-01-verify', 10, { result: 'PASS' }),
+    { at: at(12), id: 'A2', kind: 'blocked', reason: 'gate' },
+    start('A3', 'fix', 'A3-03-fix', 40),
+    done('A3', 'fix', 'A3-03-fix', 50, { result: 'READY' }),
+    { at: at(51), id: 'A3', kind: 'escalated', role: 'fix' },
+  ]
+
+  const runs = runsFromEvents(events)
+  const escalate = {
+    at: at(35),
+    kind: 'needs-decision',
+    question,
+    decision: 'escalate',
+    reasoning: '  the plan does not decide ',
+    run: 'A1-02-delegate',
+  }
+
+  const prs = (a1) => ({
+    A1: { state: 'blocked', blocked: { kind: 'needs-decision', question, evidence: 'Two sections disagree.' }, ...a1 },
+    A2: { state: 'blocked', blocked: { kind: 'gate', question: 'a check failed', evidence: '' } },
+    A3: { state: 'escalated', escalation: 'fix attempts exhausted', lastError: 'fix attempts exhausted (3)' },
+  })
+
+  const waiting = (ledgerPrs, id, eventList = events, runList = runs) =>
+    prRows(manifest, { prs: ledgerPrs }, eventList, runList).find((row) => row.id === id).waiting
+
+  assert.deepEqual(waiting(prs({ delegate: { runs: 1, answers: [escalate] } }), 'A1'), {
+    since: at(30),
+    run: 'A1-01-implement',
+    byDriver: false,
+    escalation: null,
+    lastError: null,
+    delegate: { state: 'escalate', reason: 'the plan does not decide' },
+  })
+
+  const delegateOf = (a1, runList = runs) => waiting(prs(a1), 'A1', events, runList).delegate
+
+  assert.deepEqual(delegateOf({ delegate: { runs: 0, answers: [] } }), { state: 'next', reason: '' })
+  assert.deepEqual(delegateOf({ delegate: { runs: 2, answers: [] } }), { state: 'spent', reason: '2 of 2 runs' })
+  assert.deepEqual(delegateOf({ delegate: { runs: 1, answers: [{ ...escalate, question: 'an older one' }] } }), {
+    state: 'next',
+    reason: '',
+  })
+
+  assert.deepEqual(delegateOf({ delegate: { runs: 1, answers: [] } }, runsFromEvents(events.slice(0, 4), { driverRunning: true })), {
+    state: 'running',
+    reason: '',
+  })
+
+  assert.deepEqual(waiting(prs({}), 'A2'), {
+    since: at(12),
+    run: null,
+    byDriver: true,
+    escalation: null,
+    lastError: null,
+    delegate: { state: 'skips', reason: '' },
+  })
+
+  assert.deepEqual(waiting(prs({}), 'A3'), {
+    since: at(51),
+    run: 'A3-03-fix',
+    byDriver: false,
+    escalation: 'fix attempts exhausted',
+    lastError: 'fix attempts exhausted (3)',
+    delegate: null,
+  })
+
+  assert.equal(waiting(prs({}), 'A1', [], []).since, null)
+  assert.equal(prRows(loadManifest(makeRollout()), { prs: prs({}) }, events, runs)[0].waiting.delegate, null, 'no delegate policy')
 })
 
 test('prRows follows the manifest order and the CLI info rules', () => {
@@ -373,6 +458,27 @@ test('prRows: answered is null for a plain note and for a PR blocked again, esca
 
 test("prRows: answered names the delegate when the delegate's answer applied", () => {
   assert.deepEqual(answeredRow(answeredEntry('needs_fix', { by: 'delegate' }), []), { at: at(10), by: 'delegate', run: null, role: null })
+})
+
+test('prDetail: the merge commit, the fix reason and the last error, for the overview', () => {
+  const manifest = loadManifest(makeRollout())
+  const ledger = {
+    prs: {
+      A1: { state: 'merged', mergeSha: 'feedface00' },
+      A2: { state: 'fixing', fixReason: 'CI is red' },
+      A3: { state: 'escalated', lastError: 'gh pr create failed' },
+    },
+  }
+
+  const pick = (id) => {
+    const { mergeSha, fixReason, lastError } = prDetail(manifest, ledger, [], [], id)
+
+    return { mergeSha, fixReason, lastError }
+  }
+
+  assert.deepEqual(pick('A1'), { mergeSha: 'feedface00', fixReason: null, lastError: null })
+  assert.deepEqual(pick('A2'), { mergeSha: null, fixReason: 'CI is red', lastError: null })
+  assert.deepEqual(pick('A3'), { mergeSha: null, fixReason: null, lastError: 'gh pr create failed' })
 })
 
 test('prDetail: verdicts fall back to the latest verdict for old ledgers', () => {
@@ -515,6 +621,34 @@ test('parseTranscript: the last result wins, and without one there is no final',
   assert.equal(parseTranscript(jsonLines([failed, passed])).final.ok, true)
   assert.equal(parseTranscript(jsonLines([{ ...passed, structured_output: undefined }])).final.ok, false)
   assert.deepEqual(parseTranscript(jsonLines(sampleTranscript().slice(0, 3))).final, null)
+})
+
+test('transcriptParser: fed line by line, it reads what parseTranscript reads, and keeps reading', () => {
+  for (const lines of [sampleTranscript(), interruptedTranscript().slice(0, -1)]) {
+    const parser = transcriptParser()
+
+    for (const line of lines) {
+      parser.push(line)
+    }
+
+    assert.deepEqual(parser.result(), parseTranscript(jsonLines(lines)))
+  }
+
+  const parser = transcriptParser()
+  const [init, ...rest] = sampleTranscript()
+
+  parser.push(init)
+  assert.deepEqual(parser.result().items, [{ kind: 'init', model: 'opus', sessionId: 'session-1' }])
+  assert.equal(parser.result().final, null)
+
+  for (const line of rest) {
+    parser.push(line)
+  }
+
+  assert.equal(parser.result().items.length, 8)
+  assert.equal(parser.result().final.costUsd, 4.25)
+  parser.push({ type: 'system', subtype: 'init', model: 'haiku', session_id: 'session-9' })
+  assert.equal(parser.result().model, 'opus')
 })
 
 test('readTranscript reads logs/<run>.jsonl and refuses names outside it', () => {

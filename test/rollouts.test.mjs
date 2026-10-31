@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -18,7 +18,7 @@ import {
   watchRollout,
   withEstimates,
 } from '../lib/rollouts.mjs'
-import { START, at, interruptedTranscript, jsonLines, makeRollout, makeRolloutRoot, sampleEvents } from './fixtures.mjs'
+import { START, at, interruptedTranscript, jsonLines, makeRollout, makeRolloutRoot, sampleEvents, sampleTranscript } from './fixtures.mjs'
 
 async function waitFor(check, timeoutMs = 3000) {
   const deadline = Date.now() + timeoutMs
@@ -60,10 +60,12 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
   assert.match(broken.error, /invalid manifest/)
   assert.deepEqual(
     { ...broken, error: null },
-    { name: 'broken', rollout: null, started: false, driver: null, merged: 0, total: 0, costUsd: 0, error: null },
+    { name: 'broken', rollout: null, started: false, driver: null, merge: null, merged: 0, total: 0, costUsd: 0, errors: 0, error: null },
   )
 
   assert.equal(demo.rollout, 'demo')
+  assert.equal(demo.merge, 'human')
+  assert.equal(demo.errors, 0)
   assert.equal(demo.started, true)
   assert.equal(demo.merged, 0)
   assert.equal(demo.total, 3)
@@ -78,6 +80,21 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
   assert.equal(fresh.total, 3)
   assert.equal(fresh.costUsd, 0)
   assert.deepEqual(fresh.driver, { running: false, pid: null, heartbeatAgeSeconds: null, heartbeatNote: '', paused: false, halted: null })
+})
+
+test('listRollouts: the error count follows the event log, and a rollout without one has none', () => {
+  const root = makeRolloutRoot()
+  const events = join(root, 'demo', 'events.jsonl')
+  const errors = () => listRollouts(root).find((rollout) => rollout.name === 'demo').errors
+
+  appendFileSync(events, `\n${JSON.stringify({ at: at(90), id: '-', kind: 'tick-error', error: 'gh failed' })}\n`)
+  assert.equal(errors(), 1)
+
+  appendFileSync(events, `${JSON.stringify({ at: at(91), id: 'A2', kind: 'fetch-failed', error: 'offline' })}\n`)
+  appendFileSync(events, `${JSON.stringify({ at: at(92), id: 'A2', kind: 'implement-start', run: 'A2-02-implement' })}\n`)
+  assert.equal(errors(), 2)
+
+  assert.equal(listRollouts(root).find((rollout) => rollout.name === 'fresh').errors, 0)
 })
 
 test('listRollouts: a missing root is empty', () => {
@@ -395,6 +412,51 @@ test('transcriptPage: pages of display items with their index in the log', () =>
   for (const item of whole.items) {
     assert.equal('input' in item, false, item.kind)
   }
+})
+
+test('transcriptPage: a growing log is read on from where it stopped, a half line waits for the rest', () => {
+  const manifest = demoRollout()
+  const file = join(manifest.dir, 'logs', 'A2-01-implement.jsonl')
+  const whole = jsonLines(sampleTranscript())
+  const cut = whole.indexOf('"tool-2"')
+  const page = () => transcriptPage(manifest, 'A2-01-implement', { from: 'end', limit: 200 })
+
+  writeFileSync(file, whole.slice(0, cut))
+  assert.deepEqual(
+    page().items.map((item) => item.kind),
+    ['init', 'text', 'tool', 'tool-result'],
+  )
+
+  appendFileSync(file, whole.slice(cut))
+  assert.equal(page().total, 8)
+  assert.equal(page().bytes, Buffer.byteLength(whole))
+  assert.equal(page().final.costUsd, 4.25, 'the last line counts without its newline')
+  assert.deepEqual(page().items, transcriptPage(demoRollout(), 'A1-01-implement').items)
+})
+
+test('transcriptPage: a log that shrank or changed in place is read again from the start', () => {
+  const manifest = demoRollout()
+  const file = join(manifest.dir, 'logs', 'A2-01-implement.jsonl')
+  const page = () => transcriptPage(manifest, 'A2-01-implement')
+  const text = (value) => ({ type: 'assistant', message: { content: [{ type: 'text', text: value }] } })
+
+  writeFileSync(file, jsonLines([text('one'), text('two'), text('three')]))
+  assert.equal(page().total, 3)
+
+  writeFileSync(file, jsonLines([text('four')]))
+  assert.deepEqual(
+    page().items.map((item) => item.text),
+    ['four'],
+  )
+
+  const { mtime } = statSync(file)
+
+  writeFileSync(file, jsonLines([text('five')]))
+  utimesSync(file, mtime, new Date(mtime.getTime() + 5000))
+  assert.deepEqual(
+    page().items.map((item) => item.text),
+    ['five'],
+  )
 })
 
 test('transcriptPage: long fields are cut, and a refusal past the cut still counts', () => {
