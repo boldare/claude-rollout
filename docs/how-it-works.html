@@ -340,8 +340,10 @@
             tick.
           </li>
           <li>
-            <strong>Sync every PR with GitHub.</strong> A merge or a close made on GitHub wins. A head that moved after verification is
-            checked again. Then look for new maintainer feedback on the PR.
+            <strong>Sync every PR with GitHub.</strong> A merge or a close made on GitHub wins. Under <code>merge: manual</code> the merge
+            of the PR the gate called ready, at the head it verified, is logged as <code>merged</code> by the maintainer, any other merge
+            made on GitHub as <code>merged-outside-driver</code>. A head that moved after verification is checked again. Then look for new
+            maintainer feedback on the PR.
           </li>
           <li>
             <strong>Run the gate.</strong> Verified PRs go through the gate in priority order, then manifest order. PRs with an agent
@@ -1198,7 +1200,8 @@
             their own PR.
           </li>
           <li>
-            <strong>GitHub refusing the merge</strong> is a state to wait in, not an error. The gate records it and you get a notification.
+            <strong>GitHub refusing the merge</strong> is a state to wait in, not an error. The gate records it, and you get a notification
+            once per head, because GitHub refuses again on every tick.
           </li>
           <li>
             <strong>A merge GitHub has not confirmed</strong>, accepted but with no merge commit to read yet (a merge queue, for example),
@@ -1411,8 +1414,10 @@
 
         <p>
           The driver sends desktop notifications through <code>osascript</code> on macOS and <code>notify-send</code> on Linux. Other
-          platforms get none, and a notification that fails is ignored. Nearly every notice is also a line in <code>events.jsonl</code>. The
-          gate's notices about a missing approval or GitHub still blocking show up there only as <code>gate-wait</code>.
+          platforms get none, and a notification that fails is ignored. Every notice is also a line in <code>events.jsonl</code>, unless the
+          write fails, marked <code>notified: true</code>, which is what
+          <a href="commands.html#cmd-wait"><code>rollout wait</code></a> wakes on. The gate's notices about a missing approval or GitHub
+          still blocking are <code>awaiting-approval</code> and <code>github-blocks-merge</code>.
         </p>
 
         <ul>
@@ -1433,8 +1438,8 @@
         </ul>
 
         <p>
-          Notices that could repeat on every tick are sent once per patch or head, and once per outage. A merge GitHub refuses is the
-          exception: it notifies on each refused attempt.
+          Notices that could repeat on every tick are sent once per patch or head, and once per outage. A merge GitHub refuses notifies once
+          per head.
         </p>
 
         <nav class="pager" aria-label="Pages">
