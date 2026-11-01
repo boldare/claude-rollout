@@ -1769,11 +1769,8 @@ button {
   font: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
-  cursor: pointer;
-}
-
-button {
   line-height: 20px;
+  cursor: pointer;
 }
 
 button:hover:not(:disabled) {
