@@ -147,7 +147,7 @@
 
             <rect class="dg-node" x="340" y="0" width="160" height="50" rx="8" />
             <text class="dg-title" x="354" y="21">Notifications</text>
-            <text class="dg-text" x="354" y="38">osascript or notify-send</text>
+            <text class="dg-text" x="354" y="38">desktop, command, webhook</text>
 
             <rect class="dg-node" x="170" y="92" width="150" height="50" rx="8" />
             <text class="dg-title" x="184" y="113">UI server</text>
@@ -1410,9 +1410,11 @@
         <h2 id="notifications">Notifications <a class="anchor" href="#notifications" aria-label="Link to this section">#</a></h2>
 
         <p>
-          The driver sends desktop notifications through <code>osascript</code> on macOS and <code>notify-send</code> on Linux. Other
-          platforms get none, and a notification that fails is ignored. Nearly every notice is also a line in <code>events.jsonl</code>. The
-          gate's notices about a missing approval or GitHub still blocking show up there only as <code>gate-wait</code>.
+          The driver sends each notice to every target of <a href="manifest.html#policy-notify"><code>policy.notify</code></a> that is on:
+          the desktop, on by default, through <code>osascript</code> on macOS and <code>notify-send</code> on Linux, a shell command, and a
+          webhook that gets a JSON POST. A failing target logs <code>notify-failed</code> once per target per driver run, and the driver
+          carries on. Nearly every notice is also a line in <code>events.jsonl</code>. The gate's notices about a missing approval or GitHub
+          still blocking show up there only as <code>gate-wait</code>.
         </p>
 
         <ul>

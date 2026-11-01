@@ -38,6 +38,8 @@ import {
   sshHostname,
   storedLoginCheck,
   userSettingsCheck,
+  VERIFIED_VERSIONS,
+  versionWarning,
 } from '../lib/preflight.mjs'
 import { agentSettings, contextArgs, contextEnv } from '../lib/settings.mjs'
 import { startServer } from '../lib/server.mjs'
@@ -329,6 +331,19 @@ async function preflight(manifest) {
     return result
   }
 
+  // A probe that failed is already a problem, and a version is only ever a warning.
+  function versionCheck(tool, result) {
+    if (result.code !== 0) {
+      return
+    }
+
+    const warning = versionWarning(tool, result.stdout, VERIFIED_VERSIONS[tool])
+
+    if (warning) {
+      warnings.push(warning)
+    }
+  }
+
   console.log(`manifest ok: ${manifest.rollout}, ${manifest.prs.length} PR(s): ${manifest.prs.map((pr) => pr.id).join(', ')}`)
 
   const toWrite = manifest.prs.filter((pr) => !existsSync(pr.brief)).map((pr) => pr.id)
@@ -347,9 +362,11 @@ async function preflight(manifest) {
     )
   }
 
-  await probe('claude', manifest.claudeBin, ['--version'], {
+  const claude = await probe('claude', manifest.claudeBin, ['--version'], {
     problem: `claude (${manifest.claudeBin}) did not run: put it on PATH or repo.pathPrepend, or set claudeBin in manifest.yaml`,
   })
+
+  versionCheck('claude', claude)
 
   const wrapper = claudeWrapperWarning(manifest.claudeBin, env.PATH)
 
@@ -369,6 +386,9 @@ async function preflight(manifest) {
     await probe(tool, tool, ['--version'])
   }
 
+  const gh = await probe('gh', 'gh', ['--version'], { problem: 'gh did not run: put it on PATH or repo.pathPrepend' })
+
+  versionCheck('gh', gh)
   await probe('gh auth', 'gh', ['auth', 'status'], { env: ghEnv(manifest) })
   await probe('git fetch', 'git', ['-C', manifest.repo.path, 'fetch', '--quiet', 'origin'])
 

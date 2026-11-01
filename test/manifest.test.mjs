@@ -197,6 +197,59 @@ test('validateManifest: policy.delegate errors', () => {
   }
 })
 
+test('loadManifest: policy.notify turns the desktop on by default and merges key by key', () => {
+  assert.deepEqual(loadManifest(makeRollout()).policy.notify, { desktop: true, command: null, webhook: null })
+  assert.deepEqual(loadManifest(makeRollout({ policy: { notify: { command: 'x' } } })).policy.notify, {
+    desktop: true,
+    command: 'x',
+    webhook: null,
+  })
+})
+
+test('validateManifest: policy.notify errors', () => {
+  const errors = (notify) => validateManifest({ ...structuredClone(base), policy: { notify } })
+  const mapping = 'policy.notify must be a mapping with desktop, command and webhook'
+  const desktop = 'policy.notify.desktop must be true or false'
+  const command = 'policy.notify.command must be a shell command, or null for none'
+  const webhook = 'policy.notify.webhook must be an http or https URL, or null for none'
+  const cases = [
+    [null, mapping],
+    ['on', mapping],
+    [[], mapping],
+    [false, mapping],
+    [{ desktop: null }, desktop],
+    [{ desktop: 'yes' }, desktop],
+    [{ command: '' }, command],
+    [{ command: '  ' }, command],
+    [{ command: 3 }, command],
+    [{ webhook: 'ftp://host/x' }, webhook],
+    [{ webhook: 'not a url' }, webhook],
+    [{ webhook: '' }, webhook],
+    [{ webhook: 3 }, webhook],
+    [
+      { webhook: 'https://user:pass@hooks.example.com/x' },
+      'policy.notify.webhook must have no user name or password, because fetch refuses them',
+    ],
+    [{ sound: true }, 'policy.notify: unknown key sound'],
+  ]
+
+  for (const [notify, error] of cases) {
+    assert.deepEqual(errors(notify), [error], JSON.stringify(notify))
+  }
+
+  for (const notify of [
+    undefined,
+    {},
+    { desktop: false },
+    { command: null, webhook: null },
+    { webhook: 'http://127.0.0.1:9/hook' },
+    { webhook: 'https://hooks.example.com/x?token=t' },
+    { command: 'logger -t rollout "$2"' },
+  ]) {
+    assert.deepEqual(errors(notify), [], JSON.stringify(notify))
+  }
+})
+
 // The manifest option of makeRollout replaces repo as a whole.
 function withRepo(extra) {
   const dir = makeRollout()

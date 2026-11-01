@@ -55,6 +55,11 @@ policy:
   maxBump: minor
   attempts: { implement: 2, fix: 4, verify: 3 }
   timeouts: { implement: 240, fix: 120, verify: 90 }
+  # Where notices go. Each one goes to every target that is on.
+  # notify:
+  #   desktop: true
+  #   command: logger -t rollout "$2"
+  #   webhook: https://hooks.example.com/rollout
 
 # Checks on top of CI, the policy and code scanning: on each brief the driver writes, before the verifier, and by it.
 # gates:

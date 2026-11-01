@@ -15,6 +15,8 @@ import {
   sshHostname,
   storedLoginCheck,
   userSettingsCheck,
+  VERIFIED_VERSIONS,
+  versionWarning,
 } from '../lib/preflight.mjs'
 import { makeRollout } from './fixtures.mjs'
 
@@ -732,4 +734,31 @@ test('readCatalog: a change merged into the base applies once the clone fetches 
   git(repo, 'fetch', '--quiet', 'origin')
 
   assert.deepEqual(ids(await readCatalog(manifest)), ['docs-stale', 'ui-states', 'tests-fail-first', 'changelog'])
+})
+
+test('VERIFIED_VERSIONS: the claude and gh versions the driver was verified on', () => {
+  assert.deepEqual(VERIFIED_VERSIONS, { claude: '2.1.303', gh: '2.40.0' })
+})
+
+test('versionWarning: warns below the floor and compares the parts as numbers', () => {
+  const warning = versionWarning('claude', '2.1.302 (Claude Code)', '2.1.303')
+
+  assert.match(warning, /2\.1\.302/)
+  assert.match(warning, /2\.1\.303/)
+
+  for (const output of ['2.1.303 (Claude Code)', '2.2.0 (Claude Code)', '2.1.1000 (Claude Code)']) {
+    assert.equal(versionWarning('claude', output, '2.1.303'), null, output)
+  }
+
+  assert.equal(versionWarning('gh', 'gh version 2.103.3 (2026-10-26)\nhttps://github.com/cli/cli/releases/tag/v2.103.3', '2.40.0'), null)
+  assert.match(versionWarning('gh', 'gh version 2.39.9 (2023-11-01)', '2.40.0'), /2\.39\.9/)
+})
+
+test('versionWarning: warns when the output holds no version', () => {
+  for (const output of ['', 'command not found']) {
+    const warning = versionWarning('claude', output, '2.1.303')
+
+    assert.match(warning, /no version/, output)
+    assert.match(warning, /2\.1\.303/, output)
+  }
 })
