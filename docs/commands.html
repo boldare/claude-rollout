@@ -569,6 +569,17 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 </td>
               </tr>
               <tr>
+                <td class="name">gh --version</td>
+                <td>The binary does not run. Put it on PATH or in <code>repo.pathPrepend</code>.</td>
+              </tr>
+              <tr>
+                <td>claude and gh versions</td>
+                <td>
+                  Warns when claude is older than 2.1.303 or gh older than 2.40.0, the versions the driver was verified on, or when either
+                  prints no version. It never fails.
+                </td>
+              </tr>
+              <tr>
                 <td class="name">gh auth status</td>
                 <td>Your own gh login is missing. The driver reads PRs, checks and reviews and merges with it.</td>
               </tr>

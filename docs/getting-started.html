@@ -89,7 +89,7 @@
               <tr>
                 <td class="nowrap">gh</td>
                 <td>Your login reads GitHub and merges. The bot's token opens PRs and pushes.</td>
-                <td><code>gh auth status</code> must pass</td>
+                <td><code>gh --version</code> must run and warns below 2.40.0, <code>gh auth status</code> must pass</td>
               </tr>
               <tr>
                 <td class="nowrap">package manager</td>
@@ -103,11 +103,14 @@
                   <a href="manifest.html#manifest-claudeBin"><code>claudeBin</code></a> in the manifest. Set it when a terminal such as cmux
                   puts a wrapper script first on PATH.
                 </td>
-                <td><code>claude --version</code>. Only <code>--live</code> proves the login.</td>
+                <td><code>claude --version</code>, which warns below 2.1.303. Only <code>--live</code> proves the login.</td>
               </tr>
               <tr>
                 <td class="nowrap">osascript, notify-send</td>
-                <td>Desktop notifications on macOS and Linux. Other platforms get none.</td>
+                <td>
+                  Desktop notifications on macOS and Linux. Other platforms get none.
+                  <a href="manifest.html#policy-notify"><code>policy.notify</code></a> can turn them off or add a command or a webhook.
+                </td>
                 <td>not checked</td>
               </tr>
               <tr>

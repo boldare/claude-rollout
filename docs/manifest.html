@@ -730,6 +730,47 @@ prs:
                   (<code>high</code>).
                 </td>
               </tr>
+              <tr id="policy-notify">
+                <td>notify</td>
+                <td>mapping</td>
+                <td>desktop on</td>
+                <td>
+                  Where <a href="how-it-works.html#notifications">notices</a> go. Each notice goes to every target that is on. A failing
+                  target logs one <code>notify-failed</code> event per driver run, with the target and the error. It never stops the driver
+                  and never counts against a PR. An edit applies to the next notice. Notices can quote agents' text, such as a BLOCKED
+                  question.
+                </td>
+              </tr>
+              <tr id="policy-notify-desktop">
+                <td>notify.desktop</td>
+                <td>boolean</td>
+                <td><code>true</code></td>
+                <td>
+                  <code>osascript</code> on macOS, <code>notify-send</code> on Linux, nothing elsewhere. <code>false</code> turns it off,
+                  for example on a headless machine.
+                </td>
+              </tr>
+              <tr id="policy-notify-command">
+                <td>notify.command</td>
+                <td>string or null</td>
+                <td><code>null</code></td>
+                <td>
+                  Runs with <code>sh -c</code> in the rollout directory with the driver's environment. The title is in <code>$1</code> and
+                  the message in <code>$2</code>, and both are also in <code>ROLLOUT_NOTIFY_TITLE</code> and
+                  <code>ROLLOUT_NOTIFY_MESSAGE</code>. They are never spliced into the command, so quote <code>"$1"</code> and
+                  <code>"$2"</code>. A command still running after 10 s is stopped.
+                </td>
+              </tr>
+              <tr id="policy-notify-webhook">
+                <td>notify.webhook</td>
+                <td>http or https URL, or null</td>
+                <td><code>null</code></td>
+                <td>
+                  One POST per notice with <code>Content-Type: application/json</code> and the body
+                  <code>{ rollout, title, message, at }</code>, where <code>at</code> is an ISO time. 10 s timeout, no retry. An answer
+                  outside 2xx is a failure. No user name or password in the URL.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -1175,6 +1216,10 @@ prs:
           <li>
             <code>policy.merge</code> and <code>policy.approval</code> have known values, and <code>approval: github</code> has a token and
             maintainers.
+          </li>
+          <li>
+            <code>policy.notify</code>, when set, is a mapping with at most <code>desktop</code>, a boolean, <code>command</code>, a shell
+            command or null, and <code>webhook</code>, an http or https URL with no user name or password, or null.
           </li>
           <li><code>repo.public</code>, when set, is a boolean.</li>
           <li><code>repo.baseQuietPaths</code>, when set, is a list of path globs.</li>
