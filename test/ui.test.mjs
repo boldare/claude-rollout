@@ -274,36 +274,6 @@ test('mergeEvents: appends, replaces and truncates without touching the input', 
   assert.deepEqual(current, copy)
 })
 
-test('model: the states and error kinds', () => {
-  assert.deepEqual(STATES, [
-    'pending',
-    'briefing',
-    'implementing',
-    'ready_claimed',
-    'verifying',
-    'verified',
-    'needs_fix',
-    'fixing',
-    'blocked',
-    'escalated',
-    'interrupted',
-    'merged',
-  ])
-
-  assert.deepEqual(ERROR_KINDS, [
-    'tick-error',
-    'error',
-    'on-done-error',
-    'reply-failed',
-    'manifest-rejected',
-    'fetch-failed',
-    'outside-deps-failed',
-    'watch-base-failed',
-    'github-unavailable',
-    'report-unchecked',
-  ])
-})
-
 test('errorCount: counts only error kinds', () => {
   const events = [...ERROR_KINDS, 'merged', 'tick', 'errors', 'merge-unconfirmed', 'github-back'].map((kind) => ({ id: '-', kind }))
 

@@ -5,20 +5,8 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
-import {
-  costs,
-  isRunName,
-  liveness,
-  parseEvents,
-  parseTranscript,
-  prDetail,
-  prRows,
-  readEvents,
-  readTranscript,
-  transcriptParser,
-  rolloutView,
-  runsFromEvents,
-} from '../lib/view.mjs'
+import { isRunName, parseTranscript, readTranscript, succeeded, transcriptParser } from '../lib/transcript.mjs'
+import { costs, liveness, parseEvents, prDetail, prRows, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { START, at, interruptedTranscript, jsonLines, makeRollout, samplePrs, sampleTranscript } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
@@ -359,6 +347,20 @@ test('prRows: a waiting PR says since when, which run asked and what the delegat
   assert.equal(prRows(loadManifest(makeRollout()), { prs: prs({}) }, events, runs)[0].waiting.delegate, null, 'no delegate policy')
 })
 
+test('prRows: the delegate does not run next while a note is pending', () => {
+  const manifest = loadManifest(makeRollout({ policy: { delegate: { kinds: ['needs-decision'], maxPerPr: 2 } } }))
+  const a1 = {
+    state: 'blocked',
+    blocked: { kind: 'needs-decision', question: 'Keep the old flag?', evidence: '' },
+    delegate: { runs: 0, answers: [] },
+  }
+
+  const delegateOf = (entry) => prRows(manifest, { prs: { A1: entry } }, [], []).find((row) => row.id === 'A1').waiting.delegate
+
+  assert.deepEqual(delegateOf({ ...a1, pendingNote: 'Wait for me.' }), { state: 'skips', reason: '' })
+  assert.deepEqual(delegateOf(a1), { state: 'next', reason: '' })
+})
+
 test('prRows follows the manifest order and the CLI info rules', () => {
   const manifest = loadManifest(makeRollout())
   const ledger = {
@@ -621,6 +623,14 @@ test('parseTranscript: the last result wins, and without one there is no final',
   assert.equal(parseTranscript(jsonLines([failed, passed])).final.ok, true)
   assert.equal(parseTranscript(jsonLines([{ ...passed, structured_output: undefined }])).final.ok, false)
   assert.deepEqual(parseTranscript(jsonLines(sampleTranscript().slice(0, 3))).final, null)
+})
+
+test('succeeded: only a result with a report and no error', () => {
+  assert.equal(succeeded({ structured_output: { status: 'READY' } }), true)
+
+  for (const result of [null, undefined, { is_error: true, structured_output: { status: 'READY' } }, { result: 'done' }]) {
+    assert.equal(succeeded(result), false, JSON.stringify(result))
+  }
 })
 
 test('transcriptParser: fed line by line, it reads what parseTranscript reads, and keeps reading', () => {

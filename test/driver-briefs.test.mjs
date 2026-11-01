@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { prDetail } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
 import { waitFor } from './fixtures.mjs'
 import { agentResult, driverFor, apply, SHA, eventsSince, kindsSince, modelDriver, launched } from './driver-helpers.mjs'
@@ -673,4 +674,30 @@ test('delegate: its answer reaches the next verifier, after the brief', async ()
   )
 
   assertDecisionsAfterBrief(calls[1].prompt, ['From the delegate, on needs-decision', DECISION.question, 'Keep it as an alias.'])
+})
+
+test('delegate: with a note pending or the question taken already, the board shows no next run and the driver starts none', async () => {
+  const board = (manifest, driver) => prDetail(manifest, driver.ledger, [], [], 'A1').waiting.delegate
+  const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent on the flag.' })
+  const taken = delegateDriver({ pr: 11 }, { results: [escalate] })
+
+  assert.deepEqual(board(taken.manifest, taken.driver), { state: 'next', reason: '' })
+
+  await advanced(taken.driver, taken.pr)
+  assert.equal(taken.calls.length, 1)
+  assert.match(taken.entry.delegate.lastQuestion, /^[0-9a-f]{16}$/)
+
+  // A ledger whose answers were trimmed still holds the question the delegate took.
+  taken.entry.delegate.answers = []
+  assert.deepEqual(board(taken.manifest, taken.driver), { state: 'skips', reason: '' })
+
+  await advanced(taken.driver, taken.pr)
+  assert.equal(taken.calls.length, 1)
+
+  const noted = delegateDriver({ pr: 11, pendingNote: 'Wait for me.' })
+
+  assert.deepEqual(board(noted.manifest, noted.driver), { state: 'skips', reason: '' })
+
+  await advanced(noted.driver, noted.pr)
+  assert.equal(noted.calls.length, 0)
 })
