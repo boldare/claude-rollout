@@ -22,16 +22,38 @@ import { basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
+// A `#` at the start of a word starts a comment.
+const COMMENT = /(^|[\s;&|()<>`])#/
+
 // A newline after an odd number of backslashes continues the line, so
 // `git pu\` + newline + `sh` reads as `git push`. After an even number the
-// backslashes are escaped and the newline ends the line, as in the shell.
-function joinContinuations(command) {
-  return command.replace(/(?<!\\)((?:\\\\)*)\\\n/g, '$1')
+// backslashes are escaped and the newline ends the line, as in the shell. A
+// comment ends at its newline, its last backslash included, so with
+// `comments` a line that holds a comment keeps its newline.
+function joinContinuations(command, comments = false) {
+  return command.replace(/(?<!\\)((?:\\\\)*)\\\n/g, (_, escaped, offset) => {
+    const line = command.slice(command.lastIndexOf('\n', offset) + 1, offset)
+
+    return comments && COMMENT.test(line) ? `${escaped}\n` : escaped
+  })
+}
+
+// Only quotes tell a comment's `#` from a quoted one, and the guard does not
+// read quotes. So a continued line with a `#` is read both ways: joined, as
+// when the `#` is quoted, and ended there, as after a comment.
+function readings(command) {
+  const joined = joinContinuations(command)
+  const commented = joinContinuations(command, true)
+
+  return commented === joined ? [joined] : [joined, commented]
 }
 
 const CLOSERS = { '$(': ')', '(': ')', '${': '}', '{': '}', '`': '`' }
 const SPECIAL = /[$`(){};&|\n]/g
 const SEPARATORS = ';&|\n)}'
+
+// What a plain group leaves in the command around it, when it is empty and when it is not.
+const GROUP_MARKS = { '(': ['()', '(…)'], '{': ['{}', '{…}'] }
 
 // The parameter and operator a ${…} body starts with: `PWD`, `#name`,
 // `!name`, `arr[@]`, `x:-`, `f%%`. No class crosses a `{`, so the scans of
@@ -42,16 +64,18 @@ const PARAMETER = /[#!]?(?:[A-Za-z_]\w*|\d+|[@*#?!0-])?(?:\[[^\]\s{}()`;&|<>]*\]
 // one pass with a stack: a hook that times out lets the command run.
 // `$(…)`, `$((…))`, `${…}` and backticks are commands of their own and leave
 // a `$` in the command around them, so `git -C $(pwd) push` stays one call.
-// Plain parentheses and braces are commands of their own and leave a space.
-// A ${…} body loses its parameter and operator and the rest is read, because
-// quoting is not honoured: `echo '${x:-' ; git push ; echo '}'` runs the
-// push. An opener without a closer runs to the end, and a closer without an
-// opener splits. A forbidden word inside a string still blocks.
+// Plain parentheses and braces are commands of their own and leave a mark
+// from GROUP_MARKS, so the words around them keep their places, as in
+// `git -C {} push`. A ${…} body loses its parameter and operator and the
+// rest is read, because quoting is not honoured: `echo '${x:-' ; git push ;
+// echo '}'` runs the push. An opener without a closer runs to the end, and a
+// closer without an opener splits. A forbidden word inside a string still
+// blocks.
 export function readCommands(text) {
   const commands = []
   const stack = []
   const open = { ')': 0, '}': 0, '`': 0 }
-  let current = { closer: null, text: '' }
+  let current = { opener: null, closer: null, text: '', filled: false }
 
   function flush(frame) {
     const command = frame.text.trim()
@@ -63,10 +87,20 @@ export function readCommands(text) {
     frame.text = ''
   }
 
-  function enter(opener, mark) {
-    current.text += mark
+  function append(chunk) {
+    current.text += chunk
+    current.filled ||= /\S/.test(chunk)
+  }
+
+  // A plain group leaves its mark when it ends, once it is known to be empty or not.
+  function enter(opener) {
+    if (!GROUP_MARKS[opener]) {
+      append('$')
+    }
+
+    current.filled = true
     stack.push(current)
-    current = { closer: CLOSERS[opener], text: '' }
+    current = { opener, closer: CLOSERS[opener], text: '', filled: false }
     open[current.closer] += 1
   }
 
@@ -75,10 +109,16 @@ export function readCommands(text) {
     let closed
 
     do {
-      closed = current.closer
-      flush(current)
+      const frame = current
+
+      closed = frame.closer
+      flush(frame)
       open[closed] -= 1
       current = stack.pop()
+
+      if (GROUP_MARKS[frame.opener]) {
+        current.text += GROUP_MARKS[frame.opener][frame.filled ? 1 : 0]
+      }
     } while (closed !== closer)
   }
 
@@ -88,12 +128,12 @@ export function readCommands(text) {
     const next = text[at + 1]
 
     if (char === '$' && next === '(') {
-      enter('$(', '$')
+      enter('$(')
       return 2
     }
 
     if (char === '$' && next === '{') {
-      enter('${', '$')
+      enter('${')
       PARAMETER.lastIndex = at + 2
 
       return 2 + (PARAMETER.exec(text)?.[0].length ?? 0)
@@ -103,20 +143,20 @@ export function readCommands(text) {
       if (open['`'] > 0) {
         leave('`')
       } else {
-        enter('`', '$')
+        enter('`')
       }
 
       return 1
     }
 
     if (char === '(' || char === '{') {
-      enter(char, ' ')
+      enter(char)
     } else if ((char === ')' || char === '}') && open[char] > 0) {
       leave(char)
     } else if (SEPARATORS.includes(char)) {
       flush(current)
     } else {
-      current.text += char
+      append(char)
     }
 
     return 1
@@ -129,15 +169,15 @@ export function readCommands(text) {
     const found = SPECIAL.exec(text)
     const at = found ? found.index : text.length
 
-    current.text += text.slice(i, at)
+    append(text.slice(i, at))
     i = found ? at + step(at) : at
   }
 
-  flush(current)
-
-  for (const frame of stack) {
-    flush(frame)
+  while (stack.length > 0) {
+    leave(current.closer)
   }
+
+  flush(current)
 
   return commands
 }
@@ -147,22 +187,14 @@ function unquote(text) {
 }
 
 // Quotes and backslashes are deleted so `sh -c "git push origin main"` is
-// read as the command inside it and `pu\\sh` or `p"u"sh` read as `push`. The
-// raw words keep what only the shell's spelling shows: a leading `\` or `=`.
+// read as the command inside it and `pu\\sh` or `p"u"sh` read as `push`. A
+// word that ends up empty stays, because the shell passes `""` on and git
+// reads `-C ""` as the current directory. The raw words keep what only the
+// shell's spelling shows: a leading `\` or `=`.
 function readWords(command) {
-  const words = []
-  const raws = []
+  const raws = command.split(/\s+/).filter(Boolean)
 
-  for (const raw of command.split(/\s+/)) {
-    const word = unquote(raw)
-
-    if (word) {
-      words.push(word)
-      raws.push(raw)
-    }
-  }
-
-  return { words, raws }
+  return { words: raws.map(unquote), raws }
 }
 
 // The guard decides on these words as written, so none may expand. `$` also
@@ -171,18 +203,33 @@ function readable(word, raw) {
   return !word.includes('$') && !raw.startsWith('\\')
 }
 
-// The shell may expand a glob to a file name, and zsh expands `=git` to git's path.
+// The mark of a group that is not empty.
+const GROUP = /\(…\)|\{…\}/
+
+// The shell may expand a glob to a file name, and zsh expands `=git` to git's
+// path. A group in a subcommand is a brace expansion or a zsh glob, as in
+// `gh pr {merge,x{}}` or `gh pr (mer|x)ge`.
 function isName(word, raw) {
-  return readable(word, raw) && !/[*?[]/.test(word) && !raw.startsWith('=')
+  return readable(word, raw) && !/[*?[]/.test(word) && !raw.startsWith('=') && !GROUP.test(word)
 }
 
-// `[` and `[[` start a test.
+// `[` and `[[` start a test, and a group as a whole word is a subshell or a
+// command group. Braces stay literal in a command word. zsh globs a `(…)`,
+// but quoted program text reads calls such as `fs.readFileSync(x).toString()`
+// as command words. So a `(…)` counts at the start of a word and in a path,
+// as in `/usr/bin/(g)it`, which matches without a file the agent made.
 function isCommandName(word, raw) {
-  return isName(word, raw) || (readable(word, raw) && (word === '[' || word === '[['))
+  if (['[', '[[', '(…)', '{…}'].includes(word)) {
+    return readable(word, raw)
+  }
+
+  const calls = word.includes('/') || word.startsWith('(') ? word : word.replaceAll('(…)', '')
+
+  return isName(calls.replaceAll('{…}', ''), raw)
 }
 
-function firstUnreadable(words, raws, from) {
-  for (let i = from; i < words.length; i += 1) {
+function firstUnreadable(words, raws, from, to = words.length) {
+  for (let i = from; i < to; i += 1) {
     if (!readable(words[i], raws[i])) {
       return i
     }
@@ -197,13 +244,43 @@ function isTool(word, name) {
   return lower === name || lower.endsWith(`/${name}`)
 }
 
+// Where the value that starts at raws[from] ends, as the shell reads it: a
+// quote or an escaped space joins raw words, as in `-C "a b"`. -1 when the
+// quote does not close in the command, as when readCommands split the value
+// at a separator inside it, as in `-C "a;b"`.
+function valueEnd(raws, from) {
+  let quote = null
+
+  for (let i = from; i < raws.length; i += 1) {
+    let escaped = false
+
+    for (const char of raws[i]) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\' && quote !== "'") {
+        escaped = true
+      } else if (quote === null && (char === '"' || char === "'")) {
+        quote = char
+      } else if (char === quote) {
+        quote = null
+      }
+    }
+
+    if (quote === null && !escaped) {
+      return i + 1
+    }
+  }
+
+  return -1
+}
+
 // Where every occurrence of a tool in a command starts (call) and where its
 // arguments start (start), global flags and their values skipped:
 // `git -C dir -c x=y push` → the index of `git` and of `push`. The arguments
 // run to the end of the command. Indices, not copies, keep memory linear
 // when a command repeats the tool. A call can sit among another call's flags
 // (`git -c git -c …`), so the starts are read once, from the end.
-function invocations(words, name, flagsWithValue) {
+function invocations(words, raws, name, flagsWithValue) {
   const calls = []
 
   words.forEach((word, call) => {
@@ -225,7 +302,9 @@ function invocations(words, name, flagsWithValue) {
     if (!words[i].startsWith('-')) {
       startFrom[i] = i
     } else if (flagsWithValue.includes(words[i]) && i + 1 < words.length) {
-      startFrom[i] = startFrom[i + 2]
+      const end = valueEnd(raws, i + 1)
+
+      startFrom[i] = end === -1 ? words.length : startFrom[end]
     } else {
       startFrom[i] = startFrom[i + 1]
     }
@@ -239,9 +318,10 @@ function invocations(words, name, flagsWithValue) {
 }
 
 // The flags between a call and its subcommand, read as invocations() reads
-// them, each with the index of its value or -1. A flag in `seen` was read
-// for an earlier call, and so were the flags after it, so reading stops.
-function globalOptions(words, { call, start }, flagsWithValue, seen) {
+// them: each flag's index, its value's or -1, and where the value ends, -1
+// when its quote does not close. A flag in `seen` was read for an earlier
+// call, and so were the flags after it, so reading stops.
+function globalOptions(words, raws, { call, start }, flagsWithValue, seen) {
   const options = []
   let i = call + 1
 
@@ -252,12 +332,16 @@ function globalOptions(words, { call, start }, flagsWithValue, seen) {
     seen.add(flag)
     i += 1
 
-    if (flagsWithValue.includes(words[flag]) && i < start) {
+    if (flagsWithValue.includes(words[flag]) && i < words.length) {
       value = i
-      i += 1
+      i = valueEnd(raws, value)
     }
 
-    options.push({ flag, value })
+    options.push({ flag, value, end: i })
+
+    if (i === -1) {
+      break
+    }
   }
 
   return options
@@ -392,9 +476,12 @@ function rolloutsRootPattern(dir) {
   return new RegExp(`(?<![\\w.-])${escapeRegExp(root)}/(?![\\w.-]*(?:[/\\s;&|)<>]|$))`)
 }
 
-// Rules on the whole command, its quotes and backslashes deleted. The brace
-// pattern has no greedy run on both sides of the comma, which would cost the
-// square of the length on `{,,,,…`.
+// Brace expansion, a list or a sequence: {a,b}, {1..3}, {a..z..2}. No part
+// has greedy runs on both sides of its separator, which would cost the square
+// of the length on `{,,,,…`.
+const BRACE_EXPANSION = /\{[^\s{},]*,[^\s{}]*\}|\{(?:-?\d+|[^\s{}.,])\.\.(?:-?\d+|[^\s{}.,])(?:\.\.-?\d+)?\}/
+
+// Rules on the whole command, its quotes and backslashes deleted.
 function wholeCommandProblem(plain, context) {
   if (/\$ROLLOUT_|\$\{!?ROLLOUT_/.test(plain)) {
     return 'a $ROLLOUT_ variable is refused: the rollout control plane is off limits to agents in any spelling'
@@ -404,8 +491,8 @@ function wholeCommandProblem(plain, context) {
     return `$IFS splits words that the guard reads as one, so it is refused. ${WRITE_IT_OUT}`
   }
 
-  if (/\{[^\s{},]*,[^\s{}]*\}/.test(plain)) {
-    return `brace expansion such as {a,b} builds words the guard cannot read, so it is refused. A space after the comma is fine, as in {a, b} in jq or JavaScript. ${WRITE_IT_OUT}`
+  if (BRACE_EXPANSION.test(plain)) {
+    return `brace expansion such as {a,b} or {1..3} builds words the guard cannot read, so it is refused. A space after the comma is fine, as in {a, b} in jq or JavaScript. ${WRITE_IT_OUT}`
   }
 
   if (rolloutsRootPattern(context.dir).test(plain)) {
@@ -474,10 +561,10 @@ export const GH_PR_FORBIDDEN = ['merge', 'review', 'close', 'reopen', 'lock', 'u
 export const GH_API_FIELDS = ['-f', '-F', '--field', '--raw-field', '--input']
 const GH_API_FIELD = new RegExp(`^(${GH_API_FIELDS.join('|')})`)
 
-function checkGh(words, { repo, placeholders }) {
+function checkGh(words, raws, { repo, placeholders }) {
   let api = false
 
-  for (const { start } of invocations(words, 'gh', GH_GLOBAL_FLAGS)) {
+  for (const { start } of invocations(words, raws, 'gh', GH_GLOBAL_FLAGS)) {
     const args = words.slice(start)
     const [sub, action] = positionals(words, start, GH_VALUE_FLAGS, 2).map((index) => words[index])
 
@@ -551,9 +638,6 @@ function climbs(path) {
   return path.split('/').includes('..') || /%2e|%2f/i.test(path)
 }
 
-// readCommands() reads `{owner}` and `{repo}` in `repos/{owner}/{repo}/pulls`
-// as commands of their own and leaves a bare `repos/`. gh fills the
-// placeholders from the pinned GH_REPO.
 const REPOS_PATH = /^[./]*repos\//i
 
 function apiPathProblem(word, repo) {
@@ -567,11 +651,17 @@ function apiPathProblem(word, repo) {
     return `gh api ${word} could climb out of the repository with .. or an encoded dot or slash, so it is refused`
   }
 
+  const [owner, name] = word.slice(prefix.length).split(/[?#]/)[0].split('/')
+
+  // readCommands() leaves `{…}` for `{owner}` and `{repo}`. gh fills them from
+  // the pinned GH_REPO, and placeholderProblem() reads them on the whole command.
+  if (owner.includes('{') || name?.includes('{')) {
+    return null
+  }
+
   if (!repo) {
     return `the guard has no --repo, so gh api ${word} is refused. Use repos/{owner}/{repo}/… instead`
   }
-
-  const [owner, name] = word.slice(prefix.length).split(/[?#]/)[0].split('/')
 
   if (`${owner}/${name}`.toLowerCase() !== normalizeRepo(repo)) {
     return `gh api ${word} names another repository than ${repo}, and agents stay on the manifest's repository`
@@ -621,10 +711,10 @@ function checkGhRepo(words, start, repo, api) {
   return null
 }
 
-// readCommands() takes the braces out of a word, so the placeholders and the
-// path after them are read on the whole command. Alone, {owner} or {repo}
-// could name another repository of the same owner or another owner's
-// repository of that name.
+// readCommands() leaves `{…}` in place of each placeholder, so the
+// placeholders and the path after them are read on the whole command. Alone,
+// {owner} or {repo} could name another repository of the same owner or
+// another owner's repository of that name.
 function placeholderProblem(plain) {
   for (const match of plain.matchAll(/\{owner\}\/\{repo\}(\S*)/g)) {
     if (climbs(match[1])) {
@@ -1061,14 +1151,20 @@ function gitExpansionProblem(words, raws) {
   const seen = new Set()
   let checkedFrom = Infinity
 
-  for (const call of invocations(words, 'git', GIT_VALUE_FLAGS)) {
-    for (const { flag, value } of globalOptions(words, call, GIT_VALUE_FLAGS, seen)) {
+  for (const call of invocations(words, raws, 'git', GIT_VALUE_FLAGS)) {
+    for (const { flag, value, end } of globalOptions(words, raws, call, GIT_VALUE_FLAGS, seen)) {
       if (!readable(words[flag], raws[flag])) {
         return builtByExpansion(`the git option ${raws[flag]}`)
       }
 
-      if (value !== -1 && words[flag] !== '-C' && !readable(words[value], raws[value])) {
-        return builtByExpansion(`the git option ${raws[flag]} ${raws[value]}`)
+      if (end === -1) {
+        return `the value of the git option ${raws[flag]} opens a quote that does not close in this command, so the guard cannot tell where git's subcommand starts. Keep ;, &, | and newlines out of a quoted value`
+      }
+
+      const unreadable = value === -1 || words[flag] === '-C' ? -1 : firstUnreadable(words, raws, value, end)
+
+      if (unreadable !== -1) {
+        return builtByExpansion(`the git option ${raws[flag]} ${raws[unreadable]}`)
       }
     }
 
@@ -1108,7 +1204,7 @@ function gitExpansionProblem(words, raws) {
 function ghExpansionProblem(words, raws) {
   let checkedFrom = Infinity
 
-  for (const { call, start } of invocations(words, 'gh', GH_GLOBAL_FLAGS)) {
+  for (const { call, start } of invocations(words, raws, 'gh', GH_GLOBAL_FLAGS)) {
     const [sub, action] = positionals(words, start, GH_VALUE_FLAGS, 2)
 
     if (sub === undefined) {
@@ -1150,7 +1246,7 @@ const PACKAGE_MANAGER_VALUE_FLAGS = ['-C', '--dir', '--filter', '-F', '-w', '--w
 // Globs stay free there: `npx eslint 'src/**'`.
 function packageManagerExpansionProblem(words, raws) {
   for (const name of PACKAGE_MANAGERS) {
-    for (const { start } of invocations(words, name, PACKAGE_MANAGER_VALUE_FLAGS)) {
+    for (const { start } of invocations(words, raws, name, PACKAGE_MANAGER_VALUE_FLAGS)) {
       if (start >= words.length) {
         continue
       }
@@ -1225,7 +1321,7 @@ export const PUBLISH_WORDS = [
   'token',
 ]
 
-function checkPackageManagers(words) {
+function checkPackageManagers(words, raws) {
   if (!words.some((word) => PACKAGE_MANAGERS.some((name) => isTool(word, name)))) {
     return null
   }
@@ -1237,7 +1333,7 @@ function checkPackageManagers(words) {
   }
 
   for (const name of PACKAGE_MANAGERS) {
-    for (const { start } of invocations(words, name, PACKAGE_MANAGER_VALUE_FLAGS)) {
+    for (const { start } of invocations(words, raws, name, PACKAGE_MANAGER_VALUE_FLAGS)) {
       if (words[start] === 'version') {
         return `${name} version is not allowed: versions are bumped by the release PR`
       }
@@ -1340,25 +1436,8 @@ export const GIT_FORBIDDEN = ['update-ref', 'send-pack', 'http-push', 'receive-p
 // Refused for the worker with `git tag`.
 export const BRANCH_FORBIDDEN = ['-D', '-d', '--delete', '-m', '-M', '--move']
 
-// The setting of `-c key=value` or `-ckey=value`, or null.
-function overriddenSetting(words, { flag, value }) {
-  if (words[flag] === '-c') {
-    return value === -1 ? null : words[value]
-  }
-
-  return words[flag].startsWith('-c') ? words[flag].slice(2) : null
-}
-
-function checkGit(words, role, branch) {
-  const seen = new Set()
-
-  for (const call of invocations(words, 'git', GIT_VALUE_FLAGS)) {
-    const settings = globalOptions(words, call, GIT_VALUE_FLAGS, seen).map((option) => overriddenSetting(words, option))
-
-    if (settings.some((setting) => setting !== null && GIT_SETTINGS.test(setting))) {
-      return 'overriding git settings for hooks, credentials or remotes is not allowed'
-    }
-
+function checkGit(words, raws, role, branch) {
+  for (const call of invocations(words, raws, 'git', GIT_VALUE_FLAGS)) {
     const sub = words[call.start]
 
     if (!sub) {
@@ -1430,7 +1509,7 @@ function writesGitHub(line) {
   return at !== -1 && VERIFIER_GH_ACTION.test(line.slice(at))
 }
 
-function toolProblem(words, role, branch, gh) {
+function toolProblem(words, raws, role, branch, gh) {
   const line = words.join(' ')
 
   if (HTTP_TOOL.test(line) && HTTP_HOST.test(line)) {
@@ -1438,10 +1517,10 @@ function toolProblem(words, role, branch, gh) {
   }
 
   const problem =
-    checkGh(words, gh) ??
+    checkGh(words, raws, gh) ??
     checkChangesets(words) ??
-    checkPackageManagers(words) ??
-    checkGit(words, role, branch) ??
+    checkPackageManagers(words, raws) ??
+    checkGit(words, raws, role, branch) ??
     checkBuiltins(words) ??
     checkEnvCommands(words)
 
@@ -1475,6 +1554,20 @@ function lengthProblem(command) {
   return null
 }
 
+// A -c override counts anywhere in the command, `-c key=value` or
+// `-ckey=value`, not only among a git call's options. Words the guard splits
+// unlike the shell, such as `"a b"`, move git's subcommand, and git under an
+// alias has no `git` word.
+function overridesGitSetting(plain) {
+  for (const match of plain.matchAll(/(?:^|\s)-c\s*(\S+)/g)) {
+    if (GIT_SETTINGS.test(match[1])) {
+      return true
+    }
+  }
+
+  return false
+}
+
 export function check(command, role, branch, context = {}) {
   const raw = lengthProblem(command)
 
@@ -1482,10 +1575,28 @@ export function check(command, role, branch, context = {}) {
     return raw
   }
 
-  const joined = joinContinuations(command)
+  // A command read the same way twice is decided once.
+  const checked = new Set()
+
+  for (const text of readings(command)) {
+    const problem = checkReading(text, role, branch, context, checked)
+
+    if (problem) {
+      return problem
+    }
+  }
+
+  return null
+}
+
+function checkReading(joined, role, branch, context, checked) {
   const plain = unquote(joined)
 
-  const problem = lengthProblem(joined) ?? (offLimits(joined, plain, context) ? CONTROL_PLANE : null) ?? wholeCommandProblem(plain, context)
+  const problem =
+    lengthProblem(joined) ??
+    (offLimits(joined, plain, context) ? CONTROL_PLANE : null) ??
+    (overridesGitSetting(plain) ? 'overriding git settings for hooks, credentials or remotes is not allowed' : null) ??
+    wholeCommandProblem(plain, context)
 
   if (problem) {
     return problem
@@ -1498,8 +1609,16 @@ export function check(command, role, branch, context = {}) {
       return `a command of more than ${MAX_LINE} characters between separators is too long for the guard, split it`
     }
 
+    const key = `${gh.placeholders}\n${text}`
+
+    if (checked.has(key)) {
+      continue
+    }
+
+    checked.add(key)
+
     const { words, raws } = readWords(text)
-    const found = expansionProblem(words, raws) ?? toolProblem(words, role, branch, gh)
+    const found = expansionProblem(words, raws) ?? toolProblem(words, raws, role, branch, gh)
 
     if (found) {
       return found

@@ -1028,13 +1028,17 @@ test('readCommands: nested code is read as commands of its own, and the command 
     'echo "${arr[@]}" ${#x} ${!x} ${a[$i]}': ['echo "$" $ $ $'],
     'echo ${x:-a b}': ['a b', 'echo $'],
     "echo '${x:-' ; git push origin main ; echo '}'": ["'", 'git push origin main', "echo '", "echo '$'"],
-    'echo $((1 + 2))': ['1 + 2', 'echo $'],
-    '(cd x && git push) | cat': ['cd x', 'git push', 'cat'],
-    '$(a (b) c) d': ['b', 'a   c', '$ d'],
-    '$(a { b ) c': ['b', 'a', '$ c'],
-    'gh api repos/{owner}/{repo}/pulls': ['owner', 'repo', 'gh api repos/ / /pulls'],
+    'echo $((1 + 2))': ['(…)', '1 + 2', 'echo $'],
+    '(cd x && git push) | cat': ['cd x', 'git push', '(…)', 'cat'],
+    '$(a (b) c) d': ['b', 'a (…) c', '$ d'],
+    '$(a { b ) c': ['b', 'a {…}', '$ c'],
+    'gh api repos/{owner}/{repo}/pulls': ['owner', 'repo', 'gh api repos/{…}/{…}/pulls'],
+    'git -C {} -c x status': ['git -C {} -c x status'],
+    'f() { echo hi; }': ['echo hi', 'f() {…}'],
+    'gh pr (mer|zzz)ge 1': ['mer', 'zzz', 'gh pr (…)ge 1'],
     'a ) b } c': ['a', 'b', 'c'],
     'a $(b ; c': ['a $', 'b', 'c'],
+    'a ( b': ['b', 'a (…)'],
   }
 
   for (const [command, commands] of Object.entries(reads)) {
@@ -1051,7 +1055,8 @@ function liveRollout() {
 const RULES = {
   variable: /^a \$ROLLOUT_ variable is refused: the rollout control plane is off limits to agents in any spelling$/,
   ifs: /^\$IFS splits words that the guard reads as one, so it is refused\. /,
-  brace: /^brace expansion such as \{a,b\} builds words the guard cannot read, so it is refused\. A space after the comma is fine/,
+  brace:
+    /^brace expansion such as \{a,b\} or \{1\.\.3\} builds words the guard cannot read, so it is refused\. A space after the comma is fine/,
   root: /^only a plain rollout name may follow the rollouts root, not a glob or an expansion: the rollout control plane is off limits/,
   controlPlane: /^the rollout control plane, its hooks and git hook settings are off limits to agents$/,
   setting: /^overriding git settings for hooks, credentials or remotes is not allowed$/,
@@ -1138,6 +1143,91 @@ test('the bypasses are refused by the hook command, each by its own rule', () =>
       assert.match(reason, rule, shown)
       assert.equal(WRITE_IT_OUT.test(reason), WRITTEN_OUT.includes(rule), shown)
     }
+  }
+})
+
+const GIT_CONFIG = /^changing git settings for hooks, credentials or remotes is not allowed$/
+
+// Words the guard could split, drop or join unlike the shell: an empty word,
+// a group, a quoted space, a brace sequence, a zsh glob group and a comment
+// before a line continuation. Each must still meet its own rule.
+const MISREADINGS = [
+  ['git -C "" -c core.hooksPath=/dev/null push origin main', RULES.setting],
+  ["git -C '' -c core.hooksPath=/dev/null push origin main", RULES.setting],
+  ['git -C {} -c core.hooksPath=/dev/null push origin main', RULES.setting],
+  ['git --namespace "" -c core.hooksPath=/dev/null push origin main', RULES.setting],
+  ['git -C "" -c credential.helper= push origin main', RULES.setting],
+  ['git -C "" -c remote.origin.pushurl=https://example.com/x.git push origin main', RULES.setting],
+  ['git -C "" -c core.hooksPath=/dev/null commit -m x', RULES.setting],
+  ['git -C "a b" -c core.hooksPath=/dev/null push origin feat/a1', RULES.setting],
+  ['git -C a{b}c -c core.hooksPath=/dev/null push origin feat/a1', RULES.setting],
+  ['git -C (x|y) -c core.hooksPath=/dev/null push origin feat/a1', RULES.setting],
+  ["alias g='git -c core.hooksPath=/dev/null'", RULES.setting],
+  ['git -C "" config --worktree core.hooksPath /dev/null', GIT_CONFIG],
+  ['git -C "" push origin main', RULES.pushTarget, ['implement']],
+  ['git -C {} push origin main', RULES.pushTarget, ['implement']],
+  ['git -C (x|y) push origin main', RULES.pushTarget, ['implement']],
+  ['git -C "a b" push origin main', RULES.pushTarget, ['implement']],
+  ['git -C a\\ b push origin main', RULES.pushTarget, ['implement']],
+  [`sh -c "git -C 'a b' push origin main"`, RULES.pushTarget, ['implement']],
+  ['git -C "a b" config core.hooksPath /dev/null', GIT_CONFIG],
+  ['git -C "a;b" config core.hooksPath /dev/null', /^the value of the git option -C opens a quote that does not close in this command/],
+  ['git -c user.name="A B" commit --no-verify -m x', /^git commit --no-verify is not allowed/],
+  ['gh pr {m..m}erge 1', RULES.brace],
+  ['git {p..p}ush origin main', RULES.brace],
+  ['gh {r..r}epo delete o/r', RULES.brace],
+  ['npm {p..p}ublish', RULES.brace],
+  ['echo {1..9..2}', RULES.brace],
+  ['gh pr {merge,x{}} 1', RULES.gh],
+  ['gh pr (mer|zzz)ge 1', RULES.gh],
+  ['/usr/bin/(g)it push origin main', RULES.commandWord],
+  ['echo note # \\\n$(echo gh) pr merge 1', RULES.commandWord],
+  ['echo note # \\\n/opt/homebrew/bin/g? pr merge 1', RULES.commandWord],
+  ['echo note # \\\n$x', RULES.commandWord],
+]
+
+test('misread words are refused by the hook command, each by its own rule', () => {
+  const manifest = liveRollout()
+  const branch = manifest.all[0].branch
+
+  for (const [command, rule, roles = Object.keys(HOOK_ROLES)] of MISREADINGS) {
+    for (const role of roles) {
+      const result = runHook(manifest, role, payload(command), { branch })
+      const shown = `${role}: ${JSON.stringify(command)}: ${result.stderr}`
+
+      assert.equal(result.status, 2, shown)
+      assert.match(result.stderr.slice('rollout guard: '.length, -1), rule, shown)
+    }
+  }
+})
+
+test('groups, empty words and a quoted # before a line continuation stay allowed', () => {
+  const both = [
+    '(cd sub && npm test) | tail -5',
+    'f() { echo hi; }; f',
+    '{ npm test; } 2>&1 | tail -5',
+    `node -e "const fs = require('fs'); fs.readFileSync('x').toString()"`,
+    `python3 -c "import json; print(json.dumps({'a': 1}))"`,
+    "find . -name '*.md' -exec grep -l x {} +",
+    'echo $(( (1 + 2) * 3 ))',
+    'git log --oneline --grep "#12" \\\n  -5',
+    'echo "a # b" \\\n  c',
+    'git -C "/home/u/path with space" status',
+    "git -C '/home/u/path with space' log --oneline",
+  ]
+
+  for (const role of ROLES) {
+    for (const command of both) {
+      assert.equal(check(command, role, 'feat/a1', LIVE_DEMO), null, `${role}: ${command}`)
+    }
+  }
+
+  for (const command of [
+    'git commit -m ""',
+    'git -c user.name="A B" commit -m "feat: x"',
+    'gh pr create --title "fix #12" \\\n  --body-file /tmp/body.md',
+  ]) {
+    assert.equal(check(command, 'worker', 'feat/a1', LIVE_DEMO), null, command)
   }
 })
 
@@ -1327,7 +1417,7 @@ test('GIT_SETTING_SAMPLES: a -c override or git config of each setting is refuse
     assertReason(`git config ${setting} x`, ROLES, /^changing git settings for hooks, credentials or remotes is not allowed$/)
   }
 
-  assertAllowed(['grep -c hooksPath lib/settings.mjs', 'node -c x.js', 'git log --grep credential.helper'])
+  assertAllowed(['grep -c foo file', 'node -c x.js', 'git log --grep credential.helper'])
 })
 
 test('GIT_FORBIDDEN: each subcommand is refused, for both roles', () => {
