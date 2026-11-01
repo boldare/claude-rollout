@@ -389,10 +389,11 @@
           them keep their places. Quoting is not honoured on purpose: a forbidden word inside a string still blocks. Every rule reads the
           words with quotes and backslashes deleted, so <code>sh -c "git push origin main"</code>, <code>p"u"sh</code> and
           <code>core.hooks""Path</code> read as what they are. A word that ends up empty, such as <code>""</code>, stays a word, because git
-          reads <code>-C ""</code> as the current directory. The value of an option before git's subcommand is read as the shell reads it,
-          so <code>-C "a b"</code> is one value, and a value whose quote does not close in the command, as in <code>-C "a;b"</code>, is
-          refused. The control-plane patterns read the command both as written and without them. Tool names count in any case, because macOS
-          runs <code>GIT</code> as git. Subcommands count as written, as git and gh read them.
+          reads <code>-C ""</code> as the current directory. The options before a subcommand of git, gh or a package manager, and before
+          gh's action, are read with their values as the shell splits them, so <code>-C "a b"</code> and
+          <code>--namespace="a b"</code> leave git's subcommand in its place. A git option whose quote does not close in the command, as in
+          <code>-C "a;b"</code>, is refused. The control-plane patterns read the command both as written and without them. Tool names count
+          in any case, because macOS runs <code>GIT</code> as git. Subcommands count as written, as git and gh read them.
         </p>
 
         <h4>Refused for every agent</h4>
@@ -420,13 +421,20 @@
             arguments of <code>eval</code>, the command of <code>sh -c</code> and the other shells' <code>-c</code>, git's global options
             but the directory of <code>-C</code>, the git subcommand, the arguments of <code>git config</code> and <code>git push</code>,
             the action of <code>git remote</code>, the gh subcommand and action, every argument of <code>gh api</code>, a package manager's
-            subcommand and the word after it, and every argument of the changesets CLI. In the subcommands and actions a glob, zsh's
-            <code>=cmd</code> and any group count as expansion too, as in zsh's <code>gh pr (mer|x)ge</code> or bash's
-            <code>gh pr {merge,x{}}</code>. In the command word a glob and <code>=cmd</code> count, and so does a group in a path, as in
-            <code>/usr/bin/(g)it</code>, but not a call such as <code>console.log(x)</code>, which quoted program text is full of. Arguments
-            anywhere else stay free, so <code>git diff $(git merge-base origin/main HEAD)</code> and <code>npx eslint 'src/**'</code> run.
-            Because quoted text is read as commands, a statement that starts with <code>$</code> or a glob in quoted program text or a
-            heredoc is refused too, and so is <code>{a,b}</code> with no space. The reason points to a script file or the Write tool.
+            subcommand and the word after it, and every argument of the changesets CLI. Most of these places must also hold no glob, no zsh
+            <code>=cmd</code> and no <code>(…)</code> or <code>{…}</code> group, because the shell turns those into other words once they
+            match a file: the flags before git's subcommand and the key of a <code>-c</code> value, the git subcommand, the arguments of
+            <code>git config</code> and <code>git push</code>, the action of <code>git remote</code>, the gh subcommand and action, the
+            flags, the method and every word but the endpoint of <code>gh api</code>, a package manager's subcommand and the changesets
+            command. That covers zsh's <code>gh pr (mer|x)ge</code>, <code>git pu(|)sh</code> and bash's <code>gh pr {merge,x{}}</code>. The
+            endpoint of <code>gh api</code> may hold <code>?</code>, which starts its query string, and the values of its other flags, such
+            as <code>--jq</code>, <code>-H</code> and <code>-f</code>, stay free. In the command word, and in the command of
+            <code>eval</code> and <code>sh -c</code>, a glob and <code>=cmd</code> count, and so does a group at the start of the word or in
+            a path, as in zsh's <code>/usr/bin/git(|)</code>, but not a call such as <code>console.log(x)</code>, which quoted program text
+            is full of. Arguments anywhere else stay free, so <code>git diff $(git merge-base origin/main HEAD)</code> and
+            <code>npx eslint 'src/**'</code> run. Because quoted text is read as commands, a statement that starts with <code>$</code> or a
+            glob in quoted program text or a heredoc is refused too, and so is <code>{a,b}</code> with no space. The reason points to a
+            script file or the Write tool.
           </li>
           <li>
             <strong>The agents' environment.</strong> Setting <code>GH_TOKEN</code>, <code>GH_CONFIG_DIR</code>, <code>GITHUB_TOKEN</code>,

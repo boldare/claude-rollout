@@ -154,6 +154,8 @@ export function readCommands(text) {
     } else if ((char === ')' || char === '}') && open[char] > 0) {
       leave(char)
     } else if (SEPARATORS.includes(char)) {
+      // zsh reads `git(|)` as an alternation that matches `git`, so a separator fills a group.
+      current.filled = true
       flush(current)
     } else {
       append(char)
@@ -228,9 +230,10 @@ function isCommandName(word, raw) {
   return isName(calls.replaceAll('{…}', ''), raw)
 }
 
-function firstUnreadable(words, raws, from, to = words.length) {
+// The first word from words[from] up to words[to] that fails `test`, or -1.
+function firstFailing(test, words, raws, from, to = words.length) {
   for (let i = from; i < to; i += 1) {
-    if (!readable(words[i], raws[i])) {
+    if (!test(words[i], raws[i])) {
       return i
     }
   }
@@ -274,6 +277,19 @@ function valueEnd(raws, from) {
   return -1
 }
 
+// Where the option at words[i] and its value end, both read as the shell
+// splits them: `--namespace="a b"` is one word, `-C "a b"` two. -1 when a
+// quote does not close in the command.
+function optionEnd(words, raws, i, flagsWithValue) {
+  const end = valueEnd(raws, i)
+
+  if (end === -1 || end >= words.length || !flagsWithValue.includes(words[i])) {
+    return end
+  }
+
+  return valueEnd(raws, end)
+}
+
 // Where every occurrence of a tool in a command starts (call) and where its
 // arguments start (start), global flags and their values skipped:
 // `git -C dir -c x=y push` → the index of `git` and of `push`. The arguments
@@ -301,13 +317,12 @@ function invocations(words, raws, name, flagsWithValue) {
   for (let i = words.length - 1; i >= 0; i -= 1) {
     if (!words[i].startsWith('-')) {
       startFrom[i] = i
-    } else if (flagsWithValue.includes(words[i]) && i + 1 < words.length) {
-      const end = valueEnd(raws, i + 1)
-
-      startFrom[i] = end === -1 ? words.length : startFrom[end]
-    } else {
-      startFrom[i] = startFrom[i + 1]
+      continue
     }
+
+    const end = optionEnd(words, raws, i, flagsWithValue)
+
+    startFrom[i] = end === -1 ? words.length : startFrom[end]
   }
 
   for (const call of calls) {
@@ -318,26 +333,21 @@ function invocations(words, raws, name, flagsWithValue) {
 }
 
 // The flags between a call and its subcommand, read as invocations() reads
-// them: each flag's index, its value's or -1, and where the value ends, -1
-// when its quote does not close. A flag in `seen` was read for an earlier
-// call, and so were the flags after it, so reading stops.
+// them: each flag's index, where the flag's own word ends, its value's index
+// or -1, and where the value ends, -1 when a quote does not close. A flag in
+// `seen` was read for an earlier call, and so were the flags after it, so
+// reading stops.
 function globalOptions(words, raws, { call, start }, flagsWithValue, seen) {
   const options = []
   let i = call + 1
 
   while (i < start && !seen.has(i)) {
     const flag = i
-    let value = -1
+    const flagEnd = valueEnd(raws, flag)
 
     seen.add(flag)
-    i += 1
-
-    if (flagsWithValue.includes(words[flag]) && i < words.length) {
-      value = i
-      i = valueEnd(raws, value)
-    }
-
-    options.push({ flag, value, end: i })
+    i = optionEnd(words, raws, flag, flagsWithValue)
+    options.push({ flag, flagEnd, value: i === flagEnd ? -1 : flagEnd, end: i })
 
     if (i === -1) {
       break
@@ -348,16 +358,18 @@ function globalOptions(words, raws, { call, start }, flagsWithValue, seen) {
 }
 
 // The indices of the first `limit` positionals from words[from], skipping
-// flags and the values of known value flags: `gh pr --repo o/r merge 12` →
-// the indices of `pr` and `merge`.
-function positionals(words, from, flagsWithValue, limit) {
+// flags and the values of known value flags, all read as the shell splits
+// them: `gh pr --body "x y" merge 12` → the indices of `pr` and `merge`.
+function positionals(words, raws, from, flagsWithValue, limit) {
   const found = []
+  let i = from
 
-  for (let i = from; i < words.length && found.length < limit; i += 1) {
+  while (i !== -1 && i < words.length && found.length < limit) {
     if (!words[i].startsWith('-')) {
       found.push(i)
-    } else if (flagsWithValue.includes(words[i])) {
-      i += 1
+      i = valueEnd(raws, i)
+    } else {
+      i = optionEnd(words, raws, i, flagsWithValue)
     }
   }
 
@@ -566,7 +578,7 @@ function checkGh(words, raws, { repo, placeholders }) {
 
   for (const { start } of invocations(words, raws, 'gh', GH_GLOBAL_FLAGS)) {
     const args = words.slice(start)
-    const [sub, action] = positionals(words, start, GH_VALUE_FLAGS, 2).map((index) => words[index])
+    const [sub, action] = positionals(words, raws, start, GH_VALUE_FLAGS, 2).map((index) => words[index])
 
     if (GH_FORBIDDEN.includes(sub)) {
       return `gh ${sub} is not allowed for rollout agents`
@@ -1115,13 +1127,20 @@ function shellStringAt(words, cluster) {
   return -1
 }
 
-// eval and `sh -c` run a string as a command, so the guard must read it.
+// eval and `sh -c` run a string as a command, so the guard must read it. Its
+// first word is the string's command word.
 function shellStringProblem(words, raws) {
   const evalAt = words.indexOf('eval')
-  const unreadable = evalAt === -1 ? -1 : firstUnreadable(words, raws, evalAt + 1)
+  const unreadable = evalAt === -1 ? -1 : firstFailing(readable, words, raws, evalAt + 1)
 
   if (unreadable !== -1) {
     return builtByExpansion(`the argument ${raws[unreadable]} of eval`)
+  }
+
+  const evaluated = evalAt + 1
+
+  if (evalAt !== -1 && evaluated < words.length && !isCommandName(words[evaluated], raws[evaluated])) {
+    return builtByExpansion(`the command ${raws[evaluated]} of eval`)
   }
 
   let shell = null
@@ -1145,26 +1164,49 @@ function shellStringProblem(words, raws) {
 
 const GIT_VALUE_FLAGS = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env', '--super-prefix']
 
-// Git subcommands, config and push arguments, and the global options but the
-// directory of -C are where git decides what to change.
+// The flags before git's subcommand and the key of -c must be names, because
+// a glob there can turn into a setting once it matches a file the agent made.
+// The other values need only be readable, and -C's directory is free.
+function gitOptionProblem(words, raws, { flag, flagEnd, value, end }) {
+  if (end === -1) {
+    return `a quote in the git option ${raws[flag]} does not close in this command, so the guard cannot tell where git's subcommand starts. Keep ;, &, | and newlines out of a quoted value`
+  }
+
+  const unnamed = firstFailing(isName, words, raws, flag, flagEnd)
+
+  if (unnamed !== -1) {
+    return builtByExpansion(`the git option ${raws[unnamed]}`)
+  }
+
+  if (value === -1 || words[flag] === '-C') {
+    return null
+  }
+
+  const unreadable = firstFailing(readable, words, raws, value, end)
+
+  if (unreadable !== -1) {
+    return builtByExpansion(`the git option ${raws[flag]} ${raws[unreadable]}`)
+  }
+
+  if (words[flag] === '-c' && !isName(words[value].split('=')[0], raws[value])) {
+    return builtByExpansion(`the git option ${raws[flag]} ${raws[value]}`)
+  }
+
+  return null
+}
+
+// Git's global options, its subcommand, the arguments of config and push and
+// the action of remote are where git decides what to change.
 function gitExpansionProblem(words, raws) {
   const seen = new Set()
   let checkedFrom = Infinity
 
   for (const call of invocations(words, raws, 'git', GIT_VALUE_FLAGS)) {
-    for (const { flag, value, end } of globalOptions(words, raws, call, GIT_VALUE_FLAGS, seen)) {
-      if (!readable(words[flag], raws[flag])) {
-        return builtByExpansion(`the git option ${raws[flag]}`)
-      }
+    for (const option of globalOptions(words, raws, call, GIT_VALUE_FLAGS, seen)) {
+      const problem = gitOptionProblem(words, raws, option)
 
-      if (end === -1) {
-        return `the value of the git option ${raws[flag]} opens a quote that does not close in this command, so the guard cannot tell where git's subcommand starts. Keep ;, &, | and newlines out of a quoted value`
-      }
-
-      const unreadable = value === -1 || words[flag] === '-C' ? -1 : firstUnreadable(words, raws, value, end)
-
-      if (unreadable !== -1) {
-        return builtByExpansion(`the git option ${raws[flag]} ${raws[unreadable]}`)
+      if (problem) {
+        return problem
       }
     }
 
@@ -1184,14 +1226,14 @@ function gitExpansionProblem(words, raws) {
     if ((sub === 'config' || sub === 'push') && start < checkedFrom) {
       checkedFrom = start
 
-      const unreadable = firstUnreadable(words, raws, start + 1)
+      const unnamed = firstFailing(isName, words, raws, start + 1)
 
-      if (unreadable !== -1) {
-        return builtByExpansion(`the git ${sub} argument ${raws[unreadable]}`)
+      if (unnamed !== -1) {
+        return builtByExpansion(`the git ${sub} argument ${raws[unnamed]}`)
       }
     }
 
-    const [action] = sub === 'remote' ? positionals(words, start + 1, [], 1) : []
+    const [action] = sub === 'remote' ? positionals(words, raws, start + 1, [], 1) : []
 
     if (action !== undefined && !isName(words[action], raws[action])) {
       return builtByExpansion(`the git remote action ${raws[action]}`)
@@ -1205,7 +1247,7 @@ function ghExpansionProblem(words, raws) {
   let checkedFrom = Infinity
 
   for (const { call, start } of invocations(words, raws, 'gh', GH_GLOBAL_FLAGS)) {
-    const [sub, action] = positionals(words, start, GH_VALUE_FLAGS, 2)
+    const [sub, action] = positionals(words, raws, start, GH_VALUE_FLAGS, 2)
 
     if (sub === undefined) {
       continue
@@ -1223,17 +1265,54 @@ function ghExpansionProblem(words, raws) {
       continue
     }
 
-    // The endpoint may hold a `?`, which starts its query string. Every
-    // argument counts: an expanded word can become -X, --method or a field.
+    // Every argument counts: an expanded word can become -X, --method or a field.
     if (call < checkedFrom) {
       checkedFrom = call
 
-      const unreadable = firstUnreadable(words, raws, call + 1)
+      const unreadable = firstFailing(readable, words, raws, call + 1)
+      const problem = unreadable === -1 ? ghApiProblem(words, raws, sub + 1) : null
 
       if (unreadable !== -1) {
         return builtByExpansion(`the gh api argument ${raws[unreadable]}`)
       }
+
+      if (problem) {
+        return problem
+      }
     }
+  }
+
+  return null
+}
+
+// The endpoint may hold `?`, which starts its query string, and `{…}` for the
+// placeholders, which placeholderProblem() reads.
+function isEndpoint(word, raw) {
+  return isName(word.replaceAll('?', '').replaceAll('{…}', ''), raw)
+}
+
+// gh api's flags, its method and any word but the endpoint must be names, as
+// a glob there can turn into -X PUT or a field once it matches a file the
+// agent made. The values of the other flags, such as --jq, -H and -f, are
+// free text.
+function ghApiProblem(words, raws, from) {
+  let endpoint = true
+  let i = from
+
+  while (i !== -1 && i < words.length) {
+    const flagged = words[i].startsWith('-')
+    const own = valueEnd(raws, i)
+    const end = flagged ? optionEnd(words, raws, i, GH_VALUE_FLAGS) : own
+    const named = flagged && (words[i] === '-X' || words[i] === '--method') ? end : own
+    const test = !flagged && endpoint ? isEndpoint : isName
+    const failing = firstFailing(test, words, raws, i, named === -1 ? words.length : named)
+
+    if (failing !== -1) {
+      return builtByExpansion(`the gh api argument ${raws[failing]}`)
+    }
+
+    endpoint &&= flagged
+    i = end
   }
 
   return null
@@ -1255,7 +1334,7 @@ function packageManagerExpansionProblem(words, raws) {
         return builtByExpansion(`the ${name} subcommand ${raws[start]}`)
       }
 
-      const [first] = positionals(words, start + 1, [], 1)
+      const [first] = positionals(words, raws, start + 1, [], 1)
 
       if (first !== undefined && !readable(words[first], raws[first])) {
         return builtByExpansion(`the ${name} ${words[start]} argument ${raws[first]}`)
@@ -1279,13 +1358,13 @@ function changesetExpansionProblem(words, raws) {
     return null
   }
 
-  const unreadable = firstUnreadable(words, raws, tool + 1)
+  const unreadable = firstFailing(readable, words, raws, tool + 1)
 
   if (unreadable !== -1) {
     return builtByExpansion(`the changeset argument ${raws[unreadable]}`)
   }
 
-  const [first] = positionals(words, tool + 1, [], 1)
+  const [first] = positionals(words, raws, tool + 1, [], 1)
 
   if (first !== undefined && !isName(words[first], raws[first])) {
     return builtByExpansion(`the changeset command ${raws[first]}`)
@@ -1451,7 +1530,7 @@ function checkGit(words, raws, role, branch) {
     }
 
     // git remote takes -v before its action.
-    const action = sub === 'remote' ? words[positionals(words, call.start + 1, [], 1)[0]] : undefined
+    const action = sub === 'remote' ? words[positionals(words, raws, call.start + 1, [], 1)[0]] : undefined
 
     if (REMOTE_FORBIDDEN.includes(action)) {
       return `git remote ${action} is not allowed: agents push to origin only`

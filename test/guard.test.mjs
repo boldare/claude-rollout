@@ -1171,7 +1171,7 @@ const MISREADINGS = [
   ['git -C a\\ b push origin main', RULES.pushTarget, ['implement']],
   [`sh -c "git -C 'a b' push origin main"`, RULES.pushTarget, ['implement']],
   ['git -C "a b" config core.hooksPath /dev/null', GIT_CONFIG],
-  ['git -C "a;b" config core.hooksPath /dev/null', /^the value of the git option -C opens a quote that does not close in this command/],
+  ['git -C "a;b" config core.hooksPath /dev/null', /^a quote in the git option -C does not close in this command/],
   ['git -c user.name="A B" commit --no-verify -m x', /^git commit --no-verify is not allowed/],
   ['gh pr {m..m}erge 1', RULES.brace],
   ['git {p..p}ush origin main', RULES.brace],
@@ -1184,6 +1184,26 @@ const MISREADINGS = [
   ['echo note # \\\n$(echo gh) pr merge 1', RULES.commandWord],
   ['echo note # \\\n/opt/homebrew/bin/g? pr merge 1', RULES.commandWord],
   ['echo note # \\\n$x', RULES.commandWord],
+  ['/usr/bin/git(|) push origin main', RULES.commandWord],
+  ['/usr/bin/gi(|)t push origin main', RULES.commandWord],
+  ['/opt/homebrew/bin/gh(|) pr merge 1 --squash', RULES.commandWord],
+  ['gh pr me(|)rge 1 --squash', RULES.gh],
+  ['git pu(|)sh origin main', RULES.git],
+  ['git com(|)mit -m x', RULES.git],
+  ['git (|)config core.hooksPath /dev/null', RULES.git],
+  ['git --namespace="a b" config core.hooksPath /dev/null', GIT_CONFIG],
+  ['git --namespace="a;b" config core.hooksPath /dev/null', /^a quote in the git option --namespace="a does not close in this command/],
+  ['git --exec-path="a b" push origin main', RULES.pushTarget, ['implement']],
+  ['git --namespace=a\\ b push origin main', RULES.pushTarget, ['implement']],
+  ['gh pr -b "x y" merge 1 --squash', RULES.merge],
+  ['gh pr --body="x y" merge 1 --squash', RULES.merge],
+  ['git config core.hooks?ath /dev/null', RULES.git],
+  ['git config core.hooks(P)ath /dev/null', RULES.git],
+  ['git push --mirr?r origin feat/a1', RULES.git],
+  ['git -c core.hooks?ath=/dev/null push origin feat/a1', RULES.git],
+  ['gh api repos/{owner}/{repo}/pulls/1/merge -X [P]UT', RULES.gh],
+  ['gh api repos/{owner}/{repo}/pulls/1/merge [-]XPUT', RULES.gh],
+  ["eval '/usr/bin/gi? push origin main'", /^the command .+ of eval is built by shell expansion/],
 ]
 
 test('misread words are refused by the hook command, each by its own rule', () => {
@@ -1214,6 +1234,9 @@ test('groups, empty words and a quoted # before a line continuation stay allowed
     'echo "a # b" \\\n  c',
     'git -C "/home/u/path with space" status',
     "git -C '/home/u/path with space' log --oneline",
+    "gh api repos/{owner}/{repo}/pulls --jq '[.[] | .number]'",
+    'gh api -X GET search/issues -f q="label:bug" --paginate',
+    'eval "npm test"',
   ]
 
   for (const role of ROLES) {
@@ -1225,6 +1248,7 @@ test('groups, empty words and a quoted # before a line continuation stay allowed
   for (const command of [
     'git commit -m ""',
     'git -c user.name="A B" commit -m "feat: x"',
+    'git -c user.name="github-actions[bot]" commit -m "feat: x"',
     'gh pr create --title "fix #12" \\\n  --body-file /tmp/body.md',
   ]) {
     assert.equal(check(command, 'worker', 'feat/a1', LIVE_DEMO), null, command)
