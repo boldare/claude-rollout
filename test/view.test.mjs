@@ -680,6 +680,26 @@ test('rolloutView: null without a ledger, the whole model with one', () => {
   assert.deepEqual(view.costs.byRole, { brief: 1.5, implement: 4.25, fix: 0, verify: 2, delegate: 0 })
 })
 
+test('rolloutView: reads the events through the reader it is given, and only with a ledger', () => {
+  const manifest = loadManifest(makeRollout())
+  const events = [{ at: at(1), id: 'A1', kind: 'note' }]
+  const calls = []
+  const reader = (given) => {
+    calls.push(given)
+
+    return events
+  }
+
+  const view = rolloutView(manifest, START, reader)
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0], manifest)
+  assert.equal(view.events, events)
+
+  assert.equal(rolloutView(loadManifest(makeRollout({ prs: null })), START, reader), null)
+  assert.equal(calls.length, 1)
+})
+
 function cli(...args) {
   return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', cwd: dirname(BIN) })
 }

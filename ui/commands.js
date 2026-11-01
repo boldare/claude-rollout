@@ -1,4 +1,4 @@
-import { sentence } from './format.js'
+import { sentence, serverAnswered } from './format.js'
 
 const RETRY_STATES = ['escalated', 'blocked', 'interrupted']
 const PR_COMMANDS = ['hold', 'release', 'retry']
@@ -142,7 +142,7 @@ function startNotice(body) {
   }
 
   if (body.warning) {
-    parts.push(`${body.warning[0].toUpperCase()}${body.warning.slice(1)}.`)
+    parts.push(`${sentence(body.warning)}.`)
   }
 
   return parts.join(' ')
@@ -156,7 +156,7 @@ function queuedNotice(command, driver) {
 
 export function commandNotice(command, { status, body }, driver) {
   if (status !== 202) {
-    return { text: body?.error ? sentence(body.error) : `The server answered ${status}.`, error: true }
+    return { text: serverAnswered(status, body), error: true }
   }
 
   if (command.cmd === 'stop') {

@@ -13,6 +13,19 @@ export function sentence(text) {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
+// What the server said about a failed read, or its status when it said nothing.
+export function serverAnswered(status, body) {
+  return body?.error ? sentence(body.error) : `The server answered ${status}.`
+}
+
+export function plural(count, noun, nouns) {
+  return count === 1 ? `1 ${noun}` : `${count} ${nouns}`
+}
+
+export function roleLabel(run) {
+  return run.role === 'brief' && run.step ? `brief ${run.step}` : run.role
+}
+
 // A state id as a label: needs_fix reads as needs fix.
 export function stateLabel(state) {
   return String(state).replaceAll('_', ' ')

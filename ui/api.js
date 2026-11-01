@@ -1,4 +1,4 @@
-import { sentence } from './format.js'
+import { serverAnswered } from './format.js'
 import { parseSse } from './sse.js'
 
 const FIRST_WAIT_MS = 1000
@@ -34,7 +34,46 @@ export async function apiPost(token, path, body) {
 async function errorOf(response) {
   const body = parseJson(await response.text().catch(() => ''))
 
-  return body?.error ? sentence(body.error) : `The server answered ${response.status}.`
+  return serverAnswered(response.status, body)
+}
+
+export function unreachable(error) {
+  return `Cannot reach the server: ${error.message}`
+}
+
+// One ticket for every read of a view. An answer that arrives after a cancel is
+// stale and resolves to null, a 401 included, so it never stops a newer page.
+// A load never cancels another, so several reads can be in flight at once.
+export function resource(token, { onUnauthorized }) {
+  let ticket = 0
+
+  async function load(path, key = null) {
+    const started = ticket
+    let answer
+
+    try {
+      answer = { key, ...(await apiGet(token, path)) }
+    } catch (error) {
+      answer = { key, status: 0, body: { error: unreachable(error) } }
+    }
+
+    if (started !== ticket) {
+      return null
+    }
+
+    if (answer.status === 401) {
+      onUnauthorized()
+      return null
+    }
+
+    return answer
+  }
+
+  function cancel() {
+    ticket += 1
+  }
+
+  return { load, cancel }
 }
 
 // The browser's own SSE client cannot send the Authorization header, so the

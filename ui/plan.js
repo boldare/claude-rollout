@@ -1,5 +1,5 @@
-import { cell, element, link, stateBadge, table, wrap } from './dom.js'
-import { sentence } from './format.js'
+import { cell, element, link, rowClick, stateBadge, table, wrap } from './dom.js'
+import { serverAnswered } from './format.js'
 import { markdownDocument } from './markdown.js'
 
 const HEADINGS = ['PR', 'state', 'section in the plan', 'source']
@@ -24,13 +24,8 @@ function sectionRow(pr, ctx) {
   const node = wrap('tr', cell(link(target, pr.id)), cell(stateBadge(row.state)), heading, source)
 
   node.className = 'clickable'
-  node.addEventListener('click', (event) => {
-    if (!event.target.closest('a, button')) {
-      ctx.go(target)
-    }
-  })
 
-  return node
+  return rowClick(node, target, ctx.go)
 }
 
 // A transcript source is the assistant's last long text, which is markdown too.
@@ -52,7 +47,7 @@ function planBody(plan, ctx) {
   }
 
   if (plan.status !== 200 || !plan.body) {
-    return [element('p', plan.body?.error ? sentence(plan.body.error) : `The server answered ${plan.status}.`, 'error')]
+    return [element('p', serverAnswered(plan.status, plan.body), 'error')]
   }
 
   const { prs, sources } = plan.body

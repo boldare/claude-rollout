@@ -130,14 +130,14 @@ export function renderMarkdown(text, level) {
 }
 
 // A document reads formatted, with a button for its source. Every update rebuilds the page,
-// so the choice lives in ctx.sourceDocs, by rollout and by document.
+// so the choice lives in ctx.remembered, which belongs to one rollout.
 export function markdownDocument(text, { key, level, ctx }) {
-  const id = `${ctx.route.r}|${key}`
+  const id = `source|${key}`
   const node = element('div', undefined, 'markdown-doc')
   const toggle = element('button', undefined, 'doc-toggle')
 
   function show() {
-    const source = ctx.sourceDocs.has(id)
+    const source = ctx.remembered.get(id) ?? false
 
     toggle.textContent = source ? 'Formatted' : 'Source'
     node.replaceChildren(toggle, source ? element('pre', text, 'markdown-source') : renderMarkdown(text, level))
@@ -145,12 +145,7 @@ export function markdownDocument(text, { key, level, ctx }) {
 
   toggle.type = 'button'
   toggle.addEventListener('click', () => {
-    if (ctx.sourceDocs.has(id)) {
-      ctx.sourceDocs.delete(id)
-    } else {
-      ctx.sourceDocs.add(id)
-    }
-
+    ctx.remembered.set(id, !(ctx.remembered.get(id) ?? false))
     show()
   })
 

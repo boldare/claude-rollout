@@ -63,6 +63,15 @@ export function isWaiting(row) {
   return WAITING_STATES.includes(row.state)
 }
 
+function rowOf(state, id) {
+  return JSON.stringify(state?.view?.rows?.find((row) => row.id === id))
+}
+
+// The row holds every field of the PR the driver moves, its last event time included.
+export function rowChanged(before, after, id) {
+  return rowOf(before, id) !== rowOf(after, id)
+}
+
 export function answeredText(answered) {
   if (!answered) {
     return null

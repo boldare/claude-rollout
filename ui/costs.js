@@ -1,5 +1,5 @@
 import { element, svgElement, withClass, wrap } from './dom.js'
-import { clock, money } from './format.js'
+import { clock, money, plural } from './format.js'
 
 const WIDTH = 600
 const HEIGHT = 160
@@ -62,7 +62,7 @@ function costLine(overTime, now) {
 }
 
 function estimateLine(costs) {
-  const runs = costs.estimatedRuns === 1 ? '1 run' : `${costs.estimatedRuns} runs`
+  const runs = plural(costs.estimatedRuns, 'run', 'runs')
 
   return `Runs that reported no cost: about ${money(costs.estimatedUsd)} over ${runs}, estimated from the token usage in their logs. Not in the totals.`
 }

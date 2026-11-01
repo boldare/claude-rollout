@@ -1,5 +1,5 @@
-import { badge, cell, element, externalLink, link, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
-import { ago, duration, money, stateLabel } from './format.js'
+import { badge, cell, element, externalLink, link, rowClick, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
+import { ago, duration, money, roleLabel, serverAnswered, stateLabel } from './format.js'
 import { renderPanelControls } from './controls.js'
 import { answerHint, answerPlaceholder, commandLines, delegateText, panelRun, resultTone, rowOpen, tookText } from './board-model.js'
 import { answeredText, isWaiting, stateCounts } from './model.js'
@@ -115,13 +115,8 @@ function boardRow(row, run, open, ctx) {
   )
 
   node.className = ['clickable', isWaiting(row) ? 'waiting' : '', open ? 'open' : ''].filter(Boolean).join(' ')
-  node.addEventListener('click', (event) => {
-    if (!event.target.closest('a, button')) {
-      ctx.go(ctx.linkWith({ pr: row.id, tab: null }))
-    }
-  })
 
-  return node
+  return rowClick(node, ctx.linkWith({ pr: row.id, tab: null }), ctx.go)
 }
 
 function runFact(label, value, className) {
@@ -141,7 +136,7 @@ function runFacts(run, ctx) {
     )
   }
 
-  facts.append(runFact('role', run.role === 'brief' && run.step ? `brief ${run.step}` : run.role), runFact('effort', run.effort ?? '-'))
+  facts.append(runFact('role', roleLabel(run)), runFact('effort', run.effort ?? '-'))
 
   if (run.model) {
     facts.append(runFact('model', run.model))
@@ -191,7 +186,7 @@ function commandsPart(run, ctx) {
   }
 
   if (tail.status !== 200) {
-    return [element('p', tail.body?.error ?? `The server answered ${tail.status}.`, 'error')]
+    return [element('p', serverAnswered(tail.status, tail.body), 'error')]
   }
 
   const lines = commandLines(tail.body.items, { running: run.status === 'running' })

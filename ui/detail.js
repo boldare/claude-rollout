@@ -1,6 +1,6 @@
 import { renderPrControls } from './controls.js'
-import { badge, cell, element, externalLink, link, list, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
-import { clock, duration, money, sentence } from './format.js'
+import { badge, cell, element, externalLink, link, list, rememberOpen, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
+import { clock, duration, money, roleLabel, serverAnswered } from './format.js'
 import { markdownDocument } from './markdown.js'
 import { renderTranscript } from './transcript.js'
 import { estimateNote } from './transcript-model.js'
@@ -224,13 +224,12 @@ function costCell(run) {
 
 function runRow(run, ctx) {
   const { now } = ctx
-  const role = run.role === 'brief' && run.step ? `brief ${run.step}` : run.role
   const live = run.status === 'running' ? 'live' : ''
 
   const row = wrap(
     'tr',
     cell(runName(run, ctx)),
-    cell(role),
+    cell(roleLabel(run)),
     cell(run.effort ?? '-'),
     cell(run.model ?? '-'),
     cell(clock(run.startedAt, now)),
@@ -329,21 +328,12 @@ function verdictKey(pr, verdict) {
 }
 
 function historyEntry(pr, verdict, ctx) {
-  const key = verdictKey(pr, verdict)
   const details = element('details')
   const summary = `${verdict.verdict} ${short(verdict.sha)} at ${clock(verdict.at)}: ${verdict.summary ?? ''}`
 
-  details.open = ctx.openVerdicts.has(key)
   details.append(element('summary', summary), verdictBody(verdict))
-  details.addEventListener('toggle', () => {
-    if (details.open) {
-      ctx.openVerdicts.add(key)
-    } else {
-      ctx.openVerdicts.delete(key)
-    }
-  })
 
-  return details
+  return rememberOpen(details, ctx.remembered, `verdict|${verdictKey(pr, verdict)}`)
 }
 
 // A recommended command or criterion that does not pass blocks nothing, so it reads as a warning, not as a failure.
@@ -489,7 +479,7 @@ export function renderDetail(ctx) {
   }
 
   if (detail.status !== 200 || !detail.body) {
-    return problem(detail.body?.error ? sentence(detail.body.error) : `The server answered ${detail.status}.`, ctx)
+    return problem(serverAnswered(detail.status, detail.body), ctx)
   }
 
   const pr = detail.body
