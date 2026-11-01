@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutView, runsFromEvents } from '../lib/view.mjs'
+import { resource, unreachable } from '../ui/api.js'
 import {
   COMMAND_LINES,
   answerHint,
@@ -17,7 +18,8 @@ import {
   tookText,
 } from '../ui/board-model.js'
 import { commandBody, commandNotice, dialogFor, panelControls, prControls, rolloutControls } from '../ui/commands.js'
-import { duration, money, sentence, stateLabel } from '../ui/format.js'
+import { rememberOpen, rowClick } from '../ui/dom.js'
+import { duration, money, plural, roleLabel, sentence, serverAnswered, stateLabel } from '../ui/format.js'
 import {
   ERROR_KINDS,
   STATES,
@@ -28,6 +30,7 @@ import {
   filterEvents,
   isWaiting,
   mergeEvents,
+  rowChanged,
   stateCounts,
 } from '../ui/model.js'
 import { parseSse } from '../ui/sse.js'
@@ -93,6 +96,53 @@ function uiScripts() {
   return readdirSync(UI).filter((file) => file.endsWith('.js'))
 }
 
+// Answers every fetch with respond and puts the real fetch back after the test.
+function stubFetch(context, respond) {
+  const original = globalThis.fetch
+  const calls = []
+
+  globalThis.fetch = async (path, options) => {
+    calls.push({ path, options })
+
+    return respond(path, options)
+  }
+
+  context.after(() => {
+    globalThis.fetch = original
+  })
+
+  return calls
+}
+
+function counter() {
+  const counted = { calls: 0 }
+
+  counted.call = () => {
+    counted.calls += 1
+  }
+
+  return counted
+}
+
+// Enough of a details element for rememberOpen: the open flag and the toggle event.
+function fakeDetails() {
+  const listeners = []
+
+  return {
+    open: false,
+    addEventListener(_, listener) {
+      listeners.push(listener)
+    },
+    flip() {
+      this.open = !this.open
+
+      for (const listener of listeners) {
+        listener()
+      }
+    },
+  }
+}
+
 test('parseSse: two messages in one chunk', () => {
   const { messages, rest } = parseSse('event: state\ndata: {"a":1}\n\nevent: events\ndata: {"from":0}\n\n')
 
@@ -139,6 +189,67 @@ test('parseSse: invalid JSON and a message without data are dropped', () => {
 
   assert.deepEqual(messages, [{ event: 'events', data: [] }])
   assert.equal(rest, '')
+})
+
+test('resource: a 200 answer with its key and the parsed body, read with the bearer token', async (context) => {
+  const calls = stubFetch(context, () => Response.json({ rollouts: [] }))
+  const unauthorized = counter()
+  const reads = resource('secret', { onUnauthorized: unauthorized.call })
+
+  assert.deepEqual(await reads.load('/api/rollouts', 'list'), { key: 'list', status: 200, body: { rollouts: [] } })
+  assert.deepEqual(await reads.load('/api/rollouts'), { key: null, status: 200, body: { rollouts: [] } })
+  assert.equal(calls[0].path, '/api/rollouts')
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer secret')
+  assert.equal(unauthorized.calls, 0)
+})
+
+test('resource: a 401 calls onUnauthorized once and resolves to null', async (context) => {
+  stubFetch(context, () => Response.json({ error: 'unauthorized' }, { status: 401 }))
+
+  const unauthorized = counter()
+  const reads = resource('wrong', { onUnauthorized: unauthorized.call })
+
+  assert.equal(await reads.load('/api/rollouts/demo/prs/A1', 'A1'), null)
+  assert.equal(unauthorized.calls, 1)
+})
+
+test('resource: a fetch that fails is status 0 with the reason', async (context) => {
+  stubFetch(context, () => Promise.reject(new TypeError('fetch failed')))
+
+  const reads = resource('secret', { onUnauthorized: counter().call })
+
+  assert.deepEqual(await reads.load('/api/rollouts/demo/plan', 'demo'), {
+    key: 'demo',
+    status: 0,
+    body: { error: 'Cannot reach the server: fetch failed' },
+  })
+})
+
+test('resource: a cancel turns every load in flight into null, a 401 included, and later loads answer', async (context) => {
+  const pending = []
+
+  stubFetch(context, () => new Promise((resolve) => pending.push(resolve)))
+
+  const unauthorized = counter()
+  const reads = resource('secret', { onUnauthorized: unauthorized.call })
+  const refused = reads.load('/api/rollouts/demo/runs/A1-01-implement', 'A1-01-implement')
+  const stale = reads.load('/api/rollouts/demo/runs/A1-02-verify', 'A1-02-verify')
+
+  reads.cancel()
+
+  const first = reads.load('/api/rollouts/demo/runs/A2-01-implement', 'A2-01-implement')
+  const second = reads.load('/api/rollouts/demo/runs/A2-02-verify', 'A2-02-verify')
+
+  pending[0](Response.json({ error: 'unauthorized' }, { status: 401 }))
+  pending[1](Response.json({ total: 1 }))
+  pending[2](Response.json({ total: 2 }))
+  pending[3](Response.json({ total: 3 }))
+
+  assert.equal(await refused, null)
+  assert.equal(await stale, null)
+  assert.deepEqual(await first, { key: 'A2-01-implement', status: 200, body: { total: 2 } })
+  assert.deepEqual(await second, { key: 'A2-02-verify', status: 200, body: { total: 3 } })
+  assert.equal(unauthorized.calls, 0)
 })
 
 test('mergeEvents: appends, replaces and truncates without touching the input', () => {
@@ -212,6 +323,19 @@ test('isWaiting: blocked and escalated wait for the maintainer, nothing else doe
   for (const state of STATES) {
     assert.equal(isWaiting({ state }), state === 'blocked' || state === 'escalated', state)
   }
+})
+
+test('rowChanged: the row of one PR, compared field by field across two states', () => {
+  const stateOf = (rows) => ({ view: { rows } })
+  const row = { id: 'A1', state: 'implementing', head: 'abc1234', lastEventAt: at(21) }
+  const other = { id: 'A2', state: 'pending', head: null, lastEventAt: null }
+  const before = stateOf([row, other])
+
+  assert.equal(rowChanged(before, stateOf([{ ...row }, { ...other, state: 'briefing' }]), 'A1'), false)
+  assert.equal(rowChanged(before, stateOf([{ ...row, lastEventAt: at(60) }, other]), 'A1'), true)
+  assert.equal(rowChanged(before, stateOf([row, other]), 'Z9'), false)
+  assert.equal(rowChanged(null, before, 'A1'), true)
+  assert.equal(rowChanged(before, { view: null }, 'A1'), true)
 })
 
 test('answeredText: who answered, and who resumed', () => {
@@ -472,6 +596,55 @@ test('format: a server message reads as a sentence', () => {
   assert.equal(sentence('Unknown rollout'), 'Unknown rollout')
   assert.equal(sentence(''), '')
   assert.equal(sentence(null), '')
+})
+
+test('serverAnswered: the server message as a sentence, else the status', () => {
+  const text = unreachable(new TypeError('fetch failed'))
+
+  assert.equal(serverAnswered(404, { error: 'unknown run' }), 'Unknown run')
+  assert.equal(serverAnswered(502, null), 'The server answered 502.')
+  assert.equal(serverAnswered(500, {}), 'The server answered 500.')
+  assert.equal(serverAnswered(0, { error: text }), 'Cannot reach the server: fetch failed')
+})
+
+test('plural and roleLabel: counted nouns, and the step of a brief run', () => {
+  assert.equal(plural(0, 'line', 'lines'), '0 lines')
+  assert.equal(plural(1, 'line', 'lines'), '1 line')
+  assert.equal(plural(2, 'denial', 'denials'), '2 denials')
+  assert.equal(roleLabel({ role: 'brief', step: 'write' }), 'brief write')
+  assert.equal(roleLabel({ role: 'brief', step: null }), 'brief')
+  assert.equal(roleLabel({ role: 'implement', step: null }), 'implement')
+})
+
+test('rememberOpen: the default until the reader toggles, then the last toggle', () => {
+  const remembered = new Map()
+  const key = 'transcript|A1-01-implement|3'
+  const refused = rememberOpen(fakeDetails(), remembered, key, true)
+
+  assert.equal(refused.open, true)
+  refused.flip()
+  assert.equal(remembered.get(key), false)
+  assert.equal(rememberOpen(fakeDetails(), remembered, key, true).open, false)
+  assert.equal(rememberOpen(fakeDetails(), remembered, 'verdict|A1').open, false)
+
+  rememberOpen(fakeDetails(), remembered, 'verdict|A1').flip()
+  assert.equal(rememberOpen(fakeDetails(), remembered, 'verdict|A1').open, true)
+})
+
+test('rowClick: a click on the row follows its link, a click on a link or a button in it does not', () => {
+  const visits = []
+  const listeners = []
+  const node = { addEventListener: (_, listener) => listeners.push(listener) }
+  const inside = (selector) => ({ closest: (asked) => (asked === selector ? {} : null) })
+
+  assert.equal(
+    rowClick(node, '#r=demo', (href) => visits.push(href)),
+    node,
+  )
+
+  listeners[0]({ target: inside('td') })
+  listeners[0]({ target: inside('a, button') })
+  assert.deepEqual(visits, ['#r=demo'])
 })
 
 test('format: a state id reads as words, every state of the model included', () => {

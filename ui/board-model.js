@@ -1,4 +1,4 @@
-import { duration, money } from './format.js'
+import { duration, money, plural } from './format.js'
 import { isWaiting } from './model.js'
 import { resultPreview } from './transcript-model.js'
 
@@ -28,10 +28,6 @@ export function panelRun(row, runs) {
   const own = (runs ?? []).filter((run) => run.id === row.id && run.run)
 
   return own.findLast((run) => run.status === 'running') ?? own.at(-1) ?? null
-}
-
-function lineCount(lines) {
-  return lines === 1 ? '1 line' : `${lines} lines`
 }
 
 // A waiting row opens by itself, any other row when the maintainer opens it,
@@ -78,18 +74,18 @@ function outcomeOf(result, running) {
   const { line, lines } = resultPreview(result.text)
 
   if (result.refused) {
-    return { tag: 'refused', text: lineCount(lines) }
+    return { tag: 'refused', text: plural(lines, 'line', 'lines') }
   }
 
   if (result.isError) {
-    return { tag: 'error', text: lineCount(lines) }
+    return { tag: 'error', text: plural(lines, 'line', 'lines') }
   }
 
   if (lines === 0) {
     return { tag: null, text: 'empty' }
   }
 
-  return { tag: null, text: lines === 1 && line.length <= SHORT_RESULT ? line : lineCount(lines) }
+  return { tag: null, text: lines === 1 && line.length <= SHORT_RESULT ? line : plural(lines, 'line', 'lines') }
 }
 
 function messageOf(text) {
@@ -132,7 +128,7 @@ export function tookText(run) {
   const parts = [duration(run.seconds), costOf(run)]
 
   if (typeof run.denials === 'number') {
-    parts.push(run.denials === 1 ? '1 denial' : `${run.denials} denials`)
+    parts.push(plural(run.denials, 'denial', 'denials'))
   }
 
   return parts.join(' · ')

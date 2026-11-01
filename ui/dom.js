@@ -100,3 +100,23 @@ export function secondsSince(iso, now) {
 
   return Number.isFinite(time) ? Math.max(0, (now - time) / 1000) : null
 }
+
+// The whole row follows its link. A click on a link or a button in it does what that one does.
+export function rowClick(node, href, go) {
+  node.addEventListener('click', (event) => {
+    if (!event.target.closest('a, button')) {
+      go(href)
+    }
+  })
+
+  return node
+}
+
+// Every update rebuilds the page, so a details element takes its open state from
+// the map, and the reader's last toggle wins over the default.
+export function rememberOpen(details, remembered, key, openByDefault = false) {
+  details.open = remembered.get(key) ?? openByDefault
+  details.addEventListener('toggle', () => remembered.set(key, details.open))
+
+  return details
+}

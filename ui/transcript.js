@@ -1,15 +1,11 @@
-import { badge, element, link, withClass, wrap } from './dom.js'
-import { duration, money, sentence } from './format.js'
+import { badge, element, link, rememberOpen, withClass, wrap } from './dom.js'
+import { duration, money, plural, roleLabel, serverAnswered } from './format.js'
 import { estimateNote, logSize, pageLabel, pageLinks, resultPreview } from './transcript-model.js'
 
 const PAGE_LINKS = ['first', 'previous', 'next', 'latest']
 
 function tokens(count) {
   return (count ?? 0).toLocaleString('en-US')
-}
-
-function roleOf(run) {
-  return run.role === 'brief' && run.step ? `brief ${run.step}` : run.role
 }
 
 function line(...parts) {
@@ -20,7 +16,7 @@ function runLine(page, run) {
   const node = line(element('strong', page.run))
 
   if (run) {
-    node.append(` · ${roleOf(run)} · effort ${run.effort ?? '-'} · `, element('span', run.status ?? '-', `status-${run.status}`))
+    node.append(` · ${roleLabel(run)} · effort ${run.effort ?? '-'} · `, element('span', run.status ?? '-', `status-${run.status}`))
   }
 
   return node
@@ -32,8 +28,7 @@ function logLine(page) {
 
 function finalLine(final) {
   const outcome = final.ok ? 'ok' : (final.subtype ?? 'failed')
-  const denials = final.denials === 1 ? '1 denial' : `${final.denials} denials`
-  const facts = [money(final.costUsd), duration(final.seconds), `${final.turns ?? '-'} turns`, denials]
+  const facts = [money(final.costUsd), duration(final.seconds), `${final.turns ?? '-'} turns`, plural(final.denials, 'denial', 'denials')]
 
   return line(element('strong', outcome), ` · ${facts.join(' · ')}`)
 }
@@ -96,15 +91,6 @@ function navigation(page, ctx) {
   return nav
 }
 
-// Following re-renders the page every few seconds, so every details element
-// keeps the state the reader gave it.
-function remembered(details, ctx, key, openByDefault) {
-  details.open = ctx.openTranscript.has(key) ? ctx.openTranscript.get(key) : openByDefault
-  details.addEventListener('toggle', () => ctx.openTranscript.set(key, details.open))
-
-  return details
-}
-
 function cutNote(item, run) {
   return element('p', `cut ${item.cut} characters, the full text is in logs/${run}.jsonl`, 'muted cut-note')
 }
@@ -124,7 +110,7 @@ function toolItem(item, run, ctx) {
 
   const input = wrap('details', element('summary', 'input'), element('pre', item.inputText))
 
-  node.append(call, remembered(input, ctx, `${run}|${item.index}|input`, false))
+  node.append(call, rememberOpen(input, ctx.remembered, `transcript|${run}|${item.index}|input`))
 
   return node
 }
@@ -139,9 +125,7 @@ function resultSummary(item) {
     summary.append(badge('error', 'result-error'), ' ')
   }
 
-  const lines = preview.lines === 1 ? '1 line' : `${preview.lines} lines`
-
-  summary.append(`result of ${item.name ?? 'a tool'}: ${preview.line} (${lines})`)
+  summary.append(`result of ${item.name ?? 'a tool'}: ${preview.line} (${plural(preview.lines, 'line', 'lines')})`)
 
   return summary
 }
@@ -156,7 +140,7 @@ function resultItem(item, run, ctx) {
     className = 'transcript-result is-error'
   }
 
-  return remembered(withClass(details, className), ctx, `${run}|${item.index}`, item.refused)
+  return rememberOpen(withClass(details, className), ctx.remembered, `transcript|${run}|${item.index}`, item.refused)
 }
 
 function initItem(item) {
@@ -212,7 +196,7 @@ function problem(transcript) {
     return element('p', 'No log for this run.', 'muted')
   }
 
-  return element('p', transcript.body?.error ? sentence(transcript.body.error) : `The server answered ${transcript.status}.`, 'error')
+  return element('p', serverAnswered(transcript.status, transcript.body), 'error')
 }
 
 export function renderTranscript(ctx) {

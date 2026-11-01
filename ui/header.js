@@ -1,6 +1,6 @@
 import { renderRolloutControls } from './controls.js'
 import { badge, element, link, secondsSince, withClass, wrap } from './dom.js'
-import { ago, money } from './format.js'
+import { ago, money, plural } from './format.js'
 import { driverStatus, errorCount } from './model.js'
 
 const STALE_HEARTBEAT_SECONDS = 300
@@ -48,7 +48,7 @@ function fact(label, value) {
 }
 
 function errorsLink(count, href) {
-  return link(href, `${count} ${count === 1 ? 'error' : 'errors'}`, count > 0 ? 'error' : '')
+  return link(href, plural(count, 'error', 'errors'), count > 0 ? 'error' : '')
 }
 
 // The header and the rollout list say the same things the same way. The list leaves out a zero error count.

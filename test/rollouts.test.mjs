@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFileSync, mkdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -10,6 +10,7 @@ import {
   eventsSince,
   findRollout,
   listRollouts,
+  rolloutEvents,
   rolloutPlan,
   rolloutPr,
   rolloutRoot,
@@ -148,6 +149,54 @@ test('rolloutSnapshot: the view without events, and the events beside it', () =>
 
   const fresh = rolloutSnapshot(findRollout(root, 'fresh'), 'fresh', START)
   assert.deepEqual(fresh, { state: { name: 'fresh', at: new Date(START).toISOString(), view: null }, events: [] })
+})
+
+test('rolloutSnapshot: the events are parsed again only when events.jsonl changed, not on a heartbeat or a ledger save', () => {
+  const root = makeRolloutRoot()
+  const dir = join(root, 'demo')
+  const snapshot = () => rolloutSnapshot(findRollout(root, 'demo'), 'demo', START)
+  const first = snapshot()
+
+  assert.equal(snapshot().events, first.events)
+
+  const ledger = JSON.parse(readFileSync(join(dir, 'ledger.json'), 'utf8'))
+
+  writeFileSync(join(dir, 'heartbeat'), `${new Date().toISOString()} tick`)
+  writeFileSync(
+    join(dir, 'ledger.json'),
+    JSON.stringify({ ...ledger, prs: { ...ledger.prs, A2: { ...ledger.prs.A2, state: 'needs_fix' } } }),
+  )
+
+  const ticked = snapshot()
+
+  assert.equal(ticked.events, first.events)
+  assert.equal(ticked.state.view.rows.find((row) => row.id === 'A2').state, 'needs_fix')
+
+  appendFileSync(join(dir, 'events.jsonl'), `\n${JSON.stringify({ at: at(90), id: 'A2', kind: 'note' })}\n`)
+
+  const appended = snapshot()
+
+  assert.notEqual(appended.events, first.events)
+  assert.equal(appended.events.length, first.events.length + 1)
+  assert.equal(appended.state.view.eventCount, first.events.length + 1)
+})
+
+test('rolloutEvents: empty without events.jsonl, and a few logs cached at a time', () => {
+  const root = makeRolloutRoot()
+  const demo = findRollout(root, 'demo')
+
+  assert.deepEqual(rolloutEvents(findRollout(root, 'fresh')), [])
+  assert.equal(rolloutEvents(demo).length, 9)
+
+  rmSync(join(root, 'demo', 'events.jsonl'))
+  assert.deepEqual(rolloutEvents(demo), [])
+
+  const manifests = Array.from({ length: 5 }, () => loadManifest(makeRollout()))
+  const parsed = manifests.map(rolloutEvents)
+
+  assert.equal(rolloutEvents(manifests[4]), parsed[4])
+  assert.notEqual(rolloutEvents(manifests[0]), parsed[0])
+  assert.deepEqual(rolloutEvents(manifests[0]), parsed[0])
 })
 
 test('rolloutSnapshot: each row carries the heading and first line of its plan slices, never the whole text', () => {

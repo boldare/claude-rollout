@@ -1,14 +1,14 @@
-import { apiGet, apiPost, followStream } from './api.js'
+import { apiPost, followStream, resource, unreachable } from './api.js'
 import { renderBoard } from './board.js'
 import { PANEL_ITEMS, panelRun, rowOpen } from './board-model.js'
 import { commandNotice } from './commands.js'
 import { renderCosts } from './costs.js'
 import { renderDetail } from './detail.js'
-import { element, link, wrap } from './dom.js'
+import { element, link, rowClick, wrap } from './dom.js'
 import { renderEvents } from './events.js'
-import { sentence } from './format.js'
+import { sentence, serverAnswered } from './format.js'
 import { renderFooter, renderHeader, renderListHeader, renderTop, renderViewTabs, rolloutFacts } from './header.js'
-import { isWaiting, mergeEvents } from './model.js'
+import { isWaiting, mergeEvents, rowChanged } from './model.js'
 import { renderPlan } from './plan.js'
 import { renderTimeline } from './timeline.js'
 import { FOLLOW_MS, PAGE_SIZE, shouldFollow, transcriptRoute } from './transcript-model.js'
@@ -28,9 +28,11 @@ const VIEW_RENDERERS = { board: renderBoard, timeline: renderTimeline, events: r
 
 const token = new URLSearchParams(location.hash.slice(1)).get('t')
 const app = document.getElementById('app')
-const openVerdicts = new Set()
-const openTranscript = new Map()
-const sourceDocs = new Set()
+const listResource = resource(token, { onUnauthorized: stopAll })
+const detailResource = resource(token, { onUnauthorized: stopAll })
+const planResource = resource(token, { onUnauthorized: stopAll })
+const transcriptResource = resource(token, { onUnauthorized: stopAll })
+const panelResource = resource(token, { onUnauthorized: stopAll })
 
 let route = parseRoute(location.hash)
 let stopped = false
@@ -38,15 +40,10 @@ let pendingRender = false
 let composing = false
 let listing = null
 let listTimer = null
-let listTicket = 0
-let detailTicket = 0
-let planTicket = 0
-let transcriptTicket = 0
 let transcriptBusy = false
 let followTimer = null
 let followed = false
 let noticeTimer = null
-let panelTicket = 0
 let panelTimer = null
 let session = freshSession(null)
 
@@ -65,6 +62,7 @@ function freshSession(name) {
     plan: null,
     transcript: null,
     rowChoices: new Map(),
+    remembered: new Map(),
     panels: new Map(),
     drafts: new Map(),
     sent: new Set(),
@@ -151,10 +149,7 @@ function scheduleRender() {
 function stopAll() {
   stopped = true
   stopList()
-  stopPanels()
   closeStream()
-  detailTicket += 1
-  planTicket += 1
   document.title = 'rollout'
   showLine(OPEN_THE_URL)
 }
@@ -189,13 +184,8 @@ function rolloutItem(rollout) {
 
   item.className = 'rollout clickable'
   item.append(wrap('strong', link(target, rollout.name)), rolloutSummary(rollout))
-  item.addEventListener('click', (event) => {
-    if (!event.target.closest('a, button')) {
-      go(target)
-    }
-  })
 
-  return item
+  return rowClick(item, target, go)
 }
 
 function renderList() {
@@ -206,8 +196,8 @@ function renderList() {
     return
   }
 
-  if (listing.problem) {
-    showLine(listing.problem)
+  if (listing.status !== 200 || !listing.body) {
+    showLine(serverAnswered(listing.status, listing.body))
     return
   }
 
@@ -223,56 +213,34 @@ function renderList() {
   app.replaceChildren(renderTop(renderListHeader()), items, renderFooter())
 }
 
-// Resolves to whether another refresh makes sense.
-async function loadList(ticket) {
-  const { status, body } = await apiGet(token, '/api/rollouts')
+// No answer means the list was stopped, so the chain of reads ends there.
+async function refreshList() {
+  const answer = await listResource.load('/api/rollouts')
 
-  if (ticket !== listTicket) {
-    return false
+  if (!answer) {
+    return
   }
 
-  if (status === 401) {
-    stopAll()
-    return false
-  }
-
-  listing = status === 200 && body ? { body, problem: null } : { body: null, problem: `The server answered ${status}.` }
+  listing = answer
   render()
-
-  return true
-}
-
-async function refreshList(ticket) {
-  let again = true
-
-  try {
-    again = await loadList(ticket)
-  } catch (error) {
-    if (ticket !== listTicket) {
-      return
-    }
-
-    listing = { body: null, problem: `Cannot reach the server: ${error.message}` }
-    render()
-  }
-
-  if (again && ticket === listTicket) {
-    listTimer = setTimeout(() => refreshList(ticket), REFRESH_MS)
-  }
+  listTimer = setTimeout(refreshList, REFRESH_MS)
 }
 
 function startList() {
   stopList()
-  refreshList(listTicket)
+  refreshList()
 }
 
 function stopList() {
-  listTicket += 1
+  listResource.cancel()
   clearTimeout(listTimer)
 }
 
+// The detail, the plan, the transcript and the panels belong to the session this replaces.
 function closeStream() {
   session.stream?.close()
+  detailResource.cancel()
+  planResource.cancel()
   invalidateTranscript()
   stopPanels()
   followed = false
@@ -302,9 +270,16 @@ function follow(name) {
 
   current.stream = followStream(token, name, {
     onState(state) {
+      const previous = current.state
+
       current.state = state
       current.problem = null
-      loadDetail()
+
+      // The heartbeat pushes a state at every tick, so the PR page reads again only when its row changed or its last read failed.
+      if (route.pr && (rowChanged(previous, state, route.pr) || detailFailed())) {
+        loadDetail()
+      }
+
       loadPlan()
       recheckFollow({ fetchWhenStopped: true })
       forgetSent()
@@ -357,7 +332,7 @@ async function send(current, command) {
     return answer.status === 202
   } catch (error) {
     if (current === session) {
-      showNotice(current, { text: `Cannot reach the server: ${error.message}`, error: true })
+      showNotice(current, { text: unreachable(error), error: true })
     }
 
     return false
@@ -380,34 +355,26 @@ function detailKey() {
   return route.r && route.pr ? `${route.r}\n${route.pr}` : null
 }
 
-async function fetchDetail(key, ticket) {
-  try {
-    const { status, body } = await apiGet(token, apiPath(route.r, 'prs', route.pr))
+function detailFailed() {
+  const status = session.detail?.status ?? null
 
-    if (ticket !== detailTicket) {
-      return
-    }
+  return status !== null && status !== 200
+}
 
-    if (status === 401) {
-      stopAll()
-      return
-    }
+async function fetchDetail(key) {
+  const answer = await detailResource.load(apiPath(route.r, 'prs', route.pr), key)
 
-    session.detail = { key, status, body }
-  } catch (error) {
-    if (ticket !== detailTicket) {
-      return
-    }
-
-    session.detail = { key, status: 0, body: { error: `Cannot reach the server: ${error.message}` } }
+  if (!answer) {
+    return
   }
 
+  session.detail = answer
   scheduleRender()
 }
 
 function loadDetail() {
   const key = detailKey()
-  detailTicket += 1
+  detailResource.cancel()
 
   if (!key) {
     session.detail = null
@@ -418,7 +385,7 @@ function loadDetail() {
     session.detail = { key, status: null, body: null }
   }
 
-  fetchDetail(key, detailTicket)
+  fetchDetail(key)
 }
 
 // The plan file is not watched, so every state push reads it again while the view is open.
@@ -435,34 +402,20 @@ function notStarted() {
   return Boolean(session.state) && !session.state.view
 }
 
-async function fetchPlan(key, ticket) {
-  try {
-    const { status, body } = await apiGet(token, apiPath(route.r, 'plan'))
+async function fetchPlan(key) {
+  const answer = await planResource.load(apiPath(route.r, 'plan'), key)
 
-    if (ticket !== planTicket) {
-      return
-    }
-
-    if (status === 401) {
-      stopAll()
-      return
-    }
-
-    session.plan = { key, status, body }
-  } catch (error) {
-    if (ticket !== planTicket) {
-      return
-    }
-
-    session.plan = { key, status: 0, body: { error: `Cannot reach the server: ${error.message}` } }
+  if (!answer) {
+    return
   }
 
+  session.plan = answer
   scheduleRender()
 }
 
 function loadPlan() {
   const key = planKey()
-  planTicket += 1
+  planResource.cancel()
 
   if (!key) {
     return
@@ -472,7 +425,7 @@ function loadPlan() {
     session.plan = { key, status: null, body: null }
   }
 
-  fetchPlan(key, planTicket)
+  fetchPlan(key)
 }
 
 function transcriptKey() {
@@ -497,7 +450,7 @@ function stopFollowing() {
 }
 
 function invalidateTranscript() {
-  transcriptTicket += 1
+  transcriptResource.cancel()
   transcriptBusy = false
   stopFollowing()
 }
@@ -510,43 +463,25 @@ function scheduleFollow() {
     return
   }
 
-  const ticket = transcriptTicket
-
   followTimer = setTimeout(() => {
     followTimer = null
-
-    if (ticket === transcriptTicket) {
-      fetchTranscript(transcriptKey(), ticket)
-    }
+    fetchTranscript(transcriptKey())
   }, FOLLOW_MS)
 }
 
-async function fetchTranscript(key, ticket) {
+// Without an answer transcriptBusy stays as it is, because a newer load may already be in flight.
+async function fetchTranscript(key) {
   const path = `${apiPath(route.r, 'runs', route.run)}?from=${route.from ?? 0}&limit=${PAGE_SIZE}`
 
   transcriptBusy = true
 
-  try {
-    const { status, body } = await apiGet(token, path)
+  const answer = await transcriptResource.load(path, key)
 
-    if (ticket !== transcriptTicket) {
-      return
-    }
-
-    if (status === 401) {
-      stopAll()
-      return
-    }
-
-    session.transcript = { key, status, body }
-  } catch (error) {
-    if (ticket !== transcriptTicket) {
-      return
-    }
-
-    session.transcript = { key, status: 0, body: { error: `Cannot reach the server: ${error.message}` } }
+  if (!answer) {
+    return
   }
 
+  session.transcript = answer
   transcriptBusy = false
   scheduleFollow()
   scheduleRender()
@@ -566,7 +501,7 @@ function loadTranscript() {
     session.transcript = { key, status: null, body: null }
   }
 
-  fetchTranscript(key, transcriptTicket)
+  fetchTranscript(key)
 }
 
 // The fetch after following stops shows the end of the log and the final report.
@@ -598,38 +533,26 @@ function panelRuns() {
     .filter(Boolean)
 }
 
-async function fetchPanel(run, ticket) {
+async function fetchPanel(run) {
   const current = session
   const path = `${apiPath(route.r, 'runs', run.run)}?from=end&limit=${PANEL_ITEMS}`
-  let tail
 
   panelsBusy.add(run.run)
 
-  try {
-    const { status, body } = await apiGet(token, path)
-
-    tail = { status, body, runStatus: run.status }
-  } catch (error) {
-    tail = { status: 0, body: { error: `Cannot reach the server: ${error.message}` }, runStatus: run.status }
-  }
+  const answer = await panelResource.load(path, run.run)
 
   panelsBusy.delete(run.run)
 
-  if (ticket !== panelTicket || current !== session) {
+  if (!answer || current !== session) {
     return
   }
 
-  if (tail.status === 401) {
-    stopAll()
-    return
-  }
-
-  session.panels.set(run.run, tail)
+  session.panels.set(run.run, { ...answer, runStatus: run.status })
   scheduleRender()
 }
 
 function stopPanels() {
-  panelTicket += 1
+  panelResource.cancel()
   clearTimeout(panelTimer)
   panelTimer = null
   panelsBusy.clear()
@@ -641,17 +564,11 @@ function schedulePanelPoll() {
     return
   }
 
-  const ticket = panelTicket
-
   panelTimer = setTimeout(() => {
     panelTimer = null
 
-    if (ticket !== panelTicket) {
-      return
-    }
-
     for (const run of panelRuns().filter((item) => item.status === 'running' && !panelsBusy.has(item.run))) {
-      fetchPanel(run, ticket)
+      fetchPanel(run)
     }
 
     schedulePanelPoll()
@@ -680,7 +597,7 @@ function syncPanels() {
       session.panels.set(run.run, { status: null, body: null, runStatus: run.status })
     }
 
-    fetchPanel(run, panelTicket)
+    fetchPanel(run)
   }
 
   schedulePanelPoll()
@@ -717,7 +634,7 @@ function nearBottom() {
 
 function failure() {
   const { status, error } = session.failure
-  const text = status === 404 ? 'unknown rollout' : (error ?? `The server answered ${status}.`)
+  const text = status === 404 ? 'unknown rollout' : (error ?? serverAnswered(status))
 
   document.title = 'rollout'
 
@@ -748,9 +665,7 @@ function context() {
     sending: session.sending,
     notice: session.notice,
     send: (command) => send(current, command),
-    openVerdicts,
-    openTranscript,
-    sourceDocs,
+    remembered: session.remembered,
     linkTo,
     linkWith,
     go,
