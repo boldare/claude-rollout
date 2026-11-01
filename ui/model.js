@@ -1,3 +1,4 @@
+// These mirror lib/kinds.mjs, which the browser cannot import. test/kinds.test.mjs keeps them equal.
 export const STATES = [
   'pending',
   'briefing',
