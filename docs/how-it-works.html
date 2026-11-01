@@ -994,12 +994,12 @@
         <dl class="kv">
           <dt>Environment</dt>
           <dd>
-            Yours, with <a href="manifest.html#repo-pathPrepend"><code>repo.pathPrepend</code></a> first on <code>PATH</code>, plus the
-            <code>ROLLOUT_*</code> variables, <code>GH_REPO</code> pinned to <code>repo.github</code>, no <code>GH_HOST</code> and no npm
-            credentials. With a bot token also its <code>GH_TOKEN</code>, an empty <code>GITHUB_TOKEN</code>, a
-            <code>GH_CONFIG_DIR</code> that points at an empty directory and <code>GIT_TERMINAL_PROMPT=0</code>. Every agent gets
-            <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>, and the verifier, the brief writers and the delegate
-            <code>CLAUDE_CODE_PROMPT_CACHE_TTL=5m</code>.
+            Yours, with <a href="manifest.html#repo-pathPrepend"><code>repo.pathPrepend</code></a> first on <code>PATH</code>, plus
+            <code>ROLLOUT_ROLE</code> and no other <code>ROLLOUT_*</code> variable, <code>GH_REPO</code> pinned to <code>repo.github</code>,
+            no <code>GH_HOST</code> and no npm credentials. With a bot token also its <code>GH_TOKEN</code>, an empty
+            <code>GITHUB_TOKEN</code>, a <code>GH_CONFIG_DIR</code> that points at an empty directory and
+            <code>GIT_TERMINAL_PROMPT=0</code>. Every agent gets <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>, and the verifier, the brief
+            writers and the delegate <code>CLAUDE_CODE_PROMPT_CACHE_TTL=5m</code>.
           </dd>
           <dt>Context</dt>
           <dd>

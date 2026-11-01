@@ -3,111 +3,330 @@
 // exits 2 (blocked, stderr goes back to the agent) when a Bash command could
 // merge, publish, rewrite shared history, push anywhere but the PR branch,
 // switch off the guard rails, drop or redirect the agents' GitHub identity,
-// leave the manifest's repository or drive the rollout itself. A payload the
-// guard cannot read, a command too long to check and an error of its own also
-// exit 2 with a reason. A PreToolUse hook blocks only with that code, so the
-// hook command (lib/settings.mjs) turns any other exit, such as a crash or
-// running out of memory, into 2 as well.
+// leave the manifest's repository or drive the rollout itself. Its context,
+// the rollout directory, the skill, the rollout's name, the repository and
+// the push branch, comes from the hook command (lib/settings.mjs), not from
+// the agents' environment, so no agent holds those paths in a variable. It
+// refuses commands built by shell expansion in the positions it decides on,
+// because it cannot read what the shell would run there. A payload the guard
+// cannot read, a hook command it cannot parse, a command too long to check
+// and an error of its own also exit 2 with a reason. A PreToolUse hook blocks
+// only with that code, so the hook command turns any other exit, such as a
+// crash or running out of memory, into 2 as well.
 //
 // A regex guard is a seatbelt, not a sandbox. The guarantees that matter are
 // also enforced elsewhere: the pre-push hook, no npm credentials in the agent
 // environment, and the driver re-checking every claim before it merges.
 import { readFileSync, realpathSync } from 'node:fs'
+import { basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseArgs } from 'node:util'
 
-// Splits a shell line into simple commands on ; & && || | newlines and
-// subshell or group markers. Quoting is not honoured on purpose: a forbidden
-// word inside a string still blocks.
-export function segments(command) {
-  return command
-    .split(/;|&&|\|\||\||&|\n|\$\(|`|\(|\)|\{|\}/)
-    .map((part) => part.trim())
-    .filter(Boolean)
+// A newline after an odd number of backslashes continues the line, so
+// `git pu\` + newline + `sh` reads as `git push`. After an even number the
+// backslashes are escaped and the newline ends the line, as in the shell.
+function joinContinuations(command) {
+  return command.replace(/(?<!\\)((?:\\\\)*)\\\n/g, '$1')
+}
+
+const CLOSERS = { '$(': ')', '(': ')', '${': '}', '{': '}', '`': '`' }
+const SPECIAL = /[$`(){};&|\n]/g
+const SEPARATORS = ';&|\n)}'
+
+// The parameter and operator a ${…} body starts with: `PWD`, `#name`,
+// `!name`, `arr[@]`, `x:-`, `f%%`. No class crosses a `{`, so the scans of
+// nested bodies never overlap.
+const PARAMETER = /[#!]?(?:[A-Za-z_]\w*|\d+|[@*#?!0-])?(?:\[[^\]\s{}()`;&|<>]*\])?(?::?[-=?+]|##?|%%?|\/[/#%]?|\^\^?|,,?|[@:*])?/y
+
+// Splits a shell line into simple commands on ; & && || | and newlines, in
+// one pass with a stack: a hook that times out lets the command run.
+// `$(…)`, `$((…))`, `${…}` and backticks are commands of their own and leave
+// a `$` in the command around them, so `git -C $(pwd) push` stays one call.
+// Plain parentheses and braces are commands of their own and leave a space.
+// A ${…} body loses its parameter and operator and the rest is read, because
+// quoting is not honoured: `echo '${x:-' ; git push ; echo '}'` runs the
+// push. An opener without a closer runs to the end, and a closer without an
+// opener splits. A forbidden word inside a string still blocks.
+export function readCommands(text) {
+  const commands = []
+  const stack = []
+  const open = { ')': 0, '}': 0, '`': 0 }
+  let current = { closer: null, text: '' }
+
+  function flush(frame) {
+    const command = frame.text.trim()
+
+    if (command) {
+      commands.push(command)
+    }
+
+    frame.text = ''
+  }
+
+  function enter(opener, mark) {
+    current.text += mark
+    stack.push(current)
+    current = { closer: CLOSERS[opener], text: '' }
+    open[current.closer] += 1
+  }
+
+  // Frames still open inside the one a closer ends are ended with it.
+  function leave(closer) {
+    let closed
+
+    do {
+      closed = current.closer
+      flush(current)
+      open[closed] -= 1
+      current = stack.pop()
+    } while (closed !== closer)
+  }
+
+  // Reads the special character at `at` and returns how many it used.
+  function step(at) {
+    const char = text[at]
+    const next = text[at + 1]
+
+    if (char === '$' && next === '(') {
+      enter('$(', '$')
+      return 2
+    }
+
+    if (char === '$' && next === '{') {
+      enter('${', '$')
+      PARAMETER.lastIndex = at + 2
+
+      return 2 + (PARAMETER.exec(text)?.[0].length ?? 0)
+    }
+
+    if (char === '`') {
+      if (open['`'] > 0) {
+        leave('`')
+      } else {
+        enter('`', '$')
+      }
+
+      return 1
+    }
+
+    if (char === '(' || char === '{') {
+      enter(char, ' ')
+    } else if ((char === ')' || char === '}') && open[char] > 0) {
+      leave(char)
+    } else if (SEPARATORS.includes(char)) {
+      flush(current)
+    } else {
+      current.text += char
+    }
+
+    return 1
+  }
+
+  let i = 0
+
+  while (i < text.length) {
+    SPECIAL.lastIndex = i
+    const found = SPECIAL.exec(text)
+    const at = found ? found.index : text.length
+
+    current.text += text.slice(i, at)
+    i = found ? at + step(at) : at
+  }
+
+  flush(current)
+
+  for (const frame of stack) {
+    flush(frame)
+  }
+
+  return commands
+}
+
+function unquote(text) {
+  return text.replace(/["'\\]/g, '')
 }
 
 // Quotes and backslashes are deleted so `sh -c "git push origin main"` is
-// read as the command inside it and `pu\\sh` or `p"u"sh` read as `push`.
-function tokens(segment) {
-  return segment
-    .replace(/["'\\]/g, '')
-    .split(/\s+/)
-    .filter(Boolean)
+// read as the command inside it and `pu\\sh` or `p"u"sh` read as `push`. The
+// raw words keep what only the shell's spelling shows: a leading `\` or `=`.
+function readWords(command) {
+  const words = []
+  const raws = []
+
+  for (const raw of command.split(/\s+/)) {
+    const word = unquote(raw)
+
+    if (word) {
+      words.push(word)
+      raws.push(raw)
+    }
+  }
+
+  return { words, raws }
+}
+
+// The guard decides on these words as written, so none may expand. `$` also
+// marks where readCommands took out a substitution.
+function readable(word, raw) {
+  return !word.includes('$') && !raw.startsWith('\\')
+}
+
+// The shell may expand a glob to a file name, and zsh expands `=git` to git's path.
+function isName(word, raw) {
+  return readable(word, raw) && !/[*?[]/.test(word) && !raw.startsWith('=')
+}
+
+// `[` and `[[` start a test.
+function isCommandName(word, raw) {
+  return isName(word, raw) || (readable(word, raw) && (word === '[' || word === '[['))
+}
+
+function firstUnreadable(words, raws, from) {
+  for (let i = from; i < words.length; i += 1) {
+    if (!readable(words[i], raws[i])) {
+      return i
+    }
+  }
+
+  return -1
 }
 
 function isTool(word, name) {
-  return word === name || word.endsWith(`/${name}`)
+  const lower = word.toLowerCase()
+
+  return lower === name || lower.endsWith(`/${name}`)
 }
 
-// Where the arguments of every occurrence of a tool in a segment start, global
-// flags (and their values) skipped: `git -C dir -c x=y push` → the index of
-// `push`. The arguments run to the end of the segment. Indices, not copies,
-// keep memory linear when a segment repeats the tool.
+// Where every occurrence of a tool in a command starts (call) and where its
+// arguments start (start), global flags and their values skipped:
+// `git -C dir -c x=y push` → the index of `git` and of `push`. The arguments
+// run to the end of the command. Indices, not copies, keep memory linear
+// when a command repeats the tool. A call can sit among another call's flags
+// (`git -c git -c …`), so the starts are read once, from the end.
 function invocations(words, name, flagsWithValue) {
-  const starts = []
+  const calls = []
 
-  words.forEach((word, index) => {
-    if (!isTool(word, name)) {
-      return
+  words.forEach((word, call) => {
+    if (isTool(word, name)) {
+      calls.push({ call, start: 0 })
     }
-
-    let start = index + 1
-
-    while (start < words.length && words[start].startsWith('-')) {
-      const flag = words[start]
-
-      start += 1
-
-      if (flagsWithValue.includes(flag) && start < words.length) {
-        start += 1
-      }
-    }
-
-    starts.push(start)
   })
 
-  return starts
-}
-
-// The first positionals after the subcommand, skipping flags and the values
-// of known value flags: `gh pr --repo o/r merge 12` → ['pr', 'merge', '12'].
-function positionals(args, flagsWithValue) {
-  const out = []
-
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]
-
-    if (arg.startsWith('-')) {
-      if (flagsWithValue.includes(arg)) {
-        i += 1
-      }
-
-      continue
-    }
-
-    out.push(arg)
+  if (calls.length === 0) {
+    return calls
   }
 
-  return out
+  // startFrom[i] is where the arguments start when words[i] is read as a flag.
+  const startFrom = new Array(words.length + 1)
+
+  startFrom[words.length] = words.length
+
+  for (let i = words.length - 1; i >= 0; i -= 1) {
+    if (!words[i].startsWith('-')) {
+      startFrom[i] = i
+    } else if (flagsWithValue.includes(words[i]) && i + 1 < words.length) {
+      startFrom[i] = startFrom[i + 2]
+    } else {
+      startFrom[i] = startFrom[i + 1]
+    }
+  }
+
+  for (const call of calls) {
+    call.start = startFrom[call.call + 1]
+  }
+
+  return calls
+}
+
+// The flags between a call and its subcommand, read as invocations() reads
+// them, each with the index of its value or -1. A flag in `seen` was read
+// for an earlier call, and so were the flags after it, so reading stops.
+function globalOptions(words, { call, start }, flagsWithValue, seen) {
+  const options = []
+  let i = call + 1
+
+  while (i < start && !seen.has(i)) {
+    const flag = i
+    let value = -1
+
+    seen.add(flag)
+    i += 1
+
+    if (flagsWithValue.includes(words[flag]) && i < start) {
+      value = i
+      i += 1
+    }
+
+    options.push({ flag, value })
+  }
+
+  return options
+}
+
+// The indices of the first `limit` positionals from words[from], skipping
+// flags and the values of known value flags: `gh pr --repo o/r merge 12` →
+// the indices of `pr` and `merge`.
+function positionals(words, from, flagsWithValue, limit) {
+  const found = []
+
+  for (let i = from; i < words.length && found.length < limit; i += 1) {
+    if (!words[i].startsWith('-')) {
+      found.push(i)
+    } else if (flagsWithValue.includes(words[i])) {
+      i += 1
+    }
+  }
+
+  return found
+}
+
+// The index after the options from words[from], `--` included.
+function pastOptions(words, from) {
+  let i = from
+
+  while (i < words.length && words[i].startsWith('-')) {
+    i += 1
+
+    if (words[i - 1] === '--') {
+      break
+    }
+  }
+
+  return i
 }
 
 // Off limits in every command: switches that would disable git hooks or
-// reroute pushes, the push markers, and the environment the guard relies on.
-const ALWAYS = [
-  /\.claude\/skills\/rollout(?![\w.-])/,
-  /GIT_CONFIG_/,
-  /--config-env/,
-  /(GIT_DIR|GIT_WORK_TREE)\+?=/,
-  /--git-dir|--work-tree/,
-  /GIT_SSH|(GH_TOKEN|GH_CONFIG_DIR|GITHUB_TOKEN|GH_HOST|GH_REPO)\+?=/,
-  /ROLLOUT_[A-Z_]*\+?=/,
-  /\bunset\s+[^\n]*ROLLOUT_/,
-  /\benv\b[^\n]*\s-u\s*ROLLOUT_/,
-  /(\.git|\/worktrees\/[^/\s]+)\/rollout-(branch|pushurl|ready)/,
+// reroute pushes, the push markers, and the variables that keep the CLI from
+// taking orders from agents. Each pattern comes with a command it refuses.
+export const ALWAYS = [
+  { pattern: /\.claude\/skills\/rollout(?![\w.-])/, sample: 'cat ~/.claude/skills/rollout/SKILL.md' },
+  { pattern: /GIT_CONFIG_/, sample: 'GIT_CONFIG_COUNT=1 git status' },
+  { pattern: /--config-env/, sample: 'git --config-env=core.hooksPath=HOOKS status' },
+  { pattern: /(GIT_DIR|GIT_WORK_TREE)\+?=/, sample: 'GIT_DIR=/tmp/x/.git git status' },
+  { pattern: /--git-dir|--work-tree/, sample: 'git --work-tree /tmp/x status' },
+  { pattern: /GIT_SSH|(GH_TOKEN|GH_CONFIG_DIR|GITHUB_TOKEN|GH_HOST|GH_REPO)\+?=/, sample: 'GH_TOKEN= gh pr list' },
+  { pattern: /ROLLOUT_[A-Z_]*\+?=/, sample: 'ROLLOUT_ROLE= node bin/rollout.mjs stop' },
+  { pattern: /\bunset\s+[^\n]*ROLLOUT_/, sample: 'unset ROLLOUT_ROLE' },
+  { pattern: /\benv\b[^\n]*\s-u\s*ROLLOUT_/, sample: 'env -u ROLLOUT_ROLE node bin/rollout.mjs stop' },
+  { pattern: /(\.git|\/worktrees\/[^/\s]+)\/rollout-(branch|pushurl|ready)/, sample: 'touch .git/rollout-ready' },
 ]
 
 // Git settings that would switch off the hooks or reroute pushes, whether set
 // with `git config` or with a `-c key=value` override.
 const GIT_SETTINGS = /hookspath|credential|pushurl|sshcommand|(^|[\s="'.])url\.|(^|[\s="'])remote\.|(^|[\s="'])alias\./i
+
+// One setting for each part of GIT_SETTINGS.
+export const GIT_SETTING_SAMPLES = [
+  'core.hooksPath',
+  'credential.helper',
+  'remote.origin.pushurl',
+  'core.sshCommand',
+  'url.https://example.com/.insteadOf',
+  'remote.origin.url',
+  'alias.p',
+]
+
+const CONTROL_PLANE = 'the rollout control plane, its hooks and git hook settings are off limits to agents'
 
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -138,6 +357,65 @@ function contextPatterns({ dir, home, name } = {}) {
 
   return patterns
 }
+
+function matchesAny(text, context) {
+  return [...ALWAYS.map(({ pattern }) => pattern), ...contextPatterns(context)].some((pattern) => pattern.test(text))
+}
+
+// The patterns read the command once more without quotes and backslashes, on
+// both sides, so `de""mo` and `roll\out` name what they spell. Some patterns
+// cost the square of a line's length, so the second read runs only when
+// deleting changed something.
+function offLimits(joined, plain, context) {
+  const plainContext = {
+    dir: context.dir && unquote(context.dir),
+    home: context.home && unquote(context.home),
+    name: context.name && unquote(context.name),
+  }
+
+  const changed = plain !== joined || ['dir', 'home', 'name'].some((key) => plainContext[key] !== context[key])
+
+  return matchesAny(joined, context) || (changed && matchesAny(plain, plainContext))
+}
+
+const WRITE_IT_OUT = 'Write the command out. For quoted program text, use a script file or the Write tool'
+
+function builtByExpansion(what) {
+  return `${what} is built by shell expansion, so the guard cannot read it. ${WRITE_IT_OUT}`
+}
+
+// Rollouts sit right under one root, so a glob or an expansion there could
+// reach any of them. The root is the parent of the rollout directory.
+function rolloutsRootPattern(dir) {
+  const root = (dir && basename(dirname(dir))) || '.rollouts'
+
+  return new RegExp(`(?<![\\w.-])${escapeRegExp(root)}/(?![\\w.-]*(?:[/\\s;&|)<>]|$))`)
+}
+
+// Rules on the whole command, its quotes and backslashes deleted. The brace
+// pattern has no greedy run on both sides of the comma, which would cost the
+// square of the length on `{,,,,…`.
+function wholeCommandProblem(plain, context) {
+  if (/\$ROLLOUT_|\$\{!?ROLLOUT_/.test(plain)) {
+    return 'a $ROLLOUT_ variable is refused: the rollout control plane is off limits to agents in any spelling'
+  }
+
+  if (/\$\{?IFS/.test(plain)) {
+    return `$IFS splits words that the guard reads as one, so it is refused. ${WRITE_IT_OUT}`
+  }
+
+  if (/\{[^\s{},]*,[^\s{}]*\}/.test(plain)) {
+    return `brace expansion such as {a,b} builds words the guard cannot read, so it is refused. A space after the comma is fine, as in {a, b} in jq or JavaScript. ${WRITE_IT_OUT}`
+  }
+
+  if (rolloutsRootPattern(context.dir).test(plain)) {
+    return 'only a plain rollout name may follow the rollouts root, not a glob or an expansion: the rollout control plane is off limits to agents in any spelling'
+  }
+
+  return null
+}
+
+const GH_GLOBAL_FLAGS = ['-R', '--repo', '--hostname']
 
 const GH_VALUE_FLAGS = [
   '-R',
@@ -174,7 +452,7 @@ const GH_VALUE_FLAGS = [
   '--head',
 ]
 
-const GH_FORBIDDEN = [
+export const GH_FORBIDDEN = [
   'repo',
   'release',
   'secret',
@@ -190,12 +468,18 @@ const GH_FORBIDDEN = [
   'attestation',
 ]
 
+export const GH_PR_FORBIDDEN = ['merge', 'review', 'close', 'reopen', 'lock', 'unlock']
+
+// Options that give gh api a body, which makes the call a POST.
+export const GH_API_FIELDS = ['-f', '-F', '--field', '--raw-field', '--input']
+const GH_API_FIELD = new RegExp(`^(${GH_API_FIELDS.join('|')})`)
+
 function checkGh(words, { repo, placeholders }) {
   let api = false
 
-  for (const start of invocations(words, 'gh', ['-R', '--repo', '--hostname'])) {
+  for (const { start } of invocations(words, 'gh', GH_GLOBAL_FLAGS)) {
     const args = words.slice(start)
-    const [sub, action] = positionals(args, GH_VALUE_FLAGS)
+    const [sub, action] = positionals(words, start, GH_VALUE_FLAGS, 2).map((index) => words[index])
 
     if (GH_FORBIDDEN.includes(sub)) {
       return `gh ${sub} is not allowed for rollout agents`
@@ -205,7 +489,7 @@ function checkGh(words, { repo, placeholders }) {
       return 'gh credentials stay with gh; only `gh auth status` (without the token) is allowed'
     }
 
-    if (sub === 'pr' && ['merge', 'review', 'close', 'reopen', 'lock', 'unlock'].includes(action)) {
+    if (sub === 'pr' && GH_PR_FORBIDDEN.includes(action)) {
       return 'merging, reviewing and closing PRs belongs to the driver'
     }
 
@@ -218,7 +502,7 @@ function checkGh(words, { repo, placeholders }) {
 
       const joined = args.join(' ')
       const method = joined.match(/(?:-X|--method)[\s=]*([A-Za-z]+)/)?.[1]
-      const hasFields = args.some((arg) => /^(-f|-F|--field|--raw-field|--input)/.test(arg))
+      const hasFields = args.some((arg) => GH_API_FIELD.test(arg))
 
       if ((method && method.toUpperCase() !== 'GET') || (!method && hasFields)) {
         return 'gh api is read-only for rollout agents (GET only)'
@@ -267,8 +551,9 @@ function climbs(path) {
   return path.split('/').includes('..') || /%2e|%2f/i.test(path)
 }
 
-// segments() splits `repos/{owner}/{repo}/pulls` on the braces and leaves a
-// bare `repos/`. gh fills the placeholders from the pinned GH_REPO.
+// readCommands() reads `{owner}` and `{repo}` in `repos/{owner}/{repo}/pulls`
+// as commands of their own and leaves a bare `repos/`. gh fills the
+// placeholders from the pinned GH_REPO.
 const REPOS_PATH = /^[./]*repos\//i
 
 function apiPathProblem(word, repo) {
@@ -283,7 +568,7 @@ function apiPathProblem(word, repo) {
   }
 
   if (!repo) {
-    return `ROLLOUT_REPO is not set, so gh api ${word} is refused. Use repos/{owner}/{repo}/… instead`
+    return `the guard has no --repo, so gh api ${word} is refused. Use repos/{owner}/{repo}/… instead`
   }
 
   const [owner, name] = word.slice(prefix.length).split(/[?#]/)[0].split('/')
@@ -295,7 +580,7 @@ function apiPathProblem(word, repo) {
   return null
 }
 
-// The arguments of every gh call in a segment run to its end, so one scan
+// The arguments of every gh call in a command run to its end, so one scan
 // from the first call reads the flags and paths of all of them.
 function checkGhRepo(words, start, repo, api) {
   for (let i = start; i < words.length; i += 1) {
@@ -312,7 +597,7 @@ function checkGhRepo(words, start, repo, api) {
       }
 
       if (!repo) {
-        return `ROLLOUT_REPO is not set, so gh ${shown} is refused. ${hint}`
+        return `the guard has no --repo, so gh ${shown} is refused. ${hint}`
       }
 
       if (!value) {
@@ -336,26 +621,26 @@ function checkGhRepo(words, start, repo, api) {
   return null
 }
 
-// segments() drops braces, so the placeholders and the path after them are
-// read on the whole command. Alone, {owner} or {repo} could name another
-// repository of the same owner or another owner's repository of that name.
-function placeholderProblem(command) {
-  const text = command.replace(/["'\\]/g, '')
-
-  for (const match of text.matchAll(/\{owner\}\/\{repo\}(\S*)/g)) {
+// readCommands() takes the braces out of a word, so the placeholders and the
+// path after them are read on the whole command. Alone, {owner} or {repo}
+// could name another repository of the same owner or another owner's
+// repository of that name.
+function placeholderProblem(plain) {
+  for (const match of plain.matchAll(/\{owner\}\/\{repo\}(\S*)/g)) {
     if (climbs(match[1])) {
       return `gh api {owner}/{repo}${match[1]} could climb out of the repository with .. or an encoded dot or slash, so it is refused`
     }
   }
 
-  if (/\{(owner|repo)\}/.test(text.replaceAll('{owner}/{repo}', ''))) {
+  if (/\{(owner|repo)\}/.test(plain.replaceAll('{owner}/{repo}', ''))) {
     return 'gh api placeholders {owner} and {repo} are allowed only together as {owner}/{repo}, because alone they could reach another repository'
   }
 
   return null
 }
 
-// The agents' GitHub identity and repository, and the guard's own context.
+// The agents' GitHub identity and repository, and the variables that keep
+// the CLI from taking orders from agents.
 const PROTECTED = 'GH_TOKEN|GITHUB_TOKEN|GH_CONFIG_DIR|GH_REPO|GH_HOST|ROLLOUT_\\w*'
 
 // A protected name as an argument: bare, assigned (`=`, `+=`, `[0]=`),
@@ -365,7 +650,7 @@ const PROTECTED_NAME = new RegExp(`^(${PROTECTED})$`)
 
 function protectedReason(name) {
   if (name.startsWith('ROLLOUT_')) {
-    return `${name} is the guard's context and keeps the CLI from taking orders from agents`
+    return `${name} is a ROLLOUT_* variable, and these keep the CLI from taking orders from agents`
   }
 
   return `${name} keeps agents on their own GitHub login and the manifest's repository`
@@ -641,8 +926,292 @@ function checkEnvCommands(words) {
   return null
 }
 
-const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'npx', 'pnpx', 'bun', 'bunx']
-const PUBLISH_WORDS = [
+// Words before the command word. `time -p` also takes an option.
+const KEYWORDS = new Set(['!', 'if', 'then', 'elif', 'else', 'do', 'while', 'until', 'time'])
+const ASSIGNMENT = /^[A-Za-z_]\w*(\[[^\]]*\])?\+?=/
+
+// The index of the word the shell runs, past redirections, assignments and
+// keywords, or -1 when there is none.
+function commandWordAt(words, from) {
+  let i = from
+
+  while (i < words.length) {
+    const word = words[i]
+    const redirect = redirectWidth(words, i)
+
+    if (redirect > 0) {
+      i += redirect
+    } else if (word === 'time') {
+      i = pastOptions(words, i + 1)
+    } else if (KEYWORDS.has(word) || ASSIGNMENT.test(word)) {
+      i += 1
+    } else {
+      return i
+    }
+  }
+
+  return -1
+}
+
+// Builtins and tools that run the next word as a command, past their own
+// options and assignments. Returns where that command starts, or null.
+function wrappedCommand(words, at) {
+  const name = words[at].split(/[<>]/)[0]
+
+  if (isTool(name, 'env')) {
+    return readEnvOptions(words, at + 1)
+  }
+
+  if (name === 'exec') {
+    return readExecOptions(words, at + 1)
+  }
+
+  if (name === 'command' || name === 'builtin' || isTool(name, 'nohup')) {
+    return { problem: null, end: pastOptions(words, at + 1) }
+  }
+
+  return null
+}
+
+function commandWordProblem(words, raws) {
+  let at = commandWordAt(words, 0)
+
+  while (at !== -1) {
+    if (!isCommandName(words[at], raws[at])) {
+      return builtByExpansion(`the command word ${raws[at]}`)
+    }
+
+    const wrapped = wrappedCommand(words, at)
+
+    // checkEnvCommands gives the reason for env's and exec's own options.
+    if (!wrapped || wrapped.problem) {
+      return null
+    }
+
+    at = commandWordAt(words, wrapped.end)
+  }
+
+  return null
+}
+
+const SHELLS = ['sh', 'bash', 'zsh', 'dash', 'ksh', 'csh']
+
+// How many values the options in a cluster take: -o and -O take one each.
+function optionValues(word) {
+  return /^[-+][A-Za-z]+$/.test(word) ? word.replace(/[^oO]/g, '').length : 0
+}
+
+// A shell reads all its options before the string of -c, so `bash -c -e "$x"`
+// and `bash -co errexit "$x"` both run $x. Returns the string's index or -1.
+function shellStringAt(words, cluster) {
+  let values = optionValues(words[cluster])
+
+  for (let i = cluster + 1; i < words.length; i += 1) {
+    const word = words[i]
+
+    if (values > 0) {
+      values -= 1
+    } else if (word === '--') {
+      return i + 1 < words.length ? i + 1 : -1
+    } else if (word === '--rcfile' || word === '--init-file') {
+      values = 1
+    } else if (/^[-+]/.test(word)) {
+      values = optionValues(word)
+    } else {
+      return i
+    }
+  }
+
+  return -1
+}
+
+// eval and `sh -c` run a string as a command, so the guard must read it.
+function shellStringProblem(words, raws) {
+  const evalAt = words.indexOf('eval')
+  const unreadable = evalAt === -1 ? -1 : firstUnreadable(words, raws, evalAt + 1)
+
+  if (unreadable !== -1) {
+    return builtByExpansion(`the argument ${raws[unreadable]} of eval`)
+  }
+
+  let shell = null
+
+  for (let i = 0; i < words.length; i += 1) {
+    if (SHELLS.some((name) => isTool(words[i], name))) {
+      shell = words[i]
+    } else if (shell && /^-[A-Za-z]*c[A-Za-z]*$/.test(words[i])) {
+      const at = shellStringAt(words, i)
+
+      if (at !== -1 && !isCommandName(words[at], raws[at])) {
+        return builtByExpansion(`the command ${raws[at]} of ${shell} -c`)
+      }
+
+      shell = null
+    }
+  }
+
+  return null
+}
+
+const GIT_VALUE_FLAGS = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env', '--super-prefix']
+
+// Git subcommands, config and push arguments, and the global options but the
+// directory of -C are where git decides what to change.
+function gitExpansionProblem(words, raws) {
+  const seen = new Set()
+  let checkedFrom = Infinity
+
+  for (const call of invocations(words, 'git', GIT_VALUE_FLAGS)) {
+    for (const { flag, value } of globalOptions(words, call, GIT_VALUE_FLAGS, seen)) {
+      if (!readable(words[flag], raws[flag])) {
+        return builtByExpansion(`the git option ${raws[flag]}`)
+      }
+
+      if (value !== -1 && words[flag] !== '-C' && !readable(words[value], raws[value])) {
+        return builtByExpansion(`the git option ${raws[flag]} ${raws[value]}`)
+      }
+    }
+
+    const { start } = call
+
+    if (start >= words.length) {
+      continue
+    }
+
+    const sub = words[start]
+
+    if (!isName(sub, raws[start])) {
+      return builtByExpansion(`the git subcommand ${raws[start]}`)
+    }
+
+    // Calls come in order, so the first config or push covers the words of every later one.
+    if ((sub === 'config' || sub === 'push') && start < checkedFrom) {
+      checkedFrom = start
+
+      const unreadable = firstUnreadable(words, raws, start + 1)
+
+      if (unreadable !== -1) {
+        return builtByExpansion(`the git ${sub} argument ${raws[unreadable]}`)
+      }
+    }
+
+    const [action] = sub === 'remote' ? positionals(words, start + 1, [], 1) : []
+
+    if (action !== undefined && !isName(words[action], raws[action])) {
+      return builtByExpansion(`the git remote action ${raws[action]}`)
+    }
+  }
+
+  return null
+}
+
+function ghExpansionProblem(words, raws) {
+  let checkedFrom = Infinity
+
+  for (const { call, start } of invocations(words, 'gh', GH_GLOBAL_FLAGS)) {
+    const [sub, action] = positionals(words, start, GH_VALUE_FLAGS, 2)
+
+    if (sub === undefined) {
+      continue
+    }
+
+    if (!isName(words[sub], raws[sub])) {
+      return builtByExpansion(`the gh subcommand ${raws[sub]}`)
+    }
+
+    if (words[sub] !== 'api') {
+      if (action !== undefined && !isName(words[action], raws[action])) {
+        return builtByExpansion(`the gh ${words[sub]} action ${raws[action]}`)
+      }
+
+      continue
+    }
+
+    // The endpoint may hold a `?`, which starts its query string. Every
+    // argument counts: an expanded word can become -X, --method or a field.
+    if (call < checkedFrom) {
+      checkedFrom = call
+
+      const unreadable = firstUnreadable(words, raws, call + 1)
+
+      if (unreadable !== -1) {
+        return builtByExpansion(`the gh api argument ${raws[unreadable]}`)
+      }
+    }
+  }
+
+  return null
+}
+
+export const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'npx', 'pnpx', 'bun', 'bunx']
+const PACKAGE_MANAGER_VALUE_FLAGS = ['-C', '--dir', '--filter', '-F', '-w', '--workspace']
+
+// The script or package a manager runs comes right after its subcommand.
+// Globs stay free there: `npx eslint 'src/**'`.
+function packageManagerExpansionProblem(words, raws) {
+  for (const name of PACKAGE_MANAGERS) {
+    for (const { start } of invocations(words, name, PACKAGE_MANAGER_VALUE_FLAGS)) {
+      if (start >= words.length) {
+        continue
+      }
+
+      if (!isName(words[start], raws[start])) {
+        return builtByExpansion(`the ${name} subcommand ${raws[start]}`)
+      }
+
+      const [first] = positionals(words, start + 1, [], 1)
+
+      if (first !== undefined && !readable(words[first], raws[first])) {
+        return builtByExpansion(`the ${name} ${words[start]} argument ${raws[first]}`)
+      }
+    }
+  }
+
+  return null
+}
+
+// The changesets CLI under any name it runs by: `changeset@latest`, a bin
+// path, `@changesets/cli` or its `bin.js`. `.changeset/pre.json` is not it.
+const CHANGESET_TOOL = /(^|\/)(changeset(@[^/]*)?|@changesets\/cli(@[^/]*)?(\/.*)?)$/i
+
+export const CHANGESET_RELEASE = ['version', 'publish', 'tag', 'pre']
+
+function changesetExpansionProblem(words, raws) {
+  const tool = words.findIndex((word) => CHANGESET_TOOL.test(word))
+
+  if (tool === -1) {
+    return null
+  }
+
+  const unreadable = firstUnreadable(words, raws, tool + 1)
+
+  if (unreadable !== -1) {
+    return builtByExpansion(`the changeset argument ${raws[unreadable]}`)
+  }
+
+  const [first] = positionals(words, tool + 1, [], 1)
+
+  if (first !== undefined && !isName(words[first], raws[first])) {
+    return builtByExpansion(`the changeset command ${raws[first]}`)
+  }
+
+  return null
+}
+
+// Run before the tool rules, so an expanded word gets this reason and not the
+// reason of a rule it slipped past.
+function expansionProblem(words, raws) {
+  return (
+    commandWordProblem(words, raws) ??
+    shellStringProblem(words, raws) ??
+    gitExpansionProblem(words, raws) ??
+    ghExpansionProblem(words, raws) ??
+    packageManagerExpansionProblem(words, raws) ??
+    changesetExpansionProblem(words, raws)
+  )
+}
+
+export const PUBLISH_WORDS = [
   'publish',
   'release',
   'version-packages',
@@ -668,7 +1237,7 @@ function checkPackageManagers(words) {
   }
 
   for (const name of PACKAGE_MANAGERS) {
-    for (const start of invocations(words, name, ['-C', '--dir', '--filter', '-F', '-w', '--workspace'])) {
+    for (const { start } of invocations(words, name, PACKAGE_MANAGER_VALUE_FLAGS)) {
       if (words[start] === 'version') {
         return `${name} version is not allowed: versions are bumped by the release PR`
       }
@@ -677,11 +1246,6 @@ function checkPackageManagers(words) {
 
   return null
 }
-
-// The changesets CLI under any name it runs by: `changeset@latest`, a bin
-// path, `@changesets/cli` or its `bin.js`. `.changeset/pre.json` is not it.
-const CHANGESET_TOOL = /(^|\/)(changeset(@[^/]*)?|@changesets\/cli(@[^/]*)?(\/.*)?)$/
-const CHANGESET_RELEASE = ['version', 'publish', 'tag', 'pre']
 
 // Any later release word counts, so flags such as `--cwd .` or `--` before
 // the subcommand cannot hide it.
@@ -701,15 +1265,15 @@ function checkChangesets(words) {
   return `changeset ${hit} belongs to the release PR`
 }
 
+// Push options a worker may not use. `--repo` counts in every spelling, `--repo=x` included.
+export const PUSH_FORBIDDEN = ['--force', '-f', '--mirror', '--all', '--tags', '--delete', '-d', '--prune', '--no-verify', '--repo']
+
 function checkPush(args, branch) {
   const options = args.filter((arg) => arg.startsWith('-'))
   const positional = args.filter((arg) => !arg.startsWith('-'))
 
   for (const option of options) {
-    if (
-      ['--force', '-f', '--mirror', '--all', '--tags', '--delete', '-d', '--prune', '--no-verify'].includes(option) ||
-      option.startsWith('--repo')
-    ) {
+    if (PUSH_FORBIDDEN.includes(option) || option.startsWith('--repo')) {
       return `git push ${option} is not allowed (use --force-with-lease on your own branch only)`
     }
   }
@@ -748,7 +1312,7 @@ function checkPush(args, branch) {
   return null
 }
 
-const VERIFIER_GIT_FORBIDDEN = [
+export const VERIFIER_GIT_FORBIDDEN = [
   'commit',
   'push',
   'rebase',
@@ -769,37 +1333,52 @@ const VERIFIER_GIT_FORBIDDEN = [
   'worktree',
 ]
 
+export const CONFIG_SECTION_FLAGS = ['--remove-section', '--rename-section']
+export const REMOTE_FORBIDDEN = ['add', 'set-url', 'rename', 'remove', 'rm', 'set-head']
+export const GIT_FORBIDDEN = ['update-ref', 'send-pack', 'http-push', 'receive-pack', 'filter-branch', 'replace']
+
+// Refused for the worker with `git tag`.
+export const BRANCH_FORBIDDEN = ['-D', '-d', '--delete', '-m', '-M', '--move']
+
+// The setting of `-c key=value` or `-ckey=value`, or null.
+function overriddenSetting(words, { flag, value }) {
+  if (words[flag] === '-c') {
+    return value === -1 ? null : words[value]
+  }
+
+  return words[flag].startsWith('-c') ? words[flag].slice(2) : null
+}
+
 function checkGit(words, role, branch) {
-  for (const start of invocations(words, 'git', [
-    '-C',
-    '-c',
-    '--git-dir',
-    '--work-tree',
-    '--namespace',
-    '--exec-path',
-    '--config-env',
-    '--super-prefix',
-  ])) {
-    const sub = words[start]
+  const seen = new Set()
+
+  for (const call of invocations(words, 'git', GIT_VALUE_FLAGS)) {
+    const settings = globalOptions(words, call, GIT_VALUE_FLAGS, seen).map((option) => overriddenSetting(words, option))
+
+    if (settings.some((setting) => setting !== null && GIT_SETTINGS.test(setting))) {
+      return 'overriding git settings for hooks, credentials or remotes is not allowed'
+    }
+
+    const sub = words[call.start]
 
     if (!sub) {
       continue
     }
 
-    const rest = words.slice(start + 1)
+    const rest = words.slice(call.start + 1)
 
-    if (
-      sub === 'config' &&
-      (rest.some((arg) => ['--remove-section', '--rename-section'].includes(arg)) || GIT_SETTINGS.test(rest.join(' ')))
-    ) {
+    if (sub === 'config' && (rest.some((arg) => CONFIG_SECTION_FLAGS.includes(arg)) || GIT_SETTINGS.test(rest.join(' ')))) {
       return 'changing git settings for hooks, credentials or remotes is not allowed'
     }
 
-    if (sub === 'remote' && ['add', 'set-url', 'rename', 'remove', 'rm', 'set-head'].includes(rest[0])) {
-      return `git remote ${rest[0]} is not allowed: agents push to origin only`
+    // git remote takes -v before its action.
+    const action = sub === 'remote' ? words[positionals(words, call.start + 1, [], 1)[0]] : undefined
+
+    if (REMOTE_FORBIDDEN.includes(action)) {
+      return `git remote ${action} is not allowed: agents push to origin only`
     }
 
-    if (['update-ref', 'send-pack', 'http-push', 'receive-pack', 'filter-branch', 'replace'].includes(sub)) {
+    if (GIT_FORBIDDEN.includes(sub)) {
       return `git ${sub} is not allowed for rollout agents`
     }
 
@@ -817,7 +1396,7 @@ function checkGit(words, role, branch) {
 
     if (sub === 'push') {
       if (!branch) {
-        return 'ROLLOUT_BRANCH is not set; refusing to push'
+        return 'the guard has no --branch, so it refuses to push'
       }
 
       const problem = checkPush(rest, branch)
@@ -827,7 +1406,7 @@ function checkGit(words, role, branch) {
       }
     }
 
-    if (sub === 'tag' || (sub === 'branch' && rest.some((arg) => ['-D', '-d', '--delete', '-m', '-M', '--move'].includes(arg)))) {
+    if (sub === 'tag' || (sub === 'branch' && rest.some((arg) => BRANCH_FORBIDDEN.includes(arg)))) {
       return `git ${sub} ${rest.join(' ')} is not allowed`
     }
   }
@@ -835,12 +1414,56 @@ function checkGit(words, role, branch) {
   return null
 }
 
+export const HTTP_TOOLS = ['curl', 'wget', 'http', 'https', 'xh']
+export const HTTP_HOSTS = ['api.github.com', 'uploads.github.com', 'registry.npmjs.org', 'registry.yarnpkg.com']
+const HTTP_TOOL = new RegExp(`\\b(${HTTP_TOOLS.join('|')})\\b`, 'i')
+const HTTP_HOST = new RegExp(HTTP_HOSTS.map(escapeRegExp).join('|'), 'i')
+
+// gh calls that write to GitHub, refused for the verifier on top of the rest.
+export const VERIFIER_GH_FORBIDDEN = ['pr create', 'pr edit', 'pr comment', 'pr ready', 'issue']
+const VERIFIER_GH_ACTION = new RegExp(`\\b(${VERIFIER_GH_FORBIDDEN.map((action) => action.replace(' ', '\\s+')).join('|')})\\b`)
+
+// The tool's name counts in any case, its subcommands only as written.
+function writesGitHub(line) {
+  const at = line.search(/\bgh\b/i)
+
+  return at !== -1 && VERIFIER_GH_ACTION.test(line.slice(at))
+}
+
+function toolProblem(words, role, branch, gh) {
+  const line = words.join(' ')
+
+  if (HTTP_TOOL.test(line) && HTTP_HOST.test(line)) {
+    return 'talk to GitHub through gh (read-only gh api), not raw HTTP; npm registry writes are not allowed'
+  }
+
+  const problem =
+    checkGh(words, gh) ??
+    checkChangesets(words) ??
+    checkPackageManagers(words) ??
+    checkGit(words, role, branch) ??
+    checkBuiltins(words) ??
+    checkEnvCommands(words)
+
+  if (problem) {
+    return problem
+  }
+
+  if (role === 'verifier' && writesGitHub(line)) {
+    return 'the verifier is read-only on GitHub'
+  }
+
+  return null
+}
+
 // Some rules cost the square of a line's length, and a hook that times out
-// lets the command run. The caps keep the guard's work far below the timeout.
+// lets the command run. The caps keep the guard's work far below the
+// timeout. Joined continuations and nested code can make a longer line or
+// command, so the caps hold for those too.
 const MAX_COMMAND = 262_144
 const MAX_LINE = 16_384
 
-export function check(command, role, branch, context = {}) {
+function lengthProblem(command) {
   if (command.length > MAX_COMMAND) {
     return `a command of more than ${MAX_COMMAND} characters is too long for the guard, split it`
   }
@@ -849,53 +1472,78 @@ export function check(command, role, branch, context = {}) {
     return `a line of more than ${MAX_LINE} characters is too long for the guard, split the command`
   }
 
-  for (const pattern of [...ALWAYS, ...contextPatterns(context)]) {
-    if (pattern.test(command)) {
-      return 'the rollout control plane, its hooks and git hook settings are off limits to agents'
-    }
+  return null
+}
+
+export function check(command, role, branch, context = {}) {
+  const raw = lengthProblem(command)
+
+  if (raw) {
+    return raw
   }
 
-  if (/(^|\s)-c\s*\S+/.test(command) && [...command.matchAll(/(?:^|\s)-c\s*(\S+)/g)].some((match) => GIT_SETTINGS.test(match[1]))) {
-    return 'overriding git settings for hooks, credentials or remotes is not allowed'
+  const joined = joinContinuations(command)
+  const plain = unquote(joined)
+
+  const problem = lengthProblem(joined) ?? (offLimits(joined, plain, context) ? CONTROL_PLANE : null) ?? wholeCommandProblem(plain, context)
+
+  if (problem) {
+    return problem
   }
 
-  const gh = { repo: context.repo, placeholders: placeholderProblem(command) }
+  const gh = { repo: context.repo, placeholders: placeholderProblem(plain) }
 
-  for (const segment of segments(command)) {
-    const words = tokens(segment)
-    const line = words.join(' ')
-
-    if (
-      /\b(curl|wget|http|https|xh)\b/.test(line) &&
-      /api\.github\.com|uploads\.github\.com|registry\.npmjs\.org|registry\.yarnpkg\.com/.test(line)
-    ) {
-      return 'talk to GitHub through gh (read-only gh api), not raw HTTP; npm registry writes are not allowed'
+  for (const text of readCommands(joined)) {
+    if (text.length > MAX_LINE) {
+      return `a command of more than ${MAX_LINE} characters between separators is too long for the guard, split it`
     }
 
-    const problem =
-      checkGh(words, gh) ??
-      checkChangesets(words) ??
-      checkPackageManagers(words) ??
-      checkGit(words, role, branch) ??
-      checkBuiltins(words) ??
-      checkEnvCommands(words)
+    const { words, raws } = readWords(text)
+    const found = expansionProblem(words, raws) ?? toolProblem(words, role, branch, gh)
 
-    if (problem) {
-      return problem
-    }
-
-    if (role === 'verifier' && /\bgh\b.*\b(pr\s+(create|edit|comment|ready)|issue)\b/.test(line)) {
-      return 'the verifier is read-only on GitHub'
+    if (found) {
+      return found
     }
   }
 
   return null
 }
 
+const GUARD_OPTIONS = {
+  dir: { type: 'string' },
+  home: { type: 'string' },
+  name: { type: 'string' },
+  repo: { type: 'string' },
+  branch: { type: 'string' },
+}
+
+const ROLES = ['worker', 'verifier']
+
+// The role and context on the hook command (lib/settings.mjs), or the problem
+// that refuses every command. In strict mode parseArgs refuses an unknown
+// option and a value that starts with `-` after a space.
+export function guardArgs(argv) {
+  let parsed
+
+  try {
+    parsed = parseArgs({ args: argv, options: GUARD_OPTIONS, strict: true, allowPositionals: true })
+  } catch (error) {
+    return { problem: `the guard cannot read its hook command (${errorText(error)}), command refused` }
+  }
+
+  const [role = 'worker', ...extra] = parsed.positionals
+
+  if (!ROLES.includes(role) || extra.length > 0) {
+    return { problem: `the guard takes one role, worker or verifier, not ${parsed.positionals.join(' ')}, command refused` }
+  }
+
+  return { role, context: { ...parsed.values } }
+}
+
 // Null allows the command, a string is the reason to refuse it. It never
 // throws, so the agent learns why its command was refused. The hook command
 // turns any other failure into exit 2. Only tests pass `inspect`.
-export function decide(input, role, env, inspect = check) {
+export function decide(input, role, context, inspect = check) {
   let payload
 
   try {
@@ -911,12 +1559,7 @@ export function decide(input, role, env, inspect = check) {
   }
 
   try {
-    return inspect(command, role, env.ROLLOUT_BRANCH, {
-      dir: env.ROLLOUT_DIR,
-      home: env.ROLLOUT_HOME,
-      name: env.ROLLOUT_NAME,
-      repo: env.ROLLOUT_REPO,
-    })
+    return inspect(command, role, context.branch, context)
   } catch (error) {
     return `the guard failed (${errorText(error)}), command refused`
   }
@@ -940,7 +1583,9 @@ function readStdin() {
 }
 
 function main() {
-  const problem = decide(readStdin(), process.argv[2] ?? 'worker', process.env)
+  const input = readStdin()
+  const { role, context, problem: unreadable } = guardArgs(process.argv.slice(2))
+  const problem = unreadable ?? decide(input, role, context)
 
   if (problem) {
     process.stderr.write(`rollout guard: ${problem}\n`)

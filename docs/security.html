@@ -144,7 +144,10 @@
             <tbody>
               <tr>
                 <td class="nowrap">The Bash guard</td>
-                <td>A PreToolUse hook on every Bash call. It is a regex guard, and its header says so. <a href="#guard">Details</a>.</td>
+                <td>
+                  A PreToolUse hook on every Bash call. Its context comes on its hook command, not from the agents' environment, and it
+                  refuses commands built by shell expansion. It is a regex guard, and its header says so. <a href="#guard">Details</a>.
+                </td>
                 <td class="name">hooks/guard-bash.mjs</td>
               </tr>
               <tr>
@@ -176,9 +179,10 @@
                 <td class="nowrap">The agent environment</td>
                 <td>
                   The bot's <code>GH_TOKEN</code>, an empty <code>gh</code> config directory, <code>GH_REPO</code> pinned to
-                  <code>repo.github</code>, no <code>GH_HOST</code>, an empty npmrc and empty npm tokens. <code>repo.install</code> and the
-                  ready and pre-verify commands the driver runs, with <code>ROLLOUT_ROLE=gate</code>, run with the same environment.
-                  <a href="#environment">Details</a>.
+                  <code>repo.github</code>, no <code>GH_HOST</code>, an empty npmrc and empty npm tokens. <code>ROLLOUT_ROLE</code> is the
+                  only <code>ROLLOUT_*</code> variable, and any other one the driver inherited is removed. <code>repo.install</code> and the
+                  ready and pre-verify commands the driver runs, with <code>ROLLOUT_ROLE=install</code> or <code>gate</code>, run with the
+                  same environment. <a href="#environment">Details</a>.
                 </td>
                 <td class="name">lib/identity.mjs<br />lib/spawn.mjs<br />lib/worktree.mjs<br />lib/runner.mjs</td>
               </tr>
@@ -293,8 +297,15 @@
               </tr>
               <tr>
                 <td class="nowrap">hook</td>
-                <td><code>guard-bash.mjs worker || exit 2</code> on every Bash call, with a 30 s timeout</td>
-                <td><code>guard-bash.mjs verifier || exit 2</code> on every Bash call, with a 30 s timeout</td>
+                <td>
+                  <code>guard-bash.mjs worker --dir=… --home=… --name=… --repo=… --branch='&lt;PR branch&gt;' || exit 2</code>
+                  on every Bash call, with a 30 s timeout. The values are the rollout directory, the skill directory, the rollout's name and
+                  <code>repo.github</code>.
+                </td>
+                <td>
+                  <code>guard-bash.mjs verifier --dir=… --home=… --name=… --repo=… --branch='' || exit 2</code> on every Bash call, with a
+                  30 s timeout
+                </td>
               </tr>
             </tbody>
           </table>
@@ -361,45 +372,75 @@
         </p>
 
         <p>
-          It splits a command line on <code>;</code>, <code>&amp;&amp;</code>, <code>||</code>, <code>|</code>, <code>&amp;</code>,
-          newlines, <code>$(</code>, backticks, parentheses and braces. It deletes quotes and backslashes, so
-          <code>sh -c "git push origin main"</code> and <code>p"u"sh</code> read as what they are. Quoting is not honoured on purpose: a
-          forbidden word inside a string still blocks.
+          Its context comes on its hook command: the rollout directory, the skill directory, the rollout's name, the manifest's repository
+          and the PR branch, as <code>--dir</code>, <code>--home</code>, <code>--name</code>, <code>--repo</code> and <code>--branch</code>.
+          It reads no environment variable, so an agent's own variables cannot change what it decides. A hook command it cannot parse
+          refuses every command.
+        </p>
+
+        <p>
+          It first joins line continuations, a backslash right before a newline, as the shell does. Then it splits the command line into
+          simple commands on <code>;</code>, <code>&amp;&amp;</code>, <code>||</code>, <code>|</code>, <code>&amp;</code> and newlines, in
+          one pass. <code>$(…)</code>, <code>$((…))</code>, <code>${…}</code> and backticks are read as commands of their own and leave a
+          <code>$</code> in the command around them, so <code>git -C $(pwd) push origin main</code> is still one git call. Parentheses and
+          braces are read as commands of their own too. Quoting is not honoured on purpose: a forbidden word inside a string still blocks.
+          Every rule reads the words with quotes and backslashes deleted, so <code>sh -c "git push origin main"</code>,
+          <code>p"u"sh</code> and <code>core.hooks""Path</code> read as what they are. The control-plane patterns read the command both as
+          written and without them. Tool names count in any case, because macOS runs <code>GIT</code> as git. Subcommands count as written,
+          as git and gh read them.
         </p>
 
         <h4>Refused for every agent</h4>
 
         <ul>
           <li>
-            <strong>Commands too long to check.</strong> A line longer than 16,384 characters or a command longer than 262,144. Some rules
-            cost the square of a line's length, so the guard refuses these before any other rule and asks for the command to be split.
+            <strong>Commands too long to check.</strong> A line longer than 16,384 characters, also once its continuations are joined, a
+            simple command longer than that between its separators, or a command longer than 262,144. Some rules cost the square of a line's
+            length, so the guard refuses these before the rules that read them and asks for the command to be split.
           </li>
           <li>
-            <strong>The control plane.</strong> Any command that names the rollout directory, the installed skill (<code>ROLLOUT_HOME</code>
-            and any <code>.claude/skills/rollout</code>), the rollout's name as a path or a word, as in a branch or a PR title, or the push
-            markers <code>rollout-branch</code>, <code>rollout-pushurl</code> and <code>rollout-ready</code>. Loading the manifest refuses a
-            branch, title, base or repository that would trip this rule (<a href="manifest.html#validation">what loading checks</a>).
+            <strong>The control plane.</strong> Any command that names the rollout directory, the installed skill (the skill directory on
+            the hook command and any <code>.claude/skills/rollout</code>), the rollout's name as a path or a word, as in a branch or a PR
+            title, or the push markers <code>rollout-branch</code>, <code>rollout-pushurl</code> and <code>rollout-ready</code>, also with
+            quotes or backslashes inside, as in <code>de""mo</code>. Loading the manifest refuses a branch, title, base or repository that
+            would trip this rule (<a href="manifest.html#validation">what loading checks</a>). Any <code>$ROLLOUT_…</code> variable, and
+            anything but a plain name right under the rollouts root, such as <code>~/.rollouts/*/inbox</code>,
+            <code>~/.rollouts/$n</code> or zsh's <code>~/.rollouts/(a|b)</code>.
           </li>
           <li>
-            <strong>The environment the guard relies on.</strong> Setting <code>GH_TOKEN</code>, <code>GH_CONFIG_DIR</code>,
-            <code>GITHUB_TOKEN</code>, <code>GH_HOST</code>, <code>GH_REPO</code>, <code>GIT_SSH*</code>, <code>GIT_CONFIG_*</code>,
-            <code>GIT_DIR</code>, <code>GIT_WORK_TREE</code> or any <code>ROLLOUT_*</code> variable, with <code>NAME=</code> or
-            <code>NAME+=</code>. Unsetting, emptying or un-exporting <code>GH_TOKEN</code>, <code>GITHUB_TOKEN</code>,
-            <code>GH_CONFIG_DIR</code>, <code>GH_REPO</code>, <code>GH_HOST</code> or a <code>ROLLOUT_*</code> variable in any form:
-            <code>unset</code>, <code>export</code>, <code>declare</code>, <code>typeset</code>, <code>local</code>, <code>readonly</code>,
-            <code>read</code>, <code>printf</code>, <code>mapfile</code>, <code>readarray</code>, <code>set</code>, csh's
-            <code>setenv</code> and <code>unsetenv</code>, zsh's <code>-m</code> patterns, and <code>env -u</code> or <code>--unset</code>.
-            <code>env -i</code>, a bare <code>env -</code> and <code>exec -c</code>, which start a command without the token.
-            <code>env -S</code>, which re-splits a string the guard does not read, and <code>env</code> options the guard does not know,
-            which could hide the rest. And the <code>--git-dir</code>, <code>--work-tree</code> and <code>--config-env</code> switches.
+            <strong>Commands built by shell expansion.</strong> The guard cannot read what the shell builds, so it refuses
+            <code>$IFS</code>, brace expansion such as <code>{a,b}</code> (a space after the comma, as in <code>{a, b}</code> in jq, is
+            fine), and a word built by expansion where it decides: the command word, also after <code>env</code>, <code>exec</code>,
+            <code>command</code>, <code>builtin</code>, <code>nohup</code> and <code>time</code>, the arguments of <code>eval</code>, the
+            command of <code>sh -c</code> and the other shells' <code>-c</code>, git's global options but the directory of <code>-C</code>,
+            the git subcommand, the arguments of <code>git config</code> and <code>git push</code>, the action of <code>git remote</code>,
+            the gh subcommand and action, every argument of <code>gh api</code>, a package manager's subcommand and the word after it, and
+            every argument of the changesets CLI. In the command word and the subcommands a glob and zsh's <code>=cmd</code> count as
+            expansion too. Arguments anywhere else stay free, so <code>git diff $(git merge-base origin/main HEAD)</code> and
+            <code>npx eslint 'src/**'</code> run. Because quoted text is read as commands, a statement that starts with <code>$</code> or a
+            glob in quoted program text or a heredoc is refused too, and so is <code>{a,b}</code> with no space. The reason points to a
+            script file or the Write tool.
+          </li>
+          <li>
+            <strong>The agents' environment.</strong> Setting <code>GH_TOKEN</code>, <code>GH_CONFIG_DIR</code>, <code>GITHUB_TOKEN</code>,
+            <code>GH_HOST</code>, <code>GH_REPO</code>, <code>GIT_SSH*</code>, <code>GIT_CONFIG_*</code>, <code>GIT_DIR</code>,
+            <code>GIT_WORK_TREE</code> or any <code>ROLLOUT_*</code> variable, with <code>NAME=</code> or <code>NAME+=</code>. Unsetting,
+            emptying or un-exporting <code>GH_TOKEN</code>, <code>GITHUB_TOKEN</code>, <code>GH_CONFIG_DIR</code>, <code>GH_REPO</code>,
+            <code>GH_HOST</code> or a <code>ROLLOUT_*</code> variable in any form: <code>unset</code>, <code>export</code>,
+            <code>declare</code>, <code>typeset</code>, <code>local</code>, <code>readonly</code>, <code>read</code>, <code>printf</code>,
+            <code>mapfile</code>, <code>readarray</code>, <code>set</code>, csh's <code>setenv</code> and <code>unsetenv</code>, zsh's
+            <code>-m</code> patterns, and <code>env -u</code> or <code>--unset</code>. <code>env -i</code>, a bare <code>env -</code> and
+            <code>exec -c</code>, which start a command without the token. <code>env -S</code>, which re-splits a string the guard does not
+            read, and <code>env</code> options the guard does not know, which could hide the rest. And the <code>--git-dir</code>,
+            <code>--work-tree</code> and <code>--config-env</code> switches.
           </li>
           <li>
             <strong>Other repositories.</strong> <code>--repo</code> or <code>-R</code> in any spelling, and
-            <code>gh api repos/&lt;owner&gt;/&lt;name&gt;</code>, naming anything but <code>ROLLOUT_REPO</code>. A lone
+            <code>gh api repos/&lt;owner&gt;/&lt;name&gt;</code>, naming anything but the manifest's repository. A lone
             <code>{owner}</code> or <code>{repo}</code> placeholder, and a <code>repos/</code> path with <code>..</code>,
-            <code>%2e</code> or <code>%2f</code>. Without <code>ROLLOUT_REPO</code>, any named repository. gh calls that name no repository
-            stay allowed and go to the pinned <code>GH_REPO</code>. Quoted text counts, so a PR body that mentions <code>-R</code> goes in a
-            <code>--body-file</code>.
+            <code>%2e</code> or <code>%2f</code>. When the hook command has no <code>--repo</code>, any named repository. gh calls that name
+            no repository stay allowed and go to the pinned <code>GH_REPO</code>. Quoted text counts, so a PR body that mentions
+            <code>-R</code> goes in a <code>--body-file</code>.
           </li>
           <li>
             <strong>Git settings that switch off hooks or reroute pushes.</strong> <code>hooksPath</code>, credentials, push URLs,
@@ -439,8 +480,8 @@
         <h4>Pushes from a worker</h4>
 
         <p>
-          A worker pushes only with <code>git push origin &lt;refspec&gt;</code>, where every refspec targets <code>$ROLLOUT_BRANCH</code>.
-          The guard refuses:
+          A worker pushes only with <code>git push origin &lt;refspec&gt;</code>, where every refspec targets the branch on the hook
+          command, its <code>--branch</code>. The guard refuses:
         </p>
 
         <ul>
@@ -451,7 +492,7 @@
             <code>-d</code>, <code>--prune</code>, <code>--no-verify</code> and <code>--repo</code>
           </li>
           <li>a <code>+</code> refspec and any refspec that deletes a remote ref</li>
-          <li>a push at all when <code>ROLLOUT_BRANCH</code> is not set</li>
+          <li>a push at all when the hook command names no branch</li>
         </ul>
 
         <p><code>--force-with-lease</code> on the agent's own branch stays allowed, so an agent can rewrite its own commits.</p>
@@ -515,10 +556,10 @@
           <code>repo.install</code> and the <a href="manifest.html#gates-ready-required">ready</a> and
           <a href="manifest.html#gates-preVerify-required">pre-verify commands</a> the driver runs run scripts from a worktree an agent may
           have written, so they get the same environment from <code>readOnlyEnv</code>, with <code>ROLLOUT_ROLE=install</code> or
-          <code>ROLLOUT_ROLE=gate</code>, an empty <code>ROLLOUT_BRANCH</code> and none of the <code>CLAUDE_CODE_*</code> variables
-          <code>runAgent</code> adds. The guard reads only the agents' tool calls, so it never sees what the install or a ready or
-          pre-verify command runs in the driver's own run. The implementer's run of the ready commands in its self-check is one of its tool
-          calls, and the guard reads it like any other.
+          <code>ROLLOUT_ROLE=gate</code> and none of the <code>CLAUDE_CODE_*</code> variables <code>runAgent</code> adds. The guard's
+          context is on its hook command, not in this environment. The guard reads only the agents' tool calls, so it never sees what the
+          install or a ready or pre-verify command runs in the driver's own run. The implementer's run of the ready commands in its
+          self-check is one of its tool calls, and the guard reads it like any other.
         </p>
 
         <div class="scroll">
@@ -570,17 +611,19 @@
                 <td>Git fails instead of asking for a password.</td>
               </tr>
               <tr>
-                <td>ROLLOUT_BRANCH</td>
-                <td>the PR branch, empty for read-only roles, <code>repo.install</code> and the ready and pre-verify commands</td>
-                <td>The one branch the guard lets a worker push.</td>
+                <td>ROLLOUT_ROLE</td>
+                <td>
+                  the role, <code>install</code> for <code>repo.install</code> and <code>gate</code> for the ready and pre-verify commands
+                </td>
+                <td>The CLI's refusal to take orders from an agent.</td>
               </tr>
               <tr>
-                <td>ROLLOUT_ROLE, _ID, _DIR, _HOME, _NAME, _REPO</td>
+                <td>any other ROLLOUT_* variable</td>
+                <td>removed</td>
                 <td>
-                  role (<code>install</code> for <code>repo.install</code>, <code>gate</code> for the ready and pre-verify commands), PR id,
-                  rollout directory, skill directory, rollout name, <code>repo.github</code>
+                  The guard's context is on its hook command. A variable the driver inherited, such as a default <code>--dir</code> you
+                  exported, would hand an agent a path its shell expands.
                 </td>
-                <td>The guard's context, and the CLI's refusal to take orders from an agent.</td>
               </tr>
               <tr>
                 <td>NPM_CONFIG_USERCONFIG</td>

@@ -181,6 +181,13 @@ function fakeClaude(manifest, script, lines = null) {
   manifest.claudeBin = bin
 }
 
+// The guard hook in the --settings a fake claude was started with.
+function guardHook(args) {
+  const settings = JSON.parse(args[args.indexOf('--settings') + 1])
+
+  return settings.hooks.PreToolUse.flatMap((entry) => entry.hooks)[0]
+}
+
 function run(manifest, logName, seams) {
   return runAgent(
     manifest,
@@ -417,12 +424,11 @@ test('runAgent: a run that hits its budget cap fails as a normal attempt', async
   assert.equal(result.account, false)
 })
 
-test('runAgent: the delegate runs read-only, with no branch and its own schema', async () => {
+test('runAgent: the delegate runs read-only, with no branch on its guard and its own schema', async () => {
   const manifest = loadManifest(makeRollout())
   const argsFile = join(manifest.dir, 'args.bin')
-  const branchFile = join(manifest.dir, 'branch.txt')
 
-  fakeClaude(manifest, `printf '%s\\0' "$@" > '${argsFile}'\nprintf '%s' "\${ROLLOUT_BRANCH-unset}" > '${branchFile}'\nexit 1`)
+  fakeClaude(manifest, `printf '%s\\0' "$@" > '${argsFile}'\nexit 1`)
 
   const result = await runAgent(manifest, manifest.all[0], {
     role: 'delegate',
@@ -452,7 +458,7 @@ test('runAgent: the delegate runs read-only, with no branch and its own schema',
     'Monitor',
   ])
 
-  assert.equal(readFileSync(branchFile, 'utf8'), '')
+  assert.match(guardHook(args).command, / verifier --dir=.* --branch='' \|\| exit 2$/)
   assert.deepEqual(JSON.parse(args[args.indexOf('--json-schema') + 1]), schema)
 })
 
@@ -619,32 +625,49 @@ function withAgentToken(manifest) {
   writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
 }
 
-test('runAgent: agents get GH_REPO and ROLLOUT_REPO and never GH_HOST', async () => {
+// What a driver may inherit from the maintainer's shell, or from an agent it runs inside.
+const PARENT_ROLLOUT_ENV = {
+  ROLLOUT_DIR: '/home/u/.rollouts/other',
+  ROLLOUT_HOME: '/home/u/skill',
+  ROLLOUT_NAME: 'other',
+  ROLLOUT_REPO: 'other/x',
+  ROLLOUT_ID: 'Z9',
+  ROLLOUT_BRANCH: 'main',
+}
+
+test('runAgent: agents get GH_REPO and ROLLOUT_ROLE, never GH_HOST or another ROLLOUT_* variable, and the guard gets the branch', async () => {
   const manifest = loadManifest(makeRollout())
   const envFile = join(manifest.dir, 'agent-env.txt')
+  const argsFile = join(manifest.dir, 'args.bin')
   const npmTokens = { NPM_TOKEN: 'synthetic-npm-token', NODE_AUTH_TOKEN: 'synthetic-node-auth-token' }
 
   withAgentToken(manifest)
-  fakeClaude(manifest, `env > '${envFile}'\nexit 1`)
+  fakeClaude(manifest, `env > '${envFile}'\nprintf '%s\\0' "$@" > '${argsFile}'\nexit 1`)
 
-  const result = await withProcessEnv({ ...SHELL_GITHUB_ENV, ...npmTokens }, () => run(manifest, 'A1-01-env'))
+  const parent = { ...SHELL_GITHUB_ENV, ...npmTokens, ...PARENT_ROLLOUT_ENV }
+  const result = await withProcessEnv(parent, () => run(manifest, 'A1-01-env'))
   const env = readEnvFile(envFile)
+  const args = readFileSync(argsFile, 'utf8').split('\0').slice(0, -1)
 
   assert.equal(result.ok, false)
   assert.equal(env.GH_REPO, 'github.com/example/widgets')
-  assert.equal(env.ROLLOUT_REPO, 'example/widgets')
   assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
   assert.equal(env.GH_CONFIG_DIR, join(manifest.dir, '.gh-agents'))
   assert.equal(env.NPM_TOKEN, '')
   assert.equal(env.NODE_AUTH_TOKEN, '')
   assert.equal(env.NPM_CONFIG_USERCONFIG, join(manifest.dir, '.npmrc-agents'))
   assert.equal(env.ROLLOUT_ROLE, 'implement')
-  assert.equal(env.ROLLOUT_BRANCH, manifest.all[0].branch)
   assert.equal(env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1')
 
-  for (const name of Object.keys(SHELL_GITHUB_ENV)) {
+  for (const name of [...Object.keys(SHELL_GITHUB_ENV), ...Object.keys(PARENT_ROLLOUT_ENV)]) {
     assert.equal(name in env, false, name)
   }
+
+  assert.ok(
+    guardHook(args).command.endsWith(
+      ` worker --dir='${manifest.dir}' --home='${manifest.home}' --name='demo' --repo='example/widgets' --branch='feat/a1' || exit 2`,
+    ),
+  )
 })
 
 test('agentEnv: extra never brings back GH_HOST or moves GH_REPO', () => {

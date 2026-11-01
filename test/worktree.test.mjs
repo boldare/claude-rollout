@@ -164,7 +164,13 @@ test('preparePreview: heads that conflict give null and leave no preview behind'
 test('repo.install runs with the environment of a read-only agent, in a new PR worktree and in a preview', async (context) => {
   const { dir, manifest, pr } = fixture()
   const installEnv = join(dir, 'install.env')
-  const parent = { GH_TOKEN: 'synthetic-maintainer-token', NPM_TOKEN: 'synthetic-npm-token', NODE_AUTH_TOKEN: 'synthetic-node-auth-token' }
+  const parent = {
+    GH_TOKEN: 'synthetic-maintainer-token',
+    NPM_TOKEN: 'synthetic-npm-token',
+    NODE_AUTH_TOKEN: 'synthetic-node-auth-token',
+    ROLLOUT_BRANCH: 'main',
+    ROLLOUT_ID: 'Z9',
+  }
 
   context.after(() => rmSync(dir, { recursive: true, force: true }))
   manifest.repo.install = `env > '${installEnv}'`
@@ -183,9 +189,9 @@ test('repo.install runs with the environment of a read-only agent, in a new PR w
     assert.equal(env.NPM_TOKEN, '')
     assert.equal(env.NODE_AUTH_TOKEN, '')
     assert.equal(env.NPM_CONFIG_USERCONFIG, join(manifest.dir, '.npmrc-agents'))
-    assert.equal(env.ROLLOUT_BRANCH, '')
     assert.equal(env.ROLLOUT_ROLE, 'install')
-    assert.equal(env.ROLLOUT_ID, pr.id)
+    assert.equal('ROLLOUT_BRANCH' in env, false)
+    assert.equal('ROLLOUT_ID' in env, false)
   }
 })
 
