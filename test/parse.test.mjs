@@ -518,7 +518,7 @@ test('refreshOutsideDeps throws every failed lookup, so one that is not an outag
   })
 })
 
-// A fixture rollout whose gh answers from the rules, as in test/driver.test.mjs.
+// A fixture rollout whose gh answers from the rules, as in test/driver-helpers.mjs.
 function scanningRollout(rules) {
   const dir = makeRollout()
   const tools = fakeTools(dir, rules)
