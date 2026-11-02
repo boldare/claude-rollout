@@ -523,10 +523,10 @@ async function liveGuardTest(manifest, problems) {
       '--permission-prompts',
       'none',
       '--settings',
-      JSON.stringify(agentSettings(manifest, 'implement')),
+      JSON.stringify(agentSettings(manifest, 'implement', { branch: 'rollout/guard-test' })),
       ...contextArgs(manifest, 'implement'),
     ],
-    { cwd: scratch, env: makeEnv(manifest, { ...contextEnv('implement'), ROLLOUT_BRANCH: 'rollout/guard-test' }), timeout: 5 * 60_000 },
+    { cwd: scratch, env: makeEnv(manifest, contextEnv('implement')), timeout: 5 * 60_000 },
   )
 
   rmSync(scratch, { recursive: true, force: true })

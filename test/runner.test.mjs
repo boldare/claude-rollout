@@ -119,9 +119,15 @@ test('runCommand: a process that left the group and keeps the output open still 
   assert.equal(children.size, 0)
 })
 
-test('runCommand: the command gets the read-only agents environment, with ROLLOUT_ROLE gate and no branch', async (context) => {
+test('runCommand: the command gets the read-only agents environment, with ROLLOUT_ROLE gate and no other ROLLOUT_* variable', async (context) => {
   const { manifest, pr, cwd } = setup(context)
-  const parent = { GH_TOKEN: 'synthetic-maintainer-token', NPM_TOKEN: 'synthetic-npm-token', NODE_AUTH_TOKEN: 'synthetic-node-auth-token' }
+  const parent = {
+    GH_TOKEN: 'synthetic-maintainer-token',
+    NPM_TOKEN: 'synthetic-npm-token',
+    NODE_AUTH_TOKEN: 'synthetic-node-auth-token',
+    ROLLOUT_BRANCH: 'main',
+    ROLLOUT_ID: 'Z9',
+  }
 
   manifest.repo.agentToken = join(cwd, 'agent-token')
   writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
@@ -135,8 +141,8 @@ test('runCommand: the command gets the read-only agents environment, with ROLLOU
   assert.equal(env.NODE_AUTH_TOKEN, '')
   assert.equal(env.NPM_CONFIG_USERCONFIG, join(manifest.dir, '.npmrc-agents'))
   assert.equal(env.ROLLOUT_ROLE, 'gate')
-  assert.equal(env.ROLLOUT_BRANCH, '')
-  assert.equal(env.ROLLOUT_ID, pr.id)
+  assert.equal('ROLLOUT_BRANCH' in env, false)
+  assert.equal('ROLLOUT_ID' in env, false)
 })
 
 test('runCommand: a missing repo.agentToken file throws before anything runs', (context) => {

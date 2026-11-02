@@ -41,29 +41,69 @@ test('agentSettings: a main base denies each main push once', () => {
   }
 })
 
-test('guardCommand: the shell expands nothing in the skill path', () => {
+test('guardCommand: the shell expands nothing in the skill path, the rollout directory, the name or the branch', () => {
   const root = mkdtempSync(join(tmpdir(), 'rollout-quote-'))
   const manifest = loadManifest(makeRollout())
+  const hostile = "it's a `touch tick` $(touch pwned)"
+  const branch = `feat/${hostile}`
 
   // Markers are relative because a directory name cannot hold a slash. The
   // command runs in root, so any expansion would create them there.
-  manifest.home = join(root, "it's a `touch tick` $(touch pwned)")
+  manifest.home = join(root, hostile)
+  manifest.dir = join(root, 'rollouts', hostile)
+  manifest.rollout = hostile
   mkdirSync(join(manifest.home, 'hooks'), { recursive: true })
   copyFileSync(fileURLToPath(new URL('../hooks/guard-bash.mjs', import.meta.url)), join(manifest.home, 'hooks', 'guard-bash.mjs'))
 
-  for (const role of ['implement', 'verify']) {
-    const result = spawnSync('sh', ['-c', guardCommand(manifest, role)], {
+  function run(role, command) {
+    return spawnSync('sh', ['-c', guardCommand(manifest, role, { branch })], {
       cwd: root,
-      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --admin' } }),
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
       encoding: 'utf8',
     })
-
-    assert.equal(result.status, 2, `${role}: ${result.stderr}`)
-    assert.match(result.stderr, /^rollout guard: /)
   }
 
+  for (const role of ['implement', 'verify']) {
+    const merge = run(role, 'gh pr merge 1 --admin')
+    const ledger = run(role, `cat '${join(manifest.dir, 'ledger.json')}'`)
+
+    assert.equal(merge.status, 2, `${role}: ${merge.stderr}`)
+    assert.match(merge.stderr, /^rollout guard: /)
+    assert.equal(ledger.status, 2, `${role}: ${ledger.stderr}`)
+    assert.equal(
+      ledger.stderr,
+      'rollout guard: the rollout control plane, its hooks and git hook settings are off limits to agents\n',
+      role,
+    )
+  }
+
+  const push = run('implement', 'git push -u origin other')
+
+  assert.equal(push.status, 2, push.stderr)
+  assert.equal(push.stderr, `rollout guard: push only to your branch ${branch} (got other)\n`)
   assert.equal(existsSync(join(root, 'pwned')), false)
   assert.equal(existsSync(join(root, 'tick')), false)
+})
+
+test('guardCommand: the context is on the command line, and only implement and fix get the branch', () => {
+  const manifest = loadManifest(makeRollout())
+  const script = join(manifest.home, 'hooks', 'guard-bash.mjs')
+
+  assert.equal(
+    guardCommand(manifest, 'implement', { branch: 'feat/a1' }),
+    `node '${script}' worker --dir='${manifest.dir}' --home='${manifest.home}' --name='demo' --repo='example/widgets' --branch='feat/a1' || exit 2`,
+  )
+
+  for (const role of ['brief', 'implement', 'fix', 'verify', 'delegate']) {
+    const command = guardCommand(manifest, role, { branch: 'feat/a1' })
+    const branch = readOnlyRole(role) ? "''" : "'feat/a1'"
+    const [hook] = agentSettings(manifest, role, { branch: 'feat/a1' }).hooks.PreToolUse.flatMap((entry) => entry.hooks)
+
+    assert.ok(command.endsWith(` --branch=${branch} || exit 2`), `${role}: ${command}`)
+    assert.equal(hook.command, command, role)
+  }
+
+  assert.ok(guardCommand(manifest, 'implement').endsWith(" --branch='' || exit 2"), 'no branch given')
 })
 
 test('the delegate is read-only: the verifier guard and no file edits', () => {
@@ -77,7 +117,7 @@ test('the delegate is read-only: the verifier guard and no file edits', () => {
   }
 
   assert.deepEqual(allow, agentSettings(manifest, 'verify').permissions.allow)
-  assert.ok(guardCommand(manifest, 'delegate').endsWith(' verifier || exit 2'))
+  assert.match(guardCommand(manifest, 'delegate', { branch: 'feat/a1' }), / verifier --dir=.* --branch='' \|\| exit 2$/)
 })
 
 test('agentSettings: no role gets a tool that waits for a later turn, and only read-only roles lose the file tools', () => {

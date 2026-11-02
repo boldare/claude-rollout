@@ -638,8 +638,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>guard hook</td>
                 <td>
                   Feeding <code>gh pr merge 1 --admin</code> to the Bash guard does not end with exit code 2 and a
-                  <code>rollout guard:</code> reason, or feeding it <code>echo allowed</code> does not end with exit code 0. The reason
-                  matters because the hook command ends with <code>|| exit 2</code>, so a guard that never ran exits 2 too.
+                  <code>rollout guard:</code> reason, feeding it <code>echo allowed</code> does not end with exit code 0, or feeding it
+                  <code>cat '&lt;rollout&gt;/ledger.json'</code> does not end with exit code 2 and a <code>rollout guard:</code> reason.
+                  Only a guard that got the rollout directory on its hook command refuses the last one. The reason matters because the hook
+                  command ends with <code>|| exit 2</code>, so a guard that never ran exits 2 too.
                 </td>
               </tr>
               <tr>
@@ -768,18 +770,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                   The agent's role, <code>install</code> for <code>repo.install</code> or <code>gate</code> for the
                   <a href="manifest.html#gates-ready-required">ready</a> and
                   <a href="manifest.html#gates-preVerify-required">pre-verify commands</a> the driver runs. While it is set, the CLI refuses
-                  every command but <code>status</code>, <code>card</code> and <code>help</code>.
-                </td>
-              </tr>
-              <tr>
-                <td>ROLLOUT_ID, ROLLOUT_BRANCH, ROLLOUT_NAME, ROLLOUT_HOME, ROLLOUT_REPO</td>
-                <td>the driver, for agents, <code>repo.install</code> and the ready and pre-verify commands</td>
-                <td>
-                  The PR, its branch (empty for the verifier, brief and delegate roles, for <code>repo.install</code> and for the ready and
-                  pre-verify commands the driver runs), the rollout, the skill's directory and <code>repo.github</code>. The Bash guard
-                  reads all of them but <code>ROLLOUT_ID</code>. It refuses gh calls that name another repository than
-                  <code>ROLLOUT_REPO</code>. Agents, the install and the ready and pre-verify commands also get <code>ROLLOUT_DIR</code>, so
-                  <code>status</code> and <code>card</code> work for them without flags.
+                  every command but <code>status</code>, <code>card</code> and <code>help</code>. It is the only
+                  <code>ROLLOUT_*</code> variable they get: the driver removes any other one it inherited. The Bash guard reads none of
+                  them. Its context, the rollout directory, the skill directory, the rollout's name, <code>repo.github</code> and the PR
+                  branch, is on its hook command.
                 </td>
               </tr>
               <tr>

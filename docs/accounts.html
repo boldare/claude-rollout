@@ -198,9 +198,9 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
         <p>
           It removes <code>GH_HOST</code>, <code>GH_ENTERPRISE_TOKEN</code> and <code>GITHUB_ENTERPRISE_TOKEN</code>. With
           <code>GH_HOST</code> set, gh reads your keyring login even from the empty config directory. The guard refuses agent commands that
-          set <code>GH_HOST</code> or drop the token (<a href="security.html#guard">The Bash guard</a>). Without
-          <code>repo.agentToken</code>, agents get none of the variables above except <code>GH_REPO</code>, and <code>GH_HOST</code> is
-          still removed.
+          set <code>GH_HOST</code> or drop the token (<a href="security.html#guard">The Bash guard</a>), outside its
+          <a href="security.html#guard-limits">known limits</a>. Without <code>repo.agentToken</code>, agents get none of the variables
+          above except <code>GH_REPO</code>, and <code>GH_HOST</code> is still removed.
         </p>
 
         <p>
@@ -453,9 +453,9 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
 
         <p>
           On top of that, <code>runAgent</code> in <code>lib/spawn.mjs</code> adds only the bot's GitHub variables, the pinned
-          <code>GH_REPO</code>, the <code>ROLLOUT_*</code> variables and the empty npm credentials, and removes <code>GH_HOST</code>. A
-          driver started from the UI inherits the environment of the <code>rollout ui</code> process, so start the UI from a shell where
-          <code>claude</code> works.
+          <code>GH_REPO</code>, <code>ROLLOUT_ROLE</code> and the empty npm credentials, and removes <code>GH_HOST</code> and any other
+          <code>ROLLOUT_*</code> variable. A driver started from the UI inherits the environment of the <code>rollout ui</code> process, so
+          start the UI from a shell where <code>claude</code> works.
         </p>
 
         <div class="callout">

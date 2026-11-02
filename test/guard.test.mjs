@@ -5,7 +5,31 @@ import { closeSync, copyFileSync, mkdirSync, mkdtempSync, openSync, symlinkSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { check, decide, isEntry, rolloutNamePattern } from '../hooks/guard-bash.mjs'
+import {
+  ALWAYS,
+  BRANCH_FORBIDDEN,
+  CHANGESET_RELEASE,
+  CONFIG_SECTION_FLAGS,
+  GH_API_FIELDS,
+  GH_FORBIDDEN,
+  GH_PR_FORBIDDEN,
+  GIT_FORBIDDEN,
+  GIT_SETTING_SAMPLES,
+  HTTP_HOSTS,
+  HTTP_TOOLS,
+  PACKAGE_MANAGERS,
+  PUBLISH_WORDS,
+  PUSH_FORBIDDEN,
+  REMOTE_FORBIDDEN,
+  VERIFIER_GH_FORBIDDEN,
+  VERIFIER_GIT_FORBIDDEN,
+  check,
+  decide,
+  guardArgs,
+  isEntry,
+  readCommands,
+  rolloutNamePattern,
+} from '../hooks/guard-bash.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { guardSelfTest } from '../lib/preflight.mjs'
 import { guardCommand } from '../lib/settings.mjs'
@@ -44,8 +68,8 @@ function spawnGuard(file, args, input, options) {
   }
 }
 
-function runHook(manifest, role, input, options = {}) {
-  return spawnGuard('sh', ['-c', guardCommand(manifest, role)], input, options)
+function runHook(manifest, role, input, { branch = '', ...options } = {}) {
+  return spawnGuard('sh', ['-c', guardCommand(manifest, role, { branch })], input, options)
 }
 
 function runScript(role, input) {
@@ -126,12 +150,11 @@ test('verifier is read-only', () => {
   assert.ok(!blocked('gh pr view 12 --json title,body', 'verifier'))
 })
 
-test('the hook script exits 2 with a reason on stdin payloads', () => {
+test('the hook script exits 2 with a reason on stdin payloads, and pushes only to the --branch it was given', () => {
   const script = new URL('../hooks/guard-bash.mjs', import.meta.url).pathname
-  const run = (command) =>
-    spawnSync('node', [script, 'worker'], {
+  const run = (command, args = [`--branch=${BRANCH}`]) =>
+    spawnSync('node', [script, 'worker', ...args], {
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }),
-      env: { ...process.env, ROLLOUT_BRANCH: BRANCH },
       encoding: 'utf8',
     })
 
@@ -139,6 +162,12 @@ test('the hook script exits 2 with a reason on stdin payloads', () => {
   assert.equal(denied.status, 2)
   assert.match(denied.stderr, /rollout guard/)
   assert.equal(run('ls -la').status, 0)
+  assert.equal(run(`git push -u origin ${BRANCH}`).status, 0)
+
+  const unpinned = run(`git push -u origin ${BRANCH}`, [])
+
+  assert.equal(unpinned.status, 2)
+  assert.equal(unpinned.stderr, 'rollout guard: the guard has no --branch, so it refuses to push\n')
 })
 
 test('changeset release commands are blocked in every form, for everyone', () => {
@@ -570,13 +599,14 @@ test('the preflight guard self-test passes with this checkout and fails without 
   assert.deepEqual(working.lines, [
     'ok   guard hook command exits 2 on a forbidden command',
     'ok   guard hook command exits 0 on an allowed command',
+    'ok   guard hook command exits 2 on the rollout directory',
   ])
 
   manifest.home = mkdtempSync(join(tmpdir(), 'rollout-no-guard-'))
 
   const missing = guardSelfTest(manifest)
 
-  assert.equal(missing.problems.length, 2, missing.problems.join('\n'))
+  assert.equal(missing.problems.length, 3, missing.problems.join('\n'))
   assert.ok(
     missing.lines.every((line) => line.startsWith('FAIL')),
     missing.lines.join('\n'),
@@ -599,19 +629,6 @@ function assertAllowed(forms, context = REPO) {
       assert.equal(check(command, role, BRANCH, context), null, `${role}: ${command}`)
     }
   }
-}
-
-// The test process may itself run inside an agent, so its ROLLOUT_* never reach the hook.
-function hookEnv(extra = {}) {
-  const env = { ...process.env }
-
-  for (const name of Object.keys(env)) {
-    if (name.startsWith('ROLLOUT_')) {
-      delete env[name]
-    }
-  }
-
-  return { ...env, ...extra }
 }
 
 test('agent env: dropping the token or the gh config is refused in every form, for both roles', () => {
@@ -691,7 +708,7 @@ test('agent env: dropping the token or the gh config is refused in every form, f
 
   assert.match(check('unset GH_TOKEN', 'worker', BRANCH, REPO), /^unset with GH_TOKEN is not allowed: /)
   assert.match(check('env -u GH_REPO gh pr list', 'worker', BRANCH, REPO), /^unsetting GH_REPO with env is not allowed: /)
-  assert.match(check('read ROLLOUT_ROLE < /dev/null', 'worker', BRANCH, REPO), /the guard's context/)
+  assert.match(check('read ROLLOUT_ROLE < /dev/null', 'worker', BRANCH, REPO), /keep the CLI from taking orders from agents$/)
 })
 
 test('agent env: env -i, env -S, unknown env options and exec -c are refused, for both roles', () => {
@@ -853,41 +870,62 @@ test('agent repo: gh api paths name only the manifest repo, for both roles', () 
   assert.match(check('gh api -X PUT repos/other/x/pulls/1/merge', 'worker', BRANCH, REPO), /gh api is read-only/)
 })
 
-test('agent repo: without ROLLOUT_REPO any named repo is refused', () => {
+test('agent repo: without --repo any named repo is refused', () => {
   for (const context of [{}, { repo: '' }]) {
     assertRefused(['gh pr view 1 --repo o/r', 'gh -R o/r pr view 1', 'gh api repos/o/r/pulls', 'gh api /repos/o/r'], context)
     assertAllowed(['gh pr view 12', 'gh api repos/{owner}/{repo}/pulls', 'gh api user'], context)
   }
 
-  assert.match(check('gh pr view 1 --repo o/r', 'worker', BRANCH, {}), /^ROLLOUT_REPO is not set/)
-  assert.match(check('gh api repos/o/r/pulls', 'worker', BRANCH, {}), /^ROLLOUT_REPO is not set/)
+  assert.match(check('gh pr view 1 --repo o/r', 'worker', BRANCH, {}), /^the guard has no --repo, so gh --repo o\/r is refused/)
+  assert.match(check('gh api repos/o/r/pulls', 'worker', BRANCH, {}), /^the guard has no --repo, so gh api repos\/o\/r\/pulls is refused/)
 })
 
-test('agent repo: the hook command reads ROLLOUT_REPO from its environment', () => {
+test('agent repo: the hook command carries the manifest repository, and the bare script has none', () => {
   const manifest = loadManifest(makeRollout())
-  const pinned = hookEnv({ ROLLOUT_REPO: 'o/r' })
-  const unpinned = hookEnv()
 
-  assert.equal(unpinned.ROLLOUT_REPO, undefined)
+  assert.equal(manifest.repo.github, 'example/widgets')
 
-  for (const role of Object.keys(HOOK_ROLES)) {
-    const own = runHook(manifest, role, payload('gh pr view 1 --repo o/r'), { env: pinned })
-    const other = runHook(manifest, role, payload('gh pr view 1 --repo other/x'), { env: pinned })
-    const unset = runHook(manifest, role, payload('gh pr view 1 --repo o/r'), { env: unpinned })
+  for (const [role, guardRole] of Object.entries(HOOK_ROLES)) {
+    const own = runHook(manifest, role, payload('gh pr view 1 --repo example/widgets'))
+    const other = runHook(manifest, role, payload('gh pr view 1 --repo other/x'))
+    const bare = runScript(guardRole, payload('gh pr view 1 --repo example/widgets'))
 
     assert.equal(own.status, 0, `${role}: ${own.stderr}`)
     assert.equal(other.status, 2, `${role}: ${other.stderr}`)
-    assert.match(other.stderr, /another repository than o\/r/, role)
-    assert.equal(unset.status, 2, `${role}: ${unset.stderr}`)
-    assert.match(unset.stderr, /ROLLOUT_REPO is not set/, role)
+    assert.match(other.stderr, /another repository than example\/widgets/, role)
+    assert.equal(bare.status, 2, `${guardRole}: ${bare.stderr}`)
+    assert.match(bare.stderr, /^rollout guard: the guard has no --repo/, guardRole)
+  }
+})
+
+test('the hook command decides by its command line, whatever ROLLOUT_* the environment holds', () => {
+  const manifest = loadManifest(makeRollout())
+  const branch = manifest.all[0].branch
+  const env = { ...process.env, ROLLOUT_REPO: 'other/x', ROLLOUT_BRANCH: 'main', ROLLOUT_DIR: '/tmp', ROLLOUT_NAME: 'x' }
+  const decisions = [
+    ['gh pr view 1 --repo example/widgets', 0],
+    ['gh pr view 1 --repo other/x', 2, /another repository than example\/widgets/],
+    [`git push -u origin ${branch}`, 0],
+    ['git push origin main', 2, /^rollout guard: push only to your branch feat\/a1 \(got main\)/],
+    [`cat ${join(manifest.dir, 'ledger.json')}`, 2, /control plane/],
+    ['ls /tmp', 0],
+  ]
+
+  for (const [command, status, reason] of decisions) {
+    const result = runHook(manifest, 'implement', payload(command), { branch, env })
+
+    assert.equal(result.status, status, `${command}: ${result.stderr}`)
+
+    if (reason) {
+      assert.match(result.stderr, reason, command)
+    }
   }
 })
 
 test('agent repo: padded lines are decided', () => {
   const manifest = loadManifest(makeRollout())
-  const env = hookEnv({ ROLLOUT_REPO: 'o/r' })
   const lines = {
-    'repeated gh': ['gh '.repeat(5_000) + '--repo other/x pr view 1', /another repository than o\/r/],
+    'repeated gh': ['gh '.repeat(5_000) + '--repo other/x pr view 1', /another repository than example\/widgets/],
     'repeated env -u': ['env -u '.repeat(2_000) + 'GH_TOKEN gh api user', /unsetting GH_TOKEN with env/],
   }
 
@@ -895,7 +933,7 @@ test('agent repo: padded lines are decided', () => {
     assert.ok(line.length > 13_000 && line.length < 16_384, `${name}: ${line.length}`)
 
     for (const role of Object.keys(HOOK_ROLES)) {
-      const result = runHook(manifest, role, payload(line), { env })
+      const result = runHook(manifest, role, payload(line))
 
       assert.equal(result.status, 2, `${name}, ${role}: ${result.stderr}`)
       assert.equal(result.signal, null, `${name}, ${role}`)
@@ -936,5 +974,641 @@ test('rolloutNamePattern: refuses exactly the names check() refuses', () => {
 
     assert.equal(rolloutNamePattern(name).test(value), refused, `${name}: ${value}`)
     assert.equal(check(command, 'worker', branch, { name, repo }), expected, command)
+  }
+})
+
+test('guardArgs: the role and the five context options, each attached with =', () => {
+  const options = ['--dir=/home/u/.rollouts/demo', '--home=/home/u/skill', '--name=demo', '--repo=example/widgets', '--branch=feat/a1']
+
+  assert.deepEqual(guardArgs(['worker', ...options]), {
+    role: 'worker',
+    context: { dir: '/home/u/.rollouts/demo', home: '/home/u/skill', name: 'demo', repo: 'example/widgets', branch: 'feat/a1' },
+  })
+
+  assert.deepEqual(guardArgs(['verifier', '--branch=', '--dir=-x']), { role: 'verifier', context: { branch: '', dir: '-x' } })
+  assert.deepEqual(guardArgs(['--name=demo']), { role: 'worker', context: { name: 'demo' } }, 'no role')
+  assert.deepEqual(guardArgs([]), { role: 'worker', context: {} })
+
+  const unreadable = {
+    'an unknown role': ['admin'],
+    'a second role': ['worker', 'verifier'],
+    'an unknown option': ['worker', '--force'],
+    'a value that starts with -': ['worker', '--dir', '-x'],
+    'an option without its value': ['worker', '--branch'],
+  }
+
+  for (const [name, argv] of Object.entries(unreadable)) {
+    const parsed = guardArgs(argv)
+
+    assert.match(
+      parsed.problem,
+      /^the guard (cannot read its hook command \(.+\)|takes one role, worker or verifier, not .+), command refused$/,
+      name,
+    )
+
+    assert.equal(parsed.context, undefined, name)
+  }
+})
+
+test('the hook script refuses every command when it cannot read its command line', () => {
+  for (const args of [['admin'], ['worker', '--force'], ['worker', '--dir', '-x']]) {
+    const result = spawnSync('node', [REAL_GUARD, ...args], { input: LS_PAYLOAD, encoding: 'utf8' })
+
+    assert.equal(result.status, 2, args.join(' '))
+    assert.match(result.stderr, /^rollout guard: the guard (cannot read its hook command|takes one role)/, args.join(' '))
+  }
+})
+
+test('readCommands: nested code is read as commands of its own, and the command around it stays whole', () => {
+  const reads = {
+    'gh pr $(echo merge) 12': ['echo merge', 'gh pr $ 12'],
+    'gh pr `echo merge` 12': ['echo merge', 'gh pr $ 12'],
+    'repos/x/$(git rev-parse HEAD)/y': ['git rev-parse HEAD', 'repos/x/$/y'],
+    'git -C ${PWD} push origin main': ['git -C $ push origin main'],
+    'echo "${arr[@]}" ${#x} ${!x} ${a[$i]}': ['echo "$" $ $ $'],
+    'echo ${x:-a b}': ['a b', 'echo $'],
+    "echo '${x:-' ; git push origin main ; echo '}'": ["'", 'git push origin main', "echo '", "echo '$'"],
+    'echo $((1 + 2))': ['(…)', '1 + 2', 'echo $'],
+    '(cd x && git push) | cat': ['cd x', 'git push', '(…)', 'cat'],
+    '$(a (b) c) d': ['b', 'a (…) c', '$ d'],
+    '$(a { b ) c': ['b', 'a {…}', '$ c'],
+    'gh api repos/{owner}/{repo}/pulls': ['owner', 'repo', 'gh api repos/{…}/{…}/pulls'],
+    'git -C {} -c x status': ['git -C {} -c x status'],
+    'f() { echo hi; }': ['echo hi', 'f() {…}'],
+    'gh pr (mer|zzz)ge 1': ['mer', 'zzz', 'gh pr (…)ge 1'],
+    'a ) b } c': ['a', 'b', 'c'],
+    'a $(b ; c': ['a $', 'b', 'c'],
+    'a ( b': ['b', 'a (…)'],
+  }
+
+  for (const [command, commands] of Object.entries(reads)) {
+    assert.deepEqual(readCommands(command).toSorted(), commands.toSorted(), command)
+  }
+})
+
+// A rollout named demo right under a .rollouts root, as a live one sits.
+function liveRollout() {
+  return loadManifest(makeRollout({ dir: join(mkdtempSync(join(tmpdir(), 'rollout-')), '.rollouts', 'demo') }))
+}
+
+// How each rule's reason starts, so a command refused by another rule fails the test.
+const RULES = {
+  variable: /^a \$ROLLOUT_ variable is refused: the rollout control plane is off limits to agents in any spelling$/,
+  ifs: /^\$IFS splits words that the guard reads as one, so it is refused\. /,
+  brace:
+    /^brace expansion such as \{a,b\} or \{1\.\.3\} builds words the guard cannot read, so it is refused\. A space after the comma is fine/,
+  root: /^only a plain rollout name may follow the rollouts root, not a glob or an expansion: the rollout control plane is off limits/,
+  controlPlane: /^the rollout control plane, its hooks and git hook settings are off limits to agents$/,
+  setting: /^overriding git settings for hooks, credentials or remotes is not allowed$/,
+  pushTarget: /^push only to your branch feat\/a1 \(got /,
+  rawHttp: /^talk to GitHub through gh \(read-only gh api\), not raw HTTP/,
+  merge: /^merging, reviewing and closing PRs belongs to the driver$/,
+  commandWord: /^the command word .+ is built by shell expansion, so the guard cannot read it\. /,
+  eval: /^the argument .+ of eval is built by shell expansion, so the guard cannot read it\. /,
+  shellString: /^the command .+ of [a-z]+ -c is built by shell expansion, so the guard cannot read it\. /,
+  git: /^the git .+ is built by shell expansion, so the guard cannot read it\. /,
+  gh: /^the gh .+ is built by shell expansion, so the guard cannot read it\. /,
+}
+
+// The reasons that ask for the command to be written out.
+const WRITTEN_OUT = [RULES.ifs, RULES.brace, RULES.commandWord, RULES.eval, RULES.shellString, RULES.git, RULES.gh]
+const WRITE_IT_OUT = /\. Write the command out\. For quoted program text, use a script file or the Write tool$/
+
+// Commands the guard allowed before it took its context from its command line
+// and refused expansion, with the rule that refuses each now. Rows that hang
+// on the push branch are for the worker only. They are data, never run.
+const BYPASSES = [
+  [`echo '{"cmd":"approve","id":"A1"}' > "$ROLLOUT_DIR/inbox/1.json"`, RULES.variable],
+  ['cat $ROLLOUT_DIR/ledger.json', RULES.variable],
+  ["sed -i '' 's/exit(2)/exit(0)/' $ROLLOUT_HOME/hooks/guard-bash.mjs", RULES.variable],
+  ['cp x /home/u/.rollouts/*/inbox/', RULES.root],
+  ['cp x ~/.rollouts/?/inbox/', RULES.root],
+  ['git -c core.hooks""Path=/dev/null push origin feat/a1', RULES.setting],
+  ['git${IFS}push${IFS}origin${IFS}main', RULES.ifs],
+  ['GIT push origin main', RULES.pushTarget, ['implement']],
+  ['CURL -X PUT https://API.GITHUB.COM/repos/o/r/pulls/1/merge', RULES.rawHttp],
+  ['s=commit; git $s -m "fix: thing"', RULES.git],
+  ['s=push; git $s origin main', RULES.git],
+  ['gh pr $(echo merge) 12', RULES.gh],
+  ['gh pr `echo merge` 12', RULES.gh],
+  ['git {push,} origin main', RULES.brace],
+  ["git $'push' origin main", RULES.git],
+  ['gh api -X $m repos/{owner}/{repo}/pulls/1/merge', RULES.gh],
+  ['git pu\\\nsh origin main', RULES.pushTarget, ['implement']],
+  ['ROLLOUT_\\\nROLE= node bin/rollout.mjs stop', RULES.controlPlane],
+  ['eval "$x"', RULES.eval],
+  ['sh -c "$x"', RULES.shellString],
+  ['$(echo git) push origin main', RULES.commandWord],
+  ['while read -r line; do $line; done < cmds.txt', RULES.commandWord],
+  ['x=core.hooksPath=/dev/null; git -C ${PWD} -c $x push origin main', RULES.git],
+  ['k=core.hooksPath; git config $k /dev/null', RULES.git],
+  ['f=-fbase=main; gh api repos/{owner}/{repo}/merges $f', RULES.gh],
+  ['git push --$f origin feat/a1', RULES.git],
+  ['=git push origin main', RULES.commandWord],
+  ['/usr/bin/gi? push origin main', RULES.commandWord],
+  ['/opt/homebrew/bin/g? pr merge 1', RULES.commandWord],
+  ['cat ~/.rollouts/de""mo/ledger.json', RULES.controlPlane],
+  ['cat ~/.rollouts/de\\mo/ledger.json', RULES.controlPlane],
+  [`sed -i '' 's/exit(2)/exit(0)/' ~/.claude/skills/roll""out/hooks/guard-bash.mjs`, RULES.controlPlane],
+  ['cat ~/.rollouts/(a|b)/ledger.json', RULES.root],
+  ['n=x; cat ~/.rollouts/$n/ledger.json', RULES.root],
+]
+
+// Refused before, and still refused once the guard reads nested code.
+const STILL_REFUSED = [
+  ['git -C ${PWD} -c core.hooksPath=/dev/null push origin feat/a1', RULES.setting],
+  ['git -C "$(pwd)" -c core.hooksPath=/dev/null push origin feat/a1', RULES.setting],
+  ["echo '${x:-' ; git push origin main ; echo '}'", RULES.pushTarget, ['implement']],
+  ['echo \\\\\n$x', RULES.commandWord],
+  ['git push origin main', RULES.pushTarget, ['implement']],
+  ['gh pr merge 1', RULES.merge],
+]
+
+test('the bypasses are refused by the hook command, each by its own rule', () => {
+  const manifest = liveRollout()
+  const branch = manifest.all[0].branch
+
+  assert.equal(branch, 'feat/a1')
+
+  for (const [command, rule, roles = Object.keys(HOOK_ROLES)] of [...BYPASSES, ...STILL_REFUSED]) {
+    for (const role of roles) {
+      const result = runHook(manifest, role, payload(command), { branch })
+      const shown = `${role}: ${JSON.stringify(command)}: ${result.stderr}`
+
+      assert.equal(result.status, 2, shown)
+      assert.match(result.stderr, /^rollout guard: .+\n$/, shown)
+
+      const reason = result.stderr.slice('rollout guard: '.length, -1)
+
+      assert.match(reason, rule, shown)
+      assert.equal(WRITE_IT_OUT.test(reason), WRITTEN_OUT.includes(rule), shown)
+    }
+  }
+})
+
+const GIT_CONFIG = /^changing git settings for hooks, credentials or remotes is not allowed$/
+
+// Words the guard could split, drop or join unlike the shell: an empty word,
+// a group, a quoted space, a brace sequence, a zsh glob group and a comment
+// before a line continuation. Each must still meet its own rule.
+const MISREADINGS = [
+  ['git -C "" -c core.hooksPath=/dev/null push origin main', RULES.setting],
+  ["git -C '' -c core.hooksPath=/dev/null push origin main", RULES.setting],
+  ['git -C {} -c core.hooksPath=/dev/null push origin main', RULES.setting],
+  ['git --namespace "" -c core.hooksPath=/dev/null push origin main', RULES.setting],
+  ['git -C "" -c credential.helper= push origin main', RULES.setting],
+  ['git -C "" -c remote.origin.pushurl=https://example.com/x.git push origin main', RULES.setting],
+  ['git -C "" -c core.hooksPath=/dev/null commit -m x', RULES.setting],
+  ['git -C "a b" -c core.hooksPath=/dev/null push origin feat/a1', RULES.setting],
+  ['git -C a{b}c -c core.hooksPath=/dev/null push origin feat/a1', RULES.setting],
+  ['git -C (x|y) -c core.hooksPath=/dev/null push origin feat/a1', RULES.setting],
+  ["alias g='git -c core.hooksPath=/dev/null'", RULES.setting],
+  ['git -C "" config --worktree core.hooksPath /dev/null', GIT_CONFIG],
+  ['git -C "" push origin main', RULES.pushTarget, ['implement']],
+  ['git -C {} push origin main', RULES.pushTarget, ['implement']],
+  ['git -C (x|y) push origin main', RULES.pushTarget, ['implement']],
+  ['git -C "a b" push origin main', RULES.pushTarget, ['implement']],
+  ['git -C a\\ b push origin main', RULES.pushTarget, ['implement']],
+  [`sh -c "git -C 'a b' push origin main"`, RULES.pushTarget, ['implement']],
+  ['git -C "a b" config core.hooksPath /dev/null', GIT_CONFIG],
+  ['git -C "a;b" config core.hooksPath /dev/null', /^a quote in the git option -C does not close in this command/],
+  ['git -c user.name="A B" commit --no-verify -m x', /^git commit --no-verify is not allowed/],
+  ['gh pr {m..m}erge 1', RULES.brace],
+  ['git {p..p}ush origin main', RULES.brace],
+  ['gh {r..r}epo delete o/r', RULES.brace],
+  ['npm {p..p}ublish', RULES.brace],
+  ['echo {1..9..2}', RULES.brace],
+  ['gh pr {merge,x{}} 1', RULES.gh],
+  ['gh pr (mer|zzz)ge 1', RULES.gh],
+  ['/usr/bin/(g)it push origin main', RULES.commandWord],
+  ['echo note # \\\n$(echo gh) pr merge 1', RULES.commandWord],
+  ['echo note # \\\n/opt/homebrew/bin/g? pr merge 1', RULES.commandWord],
+  ['echo note # \\\n$x', RULES.commandWord],
+  ['/usr/bin/git(|) push origin main', RULES.commandWord],
+  ['/usr/bin/gi(|)t push origin main', RULES.commandWord],
+  ['/opt/homebrew/bin/gh(|) pr merge 1 --squash', RULES.commandWord],
+  ['gh pr me(|)rge 1 --squash', RULES.gh],
+  ['git pu(|)sh origin main', RULES.git],
+  ['git com(|)mit -m x', RULES.git],
+  ['git (|)config core.hooksPath /dev/null', RULES.git],
+  ['git --namespace="a b" config core.hooksPath /dev/null', GIT_CONFIG],
+  ['git --namespace="a;b" config core.hooksPath /dev/null', /^a quote in the git option --namespace="a does not close in this command/],
+  ['git --exec-path="a b" push origin main', RULES.pushTarget, ['implement']],
+  ['git --namespace=a\\ b push origin main', RULES.pushTarget, ['implement']],
+  ['gh pr -b "x y" merge 1 --squash', RULES.merge],
+  ['gh pr --body="x y" merge 1 --squash', RULES.merge],
+  ['git config core.hooks?ath /dev/null', RULES.git],
+  ['git config core.hooks(P)ath /dev/null', RULES.git],
+  ['git push --mirr?r origin feat/a1', RULES.git],
+  ['git -c core.hooks?ath=/dev/null push origin feat/a1', RULES.git],
+  ['gh api repos/{owner}/{repo}/pulls/1/merge -X [P]UT', RULES.gh],
+  ['gh api repos/{owner}/{repo}/pulls/1/merge [-]XPUT', RULES.gh],
+  ["eval '/usr/bin/gi? push origin main'", /^the command .+ of eval is built by shell expansion/],
+  ['gh pr "" merge --squash', RULES.merge],
+  ["gh pr '' merge --admin", RULES.merge],
+  ['gh pr "" review 1 --approve', RULES.merge],
+  ['gh pr "" close 1', RULES.merge],
+  ['gh "" auth token', /^gh credentials stay with gh/],
+  ['gh "" repo delete x', /^gh repo is not allowed for rollout agents$/],
+  ['gh "" secret set X', /^gh secret is not allowed for rollout agents$/],
+  ['gh "" release create v9.9.9', /^gh release is not allowed for rollout agents$/],
+  ['gh "" api -X PUT repos/{owner}/{repo}/pulls/1/merge', /^gh api is read-only for rollout agents/],
+  ['gh "" api graphql -f query=x', /^gh api graphql is not allowed for rollout agents/],
+  ['gh "" api repos/other/x/pulls', /^gh api repos\/other\/x\/pulls names another repository than example\/widgets/],
+  ['npm "" version', /^npm version is not allowed/],
+  ["eval '' '/usr/bin/gi? push origin main'", /^the command .+ of eval is built by shell expansion/],
+]
+
+test('misread words are refused by the hook command, each by its own rule', () => {
+  const manifest = liveRollout()
+  const branch = manifest.all[0].branch
+
+  for (const [command, rule, roles = Object.keys(HOOK_ROLES)] of MISREADINGS) {
+    for (const role of roles) {
+      const result = runHook(manifest, role, payload(command), { branch })
+      const shown = `${role}: ${JSON.stringify(command)}: ${result.stderr}`
+
+      assert.equal(result.status, 2, shown)
+      assert.match(result.stderr.slice('rollout guard: '.length, -1), rule, shown)
+    }
+  }
+})
+
+test('groups, empty words and a quoted # before a line continuation stay allowed', () => {
+  const both = [
+    '(cd sub && npm test) | tail -5',
+    'f() { echo hi; }; f',
+    '{ npm test; } 2>&1 | tail -5',
+    `node -e "const fs = require('fs'); fs.readFileSync('x').toString()"`,
+    `python3 -c "import json; print(json.dumps({'a': 1}))"`,
+    "find . -name '*.md' -exec grep -l x {} +",
+    'echo $(( (1 + 2) * 3 ))',
+    'git log --oneline --grep "#12" \\\n  -5',
+    'echo "a # b" \\\n  c',
+    'git -C "/home/u/path with space" status',
+    "git -C '/home/u/path with space' log --oneline",
+    "gh api repos/{owner}/{repo}/pulls --jq '[.[] | .number]'",
+    'gh api -X GET search/issues -f q="label:bug" --paginate',
+    'eval "npm test"',
+    'gh pr "" view --json number,title',
+    'git -C "" status',
+  ]
+
+  for (const role of ROLES) {
+    for (const command of both) {
+      assert.equal(check(command, role, 'feat/a1', LIVE_DEMO), null, `${role}: ${command}`)
+    }
+  }
+
+  for (const command of [
+    'git commit -m ""',
+    'git -c user.name="A B" commit -m "feat: x"',
+    'git -c user.name="github-actions[bot]" commit -m "feat: x"',
+    'gh pr create --title "fix #12" \\\n  --body-file /tmp/body.md',
+  ]) {
+    assert.equal(check(command, 'worker', 'feat/a1', LIVE_DEMO), null, command)
+  }
+})
+
+const LIVE_DEMO = { dir: '/home/u/.rollouts/demo', home: '/home/u/.claude/skills/rollout', name: 'demo', repo: 'example/widgets' }
+
+test('everyday commands with substitutions, braces and a heredoc stay allowed', () => {
+  const both = [
+    'gh pr checks 12 --watch',
+    'grep -c foo file',
+    'node -c x.js',
+    'npm test',
+    'sha=$(git rev-parse HEAD)',
+    'git diff $(git merge-base origin/main HEAD)',
+    'cd "$(git rev-parse --show-toplevel)" && npm test',
+    'git -C "$PWD" status',
+    'git -C ${PWD} status',
+    'echo $((1 + 2))',
+    `printf '%s\\n' "\${HOME}"`,
+    'gh pr checks $(gh pr view --json number -q .number) --watch',
+    'gh api repos/{owner}/{repo}/pulls',
+    'gh api "repos/{owner}/{repo}/pulls?per_page=1"',
+    'git log -1 HEAD@{1}',
+    'for f in a b; do echo $f; done',
+    '[ -f x ] && echo y',
+    "awk '{print $1}' file",
+    "sed -n '$p' file",
+    "npx eslint 'src/**'",
+    'ls ~/.rollouts/demo.worktrees/A1/*.md',
+    'ls ~/.rollouts/',
+    'bash -c "npm test"',
+    'env FOO=1 npm test',
+    'command -v git',
+    'time -p npm test',
+    "jq '{name: .name, id: .id}' x.json",
+    'gh pr checks $n --watch',
+  ]
+
+  const worker = [
+    'git commit -m "$msg"',
+    'git commit $flags',
+    'git push -u origin feat/a1',
+    'git push --force-with-lease origin feat/a1',
+    'git commit -m "feat: x"',
+    'git commit -m "$(cat <<\'EOF\'\nfeat: x\nEOF\n)"',
+  ]
+
+  for (const role of ROLES) {
+    for (const command of both) {
+      assert.equal(check(command, role, 'feat/a1', LIVE_DEMO), null, `${role}: ${command}`)
+    }
+  }
+
+  for (const command of worker) {
+    assert.equal(check(command, 'worker', 'feat/a1', LIVE_DEMO), null, command)
+  }
+})
+
+test('expansion hides no command behind a wrapper, a keyword or a shell option', () => {
+  const forms = [
+    ['time -p $x', RULES.commandWord],
+    ['env FOO=1 $x', RULES.commandWord],
+    ['command -p $x', RULES.commandWord],
+    ['builtin $x', RULES.commandWord],
+    ['nohup $x', RULES.commandWord],
+    ['exec $x', RULES.commandWord],
+    ['if $x; then echo y; fi', RULES.commandWord],
+    ['! $x', RULES.commandWord],
+    ['2>/dev/null $x', RULES.commandWord],
+    ['FOO=1 BAR=2 "$x"', RULES.commandWord],
+    ['\\git push origin feat/a1', RULES.commandWord],
+    ['bin/*.sh', RULES.commandWord],
+    ['bash -c -e "$x"', RULES.shellString],
+    ['bash -co errexit "$x"', RULES.shellString],
+    ['zsh -lc "$x"', RULES.shellString],
+    ['sh -c -- "$x"', RULES.shellString],
+    ['eval git "$x"', RULES.eval],
+    ['git -c core.editor=$x status', RULES.git],
+    ['git remote $action origin x', RULES.git],
+    ['git remote -v $action origin x', RULES.git],
+    ['gh $sub list', RULES.gh],
+    ['gh api repos/o/r/pulls -X$m', RULES.gh],
+    ['gh api repos/o/r/pulls --method=$m', RULES.gh],
+  ]
+
+  for (const [command, rule] of forms) {
+    for (const role of ROLES) {
+      assert.match(check(command, role, BRANCH, REPO), rule, `${role}: ${command}`)
+    }
+  }
+})
+
+test('tool names count in any case, subcommands only as written', () => {
+  const forms = [
+    ['GH pr merge 1', RULES.merge, ROLES],
+    ['/USR/BIN/GIT push origin main', /^push only to your branch fix\/thing/, ['worker']],
+    ['Git -c core.hooksPath=/dev/null status', RULES.setting, ROLES],
+    ['NPM publish', /^`publish` belongs to the release PR/, ROLES],
+    ['CHANGESET version', /^changeset version belongs to the release PR$/, ROLES],
+    ['Curl https://api.github.com/repos/o/r', RULES.rawHttp, ROLES],
+    ['ENV -i gh api user', /without the agents' GitHub token/, ROLES],
+    ['GH pr create --title x', /^the verifier is read-only on GitHub$/, ['verifier']],
+  ]
+
+  for (const [command, rule, roles] of forms) {
+    for (const role of roles) {
+      assert.match(check(command, role, BRANCH, REPO), rule, `${role}: ${command}`)
+    }
+  }
+})
+
+test('the caps hold for lines joined by continuations and for commands that span lines', () => {
+  const joined = 'ls' + ' '.repeat(10_000) + '\\\n' + ' '.repeat(10_000) + 'x'
+  const spanning = ('echo ' + 'x'.repeat(10_000) + ' $(\n) ').repeat(2)
+
+  assert.ok(joined.split('\n').every((line) => line.length <= 16_384))
+  assert.ok(spanning.split('\n').every((line) => line.length <= 16_384))
+
+  for (const role of ROLES) {
+    assert.match(check(joined, role, BRANCH), /^a line of more than 16384 characters is too long for the guard/, role)
+    assert.match(
+      check(spanning, role, BRANCH),
+      /^a command of more than 16384 characters between separators is too long for the guard/,
+      role,
+    )
+  }
+})
+
+test('deeply nested and padded lines are decided by the hook command', () => {
+  const manifest = liveRollout()
+  const lines = [
+    ['5,000 nested $(', '$('.repeat(5_000) + 'x' + ')'.repeat(5_000), 2],
+    ['5,000 nested ${', '${'.repeat(5_000) + 'x' + '}'.repeat(5_000), 2],
+    ['{ and 16,000 commas', '{' + ','.repeat(16_000), 0],
+  ]
+
+  for (const [name, line, status] of lines) {
+    assert.ok(line.length <= 16_384, name)
+
+    for (const role of Object.keys(HOOK_ROLES)) {
+      const result = runHook(manifest, role, payload(line), { branch: manifest.all[0].branch })
+
+      assert.equal(result.error, undefined, `${name}, ${role}`)
+      assert.equal(result.signal, null, `${name}, ${role}`)
+      assert.equal(result.status, status, `${name}, ${role}: ${result.stderr}`)
+
+      if (status === 2) {
+        assert.match(result.stderr.slice('rollout guard: '.length), RULES.commandWord, `${name}, ${role}`)
+      }
+    }
+  }
+})
+
+// A word that ends in a backslash joins every word after it, and each -c of
+// `sh -c -o …` reads the options after it. Read again from every start,
+// either costs the square of a line's length, and a hook that times out lets
+// the command run.
+test('padded option words are decided by the hook command, far within its timeout', () => {
+  const manifest = liveRollout()
+  const write = 'gh api -X PUT repos/{owner}/{repo}/pulls/1/merge'
+  const padded = (head, unit) => [
+    '# \\',
+    ...Array.from({ length: 16 }, (_, row) => head + unit.repeat(Math.floor((16_000 - head.length) / unit.length)) + ` ${row}`),
+    write,
+  ]
+
+  const commands = [
+    ['option words that end in a backslash', padded(': git gh npm pnpm yarn npx pnpx bun bunx ', '-\\ ')],
+    ['sh -c -o', padded('', 'sh -c -o ')],
+  ]
+
+  for (const [name, lines] of commands) {
+    const command = lines.join('\n')
+
+    assert.ok(command.length <= 262_144 && lines.every((line) => line.length <= 16_384), name)
+
+    for (const role of ROLES) {
+      const started = performance.now()
+
+      assert.match(check(command, role, BRANCH, LIVE_DEMO), /^gh api is read-only for rollout agents/, `${name}, ${role}`)
+      assert.ok(performance.now() - started < 1_000, `${name}, ${role}: ${Math.round(performance.now() - started)} ms`)
+    }
+
+    for (const role of Object.keys(HOOK_ROLES)) {
+      const result = runHook(manifest, role, payload(command), { branch: manifest.all[0].branch })
+
+      assert.equal(result.signal, null, `${name}, ${role}`)
+      assert.equal(result.status, 2, `${name}, ${role}: ${result.stderr}`)
+      assert.match(result.stderr, /^rollout guard: gh api is read-only for rollout agents/, `${name}, ${role}`)
+    }
+  }
+})
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Each exported list is walked whole, so a member added later is tested here too.
+function assertReason(command, roles, reason) {
+  for (const role of roles) {
+    assert.match(check(command, role, BRANCH, REPO), reason, `${role}: ${command}`)
+  }
+}
+
+test('ALWAYS: every pattern refuses its sample, and the push markers are off limits, for both roles', () => {
+  for (const { pattern, sample } of ALWAYS) {
+    assert.match(sample, pattern)
+    assertReason(sample, ROLES, RULES.controlPlane)
+  }
+
+  for (const marker of ['rollout-branch', 'rollout-pushurl', 'rollout-ready']) {
+    assertReason(`echo x > .git/${marker}`, ROLES, RULES.controlPlane)
+    assertReason(`rm ../.git/worktrees/A1/${marker}`, ROLES, RULES.controlPlane)
+  }
+})
+
+test('GIT_SETTING_SAMPLES: a -c override or git config of each setting is refused, for both roles', () => {
+  for (const setting of GIT_SETTING_SAMPLES) {
+    for (const command of [
+      `git -c ${setting}=x status`,
+      `git -c${setting}=x status`,
+      `git -c "${setting}=x" status`,
+      `git -C /tmp -c ${setting}=x log`,
+    ]) {
+      assertReason(command, ROLES, RULES.setting)
+    }
+
+    assertReason(`git config ${setting} x`, ROLES, /^changing git settings for hooks, credentials or remotes is not allowed$/)
+  }
+
+  assertAllowed(['grep -c foo file', 'node -c x.js', 'git log --grep credential.helper'])
+})
+
+test('GIT_FORBIDDEN: each subcommand is refused, for both roles', () => {
+  for (const sub of GIT_FORBIDDEN) {
+    assertReason(`git ${sub} x`, ROLES, new RegExp(`^git ${escapeRegExp(sub)} is not allowed for rollout agents$`))
+  }
+})
+
+test('REMOTE_FORBIDDEN: each git remote action is refused, before or after its options, for both roles', () => {
+  for (const action of REMOTE_FORBIDDEN) {
+    for (const command of [`git remote ${action} origin x`, `git remote -v ${action} origin x`]) {
+      assertReason(command, ROLES, new RegExp(`^git remote ${escapeRegExp(action)} is not allowed: agents push to origin only$`))
+    }
+  }
+})
+
+test('CONFIG_SECTION_FLAGS: removing or renaming a config section is refused, for both roles', () => {
+  for (const flag of CONFIG_SECTION_FLAGS) {
+    assertReason(`git config ${flag} core`, ROLES, /^changing git settings for hooks, credentials or remotes is not allowed$/)
+  }
+})
+
+test('BRANCH_FORBIDDEN: deleting or moving a branch, and git tag, are refused for the worker', () => {
+  for (const flag of BRANCH_FORBIDDEN) {
+    assertReason(`git branch ${flag} old`, ['worker'], new RegExp(`^git branch ${escapeRegExp(flag)} old is not allowed$`))
+  }
+
+  assertReason('git tag v1.0.0', ['worker'], /^git tag v1\.0\.0 is not allowed$/)
+})
+
+test('PUSH_FORBIDDEN: each push option is refused for the worker, --repo in every spelling', () => {
+  for (const option of [...PUSH_FORBIDDEN, '--repo=origin']) {
+    assertReason(`git push ${option} origin fix/thing`, ['worker'], new RegExp(`^git push ${escapeRegExp(option)} is not allowed`))
+  }
+})
+
+test('VERIFIER_GIT_FORBIDDEN: each subcommand is refused for the verifier', () => {
+  for (const sub of VERIFIER_GIT_FORBIDDEN) {
+    // update-ref is refused for everyone first.
+    const reason = GIT_FORBIDDEN.includes(sub)
+      ? `^git ${escapeRegExp(sub)} is not allowed for rollout agents$`
+      : `^the verifier is read-only and stays on the PR head: git ${escapeRegExp(sub)} is not allowed$`
+
+    assertReason(`git ${sub}`, ['verifier'], new RegExp(reason))
+  }
+})
+
+test('GH_FORBIDDEN: each gh command is refused, for both roles', () => {
+  for (const sub of GH_FORBIDDEN) {
+    assertReason(`gh ${sub} list`, ROLES, new RegExp(`^gh ${escapeRegExp(sub)} is not allowed for rollout agents$`))
+  }
+})
+
+test('GH_PR_FORBIDDEN: each gh pr action is refused, for both roles', () => {
+  for (const action of GH_PR_FORBIDDEN) {
+    assertReason(`gh pr ${action} 12`, ROLES, RULES.merge)
+  }
+})
+
+test('GH_API_FIELDS: gh api with a body is refused without a method, for both roles', () => {
+  for (const field of GH_API_FIELDS) {
+    assertReason(`gh api repos/o/r/issues ${field} title=x`, ROLES, /^gh api is read-only for rollout agents \(GET only\)$/)
+  }
+})
+
+test('VERIFIER_GH_FORBIDDEN: each gh write is refused for the verifier, in any case of the tool', () => {
+  for (const action of VERIFIER_GH_FORBIDDEN) {
+    for (const tool of ['gh', 'GH']) {
+      assertReason(`${tool} ${action} --title x`, ['verifier'], /^the verifier is read-only on GitHub$/)
+    }
+  }
+})
+
+test('PACKAGE_MANAGERS: each manager refuses releases, versions and expanded subcommands, for both roles', () => {
+  for (const manager of PACKAGE_MANAGERS) {
+    assertReason(`${manager} publish`, ROLES, /^`publish` belongs to the release PR and the maintainer, not to rollout agents$/)
+    assertReason(`${manager} version`, ROLES, new RegExp(`^${manager} version is not allowed: versions are bumped by the release PR$`))
+    assertReason(`${manager} $cmd`, ROLES, new RegExp(`^the ${manager} subcommand \\$cmd is built by shell expansion`))
+    assertReason(`${manager} run $script`, ROLES, new RegExp(`^the ${manager} run argument \\$script is built by shell expansion`))
+  }
+})
+
+test('PUBLISH_WORDS: each word is refused under a package manager, for both roles', () => {
+  for (const word of PUBLISH_WORDS) {
+    for (const command of [`npm ${word}`, `pnpm -w ${word}`]) {
+      assertReason(command, ROLES, new RegExp(`^\`${escapeRegExp(word)}\` belongs to the release PR and the maintainer`))
+    }
+  }
+})
+
+test('CHANGESET_RELEASE: each release command is refused, for both roles', () => {
+  for (const word of CHANGESET_RELEASE) {
+    for (const command of [`changeset ${word}`, `npx @changesets/cli ${word}`, `Changeset ${word}`]) {
+      assertReason(command, ROLES, new RegExp(`^changeset ${word} belongs to the release PR$`))
+    }
+  }
+
+  assertReason('changeset $cmd', ROLES, /^the changeset argument \$cmd is built by shell expansion/)
+})
+
+test('HTTP_TOOLS: each tool is refused against GitHub, in any case, for both roles', () => {
+  for (const tool of HTTP_TOOLS) {
+    for (const name of [tool, tool.toUpperCase()]) {
+      assertReason(`${name} https://api.github.com/repos/o/r`, ROLES, RULES.rawHttp)
+    }
+  }
+})
+
+test('HTTP_HOSTS: each host is refused to raw HTTP, in any case, for both roles', () => {
+  for (const host of HTTP_HOSTS) {
+    for (const name of [host, host.toUpperCase()]) {
+      assertReason(`curl -X PUT https://${name}/x`, ROLES, RULES.rawHttp)
+    }
   }
 })
