@@ -27,7 +27,7 @@ import { batteryWarning } from '../lib/machine.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
 import { prsWithoutPlan } from '../lib/plan.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
-import { ghEnv } from '../lib/github.mjs'
+import { clientFor, ghEnv, ghError } from '../lib/github.mjs'
 import {
   agentTokenCheck,
   catalogCheck,
@@ -408,11 +408,15 @@ async function preflight(manifest) {
     problems.push(origin.text)
   }
 
-  const repo = await sh('gh', ['api', `repos/${manifest.repo.github}`], { env: ghEnv(manifest) })
+  let info = null
 
-  if (repo.code === 0) {
-    const info = JSON.parse(repo.stdout)
+  try {
+    info = (await clientFor(manifest).request('GET', `repos/${manifest.repo.github}`)).body
+  } catch (error) {
+    problems.push(`cannot read the repository: ${ghError(error)}`)
+  }
 
+  if (info) {
     if (manifest.repo.merge.method === 'squash' && !info.allow_squash_merge) {
       problems.push('squash merges are disabled on the repository')
     }
@@ -437,8 +441,6 @@ async function preflight(manifest) {
     if (info.private === true && manifest.repo.public === true) {
       warnings.push('the repository is private: set repo.public: false to drop the public-repository rules from the prompts')
     }
-  } else {
-    problems.push('cannot read the repository with gh')
   }
 
   if (manifest.repo.agentToken) {

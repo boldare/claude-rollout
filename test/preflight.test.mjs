@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readCatalog } from '../lib/github.mjs'
+import { readCatalog, setFetch } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import {
   agentTokenCheck,
@@ -18,7 +18,7 @@ import {
   VERIFIED_VERSIONS,
   versionWarning,
 } from '../lib/preflight.mjs'
-import { makeRollout } from './fixtures.mjs'
+import { fakeGitHub, makeRollout } from './fixtures.mjs'
 
 function tools(install, verify) {
   return probeTools({ repo: { install, verify } })
@@ -413,65 +413,56 @@ test('stored login: the GH_HOST fallback is an info line, never a problem', asyn
   })
 })
 
-// Answers by the exact joined arguments, logs what gh saw and never reads
-// stdin, which sh() leaves open. An unknown call fails.
-function fakeAnsweringGh(dir, answers) {
-  writeFileSync(
-    join(dir, 'gh'),
-    `#!/usr/bin/env node
-const { appendFileSync } = require('node:fs')
-const { join } = require('node:path')
-const args = process.argv.slice(2)
-const answers = ${JSON.stringify(answers)}
-const answer = answers[args.join(' ')] ?? { stderr: 'unexpected call\\n', code: 1 }
-appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ args, GH_TOKEN: process.env.GH_TOKEN }) + '\\n')
-process.stdout.write(answer.stdout ?? '')
-process.stderr.write(answer.stderr ?? '')
-process.exitCode = answer.code ?? 0
-`,
-    { mode: 0o755 },
-  )
-}
+const MAINTAINER_TOKEN = 'synthetic-maintainer-token'
+const REPOSITORY = 'repos/example/widgets'
+const PERMISSION = 'repos/example/widgets/collaborators/demo-bot/permission'
 
-const REASONS = { 200: 'OK', 403: 'Forbidden', 404: 'Not Found' }
-
-// What `gh api -i` prints: a status line, headers ending in \r\n, a blank line and the body.
-function response(status, headers, body) {
-  return `HTTP/2.0 ${status} ${REASONS[status]}\n${headers.map((header) => `${header}\r\n`).join('')}\r\n${JSON.stringify(body)}`
-}
-
-function repositoryAnswer(probe) {
+// The repository read of the probe: a status, or null for no answer at all.
+function probeRoute(probe) {
   if (probe === null) {
-    return { stderr: 'error connecting to api.github.com\n', code: 1 }
+    return { path: REPOSITORY, error: 'ECONNREFUSED' }
   }
-
-  const stdout = response(probe, ['Content-Type: application/json; charset=utf-8'], { full_name: 'example/widgets' })
 
   if (probe === 200) {
-    return { stdout }
+    return { path: REPOSITORY, body: { full_name: 'example/widgets' } }
   }
 
-  return { stdout, stderr: `gh: ${REASONS[probe]} (HTTP ${probe})\n`, code: 1 }
+  return { path: REPOSITORY, status: probe, body: { message: probe === 404 ? 'Not Found' : 'Forbidden' } }
 }
 
 // scopes null leaves the X-Oauth-Scopes header out, and probe null is a probe GitHub never answered.
-function agentAnswers({ permission = 'write', scopes = 'repo, workflow, read:org', probe = 200 } = {}) {
-  const scopeHeader = scopes === null ? [] : [`X-Oauth-Scopes: ${scopes}`]
-  const headers = ['Content-Type: application/json; charset=utf-8', 'X-Accepted-Oauth-Scopes: ', ...scopeHeader, 'X-Ratelimit-Limit: 5000']
+function agentRoutes({ permission = 'write', scopes = 'repo, workflow, read:org', probe = 200 } = {}) {
+  const scopeHeader = scopes === null ? {} : { 'x-oauth-scopes': scopes }
 
-  return {
-    'api user --jq .login': { stdout: 'demo-bot\n' },
-    'api repos/example/widgets/collaborators/demo-bot/permission --jq .permission': { stdout: `${permission}\n` },
-    'api -i user': { stdout: response(200, headers, { login: 'demo-bot' }) },
-    'api -i repos/example/widgets': repositoryAnswer(probe),
-  }
+  return [
+    { path: 'user', body: { login: 'demo-bot' }, headers: { 'x-accepted-oauth-scopes': '', ...scopeHeader, 'x-ratelimit-limit': '5000' } },
+    { path: PERMISSION, body: { permission, user: { login: 'demo-bot' } } },
+    probeRoute(probe),
+  ]
 }
 
 const CLASSIC_TOKEN = 'ghp_synthetic0123456789abcdef'
 const FINE_GRAINED_TOKEN = 'github_pat_synthetic0123456789abcdef'
 
-function withAgentToken(token, answers, run) {
-  return withAgentGh(token, (bin) => fakeAnsweringGh(bin, answers), run)
+// A fixture rollout whose repo.agentToken holds `token`, and a fake GitHub
+// that answers `routes`. No gh runs.
+async function withAgentToken(token, routes, run) {
+  const manifest = loadManifest(makeRollout())
+  const github = fakeGitHub(routes)
+
+  manifest.repo.agentToken = join(manifest.dir, 'agent-token')
+  writeFileSync(manifest.repo.agentToken, `${token}\n`)
+  setFetch(github.fetch, { token: async () => MAINTAINER_TOKEN })
+
+  try {
+    await run(manifest, github)
+  } finally {
+    rmSync(manifest.dir, { recursive: true, force: true })
+  }
+}
+
+function bearerOf(github, path) {
+  return github.requests().find((request) => request.path === path)?.headers.authorization
 }
 
 const IDENTITY_PROBLEM = 'agent token must belong to a non-maintainer account with write (not admin) permission'
@@ -480,10 +471,8 @@ const READ_ORG_WARNING =
   'agent token lacks the read:org scope: gh cannot edit or read a PR with a team review request, so agents cannot update their PR description'
 
 test('agent token: a classic token that sees the repository passes', async () => {
-  await withAgentToken(CLASSIC_TOKEN, agentAnswers(), async (manifest, calls) => {
+  await withAgentToken(CLASSIC_TOKEN, agentRoutes(), async (manifest, github) => {
     const result = await agentTokenCheck(manifest)
-    const probe = calls().find((call) => call.args.join(' ') === 'api -i repos/example/widgets')
-    const role = calls().find((call) => call.args[1].endsWith('/permission'))
 
     assert.deepEqual(result, {
       lines: [
@@ -494,15 +483,15 @@ test('agent token: a classic token that sees the repository passes', async () =>
       warnings: [],
     })
 
-    assert.deepEqual(probe.args, ['api', '-i', 'repos/example/widgets'])
-    assert.equal(probe.GH_TOKEN, CLASSIC_TOKEN)
-    assert.notEqual(role.GH_TOKEN, CLASSIC_TOKEN)
+    assert.equal(bearerOf(github, 'user'), `Bearer ${CLASSIC_TOKEN}`)
+    assert.equal(bearerOf(github, REPOSITORY), `Bearer ${CLASSIC_TOKEN}`)
+    assert.equal(bearerOf(github, PERMISSION), `Bearer ${MAINTAINER_TOKEN}`)
   })
 })
 
 test('agent token: a token that cannot see the repository fails with the status', async () => {
   for (const status of [404, 403]) {
-    await withAgentToken(CLASSIC_TOKEN, agentAnswers({ probe: status }), async (manifest) => {
+    await withAgentToken(CLASSIC_TOKEN, agentRoutes({ probe: status }), async (manifest) => {
       const result = await agentTokenCheck(manifest)
 
       assert.ok(result.lines.includes(`FAIL agent token cannot see example/widgets (${status})`), status)
@@ -516,7 +505,7 @@ test('agent token: a token that cannot see the repository fails with the status'
 })
 
 test('agent token: a repository probe without an answer fails', async () => {
-  await withAgentToken(CLASSIC_TOKEN, agentAnswers({ probe: null }), async (manifest) => {
+  await withAgentToken(CLASSIC_TOKEN, agentRoutes({ probe: null }), async (manifest) => {
     const result = await agentTokenCheck(manifest)
 
     assert.ok(result.lines.includes('FAIL agent token cannot see example/widgets (no answer)'))
@@ -527,7 +516,7 @@ test('agent token: a repository probe without an answer fails', async () => {
 })
 
 test('agent token: a fine-grained token fails without scope warnings and is never printed', async () => {
-  await withAgentToken(FINE_GRAINED_TOKEN, agentAnswers({ scopes: null }), async (manifest, calls) => {
+  await withAgentToken(FINE_GRAINED_TOKEN, agentRoutes({ scopes: null }), async (manifest, github) => {
     const result = await agentTokenCheck(manifest)
     const printed = JSON.stringify(result)
 
@@ -542,7 +531,7 @@ test('agent token: a fine-grained token fails without scope warnings and is neve
     ])
 
     assert.deepEqual(result.warnings, [])
-    assert.ok(calls().some((call) => call.args.join(' ') === 'api -i repos/example/widgets'))
+    assert.ok(github.requests().some((request) => request.path === REPOSITORY))
     assert.equal(printed.includes(FINE_GRAINED_TOKEN), false)
     assert.equal(printed.includes(FINE_GRAINED_TOKEN.slice('github_pat_'.length)), false)
   })
@@ -559,7 +548,7 @@ test('agent token: a classic token without read:org, write:org or admin:org warn
   ]
 
   for (const [scopes, warnings] of cases) {
-    await withAgentToken(CLASSIC_TOKEN, agentAnswers({ scopes }), async (manifest) => {
+    await withAgentToken(CLASSIC_TOKEN, agentRoutes({ scopes }), async (manifest) => {
       const result = await agentTokenCheck(manifest)
 
       assert.deepEqual(result.warnings, warnings, scopes)
@@ -569,14 +558,14 @@ test('agent token: a classic token without read:org, write:org or admin:org warn
 })
 
 test('agent token: an empty or missing scopes header is no scopes', async () => {
-  await withAgentToken(CLASSIC_TOKEN, agentAnswers({ scopes: '' }), async (manifest) => {
+  await withAgentToken(CLASSIC_TOKEN, agentRoutes({ scopes: '' }), async (manifest) => {
     const result = await agentTokenCheck(manifest)
 
     assert.equal(result.lines[0], 'ok   agent identity: demo-bot (permission write, scopes none)')
     assert.deepEqual(result.warnings, [WORKFLOW_WARNING, READ_ORG_WARNING])
   })
 
-  await withAgentToken(CLASSIC_TOKEN, agentAnswers({ scopes: null }), async (manifest) => {
+  await withAgentToken(CLASSIC_TOKEN, agentRoutes({ scopes: null }), async (manifest) => {
     const result = await agentTokenCheck(manifest)
 
     assert.equal(result.lines[0], 'ok   agent identity: demo-bot (permission write, scopes ?)')
@@ -585,7 +574,7 @@ test('agent token: an empty or missing scopes header is no scopes', async () => 
 })
 
 test('agent token: an account with admin permission fails the identity check', async () => {
-  await withAgentToken(CLASSIC_TOKEN, agentAnswers({ permission: 'admin' }), async (manifest) => {
+  await withAgentToken(CLASSIC_TOKEN, agentRoutes({ permission: 'admin' }), async (manifest) => {
     const result = await agentTokenCheck(manifest)
 
     assert.equal(result.lines[0], 'FAIL agent identity: demo-bot (permission admin, scopes repo, workflow, read:org)')
@@ -594,7 +583,7 @@ test('agent token: an account with admin permission fails the identity check', a
 })
 
 test('agent token: a maintainer account fails the identity check', async () => {
-  await withAgentToken(CLASSIC_TOKEN, agentAnswers(), async (manifest) => {
+  await withAgentToken(CLASSIC_TOKEN, agentRoutes(), async (manifest) => {
     manifest.repo.maintainers = ['demo-bot']
 
     const result = await agentTokenCheck(manifest)
@@ -604,11 +593,24 @@ test('agent token: a maintainer account fails the identity check', async () => {
   })
 })
 
-test('agent token: a missing token file throws', async () => {
-  await withAgentToken(CLASSIC_TOKEN, agentAnswers(), async (manifest) => {
+test('agent token: a token GitHub refuses fails the identity check and reads no role', async () => {
+  const refused = { path: 'user', status: 401, body: { message: 'Bad credentials' } }
+
+  await withAgentToken(CLASSIC_TOKEN, [refused, ...agentRoutes()], async (manifest, github) => {
+    const result = await agentTokenCheck(manifest)
+
+    assert.equal(result.lines[0], 'FAIL agent identity: ? (permission ?, scopes ?)')
+    assert.deepEqual(result.problems, [IDENTITY_PROBLEM])
+    assert.equal(bearerOf(github, PERMISSION), undefined)
+  })
+})
+
+test('agent token: a missing token file throws before any request', async () => {
+  await withAgentToken(CLASSIC_TOKEN, agentRoutes(), async (manifest, github) => {
     rmSync(manifest.repo.agentToken)
 
     await assert.rejects(agentTokenCheck(manifest), /repo\.agentToken .* does not exist/)
+    assert.deepEqual(github.requests(), [])
   })
 })
 

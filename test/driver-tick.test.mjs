@@ -2,14 +2,16 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { GitHubError } from '../lib/gh.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { at, samplePrs } from './fixtures.mjs'
-import { MERGE_SHA, FETCH, GREEN_RUNS, prJson, viewRule, tickDriver, eventsSince, kindsSince } from './driver-helpers.mjs'
+import { MERGE_SHA, MERGED_PR, FETCH, prRoute, restPr, runsRoute, tickDriver, eventsSince, kindsSince } from './driver-helpers.mjs'
 
 const FETCH_FAILS = { tool: 'git', args: 'fetch', code: 128, stderr: 'fatal: unable to access the remote' }
+const PR_11 = 'repos/example/widgets/pulls/11'
 
 test('tick: a failed fetch counts against no PR, skips the gate and lets the other PRs advance', async () => {
-  const { manifest, driver, tools, gate } = tickDriver(samplePrs(), { rules: [FETCH_FAILS, viewRule()] })
+  const { manifest, driver, tools, gate } = tickDriver(samplePrs(), { rules: [FETCH_FAILS], routes: [prRoute()] })
 
   await driver.tick()
 
@@ -30,7 +32,7 @@ test('tick: a failed fetch counts against no PR, skips the gate and lets the oth
     assert.equal(driver.ledger.prs[pr.id].tickErrors ?? 0, 0, pr.id)
   }
 
-  tools.answer([FETCH, viewRule()])
+  tools.answer([FETCH])
   await driver.tick()
 
   assert.equal(gate.calls, 1)
@@ -38,7 +40,7 @@ test('tick: a failed fetch counts against no PR, skips the gate and lets the oth
 })
 
 test('tick: a driver-wide step that fails five ticks in a row notifies once, and a success starts the count over', async () => {
-  const { manifest, driver, tools, notices } = tickDriver(samplePrs(), { rules: [FETCH_FAILS, viewRule()] })
+  const { manifest, driver, tools, notices } = tickDriver(samplePrs(), { rules: [FETCH_FAILS], routes: [prRoute()] })
   const sent = []
 
   for (let i = 0; i < 6; i += 1) {
@@ -49,9 +51,9 @@ test('tick: a driver-wide step that fails five ticks in a row notifies once, and
   assert.deepEqual(sent, [0, 0, 0, 0, 1, 1])
   assert.match(notices[0], /^-: fetch-failed 5 ticks in a row: git -C /)
 
-  tools.answer([FETCH, viewRule()])
+  tools.answer([FETCH])
   await driver.tick()
-  tools.answer([FETCH_FAILS, viewRule()])
+  tools.answer([FETCH_FAILS])
   await driver.tick()
 
   const counts = eventsSince(manifest)
@@ -63,25 +65,26 @@ test('tick: a driver-wide step that fails five ticks in a row notifies once, and
 })
 
 test('tick: outside dependencies are looked up one by one, and one already merged is not looked up', async () => {
-  const mergedA2 = { ...prJson({ number: 12, state: 'MERGED', headRefName: 'feat/a2' }), labels: [{ name: 'rollout:demo' }] }
-  const { manifest, driver, tools } = tickDriver(
+  const pulls = 'repos/example/widgets/pulls'
+  const mergedA2 = restPr({ number: 12, ...MERGED_PR, head: { ref: 'feat/a2' }, labels: [{ name: 'rollout:demo' }] })
+  const { manifest, driver, github } = tickDriver(
     { A1: { state: 'pending' }, A2: { state: 'pending' } },
     {
       only: ['A3'],
-      rules: [
-        FETCH,
-        { tool: 'gh', args: 'pr list --head feat/a1', code: 1, stderr: 'HTTP 401: Bad credentials' },
-        { tool: 'gh', args: 'pr list --head feat/a2', stdout: [mergedA2] },
+      rules: [FETCH],
+      routes: [
+        { path: pulls, query: { head: 'example:feat/a1' }, status: 403, body: { message: 'Resource not accessible by integration' } },
+        { path: pulls, query: { head: 'example:feat/a2' }, body: [mergedA2] },
       ],
     },
   )
 
   const lookups = (from) =>
-    tools
-      .calls()
+    github
+      .requests()
       .slice(from)
-      .filter((call) => call.tool === 'gh' && call.args[0] === 'pr' && call.args[1] === 'list')
-      .map((call) => call.args[3])
+      .filter((request) => request.path === pulls)
+      .map((request) => request.query.head)
 
   manifest.prs.find((pr) => pr.id === 'A3').deps = ['A1', 'A2']
   await driver.tick()
@@ -89,7 +92,7 @@ test('tick: outside dependencies are looked up one by one, and one already merge
   const events = eventsSince(manifest)
   const failed = events.filter((event) => event.kind === 'outside-deps-failed')
 
-  assert.deepEqual(lookups(0), ['feat/a1', 'feat/a2'])
+  assert.deepEqual(lookups(0), ['example:feat/a1', 'example:feat/a2'])
   assert.equal(driver.ledger.prs.A1.state, 'pending')
   assert.equal(driver.ledger.prs.A2.state, 'merged')
   assert.equal(driver.ledger.prs.A2.pr, 12)
@@ -100,21 +103,21 @@ test('tick: outside dependencies are looked up one by one, and one already merge
 
   assert.equal(failed.length, 1)
   assert.equal(failed[0].id, '-')
-  assert.match(failed[0].error, /^A1: gh pr list --head feat\/a1 .*HTTP 401/)
+  assert.match(failed[0].error, /^A1: GET repos\/example\/widgets\/pulls: HTTP 403/)
   assert.doesNotMatch(failed[0].error, /A2/)
 
-  const before = tools.calls().length
-  tools.answer([FETCH, { tool: 'gh', args: 'pr list --head feat/a1', stdout: [] }])
+  const before = github.requests().length
+  github.answer([{ path: pulls, query: { head: 'example:feat/a1' }, body: [] }])
   await driver.tick()
 
-  assert.deepEqual(lookups(before), ['feat/a1'])
+  assert.deepEqual(lookups(before), ['example:feat/a1'])
   assert.deepEqual(kindsSince(manifest, events.length), [])
 })
 
 test('tick: a failed base watch halts nothing and is tried again on the next tick', async () => {
-  const { manifest, driver, tools } = tickDriver(
+  const { manifest, driver, github } = tickDriver(
     { ...samplePrs(), A3: { state: 'merged', pr: 13, mergeSha: MERGE_SHA } },
-    { rules: [FETCH, viewRule()] },
+    { rules: [FETCH], routes: [prRoute()] },
   )
 
   driver.ledger.data.lastMerge = { id: 'A3', sha: MERGE_SHA, at: at(90) }
@@ -125,11 +128,11 @@ test('tick: a failed base watch halts nothing and is tried again on the next tic
 
   assert.equal(failed.length, 1)
   assert.equal(failed[0].id, '-')
-  assert.match(failed[0].error, /no rule for api .*check-runs/)
+  assert.match(failed[0].error, /fake GitHub: no route for GET repos\/example\/widgets\/commits\/f0f0f0f\w+\/check-runs$/)
   assert.equal(driver.ledger.data.halted, null)
   assert.equal(driver.ledger.prs.A2.state, 'interrupted')
 
-  tools.answer([FETCH, viewRule(), { tool: 'gh', args: `commits/${MERGE_SHA}/check-runs`, stdout: GREEN_RUNS }])
+  github.answer([prRoute(), runsRoute(MERGE_SHA)])
   await driver.tick()
 
   assert.equal(driver.ledger.data.lastMerge.checked, 'green')
@@ -137,31 +140,34 @@ test('tick: a failed base watch halts nothing and is tried again on the next tic
 })
 
 test('tick: the base watch reads only the merge commit, never a quiet ancestor', async () => {
+  const parent = 'e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0'
   const red = { check_runs: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }] }
-  const { manifest, driver, tools } = tickDriver(
+  const { manifest, driver, tools, github } = tickDriver(
     { ...samplePrs(), A3: { state: 'merged', pr: 13, mergeSha: MERGE_SHA } },
-    { rules: [FETCH, viewRule(), { tool: 'gh', args: `commits/${MERGE_SHA}/check-runs`, stdout: { check_runs: [] } }] },
+    {
+      rules: [
+        FETCH,
+        { tool: 'git', args: `log -1 --format=%P ${MERGE_SHA}`, stdout: `${parent}\n` },
+        { tool: 'git', args: `diff --no-renames --name-only ${parent} ${MERGE_SHA}`, stdout: 'docs/notes.md\n' },
+      ],
+      routes: [prRoute(), runsRoute(MERGE_SHA, { check_runs: [] }), runsRoute(parent, red)],
+    },
   )
 
   // A quiet merge commit with a red parent: a walk would halt, or go green from a green one.
   manifest.repo.baseQuietPaths = ['**']
   driver.ledger.data.lastMerge = { id: 'A3', sha: MERGE_SHA, at: at(90) }
-  tools.answer([
-    FETCH,
-    viewRule(),
-    { tool: 'gh', args: `commits/${MERGE_SHA}/check-runs`, stdout: { check_runs: [] } },
-    { tool: 'gh', args: 'check-runs', stdout: red },
-  ])
 
   await driver.tick()
 
   assert.equal(driver.ledger.data.halted, null)
   assert.equal(driver.ledger.data.lastMerge.checked, undefined)
   assert.ok(!tools.calls().some((call) => call.tool === 'git' && call.args.includes('--format=%P')))
+  assert.ok(!github.requests().some((request) => request.path.includes(parent)))
 })
 
 test('tick: a deleted manifest.yaml is rejected once, and loads again when it is back', async () => {
-  const { manifest, driver, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewRule()] })
+  const { manifest, driver, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute()] })
   const file = join(manifest.dir, 'manifest.yaml')
   const text = readFileSync(file, 'utf8')
   const manifestKinds = () => kindsSince(manifest).filter((kind) => kind.startsWith('manifest-'))
@@ -181,8 +187,8 @@ test('tick: a deleted manifest.yaml is rejected once, and loads again when it is
 })
 
 test('guarded: a PR counts one error per tick, a clean tick resets it, and five erroring ticks escalate it once', async () => {
-  const viewFails = { tool: 'gh', args: 'pr view 11', code: 1, stderr: 'HTTP 404: Not Found' }
-  const { manifest, driver, tools, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewFails] })
+  const viewFails = { path: PR_11, status: 404, body: { message: 'Not Found' } }
+  const { manifest, driver, github, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [viewFails] })
   const entry = driver.ledger.prs.A1
   const errorCounts = (from) =>
     eventsSince(manifest, from)
@@ -195,7 +201,7 @@ test('guarded: a PR counts one error per tick, a clean tick resets it, and five 
   assert.deepEqual(errorCounts(0), [1, 1])
   assert.equal(entry.tickErrors, 1)
 
-  tools.answer([FETCH, viewRule()])
+  github.answer([prRoute()])
   gate.error = null
   await driver.tick()
 
@@ -220,7 +226,7 @@ test('guarded: a PR counts one error per tick, a clean tick resets it, and five 
   assert.ok(notices[0].startsWith('A1: repeated errors'), notices[0])
 
   const before = readEvents(manifest).length
-  tools.answer([FETCH, viewFails])
+  github.answer([viewFails])
   await driver.tick()
 
   assert.deepEqual(errorCounts(before), [6])
@@ -229,7 +235,8 @@ test('guarded: a PR counts one error per tick, a clean tick resets it, and five 
   assert.equal(kindsSince(manifest).filter((kind) => kind === 'escalated').length, 1)
 })
 
-const VIEW_502 = { tool: 'gh', args: 'pr view 11', code: 1, stderr: 'HTTP 502: Bad Gateway' }
+// A load balancer's 502 carries no JSON message.
+const VIEW_502 = { path: PR_11, status: 502, body: '<html><body>Bad Gateway</body></html>', headers: { 'content-type': 'text/html' } }
 const FETCH_UNREACHABLE = {
   tool: 'git',
   args: 'fetch',
@@ -251,9 +258,15 @@ async function unavailablePerTick(manifest, driver, ticks) {
 }
 
 test('tick: six ticks of HTTP 502 escalate nothing, and an outage of 30 minutes notifies once and again when it ends', async () => {
-  const { manifest, driver, tools, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH, VIEW_502] })
+  const { manifest, driver, github, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [VIEW_502] })
   const entry = driver.ledger.prs.A1
-  gate.error = new Error('gh api -X GET repos/example/widgets/pulls/11/reviews -f per_page=100 exited 1: gh: Server Error (HTTP 500)')
+  gate.error = new GitHubError({
+    method: 'GET',
+    path: 'repos/example/widgets/pulls/11/reviews',
+    status: 500,
+    kind: 'http',
+    detail: 'HTTP 500: Server Error',
+  })
 
   assert.deepEqual(await unavailablePerTick(manifest, driver, 6), [1, 1, 1, 1, 1, 1])
   assert.deepEqual(kindsSince(manifest), Array(6).fill('github-unavailable'))
@@ -266,8 +279,14 @@ test('tick: six ticks of HTTP 502 escalate nothing, and an outage of 30 minutes 
   const [first] = eventsSince(manifest)
   const outage = driver.ledger.data.githubUnavailable
 
-  assert.deepEqual({ ...first, error: null }, { id: '-', kind: 'github-unavailable', source: 'A1', error: null, minutes: 0 })
-  assert.match(first.error, /^gh pr view 11 --json .* exited 1: HTTP 502: Bad Gateway$/)
+  assert.deepEqual(first, {
+    id: '-',
+    kind: 'github-unavailable',
+    source: 'A1',
+    error: 'GET repos/example/widgets/pulls/11: HTTP 502: Bad Gateway',
+    minutes: 0,
+  })
+
   assert.equal(outage.notified, false)
   assert.deepEqual(JSON.parse(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8')).githubUnavailable, outage)
 
@@ -284,7 +303,7 @@ test('tick: six ticks of HTTP 502 escalate nothing, and an outage of 30 minutes 
 
   assert.equal(notices.length, 1)
 
-  tools.answer([FETCH, viewRule()])
+  github.answer([prRoute()])
   gate.error = null
   const before = readEvents(manifest).length
   await driver.tick()
@@ -301,7 +320,11 @@ test('tick: six ticks of HTTP 502 escalate nothing, and an outage of 30 minutes 
 })
 
 test('guarded: an outage neither counts nor resets the errors of a PR, and a short one ends with github-back and no notice', async () => {
-  const { manifest, driver, tools, gate, notices } = tickDriver({ A1: { ...samplePrs().A1, tickErrors: 3 } }, { rules: [FETCH, VIEW_502] })
+  const { manifest, driver, github, gate, notices } = tickDriver(
+    { A1: { ...samplePrs().A1, tickErrors: 3 } },
+    { rules: [FETCH], routes: [VIEW_502] },
+  )
+
   const entry = driver.ledger.prs.A1
 
   await driver.tick()
@@ -322,7 +345,7 @@ test('guarded: an outage neither counts nor resets the errors of a PR, and a sho
     ],
   )
 
-  tools.answer([FETCH, viewRule()])
+  github.answer([prRoute()])
   gate.error = null
   const before = readEvents(manifest).length
   await driver.tick()
@@ -334,7 +357,7 @@ test('guarded: an outage neither counts nor resets the errors of a PR, and a sho
 })
 
 test('tick: a fetch lost to an outage skips the gate, logs no fetch-failed and leaves the count of fetch failures alone', async () => {
-  const { manifest, driver, tools, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH_UNREACHABLE, viewRule()] })
+  const { manifest, driver, tools, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH_UNREACHABLE], routes: [prRoute()] })
 
   assert.deepEqual(await unavailablePerTick(manifest, driver, 5), [1, 1, 1, 1, 1])
   assert.deepEqual(
@@ -346,7 +369,7 @@ test('tick: a fetch lost to an outage skips the gate, logs no fetch-failed and l
   assert.deepEqual(notices, [])
 
   for (const fetch of [FETCH_FAILS, FETCH_UNREACHABLE, FETCH_FAILS]) {
-    tools.answer([fetch, viewRule()])
+    tools.answer([fetch])
     await driver.tick()
   }
 
@@ -362,7 +385,7 @@ test('tick: a fetch lost to an outage skips the gate, logs no fetch-failed and l
 })
 
 const HOUR = 60 * 60_000
-const VIEW_401 = { tool: 'gh', args: 'pr view 11', code: 1, stderr: 'HTTP 401: Bad credentials' }
+const VIEW_401 = { path: PR_11, status: 401, body: { message: 'Bad credentials' } }
 
 // A wall clock the test moves by hand.
 function fakeClock() {
@@ -376,9 +399,9 @@ function fakeClock() {
   }
 }
 
-test('tick: for two minutes after a sleep, failed gh and git calls are an outage', async () => {
+test('tick: for two minutes after a sleep, failed GitHub requests and git calls are an outage', async () => {
   const time = fakeClock()
-  const { manifest, driver, tools, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewRule()], clock: time.clock })
+  const { manifest, driver, tools, github, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute()], clock: time.clock })
   const entry = driver.ledger.prs.A1
 
   await driver.tick()
@@ -387,7 +410,8 @@ test('tick: for two minutes after a sleep, failed gh and git calls are an outage
 
   assert.deepEqual(kindsSince(manifest), [])
 
-  tools.answer([FETCH_FAILS, VIEW_401])
+  tools.answer([FETCH_FAILS])
+  github.answer([VIEW_401])
   time.move(2 * HOUR)
   const woke = readEvents(manifest).length
   await driver.tick()
@@ -429,9 +453,9 @@ test('tick: for two minutes after a sleep, failed gh and git calls are an outage
   assert.deepEqual(notices, [])
 })
 
-test('tick: after a sleep, an error that is no failed gh or git call still counts', async () => {
+test('tick: after a sleep, an error that is no failed GitHub request or gh or git call still counts', async () => {
   const time = fakeClock()
-  const { manifest, driver, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewRule()], clock: time.clock })
+  const { manifest, driver, gate, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute()], clock: time.clock })
 
   await driver.tick()
   time.move(2 * HOUR)
@@ -452,7 +476,7 @@ test('tick: after a sleep, an error that is no failed gh or git call still count
 })
 
 test('runTick: a failed tick never rejects, and the fifth in a row notifies once', async () => {
-  const { manifest, driver, notices } = tickDriver(samplePrs(), { rules: [FETCH, viewRule()] })
+  const { manifest, driver, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute()] })
   const save = driver.ledger.save
   const tickErrors = () => eventsSince(manifest).filter((event) => event.kind === 'tick-error')
 
@@ -495,84 +519,159 @@ test('runTick: a failed tick never rejects, and the fifth in a row notifies once
 
 const REJECTED = { ...samplePrs().A1, state: 'needs_fix', fixReason: 'verifier findings', verified: null, approved: null }
 const REJECTED_LABELS = ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings']
-const LABELS_OK = [
-  { tool: 'gh', args: 'label create', stdout: '' },
-  { tool: 'gh', args: 'pr edit 11', stdout: '' },
-]
+const PR_LABELS = 'repos/example/widgets/issues/11/labels'
 
-// `gh pr view` for A1 carrying these labels, next to the rollout's own.
-function viewWithLabels(labels) {
-  return viewRule({ labels: ['rollout:demo', ...labels].map((name) => ({ name })) })
+// GitHub creating any label, adding labels to PR 11 and removing `removed` from it.
+function labelRoutes(removed = []) {
+  return [
+    { method: 'POST', path: 'repos/example/widgets/labels', status: 201, body: {} },
+    { method: 'POST', path: PR_LABELS, body: [] },
+    ...removed.map((name) => ({ method: 'DELETE', path: `${PR_LABELS}/${encodeURIComponent(name)}`, body: [] })),
+  ]
 }
 
-function labelEdits(tools) {
-  return tools
-    .calls()
-    .filter((call) => call.tool === 'gh' && call.args[0] === 'pr' && call.args[1] === 'edit')
-    .map((call) => call.args.slice(2).join(' '))
+// A1's PR carrying these labels, next to the rollout's own.
+function prWithLabels(labels) {
+  return prRoute({ labels: ['rollout:demo', ...labels].map((name) => ({ name })) })
+}
+
+// The label writes on PR 11: the labels each POST adds, the label each DELETE removes.
+function labelWrites(github) {
+  return github
+    .requests()
+    .filter((request) => request.path.startsWith(PR_LABELS))
+    .map((request) => {
+      if (request.method === 'POST') {
+        return ['add', ...request.body.labels]
+      }
+
+      return [request.method.toLowerCase(), decodeURIComponent(request.path.slice(PR_LABELS.length + 1))]
+    })
 }
 
 test('tick: a PR sent back by the verifier gets its stage and reason as labels, once', async () => {
-  const { driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), ...LABELS_OK] })
+  const { driver, github } = tickDriver({ A1: REJECTED }, { rules: [FETCH], routes: [prRoute(), ...labelRoutes()] })
 
   await driver.tick()
-  tools.answer([FETCH, viewWithLabels(REJECTED_LABELS), ...LABELS_OK])
+  github.answer([prWithLabels(REJECTED_LABELS), ...labelRoutes()])
   await driver.tick()
 
-  assert.deepEqual(labelEdits(tools), ['11 --add-label rollout-stage:needs-fix --add-label rollout-reason:verifier-findings'])
-  assert.ok(tools.calls().some((call) => call.args.join(' ').startsWith('label create rollout-reason:verifier-findings --color d93f0b')))
+  assert.deepEqual(labelWrites(github), [['add', 'rollout-stage:needs-fix', 'rollout-reason:verifier-findings']])
+  assert.deepEqual(
+    github
+      .requests()
+      .filter((request) => request.path === 'repos/example/widgets/labels')
+      .map((request) => request.body),
+    [
+      { name: 'rollout-stage:needs-fix', color: '1d76db', description: 'Rollout stage, set by the driver' },
+      { name: 'rollout-reason:verifier-findings', color: 'd93f0b', description: 'Rollout stage, set by the driver' },
+    ],
+  )
+
   assert.deepEqual(driver.ledger.prs.A1.stageLabels, REJECTED_LABELS)
 })
 
 test('tick: when the PR moves on, the old stage and reason come off', async () => {
-  const { driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), ...LABELS_OK] })
+  const { driver, github } = tickDriver({ A1: REJECTED }, { rules: [FETCH], routes: [prRoute(), ...labelRoutes()] })
 
   await driver.tick()
-  tools.answer([FETCH, viewWithLabels(REJECTED_LABELS), ...LABELS_OK])
+  github.answer([prWithLabels(REJECTED_LABELS), ...labelRoutes(REJECTED_LABELS)])
   driver.ledger.prs.A1.state = 'verifying'
   await driver.tick()
 
-  assert.deepEqual(
-    labelEdits(tools).at(-1),
-    '11 --add-label rollout-stage:verifying --remove-label rollout-stage:needs-fix --remove-label rollout-reason:verifier-findings',
-  )
+  assert.deepEqual(labelWrites(github).slice(1), [
+    ['add', 'rollout-stage:verifying'],
+    ['delete', 'rollout-stage:needs-fix'],
+    ['delete', 'rollout-reason:verifier-findings'],
+  ])
+
+  assert.equal(github.requests().at(-1).path, `${PR_LABELS}/rollout-reason%3Averifier-findings`)
 })
 
 test('tick: the labels the PR really carries count, so one removed or added by hand is put right', async () => {
-  const { driver, tools } = tickDriver(
+  const { driver, github } = tickDriver(
     { A1: REJECTED },
-    { rules: [FETCH, viewWithLabels(['rollout-reason:verifier-findings', 'rollout-stage:verified', 'bug']), ...LABELS_OK] },
+    {
+      rules: [FETCH],
+      routes: [
+        prWithLabels(['rollout-reason:verifier-findings', 'rollout-stage:verified', 'bug']),
+        ...labelRoutes(['rollout-stage:verified']),
+      ],
+    },
   )
 
   await driver.tick()
 
-  assert.deepEqual(labelEdits(tools), ['11 --add-label rollout-stage:needs-fix --remove-label rollout-stage:verified'])
+  assert.deepEqual(labelWrites(github), [
+    ['add', 'rollout-stage:needs-fix'],
+    ['delete', 'rollout-stage:verified'],
+  ])
+})
+
+test('tick: a label that is off already counts as removed', async () => {
+  const gone = { method: 'DELETE', path: `${PR_LABELS}/rollout-stage%3Averified`, status: 404, body: { message: 'Label does not exist' } }
+  const { driver } = tickDriver(
+    { A1: REJECTED },
+    { rules: [FETCH], routes: [prWithLabels(['rollout-reason:verifier-findings', 'rollout-stage:verified']), gone, ...labelRoutes()] },
+  )
+
+  await driver.tick()
+
+  assert.equal(driver.ledger.prs.A1.stageLabelError, null)
+  assert.deepEqual(driver.ledger.prs.A1.stageLabels, REJECTED_LABELS)
+})
+
+test('tick: a label that exists already is updated, as gh label create --force did', async () => {
+  const exists = { method: 'POST', path: 'repos/example/widgets/labels', status: 422, body: { message: 'Validation Failed' } }
+  const updated = (name) => ({ method: 'PATCH', path: `repos/example/widgets/labels/${encodeURIComponent(name)}`, body: {} })
+  const { driver, github } = tickDriver(
+    { A1: REJECTED },
+    { rules: [FETCH], routes: [prRoute(), exists, ...REJECTED_LABELS.map(updated), ...labelRoutes()] },
+  )
+
+  await driver.tick()
+
+  assert.deepEqual(
+    github
+      .requests()
+      .filter((request) => request.method === 'PATCH')
+      .map((request) => [request.path, request.body]),
+    [
+      ['repos/example/widgets/labels/rollout-stage%3Aneeds-fix', { color: '1d76db', description: 'Rollout stage, set by the driver' }],
+      [
+        'repos/example/widgets/labels/rollout-reason%3Averifier-findings',
+        { color: 'd93f0b', description: 'Rollout stage, set by the driver' },
+      ],
+    ],
+  )
+
+  assert.deepEqual(driver.ledger.prs.A1.stageLabels, REJECTED_LABELS)
 })
 
 test('tick: during a GitHub outage no label call is made', async () => {
-  const { driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, VIEW_502, ...LABELS_OK] })
+  const { driver, github } = tickDriver({ A1: REJECTED }, { rules: [FETCH], routes: [VIEW_502, ...labelRoutes()] })
 
   await driver.tick()
 
   assert.ok(driver.ledger.data.githubUnavailable)
-  assert.deepEqual(labelEdits(tools), [])
-  assert.ok(!tools.calls().some((call) => call.args[0] === 'label'))
+  assert.deepEqual(labelWrites(github), [])
+  assert.ok(!github.requests().some((request) => request.path.includes('/labels')))
 })
 
 test('tick: a label GitHub refuses is kept on the PR row, counts no error and is tried again', async () => {
-  const refused = { tool: 'gh', args: 'pr edit 11', code: 1, stderr: 'HTTP 403: Resource not accessible' }
-  const { manifest, driver, tools } = tickDriver({ A1: REJECTED }, { rules: [FETCH, viewRule(), LABELS_OK[0], refused] })
+  const refused = { method: 'POST', path: PR_LABELS, status: 403, body: { message: 'Resource not accessible by integration' } }
+  const { manifest, driver, github } = tickDriver({ A1: REJECTED }, { rules: [FETCH], routes: [prRoute(), refused, ...labelRoutes()] })
   const before = readEvents(manifest).length
 
   await driver.tick()
 
   assert.match(driver.ledger.prs.A1.stageLabelError, /HTTP 403/)
   assert.deepEqual(driver.ledger.prs.A1.stageLabels, [])
-  assert.ok(!eventsSince(manifest, before).some((event) => event.kind === 'error' && /pr edit/.test(event.error ?? '')))
+  assert.ok(!eventsSince(manifest, before).some((event) => event.kind === 'error' && /labels/.test(event.error ?? '')))
 
-  tools.answer([FETCH, viewRule(), ...LABELS_OK])
+  github.answer([prRoute(), ...labelRoutes()])
   await driver.tick()
 
   assert.equal(driver.ledger.prs.A1.stageLabelError, null)
-  assert.equal(labelEdits(tools).length, 2)
+  assert.equal(labelWrites(github).length, 2)
 })

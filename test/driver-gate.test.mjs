@@ -12,8 +12,9 @@ import {
   apply,
   SHA,
   MERGE_SHA,
+  MERGED_PR,
   FETCH,
-  viewRule,
+  prRoute,
   tickDriver,
   eventsSince,
   kindsSince,
@@ -31,14 +32,12 @@ import {
 
 test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sync sees it merged', async () => {
   const earlier = { id: 'A3', sha: MERGE_SHA.replaceAll('f', 'c'), at: at(70), checked: 'green' }
-  const { manifest, driver, tools, notices, cleaned } = tickDriver(
+  const { manifest, driver, tools, github, notices, cleaned } = tickDriver(
     { A1: { ...samplePrs().A1, held: null }, A3: { state: 'merged', pr: 13, mergeSha: earlier.sha } },
     {
       policy: { merge: 'auto' },
-      rules: [
-        { tool: 'gh', args: 'pr merge 11', stdout: '' },
-        { tool: 'gh', args: '--json state,mergeCommit', stdout: { state: 'OPEN', mergeCommit: null } },
-      ],
+      rules: [{ tool: 'gh', args: 'pr merge 11', stdout: '' }],
+      routes: [prRoute()],
     },
   )
 
@@ -62,11 +61,8 @@ test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sy
     { id: 'A1', kind: 'merge-unconfirmed', pr: 11, sha: SHA.slice(0, 7) },
   ])
 
-  tools.answer([
-    FETCH,
-    { tool: 'gh', args: '--json state,mergeCommit', stdout: { state: 'MERGED', mergeCommit: { oid: MERGE_SHA } } },
-    viewRule({ state: 'MERGED' }),
-  ])
+  tools.answer([FETCH])
+  github.answer([prRoute(MERGED_PR)])
 
   await driver.tick()
 
@@ -97,7 +93,14 @@ test('mergeCandidate: a merge GitHub refuses waits with the merge-refused code',
     { A1: { ...samplePrs().A1, held: null } },
     {
       policy: { merge: 'auto' },
-      rules: [{ tool: 'gh', args: 'pr merge 11', code: 1, stderr: 'base branch policy prohibits the merge\n' }],
+      rules: [
+        {
+          tool: 'gh',
+          args: 'pr merge 11',
+          code: 1,
+          stderr: 'Pull request example/widgets#11 is not mergeable: the base branch policy prohibits the merge.\n',
+        },
+      ],
     },
   )
 
@@ -110,6 +113,19 @@ test('mergeCandidate: a merge GitHub refuses waits with the merge-refused code',
   assert.deepEqual(entry.gate.reasons, ['GitHub refused the merge (ruleset)'])
   assert.deepEqual(kindsSince(manifest), ['gate-merge', 'merge-refused'])
   assert.deepEqual(notices, ['A1: GitHub refused to merge PR #11; check its ruleset requirements'])
+})
+
+test('mergeCandidate: a failed merge gh does not call a refusal is an error, whatever the PR title says', async () => {
+  const { manifest, driver, gate } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto' }, rules: [{ tool: 'gh', args: 'pr merge 11', code: 1, stderr: 'HTTP 422: Validation Failed\n' }] },
+  )
+
+  gate.pr = { title: 'fix: say why a PR is not mergeable' }
+
+  await assert.rejects(driver.mergeCandidate(manifest.prs.find((item) => item.id === 'A1')), /not mergeable \(#11\).* exited 1: HTTP 422/)
+  assert.equal(driver.ledger.prs.A1.gate.code, 'merge')
+  assert.deepEqual(kindsSince(manifest), ['gate-merge'])
 })
 
 // Holds none of the phrases the old notice regexes matched ("awaiting",

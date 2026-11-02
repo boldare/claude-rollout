@@ -3,18 +3,21 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createDriver } from '../lib/driver.mjs'
+import { DRIVER_MARKER, setFetch } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { verifyPrompt } from '../lib/prompts.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
-import { at, fakeTools, makeRollout, samplePrs } from './fixtures.mjs'
+import { at, fakeGitHub, fakeTools, makeRollout, samplePrs } from './fixtures.mjs'
 import {
   agentResult,
   apply,
   SHA,
   FETCH,
-  GREEN_RUNS,
-  viewRule,
+  MAINTAINER_TOKEN,
+  MERGED_PR,
+  prRoute,
+  runsRoute,
   tickDriver,
   eventsSince,
   kindsSince,
@@ -33,11 +36,12 @@ const IMPLEMENTING = { state: 'implementing', sessionId: 'session-1', attempts: 
 
 const READY = agentResult({ output: { status: 'READY', pr: 12, headSha: NEW_HEAD, summary: 'Done.' } })
 
+const PR_12 = 'repos/example/widgets/pulls/12'
+const NOT_FOUND = { status: 404, body: { message: 'Not Found' } }
+const REPOSITORY = { path: 'repos/example/widgets', body: { full_name: 'example/widgets' } }
+
 test('onDone: a READY report GitHub could not read waits, and a later tick claims it with no agent', async () => {
-  const { manifest, driver, tools } = tickDriver(
-    { A1: IMPLEMENTING },
-    { rules: [FETCH, { tool: 'gh', args: 'pr view 12', code: 1, stderr: 'HTTP 502: Bad Gateway' }] },
-  )
+  const { manifest, driver, github } = tickDriver({ A1: IMPLEMENTING }, { rules: [FETCH], routes: [{ path: PR_12, status: 502 }] })
 
   const pr = manifest.prs.find((item) => item.id === 'A1')
   const entry = driver.ledger.prs.A1
@@ -57,7 +61,7 @@ test('onDone: a READY report GitHub could not read waits, and a later tick claim
   assert.match(events[1].error, /HTTP 502/)
   assert.equal(entry.attempts.fix, 0)
 
-  tools.answer([FETCH, viewRule({ number: 12, headRefOid: NEW_HEAD })])
+  github.answer([prRoute({ number: 12, head: { sha: NEW_HEAD } })])
   await driver.tick()
 
   assert.equal(entry.state, 'ready_claimed')
@@ -69,34 +73,43 @@ test('onDone: a READY report GitHub could not read waits, and a later tick claim
   assert.deepEqual(kindsSince(manifest, events.length), ['ready-claimed'])
 })
 
-test('onDone: a READY report that names a PR GitHub does not know still goes to a fix run', async () => {
-  const unknown = [
-    'GraphQL: Could not resolve to a PullRequest with the number of 12. (repository.pullRequest)',
-    'no pull requests found for branch "feat/a1"',
-  ]
+test('onDone: a READY report whose PR answers 404 while the repository reads names an unknown PR and goes to a fix run', async () => {
+  const { manifest, driver, github } = tickDriver({ A1: IMPLEMENTING }, { routes: [{ path: PR_12, ...NOT_FOUND }, REPOSITORY] })
+  const entry = driver.ledger.prs.A1
 
-  for (const stderr of unknown) {
-    const { manifest, driver } = tickDriver({ A1: IMPLEMENTING }, { rules: [{ tool: 'gh', args: 'pr view 12', code: 1, stderr }] })
-    const entry = driver.ledger.prs.A1
+  await driver.onDone(
+    manifest.prs.find((item) => item.id === 'A1'),
+    'implement',
+    READY,
+    { run: 'A1-01-implement' },
+  )
 
-    await driver.onDone(
-      manifest.prs.find((item) => item.id === 'A1'),
-      'implement',
-      READY,
-      { run: 'A1-01-implement' },
-    )
-
-    assert.equal(entry.state, 'needs_fix', stderr)
-    assert.equal(entry.fixReason, 'report does not match GitHub')
-    assert.match(entry.fixNote, /^PR #12 could not be read/)
-    assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'needs-fix', reason: 'report does not match GitHub' })
-    assert.deepEqual(kindsSince(manifest), ['implement-done', 'needs-fix'])
-  }
+  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fixReason, 'report does not match GitHub')
+  assert.match(entry.fixNote, /^PR #12 could not be read \(GitHubError: GET repos\/example\/widgets\/pulls\/12: HTTP 404: Not Found\)/)
+  assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'needs-fix', reason: 'report does not match GitHub' })
+  assert.deepEqual(kindsSince(manifest), ['implement-done', 'needs-fix'])
+  assert.deepEqual(
+    github.requests().map((request) => [request.path, request.status]),
+    [
+      [PR_12, 404],
+      ['repos/example/widgets', 200],
+    ],
+  )
 })
 
-test('onDone: a READY report whose PR answers 404 waits, and counts as an error of the PR on the next tick', async () => {
-  const notFound = { tool: 'gh', args: 'pr view 12', code: 1, stderr: 'HTTP 404: Not Found' }
-  const { manifest, driver } = tickDriver({ A1: IMPLEMENTING }, { rules: [FETCH, notFound] })
+test('onDone: a READY report whose PR and repository both answer 404 waits, and counts as an error of the PR on the next tick', async () => {
+  const { manifest, driver } = tickDriver(
+    { A1: IMPLEMENTING },
+    {
+      rules: [FETCH],
+      routes: [
+        { path: PR_12, ...NOT_FOUND },
+        { ...REPOSITORY, ...NOT_FOUND },
+      ],
+    },
+  )
+
   const pr = manifest.prs.find((item) => item.id === 'A1')
   const entry = driver.ledger.prs.A1
 
@@ -134,7 +147,7 @@ test('advance: a parked READY report GitHub now contradicts goes to a fix run an
   const parked = { ...IMPLEMENTING, state: 'interrupted', interruptedRole: 'report', ready: READY.output }
   const { manifest, driver } = tickDriver(
     { A1: parked },
-    { rules: [FETCH, viewRule({ number: 12, headRefOid: NEW_HEAD, state: 'CLOSED' })] },
+    { rules: [FETCH], routes: [prRoute({ number: 12, head: { sha: NEW_HEAD }, state: 'closed' })] },
   )
 
   const entry = driver.ledger.prs.A1
@@ -154,7 +167,7 @@ test('retry: a PR whose verification still holds goes back to verified, keeps it
     { state: 'escalated', tickErrors: 5 },
     { state: 'blocked', blocked: GATE_BLOCK },
   ]) {
-    const { manifest, driver, gate } = tickDriver({ A1: { ...samplePrs().A1, ...state } }, { rules: [FETCH, viewRule()] })
+    const { manifest, driver, gate } = tickDriver({ A1: { ...samplePrs().A1, ...state } }, { rules: [FETCH], routes: [prRoute()] })
     const entry = driver.ledger.prs.A1
 
     assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'verified' }], state.state)
@@ -173,7 +186,7 @@ test('retry: a PR whose verification still holds goes back to verified, keeps it
 
 test('retry: a verification for an older head is dropped, and the PR goes back to its claim', () => {
   const stale = { ...samplePrs().A1, state: 'escalated', verified: { ...samplePrs().A1.verified, sha: NEW_HEAD }, ciPendingSince: at(85) }
-  const { manifest, driver } = tickDriver({ A1: stale }, { rules: [FETCH, viewRule()] })
+  const { manifest, driver } = tickDriver({ A1: stale }, { rules: [FETCH], routes: [prRoute()] })
   const entry = driver.ledger.prs.A1
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'ready_claimed' }])
@@ -186,7 +199,7 @@ test('retry: a verification for an older head is dropped, and the PR goes back t
 test('note: an answer to a gate block on a verified PR drops the verification', () => {
   const { manifest, driver } = tickDriver(
     { A1: { ...samplePrs().A1, state: 'blocked', blocked: GATE_BLOCK } },
-    { rules: [FETCH, viewRule()] },
+    { rules: [FETCH], routes: [prRoute()] },
   )
 
   const entry = driver.ledger.prs.A1
@@ -202,7 +215,7 @@ test('note: an answer to a gate block on a verified PR drops the verification', 
 
 test('retry: a parked READY report stays parked, and the next tick claims it with no agent', async () => {
   const parked = { ...IMPLEMENTING, state: 'escalated', interruptedRole: 'report', ready: READY.output }
-  const { manifest, driver } = tickDriver({ A1: parked }, { rules: [FETCH, viewRule({ number: 12, headRefOid: NEW_HEAD })] })
+  const { manifest, driver } = tickDriver({ A1: parked }, { rules: [FETCH], routes: [prRoute({ number: 12, head: { sha: NEW_HEAD } })] })
   const entry = driver.ledger.prs.A1
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'interrupted' }])
@@ -223,34 +236,36 @@ test('retry: a parked READY report stays parked, and the next tick claims it wit
 test('checkClaim: a claimed PR merged or closed since sync is left to the next sync', async () => {
   const claimed = { state: 'ready_claimed', pr: 11, claimedSha: SHA, attempts: { implement: 1, fix: 0, verify: 0, brief: 0 } }
 
-  for (const state of ['MERGED', 'CLOSED']) {
-    const { manifest, driver, tools, gate } = tickDriver({ A1: claimed }, { rules: [viewRule({ state })] })
+  const states = [
+    ['MERGED', MERGED_PR],
+    ['CLOSED', { state: 'closed' }],
+  ]
+
+  for (const [state, fields] of states) {
+    const { manifest, driver, github, gate } = tickDriver({ A1: claimed }, { routes: [prRoute(fields)] })
 
     await driver.advance(manifest.prs.find((item) => item.id === 'A1'))
 
     assert.equal(driver.ledger.prs.A1.state, 'ready_claimed', state)
     assert.deepEqual(kindsSince(manifest), [], state)
-    assert.ok(!tools.calls().some((call) => call.args.join(' ').includes('check-runs')), state)
+    assert.ok(!github.requests().some((request) => request.path.endsWith('/check-runs')), state)
     assert.equal(gate.calls, 0, state)
   }
 
-  const { manifest, driver, tools, gate } = tickDriver(
-    { A1: claimed },
-    { rules: [viewRule(), { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: GREEN_RUNS }] },
-  )
+  const { manifest, driver, github, gate } = tickDriver({ A1: claimed }, { routes: [prRoute(), runsRoute(SHA)] })
 
   gate.pr = { state: 'MERGED' }
 
   await driver.advance(manifest.prs.find((item) => item.id === 'A1'))
 
-  assert.ok(tools.calls().some((call) => call.args.join(' ').includes('check-runs')))
+  assert.ok(github.requests().some((request) => request.path.endsWith('/check-runs')))
   assert.equal(gate.calls, 1)
   assert.equal(driver.ledger.prs.A1.state, 'ready_claimed')
   assert.equal(driver.ledger.prs.A1.claimPatchId, undefined)
   assert.deepEqual(eventsSince(manifest), [gateCheckEvent('ci', 'pass', GREEN_EVIDENCE)])
 })
 
-test('checkClaim: a note queued while a verifier ran goes to a fix run first, with no agent and no gh or git call', async () => {
+test('checkClaim: a note queued while a verifier ran goes to a fix run first, with no agent, no GitHub request and no gh or git call', async () => {
   const note = 'Drop the old flag.'
   const queued = {
     pr: 11,
@@ -271,7 +286,11 @@ test('checkClaim: a note queued while a verifier ran goes to a fix run first, wi
 
     const dir = makeRollout({ prs: { A1: { ...queued, ...state } }, events: [] })
     const tools = fakeTools(dir, [])
+    const github = fakeGitHub()
     const manifest = loadManifest(dir)
+
+    setFetch(github.fetch, { token: async () => MAINTAINER_TOKEN })
+
     const driver = createDriver(manifest, { notify: () => {}, runAgent })
     const entry = driver.ledger.prs.A1
 
@@ -284,6 +303,7 @@ test('checkClaim: a note queued while a verifier ran goes to a fix run first, wi
     assert.deepEqual(kindsSince(manifest), ['needs-fix'])
     assert.deepEqual(calls, [])
     assert.deepEqual(tools.calls(), [])
+    assert.deepEqual(github.requests(), [])
   }
 })
 
@@ -313,7 +333,7 @@ const ALERT_REASON =
 
 // A claimed A1 with green CI on its head, and the given code scanning facts.
 function claimDriver(facts) {
-  const setup = tickDriver({ A1: CLAIMED }, { rules: [viewRule(), { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: GREEN_RUNS }] })
+  const setup = tickDriver({ A1: CLAIMED }, { routes: [prRoute(), runsRoute(SHA)] })
   setup.gate.facts = facts
 
   return { ...setup, pr: setup.manifest.prs.find((item) => item.id === 'A1'), entry: setup.driver.ledger.prs.A1 }
@@ -385,7 +405,7 @@ test('checkClaim: an alert from an older commit waits for the analysis of the he
 })
 
 test('checkClaim: a repo without code scanning logs it once and goes on', async () => {
-  const unavailable = { codeScanning: { available: false, reason: 'gh: no analysis found (HTTP 404)', alerts: [], baseOpen: [] } }
+  const unavailable = { codeScanning: { available: false, reason: 'HTTP 404: no analysis found', alerts: [], baseOpen: [] } }
   const { manifest, driver, pr, entry, notices } = claimDriver(unavailable)
 
   await driver.advance(pr)
@@ -396,7 +416,7 @@ test('checkClaim: a repo without code scanning logs it once and goes on', async 
   assert.deepEqual(eventsSince(manifest), [
     gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
     gateCheckEvent('policy', 'pass', 'no violations'),
-    { id: 'A1', kind: 'code-scanning-unavailable', reason: 'gh: no analysis found (HTTP 404)' },
+    { id: 'A1', kind: 'code-scanning-unavailable', reason: 'HTTP 404: no analysis found' },
     gateCheckEvent('code-scanning', 'skip', 'unavailable'),
   ])
 
@@ -518,7 +538,7 @@ test('checkClaim: untracked Claude Code files in the worktree are removed and lo
 })
 
 test('checkClaim: red CI logs a failed ci check right before it goes back to the implementer', async () => {
-  const { manifest, driver, tools, pr, entry } = claimDriver({})
+  const { manifest, driver, github, pr, entry } = claimDriver({})
   const runs = {
     check_runs: [
       { id: 1, name: 'test', status: 'completed', conclusion: 'success' },
@@ -526,7 +546,7 @@ test('checkClaim: red CI logs a failed ci check right before it goes back to the
     ],
   }
 
-  tools.answer([viewRule(), { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: runs }])
+  github.answer([prRoute(), runsRoute(SHA, runs)])
 
   await driver.advance(pr)
 
@@ -538,11 +558,11 @@ test('checkClaim: red CI logs a failed ci check right before it goes back to the
 })
 
 test('checkClaim: CI that does not settle logs a failed ci check right before it goes back to the implementer', async () => {
-  const { manifest, driver, tools, pr, entry } = claimDriver({})
+  const { manifest, driver, github, pr, entry } = claimDriver({})
   const running = { check_runs: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] }
 
   entry.ciPendingSince = new Date(Date.now() - 60 * 60_000).toISOString()
-  tools.answer([viewRule(), { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: running }])
+  github.answer([prRoute(), runsRoute(SHA, running)])
 
   await driver.advance(pr)
 
@@ -554,7 +574,7 @@ test('checkClaim: CI that does not settle logs a failed ci check right before it
 })
 
 test('checkClaim: a pass is logged once per claim, and again for a new claim', async () => {
-  const { manifest, driver, tools, gate, pr, entry } = claimDriver({})
+  const { manifest, driver, github, gate, pr, entry } = claimDriver({})
   const passes = (sha) => [
     gateCheckEvent('ci', 'pass', GREEN_EVIDENCE, sha),
     gateCheckEvent('policy', 'pass', 'no violations', sha),
@@ -580,7 +600,7 @@ test('checkClaim: a pass is logged once per claim, and again for a new claim', a
   entry.claimedSha = REBASED
   entry.claimedAt = at(3)
   gate.pr = { headRefOid: REBASED }
-  tools.answer([viewRule({ headRefOid: REBASED }), { tool: 'gh', args: `commits/${REBASED}/check-runs`, stdout: GREEN_RUNS }])
+  github.answer([prRoute({ head: { sha: REBASED } }), runsRoute(REBASED)])
 
   await driver.advance(pr)
 
@@ -594,7 +614,7 @@ test('checkClaim: a pass is logged once per claim, and again for a new claim', a
 
 // Sync's head-moved-same-patch moves claimedSha and keeps claimedAt. A gate block and rollout retry can then bring the PR back here.
 test('checkClaim: a new head under the same claim logs its passes again', async () => {
-  const { manifest, driver, tools, gate, pr, entry } = claimDriver({})
+  const { manifest, driver, github, gate, pr, entry } = claimDriver({})
 
   entry.claimedAt = at(1)
 
@@ -603,7 +623,7 @@ test('checkClaim: a new head under the same claim logs its passes again', async 
   const before = readEvents(manifest).length
   entry.claimedSha = REBASED
   gate.pr = { headRefOid: REBASED }
-  tools.answer([viewRule({ headRefOid: REBASED }), { tool: 'gh', args: `commits/${REBASED}/check-runs`, stdout: GREEN_RUNS }])
+  github.answer([prRoute({ head: { sha: REBASED } }), runsRoute(REBASED)])
 
   await driver.advance(pr)
 
@@ -675,7 +695,7 @@ test('checkClaim: code scanning turned off is a skip, not a pass', async () => {
 })
 
 test('checkClaim: a ci pass lists every run on the SHA with its conclusion', async () => {
-  const { manifest, driver, tools, pr } = claimDriver({})
+  const { manifest, driver, github, pr } = claimDriver({})
   const runs = {
     check_runs: [
       { id: 1, name: 'test', status: 'completed', conclusion: 'success' },
@@ -683,7 +703,7 @@ test('checkClaim: a ci pass lists every run on the SHA with its conclusion', asy
     ],
   }
 
-  tools.answer([viewRule(), { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: runs }])
+  github.answer([prRoute(), runsRoute(SHA, runs)])
 
   await driver.advance(pr)
 
@@ -691,10 +711,10 @@ test('checkClaim: a ci pass lists every run on the SHA with its conclusion', asy
 })
 
 test('checkClaim: every gate-check event is short and names the stage and the level', async () => {
-  const { manifest, driver, tools, pr } = claimDriver({})
+  const { manifest, driver, github, pr } = claimDriver({})
   const many = Array.from({ length: 40 }, (_, i) => ({ id: i, name: `job-${i}`, status: 'completed', conclusion: 'failure' }))
 
-  tools.answer([viewRule(), { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: { check_runs: many } }])
+  github.answer([prRoute(), runsRoute(SHA, { check_runs: many })])
 
   await driver.advance(pr)
 
@@ -756,10 +776,10 @@ test('mergeCandidate: an analysis of an older commit waits with no notification'
 })
 
 // A1 in a fix run after a FAIL whose findings are not answered yet.
-function answeringDriver(rules, state = {}) {
+function answeringDriver(routes, state = {}) {
   const setup = tickDriver(
     { A1: { state: 'fixing', pr: 11, claimedSha: SHA, sessionId: 'session-1', findings: UNANSWERED, ...state } },
-    { rules },
+    { routes },
   )
 
   return { ...setup, pr: setup.manifest.prs.find((item) => item.id === 'A1'), entry: setup.driver.ledger.prs.A1 }
@@ -775,7 +795,7 @@ const ANSWERS = [
 ]
 
 test('claimReport: answers from one READY report survive a later one with none, and reach the next verifier', async () => {
-  const { manifest, driver, pr, entry } = answeringDriver([viewRule({ headRefOid: NEW_HEAD })])
+  const { manifest, driver, pr, entry } = answeringDriver([prRoute({ head: { sha: NEW_HEAD } })])
   const ciFixed = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3'
 
   await driver.onDone(pr, 'fix', readyReport(NEW_HEAD, ANSWERS), { run: 'A1-03-fix' })
@@ -799,13 +819,14 @@ test('claimReport: answers from one READY report survive a later one with none, 
 })
 
 test('claimReport: a READY report sent back for GitHub, or parked during an outage, still answers the findings', async () => {
+  const pr11 = 'repos/example/widgets/pulls/11'
   const cases = [
-    { state: 'needs_fix', stderr: 'GraphQL: Could not resolve to a PullRequest with the number of 11.' },
-    { state: 'interrupted', stderr: 'HTTP 502: Bad Gateway' },
+    { state: 'needs_fix', routes: [{ path: pr11, ...NOT_FOUND }, REPOSITORY] },
+    { state: 'interrupted', routes: [{ path: pr11, status: 502 }] },
   ]
 
-  for (const { state, stderr } of cases) {
-    const { driver, pr, entry } = answeringDriver([{ tool: 'gh', args: 'pr view 11', code: 1, stderr }])
+  for (const { state, routes } of cases) {
+    const { driver, pr, entry } = answeringDriver(routes)
 
     await driver.onDone(pr, 'fix', readyReport(NEW_HEAD, ANSWERS), { run: 'A1-03-fix' })
 
@@ -815,28 +836,27 @@ test('claimReport: a READY report sent back for GitHub, or parked during an outa
 })
 
 test('claimReport: a finding id in addressed never reaches GitHub, and the review comment is answered as before', async () => {
-  const { manifest, driver, pr, entry, tools } = answeringDriver(
-    [viewRule({ headRefOid: NEW_HEAD }), { tool: 'gh', args: 'api -X POST', stdout: '{}' }],
+  const replies = 'repos/example/widgets/pulls/11/comments/55/replies'
+  const { driver, pr, entry, github } = answeringDriver(
+    [prRoute({ head: { sha: NEW_HEAD } }), { method: 'POST', path: replies, status: 201, body: { id: 56 } }],
     { feedbackInFix: [{ id: 'inline-5', commentId: 55, body: 'Rename this helper.' }] },
   )
 
   const addressed = [{ id: 'inline-5', action: 'Renamed it to parseTicket.' }, ANSWERS[0]]
-  const reply = `api -X POST repos/${manifest.repo.github}/pulls/11/comments/55/replies -f body=Renamed it to parseTicket. (b2b2b2b)`
 
   await driver.onDone(pr, 'fix', readyReport(NEW_HEAD, addressed), { run: 'A1-03-fix' })
 
-  const calls = tools
-    .calls()
-    .filter((call) => call.tool === 'gh')
-    .map((call) => call.args.join(' '))
+  const sent = github.requests().map((request) => JSON.stringify(request.body))
+  const writes = github.requests().filter((request) => request.method !== 'GET')
 
-  const writes = calls.filter((line) => !line.startsWith('pr view 11 '))
+  assert.deepEqual(
+    writes.map((request) => [request.method, request.path, request.body]),
+    [['POST', replies, { body: `Renamed it to parseTicket. (b2b2b2b)\n\n${DRIVER_MARKER}` }]],
+  )
 
-  assert.equal(writes.length, 1)
-  assert.ok(writes[0].startsWith(reply), writes[0])
   assert.ok(
-    calls.every((line) => !line.includes('F1') && !line.includes(ANSWERS[0].action)),
-    calls.join('\n'),
+    sent.every((body) => !body.includes('F1') && !body.includes(ANSWERS[0].action)),
+    sent.join('\n'),
   )
 
   assert.deepEqual(entry.findings.items[0].answer, { outcome: 'fixed', action: ANSWERS[0].action })

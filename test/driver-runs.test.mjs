@@ -12,8 +12,8 @@ import {
   driverFor,
   apply,
   SHA,
-  GREEN_RUNS,
-  viewRule,
+  prRoute,
+  runsRoute,
   gateFacts,
   tickDriver,
   eventsSince,
@@ -565,7 +565,7 @@ test('pre-verify: a pass lives in this driver process only, so another driver on
 test('pre-verify: a new head or changed commands run the commands again', async () => {
   const seam = commandSeam()
   const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
-  const { manifest, pr, entry, gate, tools } = setup
+  const { manifest, pr, entry, gate, tools, github } = setup
   const gitDir = join(worktreePath(manifest, pr), '.git-dir')
 
   await preVerified(setup)
@@ -579,9 +579,8 @@ test('pre-verify: a new head or changed commands run the commands again', async 
   entry.claimedSha = NEW_HEAD
   entry.claimedAt = at(5)
   gate.pr = { headRefOid: NEW_HEAD }
+  github.answer([prRoute({ head: { sha: NEW_HEAD } }), runsRoute(NEW_HEAD)])
   tools.answer([
-    viewRule({ headRefOid: NEW_HEAD }),
-    { tool: 'gh', args: `commits/${NEW_HEAD}/check-runs`, stdout: GREEN_RUNS },
     { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
     { tool: 'git', args: 'rev-parse HEAD', stdout: NEW_HEAD },
     { tool: 'git', args: '', stdout: '' },
@@ -756,12 +755,10 @@ test('ready: a change to gates.ready alone runs the commands again on the same h
   assert.equal(entry.state, 'verifying')
 })
 
-// verifiableDriver's fake gh and git once a command left `leftover` in the
+// verifiableDriver's fake git once a command left `leftover` in the
 // worktree. git reports it until a reset, and the reset cleans the tree.
 function leftoverRules(gitDir, leftover) {
   const clean = [
-    viewRule(),
-    { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: GREEN_RUNS },
     { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
     { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
     { tool: 'git', args: '', stdout: '' },
@@ -876,7 +873,7 @@ test('pre-verify: what a job that threw after a command left is cleaned before t
 })
 
 test('pre-verify: a cleanup owed for a worktree that is gone only clears', async () => {
-  const { manifest, driver, tools } = tickDriver({
+  const { manifest, driver, tools, github } = tickDriver({
     A1: { ...CLAIMED, state: 'needs_fix', fixReason: 'pre-verify check', preVerifyCleanup: SHA },
   })
 
@@ -886,4 +883,5 @@ test('pre-verify: a cleanup owed for a worktree that is gone only clears', async
 
   assert.equal(entry.preVerifyCleanup, null)
   assert.deepEqual(tools.calls(), [])
+  assert.deepEqual(github.requests(), [])
 })

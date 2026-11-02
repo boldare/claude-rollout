@@ -349,8 +349,8 @@ node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             <code>seconds</code> (wall clock) and <code>awakeSeconds</code>, next to the <code>model</code> that ran.
           </li>
           <li>
-            After a wake the driver logs <code>machine-slept</code>. For two minutes it counts failed gh and git calls as an
-            <a href="how-it-works.html#outage">outage</a>, because the network comes back a little after the machine does.
+            After a wake the driver logs <code>machine-slept</code>. For two minutes it counts every failed GitHub request or gh or git call
+            as an <a href="how-it-works.html#outage">outage</a>, because the network comes back a little after the machine does.
           </li>
         </ul>
 
