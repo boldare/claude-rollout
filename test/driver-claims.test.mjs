@@ -721,7 +721,7 @@ test('mergeCandidate: a new code scanning alert drops the verification and goes 
   assert.match(entry.fixNote, /Never silence the analyser/)
   assert.match(entry.fixNote, /kind `code-scanning`/)
   assert.deepEqual(eventsSince(manifest), [
-    { id: 'A1', kind: 'gate-fix', reasons: [ALERT_REASON] },
+    { id: 'A1', kind: 'gate-fix', code: 'code-scanning', reasons: [ALERT_REASON] },
     { id: 'A1', kind: 'needs-fix', reason: 'code scanning' },
   ])
 })
@@ -738,7 +738,7 @@ test('mergeCandidate: with action block, a new code scanning alert blocks and dr
   assert.equal(entry.blocked.evidence, ALERT_REASON)
   assert.equal(entry.verified, null)
   assert.deepEqual(eventsSince(manifest), [
-    { id: 'A1', kind: 'gate-block', reasons: [ALERT_REASON] },
+    { id: 'A1', kind: 'gate-block', code: 'code-scanning', reasons: [ALERT_REASON] },
     { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
   ])
 
@@ -751,7 +751,7 @@ test('mergeCandidate: an analysis of an older commit waits with no notification'
 
   assert.equal(await driver.mergeCandidate(manifest.prs.find((item) => item.id === 'A1')), false)
   assert.equal(driver.ledger.prs.A1.state, 'verified')
-  assert.equal(driver.ledger.prs.A1.gate.kind, 'code-scanning')
+  assert.equal(driver.ledger.prs.A1.gate.code, 'code-scanning')
   assert.deepEqual(notices, [])
 })
 

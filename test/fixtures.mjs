@@ -36,7 +36,7 @@ export function samplePrs() {
       claimedSha: SHA,
       verified: { sha: SHA, patchId: 'patch-a1', at: at(80) },
       approved: { sha: SHA, patchId: 'patch-a1', at: at(81) },
-      gate: { action: 'wait', reasons: ['held (rollout release A1)'], mergeState: 'CLEAN', sha: SHA, at: at(82) },
+      gate: { action: 'wait', code: 'held', reasons: ['held (rollout release A1)'], mergeState: 'CLEAN', sha: SHA, at: at(82) },
       verdict,
       verdicts: [verdict],
       held: { at: at(81) },

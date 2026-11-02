@@ -807,7 +807,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="name">12:41</td>
                     <td class="name">P2</td>
                     <td class="name">gate-wait</td>
-                    <td class="detail">reasons=["awaiting a maintainer review on GitHub (approve PR #42)"]</td>
+                    <td class="detail">code=awaiting-github-review reasons=["awaiting a maintainer review on GitHub (approve PR #42)"]</td>
                   </tr>
                   <tr>
                     <td class="name">12:26</td>
@@ -977,7 +977,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             </nav>
             <dl class="kv">
               <dt>gate</dt>
-              <dd><strong>wait</strong> <span class="muted">at 12:41</span></dd>
+              <dd><strong>wait</strong> <span class="muted">awaiting-github-review</span> <span class="muted">at 12:41</span></dd>
               <dt>reasons</dt>
               <dd>awaiting a maintainer review on GitHub (approve PR #42)</dd>
               <dt>GitHub merge state</dt>
@@ -1012,10 +1012,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <tr>
                 <td class="name">overview</td>
                 <td>
-                  The merge commit, the reason of a fix or the last error, the gate's last decision with its reasons, GitHub's merge state
-                  and the sha it judged, the question and evidence of a blocked PR, the delegate's runs and answers with their plan
-                  references, the hold, how this PR is approved, the verified and approved stamps, the dependencies, files outside the PR's
-                  scope and changed workflow files. With the verifier and brief tabs it covers most of
+                  The merge commit, the reason of a fix or the last error, the gate's last decision with its code and reasons, GitHub's
+                  merge state and the sha it judged, the question and evidence of a blocked PR, the delegate's runs and answers with their
+                  plan references, the hold, how this PR is approved, the verified and approved stamps, the dependencies, files outside the
+                  PR's scope and changed workflow files. With the verifier and brief tabs it covers most of
                   <a href="commands.html#cmd-card"><code>rollout card</code></a
                   >. The implementer's summary, deviations and expected results are only on the card.
                 </td>

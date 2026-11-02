@@ -96,8 +96,9 @@ function noCommands() {
 
 // A driver whose gh and git are fakes, with no slot for an agent. Its gate
 // reads gateFacts with `gate.pr` and `gate.facts` on top, or throws `gate.error`.
-// `gate.pr` may be a function of the manifest PR and its ledger entry.
-export function tickDriver(prs, { rules = [], only = null, policy = {}, clock, runAgent, runCommand = noCommands } = {}) {
+// `gate.pr` may be a function of the manifest PR and its ledger entry. A
+// `judge` stands in for the merge gate's own.
+export function tickDriver(prs, { rules = [], only = null, policy = {}, clock, judge, runAgent, runCommand = noCommands } = {}) {
   const dir = makeRollout({ prs, events: [], policy: { concurrency: 0, ...policy } })
   const tools = fakeTools(dir, rules)
   const manifest = loadManifest(dir, { only })
@@ -116,6 +117,7 @@ export function tickDriver(prs, { rules = [], only = null, policy = {}, clock, r
 
       return { ...gateFacts(manifest, typeof gate.pr === 'function' ? gate.pr(pr, entry) : gate.pr), ...gate.facts }
     },
+    judge,
     clock,
     runAgent,
     runCommand,

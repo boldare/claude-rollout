@@ -86,8 +86,10 @@ function gateFields(gate) {
     return field('gate', element('span', 'No decision yet', 'muted'))
   }
 
+  const code = gate.code ? [element('span', ` ${gate.code}`, 'muted')] : []
+
   return [
-    field('gate', element('strong', gate.action), element('span', ` at ${clock(gate.at)}`, 'muted')),
+    field('gate', element('strong', gate.action), ...code, element('span', ` at ${clock(gate.at)}`, 'muted')),
     field('reasons', namedList(gate.reasons ?? [])),
     field('GitHub merge state', `${gate.mergeState ?? '-'}, as the driver saw it at ${clock(gate.at)}`),
     field('gate SHA', short(gate.sha)),

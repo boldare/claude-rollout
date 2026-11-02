@@ -1182,6 +1182,184 @@
         </ol>
 
         <p>
+          Every verdict carries a code beside its action. The driver decides on the code, never on the reasons, which are prose for you. It
+          logs a <code>gate-&lt;action&gt;</code> event with the code and the reasons when the action or the code changes. The codes
+          <code>awaiting-github-review</code>, <code>stale-github-review</code> and <code>awaiting-inbox-approval</code> send the approval
+          notice once per patch. <code>github-blocked</code> sends the ruleset notice once per head. The last three codes below are the
+          driver's own, for manual mode and a refused merge.
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Action</th>
+                <th>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="gate-halted">
+                <td class="nowrap"><code>halted</code></td>
+                <td>wait</td>
+                <td>The rollout is halted.</td>
+              </tr>
+              <tr id="gate-held">
+                <td class="nowrap"><code>held</code></td>
+                <td>wait</td>
+                <td>
+                  The PR is held (<a href="commands.html#cmd-hold"><code>rollout hold</code></a
+                  >).
+                </td>
+              </tr>
+              <tr id="gate-no-pr">
+                <td class="nowrap"><code>no-pr</code></td>
+                <td>block</td>
+                <td>No PR exists for the branch.</td>
+              </tr>
+              <tr id="gate-merged-on-github">
+                <td class="nowrap"><code>merged-on-github</code></td>
+                <td>wait</td>
+                <td>The PR was merged on GitHub. The next sync records it.</td>
+              </tr>
+              <tr id="gate-pr-not-open">
+                <td class="nowrap"><code>pr-not-open</code></td>
+                <td>block</td>
+                <td>The PR is closed.</td>
+              </tr>
+              <tr id="gate-never-merge">
+                <td class="nowrap"><code>never-merge</code></td>
+                <td>block</td>
+                <td>
+                  The release PR (<a href="manifest.html#repo-neverMerge"><code>repo.neverMerge</code></a
+                  >).
+                </td>
+              </tr>
+              <tr id="gate-draft">
+                <td class="nowrap"><code>draft</code></td>
+                <td>block</td>
+                <td>The PR is a draft.</td>
+              </tr>
+              <tr id="gate-wrong-base">
+                <td class="nowrap"><code>wrong-base</code></td>
+                <td>block</td>
+                <td>
+                  The PR's base is not <a href="manifest.html#repo-base"><code>repo.base</code></a
+                  >.
+                </td>
+              </tr>
+              <tr id="gate-wrong-head">
+                <td class="nowrap"><code>wrong-head</code></td>
+                <td>block</td>
+                <td>The PR's head is not its branch.</td>
+              </tr>
+              <tr id="gate-missing-label">
+                <td class="nowrap"><code>missing-label</code></td>
+                <td>block</td>
+                <td>The rollout label is missing.</td>
+              </tr>
+              <tr id="gate-deps-pending">
+                <td class="nowrap"><code>deps-pending</code></td>
+                <td>wait</td>
+                <td>A dependency is not merged yet.</td>
+              </tr>
+              <tr id="gate-not-verified">
+                <td class="nowrap"><code>not-verified</code></td>
+                <td>wait</td>
+                <td>No verification of the current patch.</td>
+              </tr>
+              <tr id="gate-awaiting-github-review">
+                <td class="nowrap"><code>awaiting-github-review</code></td>
+                <td>wait</td>
+                <td>No maintainer approved on GitHub yet.</td>
+              </tr>
+              <tr id="gate-stale-github-review">
+                <td class="nowrap"><code>stale-github-review</code></td>
+                <td>wait</td>
+                <td>The GitHub approval predates the current patch.</td>
+              </tr>
+              <tr id="gate-changes-requested">
+                <td class="nowrap"><code>changes-requested</code></td>
+                <td>wait</td>
+                <td>A maintainer requested changes on GitHub.</td>
+              </tr>
+              <tr id="gate-awaiting-inbox-approval">
+                <td class="nowrap"><code>awaiting-inbox-approval</code></td>
+                <td>wait</td>
+                <td>
+                  No <a href="commands.html#cmd-approve"><code>rollout approve</code></a> for the current patch.
+                </td>
+              </tr>
+              <tr id="gate-policy-violations">
+                <td class="nowrap"><code>policy-violations</code></td>
+                <td>fix</td>
+                <td>A policy rule is broken.</td>
+              </tr>
+              <tr id="gate-behind-base">
+                <td class="nowrap"><code>behind-base</code></td>
+                <td>rebase</td>
+                <td>The branch is behind the base or conflicts with it.</td>
+              </tr>
+              <tr id="gate-mergeable-unknown">
+                <td class="nowrap"><code>mergeable-unknown</code></td>
+                <td>wait</td>
+                <td>GitHub has not reported the PR mergeable yet.</td>
+              </tr>
+              <tr id="gate-ci-red">
+                <td class="nowrap"><code>ci-red</code></td>
+                <td>fix</td>
+                <td>CI is red on the head.</td>
+              </tr>
+              <tr id="gate-ci-pending">
+                <td class="nowrap"><code>ci-pending</code></td>
+                <td>wait</td>
+                <td>CI runs, or a required check is missing.</td>
+              </tr>
+              <tr id="gate-code-scanning">
+                <td class="nowrap"><code>code-scanning</code></td>
+                <td>fix, block or wait</td>
+                <td>New code scanning alerts, or an analysis of an older commit.</td>
+              </tr>
+              <tr id="gate-base-not-green">
+                <td class="nowrap"><code>base-not-green</code></td>
+                <td>wait</td>
+                <td>The base branch is not green.</td>
+              </tr>
+              <tr id="gate-github-blocked">
+                <td class="nowrap"><code>github-blocked</code></td>
+                <td>wait</td>
+                <td>GitHub reports <code>BLOCKED</code>. A ruleset requirement is not met.</td>
+              </tr>
+              <tr id="gate-github-merge-state">
+                <td class="nowrap"><code>github-merge-state</code></td>
+                <td>wait</td>
+                <td>Another merge state that is not clean, has hooks or unstable.</td>
+              </tr>
+              <tr id="gate-merge">
+                <td class="nowrap"><code>merge</code></td>
+                <td>merge</td>
+                <td>Everything holds.</td>
+              </tr>
+              <tr id="gate-ready">
+                <td class="nowrap"><code>ready</code></td>
+                <td>ready</td>
+                <td>Manual mode. Merge it on GitHub.</td>
+              </tr>
+              <tr id="gate-queued">
+                <td class="nowrap"><code>queued</code></td>
+                <td>wait</td>
+                <td>Manual mode. Another PR is ready first.</td>
+              </tr>
+              <tr id="gate-merge-refused">
+                <td class="nowrap"><code>merge-refused</code></td>
+                <td>wait</td>
+                <td>GitHub refused the merge.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
           With <code>merge: human</code> the driver then waits
           <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a> (120 s), counted from when it first
           sees the approval, so a <code>pause</code> can still stop it. A dry run logs <code>would-merge</code> and stops there. Otherwise
@@ -1414,7 +1592,9 @@
           the desktop, on by default, through <code>osascript</code> on macOS and <code>notify-send</code> on Linux, a shell command, and a
           webhook that gets a JSON POST. A failing target logs <code>notify-failed</code> once per target per driver run, and the driver
           carries on. Nearly every notice is also a line in <code>events.jsonl</code>. The gate's notices about a missing approval or GitHub
-          still blocking show up there only as <code>gate-wait</code>.
+          still blocking show up there only as <code>gate-wait</code> with their code, <code>awaiting-github-review</code>,
+          <code>stale-github-review</code> or <code>awaiting-inbox-approval</code> for an approval and <code>github-blocked</code> for
+          GitHub (see <a href="#gate">the merge gate</a>).
         </p>
 
         <ul>

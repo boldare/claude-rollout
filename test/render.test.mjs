@@ -167,13 +167,20 @@ test('header: the rollout name, the running driver and the document title', () =
   assert.equal(fakeDocument.title, 'demo')
 })
 
-test('detail overview: the gate action and its reason', () => {
-  const detail = renderDetail(viewContext({ route: { pr: 'A1', tab: 'overview' }, detail: { status: 200, body: prBody } }))
+test('detail overview: the gate action, its code when it has one, and its reason', () => {
+  const overview = (body) => renderDetail(viewContext({ route: { pr: 'A1', tab: 'overview' }, detail: { status: 200, body } }))
+  // A gate stored before gates had codes.
+  const { code: _, ...uncoded } = prBody.gate
+  const detail = overview({ ...prBody, gate: uncoded })
+  const coded = overview({ ...prBody, gate: { ...uncoded, code: 'held' } })
 
   assert.equal(detail.tagName, 'SECTION')
   assert.equal(detail.className, 'detail')
   assert.ok(texts(detail, 'strong').includes('wait'), 'the gate shows wait')
   assert.ok(texts(detail, 'li').includes('held (rollout release A1)'), 'the gate lists its reason')
+  assert.equal(texts(coded, 'span.muted').length, texts(detail, 'span.muted').length + 1)
+  assert.equal(texts(coded, 'span.muted').filter((text) => text.trim() === 'held').length, 1)
+  assert.equal(texts(detail, 'span.muted').filter((text) => text.trim() === 'held').length, 0)
 })
 
 test('detail verifier: the verdict badge, summary and checklist', () => {
