@@ -1204,6 +1204,19 @@ const MISREADINGS = [
   ['gh api repos/{owner}/{repo}/pulls/1/merge -X [P]UT', RULES.gh],
   ['gh api repos/{owner}/{repo}/pulls/1/merge [-]XPUT', RULES.gh],
   ["eval '/usr/bin/gi? push origin main'", /^the command .+ of eval is built by shell expansion/],
+  ['gh pr "" merge --squash', RULES.merge],
+  ["gh pr '' merge --admin", RULES.merge],
+  ['gh pr "" review 1 --approve', RULES.merge],
+  ['gh pr "" close 1', RULES.merge],
+  ['gh "" auth token', /^gh credentials stay with gh/],
+  ['gh "" repo delete x', /^gh repo is not allowed for rollout agents$/],
+  ['gh "" secret set X', /^gh secret is not allowed for rollout agents$/],
+  ['gh "" release create v9.9.9', /^gh release is not allowed for rollout agents$/],
+  ['gh "" api -X PUT repos/{owner}/{repo}/pulls/1/merge', /^gh api is read-only for rollout agents/],
+  ['gh "" api graphql -f query=x', /^gh api graphql is not allowed for rollout agents/],
+  ['gh "" api repos/other/x/pulls', /^gh api repos\/other\/x\/pulls names another repository than example\/widgets/],
+  ['npm "" version', /^npm version is not allowed/],
+  ["eval '' '/usr/bin/gi? push origin main'", /^the command .+ of eval is built by shell expansion/],
 ]
 
 test('misread words are refused by the hook command, each by its own rule', () => {
@@ -1237,6 +1250,8 @@ test('groups, empty words and a quoted # before a line continuation stay allowed
     "gh api repos/{owner}/{repo}/pulls --jq '[.[] | .number]'",
     'gh api -X GET search/issues -f q="label:bug" --paginate',
     'eval "npm test"',
+    'gh pr "" view --json number,title',
+    'git -C "" status',
   ]
 
   for (const role of ROLES) {

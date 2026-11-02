@@ -391,20 +391,23 @@
           is not honoured on purpose: a forbidden word inside a string still blocks. Every rule reads the words with quotes and backslashes
           deleted, so <code>sh -c "git push origin main"</code>, <code>p"u"sh</code> and <code>core.hooks""Path</code> read as what they
           are. A word that ends up empty, such as <code>""</code>, stays a word, because git reads <code>-C ""</code> as the current
-          directory. The control-plane patterns read the command both as written and without quotes and backslashes. The names of the tools
-          it reads, such as <code>git</code>, <code>gh</code> and <code>env</code>, count in any case, because macOS runs
-          <code>GIT</code> as git. Builtins and keywords such as <code>eval</code>, <code>exec</code>, <code>command</code> and
-          <code>time</code> count as written, and so do subcommands, as git and gh read them.
+          directory. It is never the command of <code>eval</code>, which joins its arguments with spaces. The control-plane patterns read
+          the command both as written and without quotes and backslashes. The names of the tools it reads, such as <code>git</code>,
+          <code>gh</code> and <code>env</code>, count in any case, because macOS runs <code>GIT</code> as git. Builtins and keywords such as
+          <code>eval</code>, <code>exec</code>, <code>command</code> and <code>time</code> count as written, and so do subcommands, as git
+          and gh read them.
         </p>
 
         <p>
           Before git's subcommand, gh's subcommand and action and a package manager's subcommand, an option takes the next word as its value
-          only if the guard lists it as taking one, as it lists git's <code>-C</code>, <code>-c</code> and <code>--namespace</code>. An
+          only if the guard lists it as taking one, as it lists git's <code>-C</code>, <code>-c</code> and <code>--namespace</code>. Any
+          other word that is not empty and does not start with <code>-</code> is read as the subcommand or action, a redirection such as
+          <code>2&gt;/dev/null</code> too. An empty word is skipped, because gh skips an empty argument when it looks for its command. An
           option and a value each stay one word across quotes and escaped spaces, as in <code>-C "a b"</code> and
           <code>--namespace="a b"</code>. A git option whose quote does not close in the command, as in <code>-C "a;b"</code>, is refused.
-          The rules below act on the command word, subcommand and action where this reading puts them. A command that the shell or the tool
-          reads differently gets past the rules that depend on those places. The <a href="#guard-limits">known limits</a> list the cases
-          found so far.
+          The rules below that depend on the command word, a subcommand or an action take them where this reading puts them, except the
+          verifier's gh write rule, which looks for <code>pr</code> and its action side by side. A command that the shell or the tool reads
+          differently gets past those rules. The <a href="#guard-limits">known limits</a> list the cases found so far.
         </p>
 
         <h4>Refused for every agent</h4>
@@ -508,8 +511,8 @@
         <h4>Pushes from a worker</h4>
 
         <p>
-          A worker pushes only with <code>git push origin &lt;refspec&gt;</code>, where every refspec targets the branch on the hook
-          command, its <code>--branch</code>. The guard refuses:
+          The guard lets a worker push only with <code>git push origin &lt;refspec&gt;</code>, where every refspec targets the branch on the
+          hook command, its <code>--branch</code>. It refuses:
         </p>
 
         <ul>
@@ -532,9 +535,12 @@
             <code>git commit</code>, <code>push</code>, <code>rebase</code>, <code>merge</code>, <code>reset</code>, <code>clean</code>,
             <code>stash</code>, <code>cherry-pick</code>, <code>revert</code>, <code>tag</code>, <code>am</code>, <code>apply</code>,
             <code>checkout</code>, <code>switch</code>, <code>restore</code>, <code>update-ref</code>, <code>branch</code> and
-            <code>worktree</code>. The verifier stays on the PR head it was given.
+            <code>worktree</code>. They keep the verifier on the PR head it was given, outside the known limits below.
           </li>
-          <li><code>gh pr create|edit|comment|ready</code> and <code>gh issue</code>.</li>
+          <li>
+            <code>gh pr create|edit|comment|ready</code> and <code>gh issue</code>. This rule looks for <code>pr</code> and its action side
+            by side.
+          </li>
         </ul>
 
         <h4 id="guard-limits">Known limits</h4>
@@ -549,6 +555,16 @@
             A redirection that holds <code>&amp;</code> or <code>|</code>, such as <code>2&gt;&amp;1</code>, <code>&lt;&amp;-</code> or
             <code>&gt;|</code>, before the command word or among its words. The guard splits the command there, so the words after it read
             as a new command: <code>2&gt;&amp;1 $(echo git) push origin main</code>.
+          </li>
+          <li>
+            Any other redirection between git, gh or a package manager and its subcommand, or between gh's or <code>git remote</code>'s
+            subcommand and its action. The guard reads the redirection as that word:
+            <code>git 2&gt;/dev/null config core.hooksPath /dev/null</code> and <code>gh pr &gt;/dev/null merge 1</code>. As the verifier,
+            <code>git 2&gt;/dev/null push origin &lt;PR branch&gt;</code> also gets past, and the pre-push hook lets the PR branch through.
+          </li>
+          <li>
+            An option or a redirection between <code>gh pr</code> and <code>create</code>, <code>edit</code>, <code>comment</code> or
+            <code>ready</code>, which the verifier's rule looks for side by side: <code>gh pr -R example/widgets edit 1 --title x</code>.
           </li>
           <li>
             A <code>;</code>, <code>&amp;</code>, <code>|</code> or newline in a quoted option value before gh's subcommand or action or a

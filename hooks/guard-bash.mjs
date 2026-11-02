@@ -193,8 +193,10 @@ function unquote(text) {
 // Quotes and backslashes are deleted so `sh -c "git push origin main"` is
 // read as the command inside it and `pu\\sh` or `p"u"sh` read as `push`. A
 // word that ends up empty stays, because the shell passes `""` on and git
-// reads `-C ""` as the current directory. The raw words keep what only the
-// shell's spelling shows: a leading `\` or `=`.
+// reads `-C ""` as the current directory. It is never a subcommand, an action
+// or eval's command, because gh skips an empty argument when it looks for its
+// command and eval joins its arguments with spaces. The raw words keep what
+// only the shell's spelling shows: a leading `\` or `=`.
 function readWords(command) {
   const raws = command.split(/\s+/).filter(Boolean)
 
@@ -318,6 +320,11 @@ function invocations(words, raws, name, flagsWithValue) {
   startFrom[words.length] = words.length
 
   for (let i = words.length - 1; i >= 0; i -= 1) {
+    if (words[i] === '') {
+      startFrom[i] = startFrom[i + 1]
+      continue
+    }
+
     if (!words[i].startsWith('-')) {
       startFrom[i] = i
       continue
@@ -369,7 +376,9 @@ function positionals(words, raws, from, flagsWithValue, limit) {
   let i = from
 
   while (i !== -1 && i < words.length && found.length < limit) {
-    if (!words[i].startsWith('-')) {
+    if (words[i] === '') {
+      i += 1
+    } else if (!words[i].startsWith('-')) {
       found.push(i)
       i = valueEnd(raws, i)
     } else {
@@ -1132,7 +1141,8 @@ function shellStringAt(words, cluster) {
 }
 
 // eval and `sh -c` run a string as a command, so the guard must read it. Its
-// first word is the string's command word.
+// first word is the string's command word, for eval its first argument that
+// is not empty.
 function shellStringProblem(words, raws) {
   const evalAt = words.indexOf('eval')
   const unreadable = evalAt === -1 ? -1 : firstFailing(readable, words, raws, evalAt + 1)
@@ -1141,9 +1151,9 @@ function shellStringProblem(words, raws) {
     return builtByExpansion(`the argument ${raws[unreadable]} of eval`)
   }
 
-  const evaluated = evalAt + 1
+  const evaluated = evalAt === -1 ? -1 : words.findIndex((word, i) => i > evalAt && word !== '')
 
-  if (evalAt !== -1 && evaluated < words.length && !isCommandName(words[evaluated], raws[evaluated])) {
+  if (evaluated !== -1 && !isCommandName(words[evaluated], raws[evaluated])) {
     return builtByExpansion(`the command ${raws[evaluated]} of eval`)
   }
 
