@@ -1419,6 +1419,46 @@ test('deeply nested and padded lines are decided by the hook command', () => {
   }
 })
 
+// A word that ends in a backslash joins every word after it, and each -c of
+// `sh -c -o …` reads the options after it. Read again from every start,
+// either costs the square of a line's length, and a hook that times out lets
+// the command run.
+test('padded option words are decided by the hook command, far within its timeout', () => {
+  const manifest = liveRollout()
+  const write = 'gh api -X PUT repos/{owner}/{repo}/pulls/1/merge'
+  const padded = (head, unit) => [
+    '# \\',
+    ...Array.from({ length: 16 }, (_, row) => head + unit.repeat(Math.floor((16_000 - head.length) / unit.length)) + ` ${row}`),
+    write,
+  ]
+
+  const commands = [
+    ['option words that end in a backslash', padded(': git gh npm pnpm yarn npx pnpx bun bunx ', '-\\ ')],
+    ['sh -c -o', padded('', 'sh -c -o ')],
+  ]
+
+  for (const [name, lines] of commands) {
+    const command = lines.join('\n')
+
+    assert.ok(command.length <= 262_144 && lines.every((line) => line.length <= 16_384), name)
+
+    for (const role of ROLES) {
+      const started = performance.now()
+
+      assert.match(check(command, role, BRANCH, LIVE_DEMO), /^gh api is read-only for rollout agents/, `${name}, ${role}`)
+      assert.ok(performance.now() - started < 1_000, `${name}, ${role}: ${Math.round(performance.now() - started)} ms`)
+    }
+
+    for (const role of Object.keys(HOOK_ROLES)) {
+      const result = runHook(manifest, role, payload(command), { branch: manifest.all[0].branch })
+
+      assert.equal(result.signal, null, `${name}, ${role}`)
+      assert.equal(result.status, 2, `${name}, ${role}: ${result.stderr}`)
+      assert.match(result.stderr, /^rollout guard: gh api is read-only for rollout agents/, `${name}, ${role}`)
+    }
+  }
+})
+
 function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

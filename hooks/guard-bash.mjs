@@ -251,34 +251,59 @@ function isTool(word, name) {
   return lower === name || lower.endsWith(`/${name}`)
 }
 
+const QUOTES = [null, '"', "'"]
+
+// The quote still open after a raw word read from inside `quote`, and whether
+// its last backslash escapes the space after it.
+function readRaw(raw, quote) {
+  let escaped = false
+
+  for (const char of raw) {
+    if (escaped) {
+      escaped = false
+    } else if (char === '\\' && quote !== "'") {
+      escaped = true
+    } else if (quote === null && (char === '"' || char === "'")) {
+      quote = char
+    } else if (char === quote) {
+      quote = null
+    }
+  }
+
+  return { quote, escaped }
+}
+
+// The loops over options ask where a value ends at almost every word, and a
+// value can run to the end of the command, as in `-\ -\ -\ …`. Scanning from
+// each start would cost the square of the command's length and could push
+// the guard past its timeout, so the ends are read once per command, from the
+// last word back, for each quoting a word can start in: none, double or single.
+const VALUE_ENDS = new WeakMap()
+
+function valueEnds(raws) {
+  const ends = QUOTES.map(() => new Array(raws.length + 1).fill(-1))
+
+  for (let i = raws.length - 1; i >= 0; i -= 1) {
+    QUOTES.forEach((quote, state) => {
+      const after = readRaw(raws[i], quote)
+
+      ends[state][i] = after.quote === null && !after.escaped ? i + 1 : ends[QUOTES.indexOf(after.quote)][i + 1]
+    })
+  }
+
+  return ends[0]
+}
+
 // Where the value that starts at raws[from] ends: a quote or an escaped
 // space joins raw words, as in `-C "a b"`. -1 when the quote does not close
 // in the command, as when readCommands split the value at a separator inside
 // it, as in `-C "a;b"`.
 function valueEnd(raws, from) {
-  let quote = null
-
-  for (let i = from; i < raws.length; i += 1) {
-    let escaped = false
-
-    for (const char of raws[i]) {
-      if (escaped) {
-        escaped = false
-      } else if (char === '\\' && quote !== "'") {
-        escaped = true
-      } else if (quote === null && (char === '"' || char === "'")) {
-        quote = char
-      } else if (char === quote) {
-        quote = null
-      }
-    }
-
-    if (quote === null && !escaped) {
-      return i + 1
-    }
+  if (!VALUE_ENDS.has(raws)) {
+    VALUE_ENDS.set(raws, valueEnds(raws))
   }
 
-  return -1
+  return VALUE_ENDS.get(raws)[from]
 }
 
 // Where the option at words[i] and its value end, each read across quotes
@@ -1117,27 +1142,42 @@ function optionValues(word) {
 }
 
 // A shell reads all its options before the string of -c, so `bash -c -e "$x"`
-// and `bash -co errexit "$x"` both run $x. Returns the string's index or -1.
-function shellStringAt(words, cluster) {
-  let values = optionValues(words[cluster])
+// and `bash -co errexit "$x"` both run $x. strings[i] is the string's index
+// when the shell's options go on at words[i], or -1. A scan from every -c
+// would cost the square of the command's length on `sh -c -o sh -c -o …`, so
+// the table is read once per command, from the last word back.
+const SHELL_STRINGS = new WeakMap()
 
-  for (let i = cluster + 1; i < words.length; i += 1) {
+function shellStrings(words) {
+  const strings = new Array(words.length).fill(-1)
+  const at = (i) => (i < words.length ? strings[i] : -1)
+
+  for (let i = words.length - 1; i >= 0; i -= 1) {
     const word = words[i]
 
-    if (values > 0) {
-      values -= 1
-    } else if (word === '--') {
-      return i + 1 < words.length ? i + 1 : -1
+    if (word === '--') {
+      strings[i] = i + 1 < words.length ? i + 1 : -1
     } else if (word === '--rcfile' || word === '--init-file') {
-      values = 1
+      strings[i] = at(i + 2)
     } else if (/^[-+]/.test(word)) {
-      values = optionValues(word)
+      strings[i] = at(i + 1 + optionValues(word))
     } else {
-      return i
+      strings[i] = i
     }
   }
 
-  return -1
+  return strings
+}
+
+// The index of the string of the -c in the option cluster at words[cluster], or -1.
+function shellStringAt(words, cluster) {
+  if (!SHELL_STRINGS.has(words)) {
+    SHELL_STRINGS.set(words, shellStrings(words))
+  }
+
+  const next = cluster + 1 + optionValues(words[cluster])
+
+  return next < words.length ? SHELL_STRINGS.get(words)[next] : -1
 }
 
 // eval and `sh -c` run a string as a command, so the guard must read it. Its
@@ -1630,8 +1670,10 @@ function toolProblem(words, raws, role, branch, gh) {
 
 // Some rules cost the square of a line's length, and a hook that times out
 // lets the command run. The caps keep the guard's work far below the
-// timeout. Joined continuations and nested code can make a longer line or
-// command, so the caps hold for those too.
+// timeout, as long as no rule costs more than that square on a command. So a
+// loop that asks for something at every word reads a table built once per
+// command, such as valueEnds. Joined continuations and nested code can make a
+// longer line or command, so the caps hold for those too.
 const MAX_COMMAND = 262_144
 const MAX_LINE = 16_384
 
