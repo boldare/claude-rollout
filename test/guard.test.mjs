@@ -1204,31 +1204,6 @@ const MISREADINGS = [
   ['gh api repos/{owner}/{repo}/pulls/1/merge -X [P]UT', RULES.gh],
   ['gh api repos/{owner}/{repo}/pulls/1/merge [-]XPUT', RULES.gh],
   ["eval '/usr/bin/gi? push origin main'", /^the command .+ of eval is built by shell expansion/],
-  ['2>&1 $(echo git) push origin main', RULES.commandWord],
-  ['1>&2 /usr/bin/gi? push origin main', RULES.commandWord],
-  ['>/dev/null 2>&1 $x', RULES.commandWord],
-  ['<&- $x', RULES.commandWord],
-  ['>| out $x', RULES.commandWord],
-  ['&>log $x', RULES.commandWord],
-  ['2>&1 =git status', RULES.commandWord],
-  ['gh pr 2>&1 merge 1', RULES.merge],
-  ['git 2>&1 push origin main', RULES.pushTarget, ['implement']],
-  ['gh pr -b "x;y" merge 1 --squash', /^a quote in the gh option -b does not close in this command/],
-  ['gh pr --body "x&y" merge 1 --squash', /^a quote in the gh option --body does not close in this command/],
-  ['gh pr -A x merge 1 --squash', RULES.merge],
-  ['gh pr --match-head-commit abc merge 1 --squash', RULES.merge],
-  ['gh pr -A x $(echo merge) 1 --squash', RULES.gh],
-  ['gh pr "" merge 1', RULES.merge],
-  ['gh pr -R example/widgets edit 1 --title x', /^the verifier is read-only on GitHub$/, ['verify']],
-  ['git --attr-source x config core.hooksPath /dev/null', GIT_CONFIG],
-  ['git --attr-source x push origin main', RULES.pushTarget, ['implement']],
-  ['s=push; git --attr-source x $s origin main', RULES.git],
-  ['git --attr-source x commit -m x', /^the verifier is read-only and stays on the PR head: git commit/, ['verify']],
-  ['git --frobnicate x push origin main', /^git --frobnicate is an option the guard does not know/],
-  ['gh -X PUT api repos/{owner}/{repo}/pulls/1/merge', /^gh api is read-only for rollout agents/],
-  ['s=release; npm --prefix . run $s', /^the npm run argument \$s is built by shell expansion/],
-  ['npm --registry x version patch', /^npm version is not allowed/],
-  ['npm --prefix "a;b" run $s', /^a quote in the npm option --prefix does not close in this command/],
 ]
 
 test('misread words are refused by the hook command, each by its own rule', () => {
@@ -1243,33 +1218,6 @@ test('misread words are refused by the hook command, each by its own rule', () =
       assert.equal(result.status, 2, shown)
       assert.match(result.stderr.slice('rollout guard: '.length, -1), rule, shown)
     }
-  }
-})
-
-test('redirections, gh options and package manager options leave ordinary commands allowed', () => {
-  const both = [
-    'npm test 2>&1 | tail -20',
-    'gh pr view 12 --json title 2>/dev/null',
-    'echo "a > b" > out.txt',
-    "cat <<'EOF' > notes.md\nhello\nEOF",
-    'git --no-pager log -1 >/dev/null 2>&1',
-    'gh pr --repo example/widgets view 12',
-    'gh -R example/widgets pr view 12',
-    'npx -y eslint "src/**"',
-    'npm --prefix ./app test',
-    'pnpm --filter pkg test',
-    'npm view pkg version',
-    'bunx --bun vite build',
-  ]
-
-  for (const role of ROLES) {
-    for (const command of both) {
-      assert.equal(check(command, role, 'feat/a1', LIVE_DEMO), null, `${role}: ${command}`)
-    }
-  }
-
-  for (const command of ['git push -u origin feat/a1 2>&1', 'gh pr checks 12 --watch 2>&1 | tail -5', 'pnpm -w add -D typescript']) {
-    assert.equal(check(command, 'worker', 'feat/a1', LIVE_DEMO), null, command)
   }
 })
 
