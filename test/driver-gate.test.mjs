@@ -112,8 +112,8 @@ test('mergeCandidate: a merge GitHub refuses waits with the merge-refused code',
   assert.deepEqual(notices, ['A1: GitHub refused to merge PR #11; check its ruleset requirements'])
 })
 
-// Shares no words with the gate's approval and ruleset reasons, so only the
-// code can pick a notice.
+// Holds none of the phrases the old notice regexes matched ("awaiting",
+// "approve PR", "GitHub still blocks"), so only the code can pick a notice.
 const PLAIN_REASON = 'the stub gate says no'
 
 // A1 verified and not held, under a merge gate that answers `stub.verdict`.
