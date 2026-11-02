@@ -407,7 +407,7 @@
           <code>--namespace="a b"</code>. A git option whose quote does not close in the command, as in <code>-C "a;b"</code>, is refused.
           The rules below that depend on the command word, a subcommand or an action take them where this reading puts them, except the
           verifier's gh write rule, which looks for <code>pr</code> and its action side by side. A command that the shell or the tool reads
-          differently gets past those rules. The <a href="#guard-limits">known limits</a> list the cases found so far.
+          differently can get past those rules. The <a href="#guard-limits">known limits</a> list the cases found so far.
         </p>
 
         <h4>Refused for every agent</h4>
@@ -425,7 +425,8 @@
             quotes or backslashes inside, as in <code>de""mo</code>. Loading the manifest refuses a branch, title, base or repository that
             would trip this rule (<a href="manifest.html#validation">what loading checks</a>). Any <code>$ROLLOUT_…</code> variable, and
             anything but a plain name right under the rollouts root, such as <code>~/.rollouts/*/inbox</code>,
-            <code>~/.rollouts/$n</code> or zsh's <code>~/.rollouts/(a|b)</code>.
+            <code>~/.rollouts/$n</code> or zsh's <code>~/.rollouts/(a|b)</code>. The rollout's name spelled with <code>$'…'</code>
+            escapes is one of the known limits.
           </li>
           <li>
             <strong>Commands built by shell expansion.</strong> The guard cannot read what the shell builds, so it refuses
@@ -610,10 +611,15 @@
           <li>Brace expansion with a space inside, where the guard needs no name: <code>git commit {--no-verify,"-m x"}</code>.</li>
           <li>zsh glob qualifiers that run code: <code>ls *(e:'…':)</code>.</li>
           <li>A relative path into the rollouts root: <code>cat ../../*/inbox/x</code>.</li>
+          <li>
+            The rollout's name spelled with the escapes of <code>$'…'</code>, in a path that does not start at the rollouts root:
+            <code>cat ../../$'de\x6do'/ledger.json</code>.
+          </li>
           <li>A recursive tool over the rollouts root: <code>grep -r token ~/.rollouts</code>.</li>
           <li>A glob in the root's own name: <code>cat ~/.rol*/*/ledger.json</code>.</li>
           <li>
-            Another case of a path, which macOS ignores: <code>cat ~/.rollouts/DEMO/ledger.json</code> reads the rollout <code>demo</code>.
+            Another case of a path, which macOS ignores: <code>cat ~/.rollouts/DEMO/ledger.json</code> reads the rollout <code>demo</code>,
+            and <code>~/.claude/skills/ROLLOUT</code> is the skill.
           </li>
           <li>The Read tool, which the guard never sees and which is not denied on the rollout directory.</li>
         </ul>
