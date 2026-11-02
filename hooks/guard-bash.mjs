@@ -122,6 +122,17 @@ export function readCommands(text) {
     } while (closed !== closer)
   }
 
+  // The `&` of `2>&1`, `<&-` and `&>log` and the `|` of `>|` belong to a redirection, not a separator.
+  function inRedirect(at) {
+    const before = text[at - 1]
+
+    if (text[at] === '|') {
+      return before === '>'
+    }
+
+    return text[at] === '&' && (before === '>' || before === '<' || text[at + 1] === '>')
+  }
+
   // Reads the special character at `at` and returns how many it used.
   function step(at) {
     const char = text[at]
@@ -153,7 +164,7 @@ export function readCommands(text) {
       enter(char)
     } else if ((char === ')' || char === '}') && open[char] > 0) {
       leave(char)
-    } else if (SEPARATORS.includes(char)) {
+    } else if (SEPARATORS.includes(char) && !inRedirect(at)) {
       // zsh reads `git(|)` as an alternation that matches `git`, so a separator fills a group.
       current.filled = true
       flush(current)
@@ -194,9 +205,44 @@ function unquote(text) {
 // reads `-C ""` as the current directory. The raw words keep what only the
 // shell's spelling shows: a leading `\` or `=`.
 function readWords(command) {
-  const raws = command.split(/\s+/).filter(Boolean)
+  const raws = withoutRedirects(command.split(/\s+/).filter(Boolean))
 
   return { words: raws.map(unquote), raws }
+}
+
+// The shell takes redirections out before the program sees its arguments,
+// so `2>&1 $x` runs $x and `git 2>&1 push` pushes. An operator alone takes
+// the next word as its target. A redirection inside quotes is text.
+function withoutRedirects(raws) {
+  const kept = []
+  let open = null
+  let skip = 0
+
+  raws.forEach((raw, i) => {
+    const outside = open === null
+
+    open = readQuotes(raw, open).open
+
+    if (skip > 0) {
+      skip -= 1
+      return
+    }
+
+    if (!outside || redirectWidth(raws, i) === 0) {
+      kept.push(raw)
+      return
+    }
+
+    let stop = valueEnd(raws, i)
+
+    if (REDIRECT_OPERATOR.test(raw) && stop !== -1 && stop < raws.length) {
+      stop = valueEnd(raws, stop)
+    }
+
+    skip = (stop === -1 ? raws.length : stop) - i - 1
+  })
+
+  return kept
 }
 
 // The guard decides on these words as written, so none may expand. `$` also
@@ -252,29 +298,40 @@ function isTool(word, name) {
 // quote does not close in the command, as when readCommands split the value
 // at a separator inside it, as in `-C "a;b"`.
 function valueEnd(raws, from) {
-  let quote = null
+  let open = null
 
   for (let i = from; i < raws.length; i += 1) {
-    let escaped = false
+    const state = readQuotes(raws[i], open)
 
-    for (const char of raws[i]) {
-      if (escaped) {
-        escaped = false
-      } else if (char === '\\' && quote !== "'") {
-        escaped = true
-      } else if (quote === null && (char === '"' || char === "'")) {
-        quote = char
-      } else if (char === quote) {
-        quote = null
-      }
-    }
+    open = state.open
 
-    if (quote === null && !escaped) {
+    if (open === null && !state.escaped) {
       return i + 1
     }
   }
 
   return -1
+}
+
+// The quote still open after `raw`, read from the quote `open` before it,
+// and whether its last backslash escapes the space after it.
+function readQuotes(raw, open) {
+  let quote = open
+  let escaped = false
+
+  for (const char of raw) {
+    if (escaped) {
+      escaped = false
+    } else if (char === '\\' && quote !== "'") {
+      escaped = true
+    } else if (quote === null && (char === '"' || char === "'")) {
+      quote = char
+    } else if (char === quote) {
+      quote = null
+    }
+  }
+
+  return { open: quote, escaped }
 }
 
 // Where the option at words[i] and its value end, both read as the shell
@@ -514,7 +571,78 @@ function wholeCommandProblem(plain, context) {
   return null
 }
 
-const GH_GLOBAL_FLAGS = ['-R', '--repo', '--hostname']
+function toolCalls(words, name) {
+  return words.flatMap((word, index) => (isTool(word, name) ? [index] : []))
+}
+
+// gh finds its subcommand and action as cobra does: an option before them
+// takes the next word as its value unless it holds `=`, is a cluster of short
+// flags or is one of these, and an empty word is no command.
+const GH_FLAGS = ['-h', '--help', '--version']
+
+function takesCobraValue(word) {
+  return !word.includes('=') && !GH_FLAGS.includes(word) && (word.startsWith('--') || word.length === 2)
+}
+
+const COBRA_TABLES = new WeakMap()
+
+// From each word: the command cobra's scan finds next, the word after that
+// command, and an option whose quote does not close before it, each -1 when
+// there is none. Read once per command, from the end, so `gh -x gh -x …`
+// costs one pass and not one per call.
+function cobraTable(words, raws) {
+  const cached = COBRA_TABLES.get(words)
+
+  if (cached) {
+    return cached
+  }
+
+  const length = words.length + 1
+  const table = { command: new Array(length).fill(-1), after: new Array(length).fill(-1), unclosed: new Array(length).fill(-1) }
+
+  for (let i = words.length - 1; i >= 0; i -= 1) {
+    const word = words[i]
+    let end = valueEnd(raws, i)
+
+    if (end !== -1 && end < words.length && word.startsWith('-') && takesCobraValue(word)) {
+      end = valueEnd(raws, end)
+    }
+
+    if (word === '--') {
+      continue
+    }
+
+    if (end === -1) {
+      table.unclosed[i] = i
+    } else if (word !== '' && !word.startsWith('-')) {
+      table.command[i] = i
+      table.after[i] = end
+    } else {
+      table.command[i] = table.command[end]
+      table.after[i] = table.after[end]
+      table.unclosed[i] = table.unclosed[end]
+    }
+  }
+
+  COBRA_TABLES.set(words, table)
+
+  return table
+}
+
+// The indices of gh's subcommand and action from words[from], and the index of
+// an option whose quote does not close before them, or -1.
+function cobraCommands(words, raws, from) {
+  const { command, after, unclosed } = cobraTable(words, raws)
+  const sub = command[from]
+
+  if (sub === -1) {
+    return { found: [], unclosed: unclosed[from] }
+  }
+
+  const action = command[after[sub]]
+
+  return { found: action === -1 ? [sub] : [sub, action], unclosed: action === -1 ? unclosed[after[sub]] : -1 }
+}
 
 const GH_VALUE_FLAGS = [
   '-R',
@@ -576,15 +704,16 @@ const GH_API_FIELD = new RegExp(`^(${GH_API_FIELDS.join('|')})`)
 function checkGh(words, raws, { repo, placeholders }) {
   let api = false
 
-  for (const { start } of invocations(words, raws, 'gh', GH_GLOBAL_FLAGS)) {
-    const args = words.slice(start)
-    const [sub, action] = positionals(words, raws, start, GH_VALUE_FLAGS, 2).map((index) => words[index])
+  for (const call of toolCalls(words, 'gh')) {
+    // gh reads a subcommand's options before it too, as in `gh -X PUT api`.
+    const after = words.slice(call + 1)
+    const [sub, action] = cobraCommands(words, raws, call + 1).found.map((index) => words[index])
 
     if (GH_FORBIDDEN.includes(sub)) {
       return `gh ${sub} is not allowed for rollout agents`
     }
 
-    if (sub === 'auth' && (action !== 'status' || args.some((arg) => arg === '-t' || arg === '--show-token'))) {
+    if (sub === 'auth' && (action !== 'status' || after.some((arg) => arg === '-t' || arg === '--show-token'))) {
       return 'gh credentials stay with gh; only `gh auth status` (without the token) is allowed'
     }
 
@@ -595,13 +724,13 @@ function checkGh(words, raws, { repo, placeholders }) {
     if (sub === 'api') {
       api = true
 
-      if (action === 'graphql' || args.includes('graphql')) {
+      if (action === 'graphql' || after.includes('graphql')) {
         return 'gh api graphql is not allowed for rollout agents (use gh pr / gh run subcommands)'
       }
 
-      const joined = args.join(' ')
+      const joined = after.join(' ')
       const method = joined.match(/(?:-X|--method)[\s=]*([A-Za-z]+)/)?.[1]
-      const hasFields = args.some((arg) => GH_API_FIELD.test(arg))
+      const hasFields = after.some((arg) => GH_API_FIELD.test(arg))
 
       if ((method && method.toUpperCase() !== 'GET') || (!method && hasFields)) {
         return 'gh api is read-only for rollout agents (GET only)'
@@ -778,16 +907,22 @@ const ENV_BUILTINS = new Set([
 // zsh reads their names as patterns with -m: `unset -m 'GH_*'`.
 const PATTERN_BUILTINS = new Set(['unset', 'export', 'declare', 'typeset', 'local', 'readonly'])
 
+// A word that starts a redirection: `>out`, `2>&1`, `<&-`, `&>log`.
+const REDIRECT = /^(?:\d+|&)?[<>]/
+
+// An operator without its target: `>`, `2>`, `>|`, `<<<`, `&>`.
+const REDIRECT_OPERATOR = /^(?:\d+|&)?[<>]+[&|!]?$/
+
 // A redirect is no argument, so `env >/dev/null -i` still gives env its -i.
 // An operator without its target takes the next word too.
 function redirectWidth(words, index) {
   const word = words[index]
 
-  if (!/^\d*[<>]/.test(word)) {
+  if (!REDIRECT.test(word)) {
     return 0
   }
 
-  return /^\d*[<>]+$/.test(word) ? 2 : 1
+  return REDIRECT_OPERATOR.test(word) ? 2 : 1
 }
 
 function checkBuiltins(words) {
@@ -1162,7 +1297,51 @@ function shellStringProblem(words, raws) {
   return null
 }
 
-const GIT_VALUE_FLAGS = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env', '--super-prefix']
+const GIT_VALUE_FLAGS = [
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--exec-path',
+  '--config-env',
+  '--super-prefix',
+  '--attr-source',
+  '--shallow-file',
+]
+
+// git 2.54's other global options. git stops at an option it does not know,
+// but a later git may know one that takes a value and moves the subcommand,
+// so the guard refuses any option outside these lists.
+const GIT_FLAGS = [
+  '-h',
+  '--help',
+  '-v',
+  '--version',
+  '--html-path',
+  '--man-path',
+  '--info-path',
+  '-p',
+  '--paginate',
+  '-P',
+  '--no-pager',
+  '--no-lazy-fetch',
+  '--no-replace-objects',
+  '--bare',
+  '--literal-pathspecs',
+  '--no-literal-pathspecs',
+  '--glob-pathspecs',
+  '--noglob-pathspecs',
+  '--icase-pathspecs',
+  '--no-optional-locks',
+  '--no-advice',
+]
+
+function knownGitOption(word) {
+  const name = word.split('=')[0]
+
+  return GIT_FLAGS.includes(word) || GIT_VALUE_FLAGS.includes(name) || name === '--list-cmds'
+}
 
 // The flags before git's subcommand and the key of -c must be names, because
 // a glob there can turn into a setting once it matches a file the agent made.
@@ -1176,6 +1355,10 @@ function gitOptionProblem(words, raws, { flag, flagEnd, value, end }) {
 
   if (unnamed !== -1) {
     return builtByExpansion(`the git option ${raws[unnamed]}`)
+  }
+
+  if (!knownGitOption(words[flag])) {
+    return `git ${raws[flag]} is an option the guard does not know, so it cannot tell where git's subcommand starts`
   }
 
   if (value === -1 || words[flag] === '-C') {
@@ -1246,8 +1429,13 @@ function gitExpansionProblem(words, raws) {
 function ghExpansionProblem(words, raws) {
   let checkedFrom = Infinity
 
-  for (const { call, start } of invocations(words, raws, 'gh', GH_GLOBAL_FLAGS)) {
-    const [sub, action] = positionals(words, raws, start, GH_VALUE_FLAGS, 2)
+  for (const call of toolCalls(words, 'gh')) {
+    const { found, unclosed } = cobraCommands(words, raws, call + 1)
+    const [sub, action] = found
+
+    if (unclosed !== -1) {
+      return `a quote in the gh option ${raws[unclosed]} does not close in this command, so the guard cannot tell where gh's subcommand and action start. Keep ;, &, | and newlines out of a quoted value`
+    }
 
     if (sub === undefined) {
       continue
@@ -1270,7 +1458,7 @@ function ghExpansionProblem(words, raws) {
       checkedFrom = call
 
       const unreadable = firstFailing(readable, words, raws, call + 1)
-      const problem = unreadable === -1 ? ghApiProblem(words, raws, sub + 1) : null
+      const problem = unreadable === -1 ? ghApiProblem(words, raws, call + 1, sub) : null
 
       if (unreadable !== -1) {
         return builtByExpansion(`the gh api argument ${raws[unreadable]}`)
@@ -1295,11 +1483,16 @@ function isEndpoint(word, raw) {
 // a glob there can turn into -X PUT or a field once it matches a file the
 // agent made. The values of the other flags, such as --jq, -H and -f, are
 // free text.
-function ghApiProblem(words, raws, from) {
+function ghApiProblem(words, raws, from, sub) {
   let endpoint = true
   let i = from
 
   while (i !== -1 && i < words.length) {
+    if (i === sub) {
+      i = valueEnd(raws, i)
+      continue
+    }
+
     const flagged = words[i].startsWith('-')
     const own = valueEnd(raws, i)
     const end = flagged ? optionEnd(words, raws, i, GH_VALUE_FLAGS) : own
@@ -1319,26 +1512,93 @@ function ghApiProblem(words, raws, from) {
 }
 
 export const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'npx', 'pnpx', 'bun', 'bunx']
-const PACKAGE_MANAGER_VALUE_FLAGS = ['-C', '--dir', '--filter', '-F', '-w', '--workspace']
+
+// npm, pnpm, yarn and bun differ in which options take a value, and the guard
+// knows only these. Any other option is read both ways, taking the next word
+// and not, so every word that can be the subcommand is checked as one.
+const PACKAGE_MANAGER_VALUE_FLAGS = ['-C', '--dir', '--filter', '-F', '--workspace', '--prefix', '--cwd']
+const PACKAGE_MANAGER_FLAGS = [
+  '--',
+  '-y',
+  '--yes',
+  '-g',
+  '--global',
+  '-s',
+  '--silent',
+  '-q',
+  '--quiet',
+  '-r',
+  '--recursive',
+  '-D',
+  '--save-dev',
+  '-h',
+  '--help',
+  '-v',
+  '--version',
+  '--if-present',
+  '--offline',
+  '--prefer-offline',
+  '--frozen-lockfile',
+  '--ignore-scripts',
+]
+
+// Every word that can be a package manager's subcommand, with the manager's
+// name, and an option whose quote does not close in the command. A word read
+// for an earlier call leads to the same subcommands, so it is read once.
+function packageManagerSubcommands(words, raws) {
+  const subcommands = []
+  const seen = new Set()
+
+  for (let call = 0; call < words.length; call += 1) {
+    const name = PACKAGE_MANAGERS.find((tool) => isTool(words[call], tool))
+    const queue = name ? [call + 1] : []
+
+    while (queue.length > 0) {
+      const i = queue.pop()
+
+      if (i >= words.length || seen.has(i)) {
+        continue
+      }
+
+      seen.add(i)
+
+      const word = words[i]
+      const end = valueEnd(raws, i)
+      const value = end === -1 || end >= words.length ? end : valueEnd(raws, end)
+      const known = PACKAGE_MANAGER_FLAGS.includes(word) || word.includes('=')
+      const takesValue = PACKAGE_MANAGER_VALUE_FLAGS.includes(word)
+
+      if (!word.startsWith('-')) {
+        subcommands.push({ name, index: i })
+      } else if (end === -1 || (value === -1 && !known)) {
+        return { subcommands, unclosed: { name, index: i } }
+      } else {
+        queue.push(...(takesValue ? [] : [end]), ...(known ? [] : [value]))
+      }
+    }
+  }
+
+  return { subcommands, unclosed: null }
+}
 
 // The script or package a manager runs comes right after its subcommand.
 // Globs stay free there: `npx eslint 'src/**'`.
 function packageManagerExpansionProblem(words, raws) {
-  for (const name of PACKAGE_MANAGERS) {
-    for (const { start } of invocations(words, raws, name, PACKAGE_MANAGER_VALUE_FLAGS)) {
-      if (start >= words.length) {
-        continue
-      }
+  const { subcommands, unclosed } = packageManagerSubcommands(words, raws)
 
-      if (!isName(words[start], raws[start])) {
-        return builtByExpansion(`the ${name} subcommand ${raws[start]}`)
-      }
+  if (unclosed) {
+    return `a quote in the ${unclosed.name} option ${raws[unclosed.index]} does not close in this command, so the guard cannot tell where its subcommand starts. Keep ;, &, | and newlines out of a quoted value`
+  }
 
-      const [first] = positionals(words, raws, start + 1, [], 1)
+  for (const { name, index } of subcommands) {
+    if (!isName(words[index], raws[index])) {
+      return builtByExpansion(`the ${name} subcommand ${raws[index]}`)
+    }
 
-      if (first !== undefined && !readable(words[first], raws[first])) {
-        return builtByExpansion(`the ${name} ${words[start]} argument ${raws[first]}`)
-      }
+    const [first] = positionals(words, raws, valueEnd(raws, index), [], 1)
+
+    if (first !== undefined && !readable(words[first], raws[first])) {
+      return builtByExpansion(`the ${name} ${words[index]} argument ${raws[first]}`)
     }
   }
 
@@ -1411,12 +1671,10 @@ function checkPackageManagers(words, raws) {
     return `\`${hit}\` belongs to the release PR and the maintainer, not to rollout agents`
   }
 
-  for (const name of PACKAGE_MANAGERS) {
-    for (const { start } of invocations(words, raws, name, PACKAGE_MANAGER_VALUE_FLAGS)) {
-      if (words[start] === 'version') {
-        return `${name} version is not allowed: versions are bumped by the release PR`
-      }
-    }
+  const version = packageManagerSubcommands(words, raws).subcommands.find(({ index }) => words[index] === 'version')
+
+  if (version) {
+    return `${version.name} version is not allowed: versions are bumped by the release PR`
   }
 
   return null
@@ -1582,10 +1840,19 @@ export const VERIFIER_GH_FORBIDDEN = ['pr create', 'pr edit', 'pr comment', 'pr 
 const VERIFIER_GH_ACTION = new RegExp(`\\b(${VERIFIER_GH_FORBIDDEN.map((action) => action.replace(' ', '\\s+')).join('|')})\\b`)
 
 // The tool's name counts in any case, its subcommands only as written.
-function writesGitHub(line) {
+function writesGitHub(words, raws, line) {
   const at = line.search(/\bgh\b/i)
 
-  return at !== -1 && VERIFIER_GH_ACTION.test(line.slice(at))
+  if (at !== -1 && VERIFIER_GH_ACTION.test(line.slice(at))) {
+    return true
+  }
+
+  // An option before the action moves it: `gh pr -R o/r edit`.
+  return toolCalls(words, 'gh').some((call) => {
+    const [sub, action] = cobraCommands(words, raws, call + 1).found.map((index) => words[index])
+
+    return VERIFIER_GH_FORBIDDEN.includes(sub) || VERIFIER_GH_FORBIDDEN.includes(`${sub} ${action}`)
+  })
 }
 
 function toolProblem(words, raws, role, branch, gh) {
@@ -1607,7 +1874,7 @@ function toolProblem(words, raws, role, branch, gh) {
     return problem
   }
 
-  if (role === 'verifier' && writesGitHub(line)) {
+  if (role === 'verifier' && writesGitHub(words, raws, line)) {
     return 'the verifier is read-only on GitHub'
   }
 

@@ -389,11 +389,17 @@
           them keep their places. Quoting is not honoured on purpose: a forbidden word inside a string still blocks. Every rule reads the
           words with quotes and backslashes deleted, so <code>sh -c "git push origin main"</code>, <code>p"u"sh</code> and
           <code>core.hooks""Path</code> read as what they are. A word that ends up empty, such as <code>""</code>, stays a word, because git
-          reads <code>-C ""</code> as the current directory. The options before a subcommand of git, gh or a package manager, and before
-          gh's action, are read with their values as the shell splits them, so <code>-C "a b"</code> and
-          <code>--namespace="a b"</code> leave git's subcommand in its place. A git option whose quote does not close in the command, as in
-          <code>-C "a;b"</code>, is refused. The control-plane patterns read the command both as written and without them. Tool names count
-          in any case, because macOS runs <code>GIT</code> as git. Subcommands count as written, as git and gh read them.
+          reads <code>-C ""</code> as the current directory. Redirections such as <code>2&gt;&amp;1</code>, <code>&gt;| out</code> or
+          <code>&lt;&amp;-</code> come out of a command before any rule reads its words, as the shell takes them out before the program
+          runs, so <code>2&gt;&amp;1 $x</code> still has <code>$x</code> as its command word. The options before a subcommand are read with
+          their values as each tool reads them. git's are the ones git 2.54 knows, and an option the guard does not know is refused. gh's
+          are read as gh's command parser finds its subcommand and action: an option takes the next word unless it holds <code>=</code>, is
+          a cluster of short flags or is <code>-h</code>, <code>--help</code> or <code>--version</code>. A package manager option the guard
+          does not know is read both ways, taking the next word and not, and every word that can then be the subcommand is checked as one.
+          Each value is one shell word, so <code>-C "a b"</code> and <code>--namespace="a b"</code> leave git's subcommand in its place, and
+          a value whose quote does not close in the command, as in <code>-C "a;b"</code> or <code>gh pr -b "x;y"</code>, is refused. The
+          control-plane patterns read the command both as written and without them. Tool names count in any case, because macOS runs
+          <code>GIT</code> as git. Subcommands count as written, as git and gh read them.
         </p>
 
         <h4>Refused for every agent</h4>
