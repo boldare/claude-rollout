@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
 import { COMMANDS } from '../lib/control.mjs'
+import { GATE_CODES } from '../lib/judge.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { ROLES } from '../lib/view.mjs'
 import { STATES } from '../ui/model.js'
@@ -222,6 +223,14 @@ test('docs: every PR state has its row on the how it works page', () => {
 
   for (const state of STATES) {
     assert.ok(pageIds.includes(`state-${state}`), `how-it-works.html has no #state-${state}`)
+  }
+})
+
+test('docs: every gate code, and each code the driver gives a verdict of its own, has its row on the how it works page', () => {
+  const pageIds = ids(read('how-it-works.html'))
+
+  for (const code of [...GATE_CODES, 'ready', 'queued', 'merge-refused']) {
+    assert.ok(pageIds.includes(`gate-${code}`), `how-it-works.html has no #gate-${code}`)
   }
 })
 

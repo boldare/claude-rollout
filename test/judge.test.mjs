@@ -5,6 +5,8 @@ import {
   approveRefusal,
   codeScanningFindings,
   currentGate,
+  GATE_CODES,
+  githubApproval,
   highestBump,
   judge,
   outOfScope,
@@ -61,57 +63,62 @@ function facts(overrides = {}) {
 
 const verifiedAndApproved = { verified: { sha: 'abc1234def', patchId: PATCH }, approved: { patchId: PATCH } }
 
+function assertVerdict(verdict, action, code, message) {
+  assert.equal(verdict.action, action, message)
+  assert.equal(verdict.code, code, message)
+}
+
 test('merges when everything holds', () => {
-  assert.equal(judge(manifest, pr, verifiedAndApproved, facts()).action, 'merge')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, facts()), 'merge', 'merge')
 })
 
 test('waits for approval bound to the current patch', () => {
   const stale = { verified: { patchId: PATCH }, approved: { patchId: 'older' } }
   const verdict = judge(manifest, pr, stale, facts())
-  assert.equal(verdict.action, 'wait')
+  assertVerdict(verdict, 'wait', 'awaiting-inbox-approval')
   assert.match(verdict.reasons.join(), /approval/)
 })
 
 test('merges without approval when policy is auto', () => {
   const auto = { ...manifest, policy: { ...manifest.policy, merge: 'auto' } }
-  assert.equal(judge(auto, pr, { verified: { patchId: PATCH } }, facts()).action, 'merge')
+  assertVerdict(judge(auto, pr, { verified: { patchId: PATCH } }, facts()), 'merge', 'merge')
 })
 
 test('never merges the release PR', () => {
   const release = facts({ pr: { ...facts().pr, headRefName: 'changeset-release/main', title: 'chore: version packages' } })
-  assert.equal(judge(manifest, { ...pr, branch: 'changeset-release/main' }, verifiedAndApproved, release).action, 'block')
+  assertVerdict(judge(manifest, { ...pr, branch: 'changeset-release/main' }, verifiedAndApproved, release), 'block', 'never-merge')
 })
 
 test('waits when verification belongs to another patch', () => {
   const verdict = judge(manifest, pr, { verified: { patchId: 'other' }, approved: { patchId: PATCH } }, facts())
-  assert.equal(verdict.action, 'wait')
+  assertVerdict(verdict, 'wait', 'not-verified')
   assert.match(verdict.reasons.join(), /not verified/)
 })
 
 test('rebases when the branch is behind the base', () => {
-  assert.equal(judge(manifest, pr, verifiedAndApproved, facts({ baseIsAncestor: false })).action, 'rebase')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, facts({ baseIsAncestor: false })), 'rebase', 'behind-base')
 })
 
 test('rebases on conflicts', () => {
   const conflicting = facts({ pr: { ...facts().pr, mergeable: 'CONFLICTING' } })
-  assert.equal(judge(manifest, pr, verifiedAndApproved, conflicting).action, 'rebase')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, conflicting), 'rebase', 'behind-base')
 })
 
 test('waits while mergeability is computed', () => {
   const unknown = facts({ pr: { ...facts().pr, mergeable: 'UNKNOWN' } })
-  assert.equal(judge(manifest, pr, verifiedAndApproved, unknown).action, 'wait')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, unknown), 'wait', 'mergeable-unknown')
 })
 
 test('sends red CI back to the implementer', () => {
   const red = facts({ checks: { state: 'red', missing: [], pending: [], failing: ['smoke: failure'] } })
   const verdict = judge(manifest, pr, verifiedAndApproved, red)
-  assert.equal(verdict.action, 'fix')
+  assertVerdict(verdict, 'fix', 'ci-red')
   assert.match(verdict.reasons.join(), /smoke: failure/)
 })
 
 test('waits for missing required checks', () => {
   const missing = facts({ checks: { state: 'pending', missing: ['smoke*'], pending: [], failing: [] } })
-  assert.equal(judge(manifest, pr, verifiedAndApproved, missing).action, 'wait')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, missing), 'wait', 'ci-pending')
 })
 
 test('does not merge onto a red base branch', () => {
@@ -122,28 +129,34 @@ test('does not merge onto a red base branch', () => {
     facts({ mainChecks: { state: 'red', missing: [], pending: [], failing: ['check'] } }),
   )
 
-  assert.equal(verdict.action, 'wait')
+  assertVerdict(verdict, 'wait', 'base-not-green')
 })
 
 test('the wait on a base that is not green names the commit it was read from', () => {
   const pending = { state: 'pending', missing: [], pending: [], failing: [], sha: 'abc1234def5678', skipped: 1 }
   const one = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: pending }))
 
-  assert.equal(one.action, 'wait')
+  assertVerdict(one, 'wait', 'base-not-green')
   assert.match(one.reasons.join(), /main is not green \(pending at abc1234, 1 quiet commit skipped\)/)
 
   const three = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { ...pending, skipped: 3 } }))
 
+  assertVerdict(three, 'wait', 'base-not-green')
   assert.match(three.reasons.join(), /pending at abc1234, 3 quiet commits skipped/)
 
   const tip = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { ...pending, skipped: 0 } }))
 
+  assertVerdict(tip, 'wait', 'base-not-green')
   assert.match(tip.reasons.join(), /main is not green \(pending\)/)
-  assert.match(judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { state: 'pending' } })).reasons.join(), /\(pending\)/)
+
+  const bare = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { state: 'pending' } }))
+
+  assertVerdict(bare, 'wait', 'base-not-green')
+  assert.match(bare.reasons.join(), /\(pending\)/)
 })
 
 test('a halted rollout waits instead of blocking verified PRs', () => {
-  assert.equal(judge(manifest, pr, verifiedAndApproved, facts({ halted: 'main red' })).action, 'wait')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, facts({ halted: 'main red' })), 'wait', 'halted')
 })
 
 test('changeset parsing follows @changesets/parse: comments, CRLF, flow style; unknown means violation', () => {
@@ -183,13 +196,20 @@ test('Claude Code files need allowClaudeConfig, and a rename out of .claude/ cou
 })
 
 test('dependencies must be merged first', () => {
-  assert.equal(judge(manifest, pr, verifiedAndApproved, facts({ depsPending: ['A6'] })).action, 'wait')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, facts({ depsPending: ['A6'] })), 'wait', 'deps-pending')
 })
 
 test('draft, wrong base, wrong branch and missing label block', () => {
-  for (const change of [{ isDraft: true }, { baseRefName: 'develop' }, { headRefName: 'other' }, { labels: [] }]) {
+  const changes = [
+    [{ isDraft: true }, 'draft'],
+    [{ baseRefName: 'develop' }, 'wrong-base'],
+    [{ headRefName: 'other' }, 'wrong-head'],
+    [{ labels: [] }, 'missing-label'],
+  ]
+
+  for (const [change, code] of changes) {
     const verdict = judge(manifest, pr, verifiedAndApproved, facts({ pr: { ...facts().pr, ...change } }))
-    assert.equal(verdict.action, 'block', JSON.stringify(change))
+    assertVerdict(verdict, 'block', code, JSON.stringify(change))
   }
 })
 
@@ -207,14 +227,13 @@ test('a PR merged on GitHub waits for sync whatever else is off, and a closed on
   for (const change of changes) {
     const verdict = judge(manifest, pr, verifiedAndApproved, facts({ pr: { ...merged, ...change } }))
 
-    assert.equal(verdict.action, 'wait', JSON.stringify(change))
+    assertVerdict(verdict, 'wait', 'merged-on-github', JSON.stringify(change))
     assert.deepEqual(verdict.reasons, ['merged on GitHub (the next sync records it)'])
-    assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve PR|GitHub still blocks/)
   }
 
   const closed = judge(manifest, pr, verifiedAndApproved, facts({ pr: { ...facts().pr, state: 'CLOSED' } }))
 
-  assert.equal(closed.action, 'block')
+  assertVerdict(closed, 'block', 'pr-not-open')
   assert.deepEqual(closed.reasons, ['PR is CLOSED'])
 })
 
@@ -242,7 +261,7 @@ test('policy: forbidden paths, versions, changesets, denylist, multi-line commit
   assert.match(violations, /major bump/)
   assert.match(violations, /denylisted term in README\.md/)
   assert.match(violations, /more than one line/)
-  assert.equal(judge(manifest, pr, verifiedAndApproved, bad).action, 'fix')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, bad), 'fix', 'policy-violations')
 })
 
 test('policy: the denylist also covers the PR body', () => {
@@ -301,56 +320,60 @@ const onVerified = { verified: { sha: 'abc1234def', patchId: PATCH, at: '2026-09
 
 test('github approval: a maintainer review given after the patch appeared merges', () => {
   const reviews = [{ user: 'maint', state: 'APPROVED', commit: 'rebased999', at: '2026-09-27T10:00:00Z' }]
-  assert.equal(judge(GM, pr, onVerified, botFacts(reviews)).action, 'merge')
+  assertVerdict(judge(GM, pr, onVerified, botFacts(reviews)), 'merge', 'merge')
 })
 
 test('github approval: none, stale, non-maintainer or changes requested waits', () => {
   const cases = [
-    [],
-    [{ user: 'maint', state: 'APPROVED', commit: 'abc1234def', at: '2026-09-27T08:00:00Z' }],
-    [{ user: 'someone', state: 'APPROVED', commit: 'abc1234def', at: '2026-09-27T10:00:00Z' }],
+    [[], 'awaiting-github-review'],
+    [[{ user: 'maint', state: 'APPROVED', commit: 'abc1234def', at: '2026-09-27T08:00:00Z' }], 'stale-github-review'],
+    [[{ user: 'someone', state: 'APPROVED', commit: 'abc1234def', at: '2026-09-27T10:00:00Z' }], 'awaiting-github-review'],
     [
-      { user: 'maint', state: 'APPROVED', commit: 'abc1234def', at: '2026-09-27T10:00:00Z' },
-      { user: 'maint', state: 'CHANGES_REQUESTED', commit: 'abc1234def', at: '2026-09-27T11:00:00Z' },
+      [
+        { user: 'maint', state: 'APPROVED', commit: 'abc1234def', at: '2026-09-27T10:00:00Z' },
+        { user: 'maint', state: 'CHANGES_REQUESTED', commit: 'abc1234def', at: '2026-09-27T11:00:00Z' },
+      ],
+      'changes-requested',
     ],
   ]
 
-  for (const reviews of cases) {
-    assert.equal(judge(GM, pr, onVerified, botFacts(reviews)).action, 'wait', JSON.stringify(reviews))
+  for (const [reviews, code] of cases) {
+    assertVerdict(judge(GM, pr, onVerified, botFacts(reviews)), 'wait', code, JSON.stringify(reviews))
   }
 })
 
 test('github approval: an inbox approval does not replace a GitHub review for agent PRs', () => {
-  assert.equal(judge(GM, pr, { ...onVerified, approved: { patchId: PATCH } }, botFacts([])).action, 'wait')
+  assertVerdict(judge(GM, pr, { ...onVerified, approved: { patchId: PATCH } }, botFacts([])), 'wait', 'awaiting-github-review')
 })
 
 test('github approval: maintainer-authored PRs fall back to rollout approve', () => {
   const own = facts({ pr: { ...facts().pr, author: 'maint' }, reviews: [] })
-  assert.equal(judge(GM, pr, { ...onVerified, approved: { patchId: PATCH } }, own).action, 'merge')
-  assert.equal(judge(GM, pr, onVerified, own).action, 'wait')
+  assertVerdict(judge(GM, pr, { ...onVerified, approved: { patchId: PATCH } }, own), 'merge', 'merge')
+  assertVerdict(judge(GM, pr, onVerified, own), 'wait', 'awaiting-inbox-approval')
 })
 
 test('without a bypass, a merge waits while GitHub reports BLOCKED', () => {
   const reviews = [{ user: 'maint', state: 'APPROVED', commit: 'abc1234def', at: '2026-09-27T10:00:00Z' }]
   const blockedByGitHub = botFacts(reviews, { pr: { ...facts().pr, author: 'bot', mergeStateStatus: 'BLOCKED' } })
   const verdict = judge({ ...GM, repo: { ...GM.repo, merge: { admin: 'auto' } } }, pr, onVerified, blockedByGitHub)
-  assert.equal(verdict.action, 'wait')
+  assertVerdict(verdict, 'wait', 'github-blocked')
   assert.match(verdict.reasons.join(), /GitHub still blocks/)
 })
 
 test('with a bypass (maintainer-authored PR), BLOCKED is expected and merges', () => {
   const own = facts({ pr: { ...facts().pr, author: 'maint', mergeStateStatus: 'BLOCKED' }, reviews: [] })
   const verdict = judge({ ...GM, repo: { ...GM.repo, merge: { admin: 'auto' } } }, pr, { ...onVerified, approved: { patchId: PATCH } }, own)
-  assert.equal(verdict.action, 'merge')
+  assertVerdict(verdict, 'merge', 'merge')
 })
 
 test('manual mode: the gate says merge without any approval; the maintainer merges', () => {
   const MM = { ...GM, policy: { ...GM.policy, merge: 'manual' } }
   const blocked = botFacts([], { pr: { ...facts().pr, author: 'bot', mergeStateStatus: 'BLOCKED' } })
-  assert.equal(judge(MM, pr, onVerified, blocked).action, 'merge')
-  assert.equal(
-    judge(MM, pr, onVerified, facts({ checks: { state: 'pending', missing: [], pending: ['CodeQL'], failing: [] } })).action,
+  assertVerdict(judge(MM, pr, onVerified, blocked), 'merge', 'merge')
+  assertVerdict(
+    judge(MM, pr, onVerified, facts({ checks: { state: 'pending', missing: [], pending: ['CodeQL'], failing: [] } })),
     'wait',
+    'ci-pending',
   )
 })
 
@@ -364,12 +387,11 @@ test('a held PR waits: no merge, no rebase, no ready notice in manual mode', () 
   const held = { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z' } }
   const verdict = judge(manifest, pr, held, facts())
 
-  assert.equal(verdict.action, 'wait')
+  assertVerdict(verdict, 'wait', 'held')
   assert.match(verdict.reasons.join(), /held/)
-  assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve PR|GitHub still blocks/)
-  assert.equal(judge(manifest, pr, held, facts({ baseIsAncestor: false })).action, 'wait')
-  assert.equal(judge({ ...manifest, policy: { ...manifest.policy, merge: 'manual' } }, pr, held, facts()).action, 'wait')
-  assert.equal(judge(manifest, pr, { ...held, held: null }, facts()).action, 'merge')
+  assertVerdict(judge(manifest, pr, held, facts({ baseIsAncestor: false })), 'wait', 'held')
+  assertVerdict(judge({ ...manifest, policy: { ...manifest.policy, merge: 'manual' } }, pr, held, facts()), 'wait', 'held')
+  assertVerdict(judge(manifest, pr, { ...held, held: null }, facts()), 'merge', 'merge')
 })
 
 const withMerge = (base, merge) => ({ ...base, policy: { ...base.policy, merge } })
@@ -406,9 +428,9 @@ test('approveRefusal: manual and auto refuse, and so does a PR approved on GitHu
 test('a record of a GitHub approval never passes for rollout approve', () => {
   const verdict = judge(manifest, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'github' } }, facts())
 
-  assert.equal(verdict.action, 'wait')
+  assertVerdict(verdict, 'wait', 'awaiting-inbox-approval')
   assert.match(verdict.reasons.join(), /rollout approve/)
-  assert.equal(judge(manifest, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'inbox' } }, facts()).action, 'merge')
+  assertVerdict(judge(manifest, pr, { ...onVerified, approved: { patchId: PATCH, channel: 'inbox' } }, facts()), 'merge', 'merge')
 })
 
 const withScanning = (codeScanning) => ({
@@ -489,7 +511,7 @@ test('codeScanningFindings: an alert from an older commit waits for the analysis
     ],
   })
 
-  assert.doesNotMatch(verdict.reasons.join(), /awaiting|approve/)
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, scanned([stale, unknown, alert({ number: 6 })])), 'wait', 'code-scanning')
 })
 
 test('codeScanningFindings: no code scanning, or none available, finds nothing', () => {
@@ -525,22 +547,24 @@ test('judge: code scanning comes after red and pending CI, and before the base a
   const red = { state: 'red', missing: [], pending: [], failing: ['smoke: failure'] }
   const pending = { state: 'pending', missing: [], pending: ['test'], failing: [] }
   const redBase = { state: 'red', missing: [], pending: [], failing: ['check'] }
-  const flagged = { action: 'fix', reasons: [ALERT_REASON], kind: 'code-scanning' }
+  const flagged = { action: 'fix', code: 'code-scanning', reasons: [ALERT_REASON] }
 
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { checks: red })), {
     action: 'fix',
+    code: 'ci-red',
     reasons: ['smoke: failure', 'CI is red on the PR head'],
   })
 
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { checks: pending })), {
     action: 'wait',
+    code: 'ci-pending',
     reasons: ['CI pending (missing: -; running: test)'],
   })
 
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()])), flagged)
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { mainChecks: redBase })), flagged)
   assert.deepEqual(judge(withScanning({ action: 'block' }), pr, verifiedAndApproved, scanned([alert()])), { ...flagged, action: 'block' })
-  assert.equal(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [4])).action, 'merge')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [4])), 'merge', 'merge')
 })
 
 test('currentGate: the verdict counts only while the PR is verified and the gate ran since', () => {
@@ -552,4 +576,76 @@ test('currentGate: the verdict counts only while the PR is verified and the gate
   assert.equal(currentGate({ ...entry, verified: { at: '2026-01-01T11:00:00.000Z' } }), null)
   assert.equal(currentGate({ ...entry, state: 'needs_fix' }), null)
   assert.equal(currentGate({ ...entry, gate: null }), null)
+})
+
+const STALE_APPROVAL = { user: 'maint', state: 'APPROVED', commit: 'abc1234def', at: '2026-09-27T08:00:00Z' }
+const APPROVAL = { ...STALE_APPROVAL, at: '2026-09-27T10:00:00Z' }
+const CHANGES_REQUESTED = { ...APPROVAL, state: 'CHANGES_REQUESTED', at: '2026-09-27T11:00:00Z' }
+
+test('githubApproval: changes requested, a stale approval and no approval each have a code, an approval has who and when', () => {
+  assert.deepEqual(githubApproval(GM, onVerified, botFacts([APPROVAL, CHANGES_REQUESTED])), {
+    approved: false,
+    code: 'changes-requested',
+    reason: 'a maintainer requested changes on GitHub',
+  })
+
+  assert.deepEqual(githubApproval(GM, onVerified, botFacts([STALE_APPROVAL])), {
+    approved: false,
+    code: 'stale-github-review',
+    reason: 'the GitHub approval is for an older patch; approve PR #7 again',
+  })
+
+  assert.deepEqual(githubApproval(GM, onVerified, botFacts([])), {
+    approved: false,
+    code: 'awaiting-github-review',
+    reason: 'awaiting a maintainer review on GitHub (approve PR #7)',
+  })
+
+  assert.deepEqual(githubApproval(GM, onVerified, botFacts([APPROVAL])), { approved: true, by: 'maint', at: APPROVAL.at })
+})
+
+test('judge: every gate code, each with its action', () => {
+  const withPr = (change) => facts({ pr: { ...facts().pr, ...change } })
+  const red = { state: 'red', missing: [], pending: [], failing: ['check'] }
+  const pending = { state: 'pending', missing: ['smoke*'], pending: [], failing: [] }
+  const forbidden = facts({ files: [...facts().files, { status: 'modified', path: 'packages/core/CHANGELOG.md' }] })
+  // No bypass, so GitHub's merge state has the last word, as in the BLOCKED test above.
+  const noBypass = { ...GM, repo: { ...GM.repo, merge: { admin: 'auto' } } }
+  const mergeState = (mergeStateStatus) => botFacts([APPROVAL], { pr: { ...facts().pr, author: 'bot', mergeStateStatus } })
+
+  const rows = [
+    ['halted', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ halted: 'main red' }))],
+    ['held', 'wait', judge(manifest, pr, { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z' } }, facts())],
+    ['no-pr', 'block', judge(manifest, pr, verifiedAndApproved, facts({ pr: null }))],
+    ['merged-on-github', 'wait', judge(manifest, pr, verifiedAndApproved, withPr({ state: 'MERGED' }))],
+    ['pr-not-open', 'block', judge(manifest, pr, verifiedAndApproved, withPr({ state: 'CLOSED' }))],
+    ['never-merge', 'block', judge(manifest, pr, verifiedAndApproved, withPr({ title: 'chore: version packages' }))],
+    ['draft', 'block', judge(manifest, pr, verifiedAndApproved, withPr({ isDraft: true }))],
+    ['wrong-base', 'block', judge(manifest, pr, verifiedAndApproved, withPr({ baseRefName: 'develop' }))],
+    ['wrong-head', 'block', judge(manifest, pr, verifiedAndApproved, withPr({ headRefName: 'other' }))],
+    ['missing-label', 'block', judge(manifest, pr, verifiedAndApproved, withPr({ labels: [] }))],
+    ['deps-pending', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ depsPending: ['A6'] }))],
+    ['not-verified', 'wait', judge(manifest, pr, { ...verifiedAndApproved, verified: { patchId: 'other' } }, facts())],
+    ['awaiting-github-review', 'wait', judge(GM, pr, onVerified, botFacts([]))],
+    ['stale-github-review', 'wait', judge(GM, pr, onVerified, botFacts([STALE_APPROVAL]))],
+    ['changes-requested', 'wait', judge(GM, pr, onVerified, botFacts([APPROVAL, CHANGES_REQUESTED]))],
+    ['awaiting-inbox-approval', 'wait', judge(manifest, pr, onVerified, facts())],
+    ['policy-violations', 'fix', judge(manifest, pr, verifiedAndApproved, forbidden)],
+    ['behind-base', 'rebase', judge(manifest, pr, verifiedAndApproved, facts({ baseIsAncestor: false }))],
+    ['mergeable-unknown', 'wait', judge(manifest, pr, verifiedAndApproved, withPr({ mergeable: 'UNKNOWN' }))],
+    ['ci-red', 'fix', judge(manifest, pr, verifiedAndApproved, facts({ checks: red }))],
+    ['ci-pending', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ checks: pending }))],
+    ['code-scanning', 'block', judge(withScanning({ action: 'block' }), pr, verifiedAndApproved, scanned([alert()]))],
+    ['base-not-green', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: red }))],
+    ['github-blocked', 'wait', judge(noBypass, pr, onVerified, mergeState('BLOCKED'))],
+    ['github-merge-state', 'wait', judge(noBypass, pr, onVerified, mergeState('BEHIND'))],
+    ['merge', 'merge', judge(manifest, pr, verifiedAndApproved, facts())],
+  ]
+
+  for (const [code, action, verdict] of rows) {
+    assertVerdict(verdict, action, code, code)
+    assert.ok(GATE_CODES.includes(verdict.code), code)
+  }
+
+  assert.deepEqual(rows.map(([, , verdict]) => verdict.code).sort(), [...GATE_CODES].sort())
 })
