@@ -45,9 +45,11 @@ test('client: every request sends the API headers and the maintainer token that 
   const client = createClient(manifest, { fetch: github.fetch })
   const answer = await client.request('GET', PR_PATH)
 
+  assert.deepEqual(Object.keys(answer).sort(), ['body', 'headers', 'status'])
   assert.equal(answer.status, 200)
   assert.deepEqual(answer.body, { number: 11 })
   assert.ok(answer.headers instanceof Headers)
+  assert.deepEqual(Object.keys(await client.request('GET', PR_PATH)).sort(), ['body', 'headers', 'status'])
 
   const [request] = github.requests()
 
@@ -405,6 +407,56 @@ test('pages: an unchanged list costs 304s and gives the same items, page by page
     github.requests().map((request) => request.status),
     [200, 200, 304, 304],
   )
+})
+
+const COMMENTS = 'repos/example/widgets/issues/11/comments'
+
+function comments(count) {
+  return Array.from({ length: count }, (_, i) => ({ id: i + 1 }))
+}
+
+// Each request as its page and the status it got.
+function pageStatuses(github) {
+  return github.requests().map((request) => [request.query.page ?? '1', request.status])
+}
+
+test('pages: a full page answered 304 is followed by the page after it, so items added since are read', async () => {
+  const { github, client } = fakeClient([{ path: COMMENTS, body: comments(100) }])
+
+  assert.deepEqual(await client.pages(COMMENTS), comments(100))
+
+  github.answer([{ path: COMMENTS, body: comments(101) }])
+  assert.deepEqual(await client.pages(COMMENTS), comments(101))
+
+  github.answer([{ path: COMMENTS, body: comments(103) }])
+  assert.deepEqual(await client.pages(COMMENTS), comments(103))
+  assert.deepEqual(await client.pages(COMMENTS), comments(103))
+
+  assert.deepEqual(pageStatuses(github), [
+    ['1', 200],
+    ['1', 304],
+    ['2', 200],
+    ['1', 304],
+    ['2', 200],
+    ['1', 304],
+    ['2', 304],
+  ])
+})
+
+test('pages: a list that stays at a full page costs one read of the empty page after it, then 304s', async () => {
+  const { github, client } = fakeClient([{ path: COMMENTS, body: comments(100) }])
+
+  for (let i = 0; i < 3; i += 1) {
+    assert.deepEqual(await client.pages(COMMENTS), comments(100))
+  }
+
+  assert.deepEqual(pageStatuses(github), [
+    ['1', 200],
+    ['1', 304],
+    ['2', 200],
+    ['1', 304],
+    ['2', 304],
+  ])
 })
 
 test('pages: a page with no list throws', async () => {

@@ -1243,6 +1243,38 @@ test('feedbackFor reads a maintainer comment on the second page', async () => {
   assert.deepEqual(queriesOf(github, CONVERSATION), [{ per_page: '100' }, { per_page: '100', page: '2' }])
 })
 
+test('feedbackFor sees a maintainer comment that comes after exactly 100 others, on a later read of the same client', async () => {
+  const others = Array.from({ length: 100 }, (_, i) => conversationComment(i + 1, 'demo-bot', '2026-10-01T09:00:00Z', 'status'))
+  const empty = [
+    { path: `${PR_11}/comments`, body: [] },
+    { path: REVIEWS, body: [] },
+  ]
+
+  const { manifest, github } = scanningRollout([], [{ path: CONVERSATION, body: others }, ...empty])
+
+  manifest.repo.maintainers = ['maint']
+
+  assert.deepEqual(await feedbackFor(manifest, 11), [])
+
+  github.answer([
+    { path: CONVERSATION, body: [...others, conversationComment(101, 'maint', '2026-10-01T10:00:00Z', 'Rename it.')] },
+    ...empty,
+  ])
+
+  assert.deepEqual(await feedbackFor(manifest, 11), [{ id: 'conversation-101', at: '2026-10-01T10:00:00Z', body: 'Rename it.' }])
+  assert.deepEqual(
+    github
+      .requests()
+      .filter((request) => request.path === CONVERSATION)
+      .map((request) => [request.query.page ?? '1', request.status]),
+    [
+      ['1', 200],
+      ['1', 304],
+      ['2', 200],
+    ],
+  )
+})
+
 test('checksFor reads the next page while GitHub links one, and stops at the page that links none', async () => {
   const full = scanningRollout([], [runsRoute(HEAD, passingRuns(100, jobName))])
 

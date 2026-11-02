@@ -310,8 +310,9 @@
         </p>
 
         <p>
-          Every GET the driver repeats sends back the ETag of its last answer, while the driver still holds that answer, and GitHub answers
-          304 when nothing changed. A 304 costs no rate limit.
+          Every GET the driver repeats sends back the ETag of its last answer, while the driver still holds that answer. GitHub answers 304
+          when the body did not change, and a 304 costs no rate limit. The ETag does not cover the Link header, which names the next page of
+          a list. So when the driver reads a list page by page and a full page answers 304, it reads the page after it too.
         </p>
 
         <h2 id="tick">One tick <a class="anchor" href="#tick" aria-label="Link to this section">#</a></h2>
