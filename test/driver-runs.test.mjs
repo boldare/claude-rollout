@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { briefDrift, createDriver, doneDetail } from '../lib/driver.mjs'
-import { readLedger } from '../lib/ledger.mjs'
+import { endRun, readLedger } from '../lib/ledger.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { previewPath, worktreePath } from '../lib/worktree.mjs'
 import { at, samplePrs, waitFor } from './fixtures.mjs'
@@ -171,6 +171,108 @@ test('launch: the verifier and the brief writer run on the rollout model whateve
   assert.equal(writer.role, 'brief')
   assert.equal(writer.model, 'opus')
   assert.ok(eventsSince(setup.manifest).some((event) => event.kind === 'brief-start' && event.model === 'opus'))
+})
+
+test('launch: one implement run is one record in the ledger, with the model it asked for and the model that ran', async () => {
+  const blocked = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 reads it.' }
+  const report = agentResult({ model: 'claude-sonnet-5-5', output: { status: 'BLOCKED', summary: 'A question.', blocked } })
+  const setup = modelDriver({ A1: { state: 'pending' } }, { result: () => Promise.resolve(report) })
+
+  const { logName: run } = await launched(setup, 'implement')
+  await waitFor(() => !setup.driver.running.has('A1'), 'the run to end')
+
+  const runs = setup.driver.ledger.data.runs
+  const record = runs[run]
+
+  assert.deepEqual(Object.keys(runs), [run])
+  assert.ok(Date.parse(record.startedAt) <= Date.parse(record.endedAt), JSON.stringify(record))
+  assert.deepEqual(
+    [record.id, record.role, record.effort, record.requestedModel, record.model, record.resume, record.log],
+    ['A1', 'implement', 'high', 'sonnet', 'claude-sonnet-5-5', false, `logs/${run}.jsonl`],
+  )
+
+  assert.deepEqual(
+    [record.ok, record.result, record.costUsd, record.seconds, record.denials, record.stopped],
+    [true, 'BLOCKED', 1.25, 60, 0, false],
+  )
+
+  assert.deepEqual(setup.entry.blocked, { ...blocked, run })
+  assert.deepEqual(readLedger(setup.manifest).runs[run], record, 'the job saves it')
+})
+
+test('note: a note applied to a blocked PR goes into the fix run that starts from it', async () => {
+  const blocked = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: '' }
+  const attempts = { implement: 1, fix: 0, verify: 0, brief: 0 }
+  const setup = modelDriver({
+    A1: { state: 'blocked', blocked: { ...blocked, run: 'A1-01-implement' }, pr: 11, sessionId: 'session-1', attempts },
+  })
+
+  apply(setup.manifest, setup.driver, { cmd: 'note', id: 'A1', text: 'Keep it as an alias.' })
+
+  assert.equal(setup.entry.state, 'needs_fix')
+  assert.equal(setup.entry.noteHistory.at(-1).run, null)
+
+  const fix = await launched(setup, 'fix', { reason: setup.entry.fixReason, note: setup.entry.fixNote })
+
+  assert.equal(fix.logName, 'A1-02-fix')
+  assert.deepEqual(
+    setup.entry.noteHistory.map(({ at: _, ...note }) => note),
+    [{ by: 'maintainer', kind: 'needs-decision', question: 'Keep the old flag?', text: 'Keep it as an alias.', run: 'A1-02-fix' }],
+  )
+})
+
+test('note: a note queued while an implement run works waits for the next run, which takes it', async () => {
+  let finish
+  const old = { at: at(1), by: 'maintainer', kind: null, question: null, text: 'From an older ledger.' }
+  const setup = modelDriver(
+    { A1: { state: 'pending', noteHistory: [old] } },
+    {
+      result: () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    },
+  )
+
+  const implement = await launched(setup, 'implement')
+
+  apply(setup.manifest, setup.driver, { cmd: 'note', id: 'A1', text: 'Keep the old flag.' })
+
+  assert.equal(setup.entry.pendingNote, 'Keep the old flag.')
+  assert.equal(setup.entry.noteHistory.at(-1).run, null, 'the run at work never reads it')
+
+  finish(agentResult({ ok: false, error: 'error_during_execution' }))
+  await waitFor(() => !setup.driver.running.has('A1'), 'the run to end')
+
+  assert.equal(setup.entry.noteHistory.at(-1).run, null)
+
+  const fix = await launched(setup, 'fix', { reason: 'r' })
+
+  assert.notEqual(fix.logName, implement.logName)
+  assert.equal(setup.entry.noteHistory.at(-1).run, fix.logName)
+  assert.equal(Object.hasOwn(setup.entry.noteHistory[0], 'run'), false, 'a record from an older ledger stays without a run')
+})
+
+test('launch: attempts exhausted after an ended run escalate with the time and that run, and a delegate run does not count', async () => {
+  const setup = modelDriver(
+    { A1: { state: 'pending' } },
+    { result: () => Promise.resolve(agentResult({ ok: false, error: 'error_during_execution' })) },
+  )
+
+  const implement = await launched(setup, 'implement')
+  await waitFor(() => !setup.driver.running.has('A1'), 'the run to end')
+
+  const later = new Date(Date.now() + 60_000).toISOString()
+  endRun(setup.driver.ledger.data, { id: 'A1', role: 'delegate' }, { run: 'A1-01-delegate', ok: true }, later)
+  setup.entry.attempts.implement = setup.manifest.policy.attempts.implement
+
+  const before = Date.now()
+  setup.driver.launch(setup.pr, 'implement')
+
+  assert.equal(setup.entry.state, 'escalated')
+  assert.equal(setup.entry.escalation, 'implement attempts exhausted')
+  assert.equal(setup.entry.escalationRun, implement.logName)
+  assert.ok(Date.parse(setup.entry.escalatedAt) >= before, setup.entry.escalatedAt)
 })
 
 test('doneDetail: the model the run reported', () => {

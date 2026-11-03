@@ -79,8 +79,10 @@
             <code>status</code> and the UI read its age to tell a live driver from a stuck one.
           </li>
           <li>
-            <strong>State on disk.</strong> <code>ledger.json</code> holds the state of every PR and is replaced atomically, through a temp
-            file and a rename. <code>events.jsonl</code> only grows. <code>logs/</code> keeps every agent transcript.
+            <strong>State on disk.</strong> <code>ledger.json</code> holds the state of every PR and every agent run, and is replaced
+            atomically, through a temp file and a rename. Its <code>version</code> says which shape it has. A driver migrates an older
+            ledger once, when it starts. The driver, <code>status</code> and the UI refuse a ledger that a newer driver wrote.
+            <code>events.jsonl</code> only grows. <code>logs/</code> keeps every agent transcript.
           </li>
           <li>
             <strong>A live manifest.</strong> A changed <code>manifest.yaml</code> is loaded again on the next tick, without a restart. An

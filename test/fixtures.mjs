@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import { freshPr } from '../lib/ledger.mjs'
+import { runRecords } from '../lib/runs.mjs'
 
 // A synthetic rollout directory, in a fresh temp dir unless `dir` names one.
 // Every part can be overridden, and null leaves the file out.
@@ -237,11 +238,28 @@ function sampleManifest(dir, policy) {
   }
 }
 
+// A legacy ledger is one a driver from before ledger versions wrote. Any
+// other records the runs of the events, as the driver that holds the lock
+// would, unless `runs` gives them.
+function ledgerOf(options, prs) {
+  const { paused, halted } = options
+
+  if (options.legacy) {
+    return { prs, paused, halted }
+  }
+
+  const events = (options.events ?? []).filter((event) => typeof event !== 'string')
+
+  return { version: 2, prs, runs: options.runs ?? runRecords(events, { driverRunning: true }), paused, halted }
+}
+
 export function makeRollout(overrides = {}) {
   const options = {
     prs: samplePrs(),
     paused: false,
     halted: null,
+    legacy: false,
+    runs: null,
     events: sampleEvents(),
     heartbeat: 'tick',
     lock: true,
@@ -262,7 +280,7 @@ export function makeRollout(overrides = {}) {
 
   if (options.prs) {
     const prs = Object.fromEntries(Object.entries(options.prs).map(([id, state]) => [id, { ...freshPr(), ...state }]))
-    writeFileSync(join(dir, 'ledger.json'), JSON.stringify({ prs, paused: options.paused, halted: options.halted }, null, 2))
+    writeFileSync(join(dir, 'ledger.json'), JSON.stringify(ledgerOf(options, prs), null, 2))
   }
 
   if (options.events) {

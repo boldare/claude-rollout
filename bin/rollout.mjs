@@ -24,7 +24,7 @@ import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
 import { stopDriver } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { batteryWarning } from '../lib/machine.mjs'
-import { liveness, prDetail, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
+import { liveness, prDetail, readEvents, rolloutView, runsOf } from '../lib/view.mjs'
 import { prsWithoutPlan } from '../lib/plan.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { clientFor, ghEnv, ghError } from '../lib/github.mjs'
@@ -224,7 +224,7 @@ function card(manifest, id) {
   }
 
   const events = readEvents(manifest)
-  const runs = runsFromEvents(events, { driverRunning: liveness(manifest).running })
+  const runs = runsOf(ledger, events, { driverRunning: liveness(manifest).running })
   const entry = prDetail(manifest, ledger, events, runs, id)
 
   console.log(`# ${id} ${entry.title}  (${entry.branch})`)

@@ -1,22 +1,34 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { doneDetail } from '../lib/driver.mjs'
 import {
   acquireLock,
   drainInbox,
+  endRun,
   freshPr,
+  LEDGER_VERSION,
   lockHolder,
+  migrate,
+  MIGRATIONS,
+  openLedger,
   postCommand,
+  readLedger,
   recheckedFindings,
   recordAnswers,
   recordFindings,
   recordVerdict,
   reserveRunName,
+  startRun,
   watchInbox,
+  withDefaults,
 } from '../lib/ledger.mjs'
-import { liveness } from '../lib/view.mjs'
+import { loadManifest } from '../lib/manifest.mjs'
+import { runRecords, runsFromEvents, runsFromLedger } from '../lib/runs.mjs'
+import { liveness, readEvents } from '../lib/view.mjs'
+import { at, makeRollout } from './fixtures.mjs'
 
 function scratch() {
   return { dir: mkdtempSync(join(tmpdir(), 'rollout-')) }
@@ -298,3 +310,234 @@ test(
     assert.ok(existsSync(join(inbox, name)))
   },
 )
+
+function stored(manifest) {
+  return JSON.parse(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8'))
+}
+
+function withLedger(ledger) {
+  const dir = makeRollout()
+  writeFileSync(join(dir, 'ledger.json'), JSON.stringify(ledger))
+
+  return loadManifest(dir)
+}
+
+test('openLedger migrates a version 1 ledger once: version 2 with the runs of its events, also on disk', () => {
+  const manifest = loadManifest(makeRollout({ legacy: true }))
+  const { data } = openLedger(manifest)
+
+  assert.equal(LEDGER_VERSION, 2)
+  assert.equal(data.version, 2)
+  assert.deepEqual(runsFromLedger(data), runsFromEvents(readEvents(manifest)))
+  assert.equal(stored(manifest).version, 2)
+  assert.deepEqual(stored(manifest).runs, data.runs)
+
+  const late = { at: at(90), id: 'A3', kind: 'implement-start', run: 'A3-01-implement', log: 'logs/A3-01-implement.jsonl' }
+  appendFileSync(join(manifest.dir, 'events.jsonl'), '\n' + JSON.stringify(late) + '\n')
+
+  assert.equal(readEvents(manifest).at(-1).run, 'A3-01-implement')
+  assert.deepEqual(openLedger(manifest).data.runs, data.runs)
+})
+
+test('openLedger: a version 1 ledger without events migrates to no runs, and one without a file starts at version 2 and writes nothing', () => {
+  const legacy = loadManifest(makeRollout({ legacy: true, events: null }))
+
+  assert.deepEqual(openLedger(legacy).data.runs, {})
+
+  const fresh = loadManifest(makeRollout({ prs: null }))
+  const { data } = openLedger(fresh)
+
+  assert.equal(data.version, 2)
+  assert.deepEqual(data.runs, {})
+  assert.deepEqual(Object.keys(data.prs), ['A1', 'A2', 'A3'])
+  assert.equal(existsSync(join(fresh.dir, 'ledger.json')), false)
+})
+
+test('MIGRATIONS: the step from 1 to 2 is pure, fills the defaults of every entry and stamps nothing', () => {
+  const [step] = MIGRATIONS
+  const events = readEvents(loadManifest(makeRollout()))
+  const note = { at: at(10), by: 'maintainer', kind: 'needs-decision', question: 'Which API?', text: 'the old one' }
+  const data = {
+    prs: {
+      A1: { state: 'blocked', blocked: { kind: 'needs-decision', question: 'Which API?', evidence: '' }, noteHistory: [note] },
+      Z9: { state: 'escalated', escalation: 'fix attempts exhausted', delegate: { runs: 1 } },
+    },
+    paused: true,
+    halted: null,
+    lastMerge: { id: 'A1', sha: 'feedface', at: at(5) },
+  }
+
+  const before = structuredClone(data)
+  const migrated = step.apply(data, { events })
+
+  assert.deepEqual([step.from, step.to], [1, 2])
+  assert.deepEqual(data, before)
+  assert.equal(migrated.version, 2)
+  assert.deepEqual(migrated.runs, runRecords(events))
+  assert.equal(migrated.paused, true)
+  assert.deepEqual(migrated.lastMerge, before.lastMerge)
+  assert.deepEqual(migrated.prs.Z9.delegate, { runs: 1, lastQuestion: null, limitNotified: false, answers: [] })
+  assert.deepEqual(migrated.prs.Z9, withDefaults(before.prs.Z9))
+  assert.equal(migrated.prs.Z9.escalatedAt, null)
+  assert.deepEqual(migrated.prs.A1.blocked, before.prs.A1.blocked)
+  assert.deepEqual(migrated.prs.A1.noteHistory, [note])
+
+  migrated.prs.A1.noteHistory[0].run = 'A1-02-fix'
+  assert.deepEqual(data, before, 'the result shares nothing with its input')
+})
+
+test('migrate: a ledger at the current version comes back as it is', () => {
+  const manifest = loadManifest(makeRollout())
+  const data = stored(manifest)
+
+  assert.equal(migrate(data, manifest), data)
+})
+
+test('openLedger and readLedger refuse a ledger a newer driver wrote, and change nothing', () => {
+  const manifest = withLedger({ version: 99, prs: {}, runs: {}, paused: false, halted: null })
+  const file = join(manifest.dir, 'ledger.json')
+  const before = readFileSync(file)
+
+  assert.throws(() => openLedger(manifest), /newer driver/)
+  assert.throws(() => readLedger(manifest), /newer driver/)
+  assert.throws(() => migrate(stored(manifest), manifest), /newer driver/)
+  assert.throws(() => readLedger(manifest), {
+    message: /^ledger\.json is version 99, written by a newer driver than this one \(version 2\)\./,
+  })
+
+  assert.deepEqual(readFileSync(file), before)
+  assert.equal(existsSync(join(manifest.dir, 'inbox')), false)
+})
+
+test('openLedger and readLedger refuse a version that is not a positive integer', () => {
+  for (const version of ['two', 0, 1.5, null]) {
+    const manifest = withLedger({ version, prs: {}, paused: false, halted: null })
+
+    assert.throws(() => openLedger(manifest), /invalid version/, String(version))
+    assert.throws(() => readLedger(manifest), /invalid version/, String(version))
+  }
+})
+
+test('readLedger returns a version 1 ledger as stored', () => {
+  const manifest = loadManifest(makeRollout({ legacy: true }))
+  const before = readFileSync(join(manifest.dir, 'ledger.json'), 'utf8')
+
+  assert.deepEqual(readLedger(manifest), JSON.parse(before))
+  assert.equal(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8'), before)
+})
+
+test('startRun and endRun write the record of one run, and endRun without a start creates one', () => {
+  const data = {}
+
+  startRun(data, { run: 'A1-01-implement', id: 'A1', role: 'implement', effort: 'high', model: 'sonnet' }, at(0))
+
+  assert.deepEqual(data.runs['A1-01-implement'], {
+    id: 'A1',
+    role: 'implement',
+    step: null,
+    reason: null,
+    startedAt: at(0),
+    endedAt: null,
+    effort: 'high',
+    model: null,
+    requestedModel: 'sonnet',
+    resume: false,
+    log: 'logs/A1-01-implement.jsonl',
+    ok: null,
+    result: null,
+    costUsd: null,
+    seconds: null,
+    awakeSeconds: null,
+    denials: null,
+    stopped: false,
+    error: null,
+  })
+
+  const result = {
+    ok: true,
+    model: 'claude-sonnet-5-5',
+    output: { status: 'READY' },
+    costUsd: 2.5,
+    seconds: 600,
+    awakeSeconds: 540,
+    denials: [{ tool_name: 'Bash' }],
+  }
+
+  endRun(data, { id: 'A1', role: 'implement' }, doneDetail('implement', 'A1-01-implement', result), at(10))
+
+  assert.deepEqual(data.runs['A1-01-implement'], {
+    id: 'A1',
+    role: 'implement',
+    step: null,
+    reason: null,
+    startedAt: at(0),
+    endedAt: at(10),
+    effort: 'high',
+    model: 'claude-sonnet-5-5',
+    requestedModel: 'sonnet',
+    resume: false,
+    log: 'logs/A1-01-implement.jsonl',
+    ok: true,
+    result: 'READY',
+    costUsd: 2.5,
+    seconds: 600,
+    awakeSeconds: 540,
+    denials: 1,
+    stopped: false,
+    error: null,
+  })
+
+  const stopped = { ok: false, costUsd: 0, seconds: 3, stopped: true, error: 'driver stopping' }
+  endRun(
+    data,
+    { id: 'A2', role: 'brief', step: 'review' },
+    { ...doneDetail('brief', 'A2-01-brief-review', stopped), step: 'review' },
+    at(20),
+  )
+
+  assert.deepEqual(data.runs['A2-01-brief-review'], {
+    id: 'A2',
+    role: 'brief',
+    step: 'review',
+    reason: null,
+    startedAt: null,
+    endedAt: at(20),
+    effort: null,
+    model: null,
+    requestedModel: null,
+    resume: null,
+    log: 'logs/A2-01-brief-review.jsonl',
+    ok: false,
+    result: null,
+    costUsd: 0,
+    seconds: 3,
+    awakeSeconds: null,
+    denials: 0,
+    stopped: true,
+    error: 'driver stopping',
+  })
+
+  assert.deepEqual(Object.keys(data.runs), ['A1-01-implement', 'A2-01-brief-review'])
+})
+
+test('startRun and endRun change nothing without a run name', () => {
+  const data = {}
+
+  startRun(data, { run: '', id: 'A1', role: 'implement' })
+  endRun(data, { id: 'A1', role: 'implement' }, doneDetail('implement', null, { ok: false, costUsd: 0 }))
+
+  assert.deepEqual(data, {})
+})
+
+test('openLedger stops the runs a driver that is gone left open, and saves that', () => {
+  const manifest = loadManifest(makeRollout())
+
+  assert.equal(stored(manifest).runs['A2-01-implement'].stopped, false)
+
+  const { data } = openLedger(manifest)
+
+  assert.equal(data.runs['A2-01-implement'].stopped, true)
+  assert.equal(data.runs['A1-01-implement'].stopped, false)
+  assert.equal(stored(manifest).runs['A2-01-implement'].stopped, true)
+  assert.equal(runsFromLedger(data, { driverRunning: true }).at(-1).status, 'interrupted')
+})
