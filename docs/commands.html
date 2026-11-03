@@ -609,8 +609,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>
                   Fails when squash merges are disabled under <code>merge.method: squash</code>, when <code>merge.admin</code> is not
                   <code>false</code> (the default <code>auto</code> counts) and you are not an admin, when a public repo is marked
-                  <code>public: false</code>, or when gh cannot read the repo. Warns when the squash default is not the PR title with a
-                  blank message, and when a private repo is marked <code>public: true</code>.
+                  <code>public: false</code>, or when the repository cannot be read. Warns when the squash default is not the PR title with
+                  a blank message, and when a private repo is marked <code>public: true</code>.
                 </td>
               </tr>
               <tr>

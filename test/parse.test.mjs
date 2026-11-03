@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createClient, GitHubError } from '../lib/gh.mjs'
 import {
   alertsFrom,
   baseChecks,
@@ -12,22 +13,33 @@ import {
   collectFacts,
   commentAsAgents,
   deleteRemoteBranch,
+  DRIVER_MARKER,
   ensureLabel,
   feedbackFor,
+  findPr,
+  findReleasePr,
+  ghError,
   githubUnavailable,
   maintainerFeedback,
+  merge,
+  mergeCommit,
+  mergeRefusal,
   parseAddedLines,
   parseCommits,
   parseNameStatus,
+  prNotFound,
   refreshOutsideDeps,
   remoteRepo,
   replyAsAgents,
   reviewsFor,
+  setFetch,
+  setStageLabels,
   unmergedHeads,
+  viewPr,
 } from '../lib/github.mjs'
 import { githubApproval } from '../lib/judge.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
-import { fakeTools, makeRollout } from './fixtures.mjs'
+import { fakeGitHub, fakeTools, makeRollout, withProcessEnv } from './fixtures.mjs'
 
 test('name-status with renames and deletions', () => {
   const files = parseNameStatus('M\tREADME.md\nA\t.changeset/a.md\nD\tpackages/core/src/quick-hash.ts\nR087\told/x.ts\tnew/x.ts\n')
@@ -149,45 +161,75 @@ test('maintainer feedback still counts a marker that is not the last line', () =
   )
 })
 
-// Records its args and, for --body-file, its stdin. Reading stdin otherwise
-// would hang, because sh() leaves it open when it has no input.
-const FAKE_GH = `#!/usr/bin/env node
-const { appendFileSync, readFileSync } = require('node:fs')
-const { join } = require('node:path')
-const args = process.argv.slice(2)
-const stdin = args.includes('--body-file') ? readFileSync(0, 'utf8') : null
-const { GH_REPO, GH_HOST } = process.env
-appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ args, stdin, GH_REPO, GH_HOST }) + '\\n')
-`
+const MAINTAINER_TOKEN = 'synthetic-maintainer-token'
+const AGENT_TOKEN = 'synthetic-agent-token'
+const PR_11 = 'repos/example/widgets/pulls/11'
+const PULLS = 'repos/example/widgets/pulls'
+const REPOSITORY = { path: 'repos/example/widgets', body: { full_name: 'example/widgets' } }
 
-test('the driver marks what it posts and never reads it back as feedback', async () => {
+// Every client built from now on reads this fake GitHub.
+function useGitHub(routes = []) {
+  const github = fakeGitHub(routes)
+
+  setFetch(github.fetch, { token: async () => MAINTAINER_TOKEN })
+
+  return github
+}
+
+// Enough of a manifest for the GitHub reads and writes, with no rollout directory.
+function plainManifest(repo = {}) {
+  return {
+    label: 'rollout:demo',
+    repo: { path: tmpdir(), github: 'example/widgets', pathPrepend: [], agentToken: null, maintainers: [], ...repo },
+  }
+}
+
+async function rejection(promise) {
+  try {
+    await promise
+  } catch (error) {
+    return error
+  }
+
+  assert.fail('the call did not fail')
+}
+
+// The GitHubError the client throws when the fake answers one GET of PR 11 with `answer`.
+function githubError(answer) {
+  const github = fakeGitHub([{ path: PR_11, ...answer }])
+  const client = createClient(plainManifest(), { fetch: github.fetch, token: async () => MAINTAINER_TOKEN, timeoutMs: 50 })
+
+  return rejection(client.request('GET', PR_11))
+}
+
+test('the driver posts as the agents, marks what it posts and never reads it back as feedback', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'rollout-gh-'))
+  const github = useGitHub([
+    { method: 'POST', path: 'repos/example/widgets/pulls/7/comments/101/replies', status: 201, body: { id: 102 } },
+    { method: 'POST', path: 'repos/example/widgets/issues/7/comments', status: 201, body: { id: 103 } },
+  ])
 
   try {
-    writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 })
-    const manifest = { repo: { path: dir, github: 'example/widgets', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] } }
+    const manifest = plainManifest({ agentToken: join(dir, 'agent-token'), maintainers: ['maint'] })
 
+    writeFileSync(manifest.repo.agentToken, `${AGENT_TOKEN}\n`)
     await replyAsAgents(manifest, 7, 101, 'Renamed the helper (abc1234)')
     await commentAsAgents(manifest, 7, 'Review comments addressed:\n\n- "x": done (abc1234)')
 
-    const [reply, comment] = readFileSync(join(dir, 'calls.jsonl'), 'utf8')
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line))
+    const [reply, comment] = github.requests()
 
-    const replyBody = reply.args.at(-1).replace(/^body=/, '')
+    assert.deepEqual(reply.body, { body: `Renamed the helper (abc1234)\n\n${DRIVER_MARKER}` })
+    assert.deepEqual(comment.body, { body: `Review comments addressed:\n\n- "x": done (abc1234)\n\n${DRIVER_MARKER}` })
 
-    assert.equal(reply.args.at(-2), '-f')
-    assert.ok(replyBody.startsWith('Renamed the helper (abc1234)'))
-    assert.ok(replyBody.endsWith('\n\n<!-- rollout-driver -->'))
-    assert.deepEqual(comment.args, ['pr', 'comment', '7', '--body-file', '-'])
-    assert.ok(comment.stdin.startsWith('Review comments addressed:\n\n- "x": done (abc1234)'))
-    assert.ok(comment.stdin.endsWith('\n\n<!-- rollout-driver -->'))
+    for (const request of [reply, comment]) {
+      assert.equal(request.method, 'POST')
+      assert.equal(request.headers.authorization, `Bearer ${AGENT_TOKEN}`)
+    }
 
     const feedback = maintainerFeedback(manifest, {
-      inline: [{ ...inlineComment(12, 'maint', '2026-01-01T00:00:00Z', replyBody), in_reply_to_id: 101 }],
+      inline: [{ ...inlineComment(12, 'maint', '2026-01-01T00:00:00Z', reply.body.body), in_reply_to_id: 101 }],
       reviews: [],
-      conversation: [conversationComment(31, 'maint', '2026-01-01T00:01:00Z', comment.stdin)],
+      conversation: [conversationComment(31, 'maint', '2026-01-01T00:01:00Z', comment.body.body)],
     })
 
     assert.deepEqual(feedback, [])
@@ -196,46 +238,129 @@ test('the driver marks what it posts and never reads it back as feedback', async
   }
 })
 
-test('the driver pins every gh call to the manifest repo on github.com', async () => {
+// Records its arguments and the GH_REPO and GH_HOST it saw.
+const FAKE_GH = `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+const { join } = require('node:path')
+const { GH_REPO, GH_HOST } = process.env
+appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ args: process.argv.slice(2), GH_REPO, GH_HOST }) + '\\n')
+`
+
+const HEAD = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+const MERGE_SHA = 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0'
+
+test('every request goes to api.github.com for the manifest repo, and gh pr merge is pinned to it, whatever the environment says', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'rollout-gh-'))
-  const inherited = { GH_REPO: process.env.GH_REPO, GH_HOST: process.env.GH_HOST }
-  process.env.GH_REPO = 'someone/else'
-  process.env.GH_HOST = 'ghe.example.com'
+  const github = useGitHub([
+    { method: 'POST', path: 'repos/example/widgets/labels', status: 201, body: {} },
+    { method: 'DELETE', path: 'repos/example/widgets/git/refs/heads/feat/x', status: 204 },
+    { method: 'POST', path: 'repos/example/widgets/pulls/7/comments/101/replies', status: 201, body: {} },
+    { method: 'POST', path: 'repos/example/widgets/issues/7/comments', status: 201, body: {} },
+    { path: PR_11, body: { number: 11, state: 'closed', merged_at: '2026-10-01T12:00:00Z', merge_commit_sha: MERGE_SHA } },
+  ])
 
   try {
     writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 })
-    const manifest = {
-      label: 'rollout:demo',
-      repo: { path: dir, github: 'example/widgets', pathPrepend: [dir], agentToken: null, maintainers: ['maint'] },
-    }
 
-    await ensureLabel(manifest)
-    await deleteRemoteBranch(manifest, 'feat/x')
-    await replyAsAgents(manifest, 7, 101, 'Done')
-    await commentAsAgents(manifest, 7, 'Done')
+    const manifest = plainManifest({ path: dir, pathPrepend: [dir], merge: { method: 'squash', admin: false } })
+    const facts = { pr: { number: 11, headRefOid: HEAD, title: 'feat: A1', author: 'demo-bot' } }
+
+    await withProcessEnv({ GH_REPO: 'someone/else', GH_HOST: 'ghe.example.com' }, async () => {
+      await ensureLabel(manifest)
+      await deleteRemoteBranch(manifest, 'feat/x')
+      await replyAsAgents(manifest, 7, 101, 'Done')
+      await commentAsAgents(manifest, 7, 'Done')
+
+      assert.equal(await merge(manifest, {}, {}, facts), MERGE_SHA)
+    })
+
+    assert.equal(github.requests().length, 5)
+
+    for (const request of github.requests()) {
+      assert.ok(request.url.startsWith('https://api.github.com/repos/example/widgets/'), request.url)
+    }
 
     const calls = readFileSync(join(dir, 'calls.jsonl'), 'utf8')
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line))
 
-    assert.equal(calls.length, 4)
+    assert.deepEqual(
+      calls.map((call) => call.args.slice(0, 6)),
+      [['pr', 'merge', '11', '--squash', '--match-head-commit', HEAD]],
+    )
 
-    for (const call of calls) {
-      assert.equal(call.GH_REPO, 'github.com/example/widgets')
-      assert.equal(call.GH_HOST, 'github.com')
-    }
+    assert.equal(calls[0].GH_REPO, 'github.com/example/widgets')
+    assert.equal(calls[0].GH_HOST, 'github.com')
   } finally {
-    for (const [name, value] of Object.entries(inherited)) {
-      if (value === undefined) {
-        delete process.env[name]
-      } else {
-        process.env[name] = value
-      }
-    }
-
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('deleteRemoteBranch encodes each segment of the branch, and keeps its slashes', async () => {
+  const github = useGitHub([{ method: 'DELETE', path: 'repos/example/widgets/git/refs/heads/fix/a%20b%231/c', status: 204 }])
+
+  await deleteRemoteBranch(plainManifest(), 'fix/a b#1/c')
+
+  assert.deepEqual(
+    github.requests().map((request) => [request.method, request.status]),
+    [['DELETE', 204]],
+  )
+})
+
+const LABELS = 'repos/example/widgets/labels'
+const PR_LABELS = 'repos/example/widgets/issues/11/labels'
+const STAGE_DESCRIPTION = 'Rollout stage, set by the driver'
+
+test('ensureLabel creates the rollout label', async () => {
+  const github = useGitHub([{ method: 'POST', path: LABELS, status: 201, body: { name: 'rollout:demo' } }])
+
+  await ensureLabel(plainManifest())
+
+  assert.deepEqual(github.requests()[0].body, { name: 'rollout:demo', color: '5319e7', description: 'Managed by the rollout driver' })
+})
+
+test('setStageLabels creates each label, updates one that exists, adds them and removes the old ones, names encoded', async () => {
+  const github = useGitHub([
+    { method: 'POST', path: LABELS, status: 422, body: { message: 'Validation Failed' } },
+    { method: 'PATCH', path: `${LABELS}/rollout-stage%3Averifying`, body: {} },
+    { method: 'POST', path: PR_LABELS, body: [] },
+    { method: 'DELETE', path: `${PR_LABELS}/rollout-stage%3Aneeds-fix`, body: [] },
+    { method: 'DELETE', path: `${PR_LABELS}/rollout-reason%3Averifier-findings`, status: 404, body: { message: 'Label does not exist' } },
+  ])
+
+  await setStageLabels(plainManifest(), 11, {
+    add: ['rollout-stage:verifying'],
+    remove: ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings'],
+  })
+
+  assert.deepEqual(
+    github.requests().map((request) => [request.method, request.path, request.body, request.status]),
+    [
+      ['POST', LABELS, { name: 'rollout-stage:verifying', color: '1d76db', description: STAGE_DESCRIPTION }, 422],
+      ['PATCH', `${LABELS}/rollout-stage%3Averifying`, { color: '1d76db', description: STAGE_DESCRIPTION }, 200],
+      ['POST', PR_LABELS, { labels: ['rollout-stage:verifying'] }, 200],
+      ['DELETE', `${PR_LABELS}/rollout-stage%3Aneeds-fix`, null, 200],
+      ['DELETE', `${PR_LABELS}/rollout-reason%3Averifier-findings`, null, 404],
+    ],
+  )
+})
+
+test('setStageLabels rejects what GitHub refuses, other than a label that is off already', async () => {
+  useGitHub([
+    { method: 'POST', path: LABELS, status: 403, body: { message: 'Resource not accessible by integration' } },
+    {
+      method: 'DELETE',
+      path: `${PR_LABELS}/rollout-stage%3Averified`,
+      status: 403,
+      body: { message: 'Resource not accessible by integration' },
+    },
+  ])
+
+  const manifest = plainManifest()
+
+  await assert.rejects(setStageLabels(manifest, 11, { add: ['rollout-stage:verifying'], remove: [] }), /^GitHubError: POST .* HTTP 403/)
+  await assert.rejects(setStageLabels(manifest, 11, { add: [], remove: ['rollout-stage:verified'] }), /^GitHubError: DELETE .* HTTP 403/)
 })
 
 const GITHUB_SSH = { protocol: 'ssh', host: 'github.com', repo: 'my-org/my-lib' }
@@ -286,7 +411,148 @@ test('remote URLs that are not SSH or HTTPS owner/name give null', () => {
   assert.equal(remoteRepo(42), null)
 })
 
-const HEAD = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+// A pull request as the REST API answers it, written out here so the mapping
+// is checked against GitHub's names and not against a fixture of the same code.
+const REST_PR = {
+  number: 11,
+  state: 'open',
+  draft: true,
+  title: 'feat: widgets',
+  body: 'Adds the widgets.',
+  labels: [{ name: 'rollout:demo' }, { name: 'rollout-stage:verified' }],
+  user: { login: 'demo-bot' },
+  html_url: 'https://github.com/example/widgets/pull/11',
+  base: { ref: 'main', sha: 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0' },
+  head: { ref: 'feat/widgets', sha: HEAD },
+  mergeable: true,
+  mergeable_state: 'blocked',
+  merged_at: null,
+  merge_commit_sha: 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+}
+
+test('viewPr maps the REST pull request to the names the gate reads', async () => {
+  useGitHub([{ path: PR_11, body: REST_PR }])
+
+  assert.deepEqual(await viewPr(plainManifest(), 11), {
+    number: 11,
+    state: 'OPEN',
+    isDraft: true,
+    baseRefName: 'main',
+    headRefName: 'feat/widgets',
+    headRefOid: HEAD,
+    labels: ['rollout:demo', 'rollout-stage:verified'],
+    title: 'feat: widgets',
+    body: 'Adds the widgets.',
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'BLOCKED',
+    mergedAt: null,
+    url: 'https://github.com/example/widgets/pull/11',
+    author: 'demo-bot',
+  })
+})
+
+test('viewPr: the state, mergeable, a missing mergeable_state, a null body and a deleted author', async () => {
+  const cases = [
+    [
+      { state: 'open', merged_at: null },
+      { state: 'OPEN', mergedAt: null },
+    ],
+    [
+      { state: 'closed', merged_at: null },
+      { state: 'CLOSED', mergedAt: null },
+    ],
+    [
+      { state: 'closed', merged_at: '2026-10-01T12:00:00Z' },
+      { state: 'MERGED', mergedAt: '2026-10-01T12:00:00Z' },
+    ],
+    [{ mergeable: true }, { mergeable: 'MERGEABLE' }],
+    [{ mergeable: false }, { mergeable: 'CONFLICTING' }],
+    [{ mergeable: null }, { mergeable: 'UNKNOWN' }],
+    [{ mergeable_state: undefined }, { mergeStateStatus: 'UNKNOWN' }],
+    [
+      { mergeable_state: 'clean', draft: false },
+      { mergeStateStatus: 'CLEAN', isDraft: false },
+    ],
+    [{ body: null }, { body: '' }],
+    [{ user: null }, { author: null }],
+  ]
+
+  for (const [fields, expected] of cases) {
+    useGitHub([{ path: PR_11, body: { ...REST_PR, ...fields } }])
+
+    const githubPr = await viewPr(plainManifest(), 11)
+    const picked = Object.fromEntries(Object.keys(expected).map((name) => [name, githubPr[name]]))
+
+    assert.deepEqual(picked, expected, JSON.stringify(fields))
+  }
+})
+
+test('viewPr of an unchanged PR asks with its ETag, and the 304 gives the same PR', async () => {
+  const github = useGitHub([{ path: PR_11, body: REST_PR }])
+  const manifest = plainManifest()
+  const first = await viewPr(manifest, 11)
+  const second = await viewPr(manifest, 11)
+
+  assert.deepEqual(
+    github.requests().map((request) => request.status),
+    [200, 304],
+  )
+
+  assert.equal(github.requests()[0].headers['if-none-match'], undefined)
+  assert.match(github.requests()[1].headers['if-none-match'], /^"\w+"$/)
+  assert.deepEqual(second, first)
+})
+
+test('mergeCommit is the merge commit of a merged PR, and nothing for an open one, whose merge_commit_sha is a test merge', async () => {
+  useGitHub([{ path: PR_11, body: REST_PR }])
+
+  assert.equal(await mergeCommit(plainManifest(), 11), null)
+
+  useGitHub([{ path: PR_11, body: { ...REST_PR, state: 'closed', merged_at: '2026-10-01T12:00:00Z', merge_commit_sha: MERGE_SHA } }])
+
+  assert.equal(await mergeCommit(plainManifest(), 11), MERGE_SHA)
+})
+
+test('findPr asks once for the branch from the repository owner, and takes the open PR, then the merged one, then the first', async () => {
+  const closed = { ...REST_PR, number: 9, state: 'closed' }
+  const merged = { ...REST_PR, number: 10, state: 'closed', merged_at: '2026-10-01T12:00:00Z' }
+  const open = { ...REST_PR, number: 11, mergeable: undefined, mergeable_state: undefined }
+  const github = useGitHub([{ path: PULLS, query: { head: 'example:feat/widgets' }, body: [closed, merged, open] }])
+  const found = await findPr(plainManifest(), 'feat/widgets')
+
+  assert.equal(found.number, 11)
+  assert.equal(found.mergeable, 'UNKNOWN')
+  assert.equal(found.mergeStateStatus, 'UNKNOWN')
+  assert.deepEqual(github.requests()[0].query, { head: 'example:feat/widgets', state: 'all', per_page: '10' })
+
+  useGitHub([{ path: PULLS, body: [closed, merged] }])
+  assert.equal((await findPr(plainManifest(), 'feat/widgets')).number, 10)
+
+  useGitHub([{ path: PULLS, body: [closed] }])
+  assert.equal((await findPr(plainManifest(), 'feat/widgets')).number, 9)
+
+  useGitHub([{ path: PULLS, body: [] }])
+  assert.equal(await findPr(plainManifest(), 'feat/widgets'), null)
+})
+
+test('findReleasePr finds the open PR with a never-merge title on any page', async () => {
+  const others = Array.from({ length: 100 }, (_, i) => ({ ...REST_PR, number: i + 1, title: `feat: ${i + 1}` }))
+  const release = { ...REST_PR, number: 101, title: ' chore: version packages ', head: { ref: 'changeset-release/main', sha: HEAD } }
+  const github = useGitHub([{ path: PULLS, query: { state: 'open' }, body: [...others, release] }])
+  const manifest = plainManifest({ neverMerge: { titles: ['chore: version packages'] } })
+
+  assert.deepEqual(await findReleasePr(manifest), {
+    number: 101,
+    title: ' chore: version packages ',
+    headRefName: 'changeset-release/main',
+    url: 'https://github.com/example/widgets/pull/11',
+  })
+
+  assert.equal(github.requests().length, 2)
+
+  useGitHub([{ path: PULLS, query: { state: 'open' }, body: others }])
+  assert.equal(await findReleasePr(manifest), null)
+})
 
 // One alert as the code scanning API returns it, trimmed.
 function alertJson(number, overrides = {}) {
@@ -368,135 +634,246 @@ test('alertsFrom keeps open alerts, the first line of each message and null for 
   }
 })
 
-test('codeScanningUnavailable: a 404 or a 403 means no code scanning, a rate limit or a 500 does not', () => {
-  const prefix = 'gh api -X GET repos/example/widgets/code-scanning/alerts exited 1: '
+test('codeScanningUnavailable: a 404 or a 403 that is no rate limit means no code scanning, a 403 rate limit or a 500 does not', async () => {
+  const missing = await githubError({ status: 404, body: { message: 'no analysis found' } })
+  const off = await githubError({
+    status: 403,
+    body: { message: 'Advanced Security must be enabled for this repository to use code scanning.' },
+  })
 
-  for (const text of [
-    'gh: no analysis found (HTTP 404)',
-    'gh: Advanced Security must be enabled for this repository to use code scanning. (HTTP 403)',
-  ]) {
-    assert.equal(codeScanningUnavailable(text), true, text)
-    assert.equal(codeScanningUnavailable(new Error(`${prefix}${text}`)), true, text)
-  }
+  const limited = await githubError({
+    status: 403,
+    body: { message: 'API rate limit exceeded for user ID 1.' },
+    headers: { 'x-ratelimit-remaining': '0' },
+  })
 
-  for (const text of ['gh: API rate limit exceeded for user ID 1. (HTTP 403)', 'gh: Server Error (HTTP 500)']) {
-    assert.equal(codeScanningUnavailable(text), false, text)
-    assert.equal(codeScanningUnavailable(new Error(`${prefix}${text}`)), false, text)
-  }
+  const broken = await githubError({ status: 500, body: { message: 'Server Error' } })
+
+  assert.equal(codeScanningUnavailable(missing), true)
+  assert.equal(codeScanningUnavailable(off), true)
+  assert.equal(codeScanningUnavailable(limited), false)
+  assert.equal(codeScanningUnavailable(broken), false)
+  assert.equal(
+    codeScanningUnavailable(new Error('gh api repos/example/widgets/code-scanning/alerts exited 1: gh: no analysis found (HTTP 404)')),
+    false,
+  )
 })
 
-// What gh, git, curl and ssh print when GitHub or the network is down.
-const OUTAGES = [
+// git's own words when the network is down or slow, and shOk's for a command it killed.
+const GIT_OUTAGES = [
+  "fatal: unable to access 'https://github.com/example/widgets.git/': Could not resolve host: github.com",
+  'ssh: connect to host github.com port 22: Connection refused',
+  'kex_exchange_identification: read: Connection reset by peer',
+  "fatal: unable to access 'https://github.com/example/widgets.git/': Operation timed out after 300000 milliseconds with 0 bytes received",
+  'fetch-pack: unexpected disconnect while reading sideband packet\nfatal: early EOF',
+  'fatal: the remote end hung up unexpectedly',
+  'git -C repo fetch --quiet --prune origin timed out after 600 s',
+]
+
+// Failures of the call itself, and what gh used to print for an outage,
+// which only git's words or a GitHub request's status now make one.
+const NOT_OUTAGES = [
   'HTTP 502: Bad Gateway',
   'gh: Server Error (HTTP 500)',
   'HTTP 429: Too Many Requests',
-  'non-200 OK status code: 502 Bad Gateway body: ""',
-  "fatal: unable to access 'https://github.com/example/widgets.git/': The requested URL returned error: 503",
-  "fatal: unable to access 'https://github.com/example/widgets.git/': The requested URL returned error: 429",
-  'Server Error',
-  'GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug.',
   'gh: API rate limit exceeded for user ID 1. (HTTP 403)',
-  'gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)',
-  "fatal: unable to access 'https://github.com/example/widgets.git/': Could not resolve host: github.com",
-  'ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known',
-  'Get "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host',
   'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com',
-  "fatal: unable to access 'https://github.com/example/widgets.git/': Failed to connect to github.com port 443 after 75000 ms",
-  "curl: (7) Couldn't connect to server",
-  'dial tcp 192.0.2.10:443: connect: connection refused',
-  'read tcp 192.0.2.2:50000->192.0.2.10:443: read: connection reset by peer',
-  'dial tcp 192.0.2.10:443: connect: network is unreachable',
-  'Get "https://api.github.com/graphql": net/http: TLS handshake timeout',
-  'ssh: connect to host github.com port 22: No route to host',
-  "fatal: unable to access 'https://github.com/example/widgets.git/': Operation timed out after 300000 milliseconds with 0 bytes received",
-  'kex_exchange_identification: read: Connection timed out',
-  'git -C repo fetch --quiet --prune origin timed out after 600 s',
-  'dial tcp: lookup api.github.com on 192.0.2.53:53: read udp 192.0.2.2:5353->192.0.2.53:53: i/o timeout',
-  'Get "https://api.github.com/graphql": net/http: request canceled (Client.Timeout exceeded while awaiting headers)',
-  'Post "https://api.github.com/graphql": context deadline exceeded',
-]
-
-// Failures of the call itself. They still count as errors.
-const NOT_OUTAGES = [
   'HTTP 401: Bad credentials (https://api.github.com/graphql)',
-  'HTTP 403: Resource not accessible by integration (https://api.github.com/repos/example/widgets/pulls/11)',
-  'HTTP 404: Not Found (https://api.github.com/repos/example/widgets/pulls/12)',
   'HTTP 422: Validation Failed',
   'GraphQL: Could not resolve to a PullRequest with the number of 12. (repository.pullRequest)',
-  "GraphQL: Could not resolve to a Repository with the name 'example/widgets'. (repository)",
-  'no pull requests found for branch "feat/a1"',
   'git@github.com: Permission denied (publickey).',
   'fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.',
   "fatal: unable to access 'https://github.com/example/widgets.git/': The requested URL returned error: 403",
   'fatal: unable to access the remote',
-  'fake gh: no rule for pr view 11 --json number',
   'gate down',
   " ! [rejected]        fix/timeout -> fix/timeout (fetch first)\nerror: failed to push some refs to 'https://github.com/example/widgets.git'",
 ]
 
-function failedView(text) {
-  return new Error(`gh pr view 11 --json number exited 1: ${text}`)
+function failedFetch(text) {
+  return new Error(`git -C repo fetch --quiet --prune origin exited 128: ${text}`)
 }
 
-test('githubUnavailable: a 5xx, a 429, a rate limit, DNS, a failed connection and a timeout are an outage', () => {
-  for (const text of OUTAGES) {
-    assert.equal(githubUnavailable(text), true, text)
-    assert.equal(githubUnavailable(failedView(text)), true, text)
+test('githubUnavailable: a 5xx, a failed connection, no answer in time and a rate limit from GitHub are an outage', async () => {
+  const outages = [
+    await githubError({ status: 500, body: { message: 'Server Error' } }),
+    await githubError({ status: 502 }),
+    await githubError({ error: 'ECONNRESET' }),
+    await githubError({ hang: true }),
+    await githubError({ status: 429, body: { message: 'Too Many Requests' } }),
+    await githubError({ status: 403, body: { message: 'You have exceeded a secondary rate limit.' } }),
+  ]
+
+  for (const error of outages) {
+    assert.ok(error instanceof GitHubError, String(error))
+    assert.equal(githubUnavailable(error), true, String(error))
   }
 })
 
-test('githubUnavailable: 401, 403, 404, 422, an unknown PR, a refused key and a bare timeout are not', () => {
+test('githubUnavailable: a 401, a 403 that is no rate limit, a 404 and a 422 from GitHub are not', async () => {
+  const failures = [
+    await githubError({ status: 401, body: { message: 'Bad credentials' } }),
+    await githubError({ status: 403, body: { message: 'Resource not accessible by integration' } }),
+    await githubError({ status: 404, body: { message: 'Not Found' } }),
+    await githubError({ status: 422, body: { message: 'Validation Failed' } }),
+    await githubError({ status: 400, body: { message: 'Problems parsing JSON' } }),
+  ]
+
+  for (const error of failures) {
+    assert.ok(error instanceof GitHubError, String(error))
+    assert.equal(githubUnavailable(error), false, String(error))
+  }
+})
+
+test("githubUnavailable: git's six messages are an outage", () => {
+  for (const text of GIT_OUTAGES) {
+    assert.equal(githubUnavailable(text), true, text)
+    assert.equal(githubUnavailable(failedFetch(text)), true, text)
+  }
+})
+
+test("githubUnavailable: gh's old texts for an outage, a refused key and a bare timeout are not", () => {
   for (const text of NOT_OUTAGES) {
     assert.equal(githubUnavailable(text), false, text)
-    assert.equal(githubUnavailable(failedView(text)), false, text)
+    assert.equal(githubUnavailable(failedFetch(text)), false, text)
   }
 
   assert.equal(githubUnavailable(new Error('gate down')), false)
 })
 
 test('githubUnavailable reads what the tool said, never the command line', () => {
-  const merge = new Error('gh pr merge 11 --subject fix: Server Error timed out exited 1: HTTP 422: Validation Failed')
+  const failedMerge = new Error('gh pr merge 11 --subject fix: Server Error timed out exited 1: HTTP 422: Validation Failed')
 
-  assert.equal(githubUnavailable(merge), false)
+  assert.equal(githubUnavailable(failedMerge), false)
 })
 
-test('githubUnavailable: an AggregateError is an outage only when every error in it is one, whatever its message says', () => {
-  const badGateway = failedView('HTTP 502: Bad Gateway')
-  const refused = failedView('dial tcp 192.0.2.10:443: connect: connection refused')
-  const denied = failedView('HTTP 401: Bad credentials')
+test('githubUnavailable: an AggregateError is an outage only when every error in it is one, whatever its message says', async () => {
+  const badGateway = await githubError({ status: 502 })
+  const reset = await githubError({ error: 'ECONNRESET' })
+  const denied = await githubError({ status: 401, body: { message: 'Bad credentials' } })
 
-  assert.equal(githubUnavailable(new AggregateError([badGateway, refused], 'two lookups failed')), true)
+  assert.equal(githubUnavailable(new AggregateError([badGateway, reset], 'two lookups failed')), true)
   assert.equal(githubUnavailable(new AggregateError([badGateway, denied], 'HTTP 502: Bad Gateway')), false)
   assert.equal(githubUnavailable(new AggregateError([], 'HTTP 502: Bad Gateway')), false)
 })
 
-test('githubUnavailable: right after a sleep, every failed gh or git command is an outage', () => {
+test('githubUnavailable: right after a sleep, every failed GitHub request and every failed gh or git command is an outage', async () => {
   const afterSleep = { afterSleep: true }
-  const view = failedView('fatal: unable to access the remote')
-  const fetch = new Error('git -C repo fetch --quiet --prune origin exited 128: fatal: unable to access the remote')
+  const denied = await githubError({ status: 401, body: { message: 'Bad credentials' } })
+  const failedMerge = new Error('gh pr merge 11 --squash exited 1: error connecting to api.github.com')
+  const fetch = failedFetch('fatal: unable to access the remote')
 
-  assert.equal(githubUnavailable(view, afterSleep), true)
+  assert.equal(githubUnavailable(denied, afterSleep), true)
+  assert.equal(githubUnavailable(failedMerge, afterSleep), true)
   assert.equal(githubUnavailable(fetch, afterSleep), true)
-  assert.equal(githubUnavailable(new AggregateError([view, fetch], 'two lookups failed'), afterSleep), true)
+  assert.equal(githubUnavailable(new AggregateError([denied, fetch], 'two lookups failed'), afterSleep), true)
 
-  assert.equal(githubUnavailable(view), false)
+  assert.equal(githubUnavailable(denied), false)
+  assert.equal(githubUnavailable(failedMerge), false)
   assert.equal(githubUnavailable(fetch), false)
 })
 
-test('githubUnavailable: right after a sleep, an error that is no gh or git command still counts', () => {
+test('githubUnavailable: right after a sleep, an error that is no GitHub request or gh or git command still counts', async () => {
   const afterSleep = { afterSleep: true }
   const gateDown = new Error('gate down')
+  const denied = await githubError({ status: 401, body: { message: 'Bad credentials' } })
 
   assert.equal(githubUnavailable(gateDown, afterSleep), false)
   assert.equal(githubUnavailable('fatal: unable to access the remote', afterSleep), false)
-  assert.equal(githubUnavailable(new AggregateError([failedView('HTTP 401: Bad credentials'), gateDown], 'two failed'), afterSleep), false)
+  assert.equal(githubUnavailable(new AggregateError([denied, gateDown], 'two failed'), afterSleep), false)
+})
+
+test("ghError: a GitHub request's detail, or what a command printed after its command line", async () => {
+  assert.equal(ghError(await githubError({ status: 404, body: { message: 'Not Found' } })), 'HTTP 404: Not Found')
+  assert.equal(ghError(new Error('git -C repo fetch origin exited 128: fatal: early EOF')), 'fatal: early EOF')
+  assert.equal(ghError('fatal: early EOF'), 'fatal: early EOF')
+})
+
+const MERGE_COMMAND = `gh pr merge 11 --squash --match-head-commit ${HEAD} --subject feat: A1 (#11) --body `
+
+test("mergeRefusal: gh's refusal from the merge state and the mutation's error are refusals", () => {
+  const refusals = [
+    'Pull request example/widgets#11 is not mergeable: the base branch policy prohibits the merge.',
+    'GraphQL: Pull Request is not mergeable (mergePullRequest)',
+  ]
+
+  for (const text of refusals) {
+    assert.equal(mergeRefusal(new Error(`${MERGE_COMMAND} exited 1: ${text}`)), true, text)
+  }
+})
+
+test('mergeRefusal: "not mergeable" in the --subject of the command line is no refusal when gh said something else', () => {
+  const titled = `gh pr merge 11 --squash --match-head-commit ${HEAD} --subject fix: say why a PR is not mergeable (#11) --body `
+
+  assert.equal(mergeRefusal(new Error(`${titled} exited 1: HTTP 422: Validation Failed`)), false)
+  assert.equal(
+    mergeRefusal(new Error(`${MERGE_COMMAND} exited 1: GraphQL: Head branch was modified. Review and try the merge again.`)),
+    false,
+  )
+})
+
+// What viewPr rejects with for PR 12, and prNotFound's verdict on it.
+async function unknownPr(routes) {
+  const github = useGitHub(routes)
+  const manifest = plainManifest()
+  const error = await rejection(viewPr(manifest, 12))
+
+  return { github, error, verdict: () => prNotFound(manifest, error) }
+}
+
+const PR_12 = 'repos/example/widgets/pulls/12'
+
+test('prNotFound: a PR that answers 404 while the repository reads is unknown', async () => {
+  const { github, verdict } = await unknownPr([{ path: PR_12, status: 404, body: { message: 'Not Found' } }, REPOSITORY])
+
+  assert.equal(await verdict(), true)
+  assert.deepEqual(
+    github.requests().map((request) => [request.path, request.status]),
+    [
+      [PR_12, 404],
+      ['repos/example/widgets', 200],
+    ],
+  )
+})
+
+test('prNotFound: a 404 for the repository too is no unknown PR, because a token without access gets both', async () => {
+  const { verdict } = await unknownPr([
+    { path: PR_12, status: 404, body: { message: 'Not Found' } },
+    { path: 'repos/example/widgets', status: 404, body: { message: 'Not Found' } },
+  ])
+
+  assert.equal(await verdict(), false)
+})
+
+test('prNotFound: a repository read that fails otherwise rejects with its own error', async () => {
+  const { verdict } = await unknownPr([
+    { path: PR_12, status: 404, body: { message: 'Not Found' } },
+    { path: 'repos/example/widgets', status: 502 },
+  ])
+
+  const error = await rejection(verdict())
+
+  assert.ok(error instanceof GitHubError)
+  assert.equal(error.status, 502)
+  assert.equal(error.path, 'repos/example/widgets')
+})
+
+test('prNotFound: a PR read that fails with anything but a 404 is no unknown PR, and reads no repository', async () => {
+  const { github, verdict } = await unknownPr([{ path: PR_12, status: 502 }, REPOSITORY])
+
+  assert.equal(await verdict(), false)
+  assert.equal(await prNotFound(plainManifest(), new Error('gh pr view 12 exited 1: HTTP 404: Not Found')), false)
+  assert.deepEqual(
+    github.requests().map((request) => request.path),
+    [PR_12],
+  )
 })
 
 test('refreshOutsideDeps throws every failed lookup, so one that is not an outage still counts', async () => {
   const dir = makeRollout()
-  fakeTools(dir, [
-    { tool: 'gh', args: 'pr list --head feat/a1', code: 1, stderr: 'HTTP 502: Bad Gateway' },
-    { tool: 'gh', args: 'pr list --head feat/a2', code: 1, stderr: 'HTTP 401: Bad credentials' },
+
+  useGitHub([
+    { path: PULLS, query: { head: 'example:feat/a1' }, status: 502 },
+    { path: PULLS, query: { head: 'example:feat/a2' }, status: 401, body: { message: 'Bad credentials' } },
   ])
 
   const manifest = loadManifest(dir, { only: ['A3'] })
@@ -506,9 +883,9 @@ test('refreshOutsideDeps throws every failed lookup, so one that is not an outag
   await assert.rejects(refreshOutsideDeps(manifest, ledger), (error) => {
     assert.ok(error instanceof AggregateError)
     assert.equal(error.errors.length, 2)
-    assert.match(
+    assert.equal(
       error.message,
-      /^A1: gh pr list --head feat\/a1 .*HTTP 502: Bad Gateway\nA2: gh pr list --head feat\/a2 .*HTTP 401: Bad credentials$/,
+      'A1: GET repos/example/widgets/pulls: HTTP 502: Bad Gateway\nA2: GET repos/example/widgets/pulls: HTTP 401: Bad credentials',
     )
 
     assert.equal(githubUnavailable(error), false)
@@ -518,101 +895,144 @@ test('refreshOutsideDeps throws every failed lookup, so one that is not an outag
   })
 })
 
-// A fixture rollout whose gh answers from the rules, as in test/driver-helpers.mjs.
-function scanningRollout(rules) {
+// A fixture rollout whose git answers the rules, as in test/driver-helpers.mjs,
+// and whose GitHub answers the routes.
+function scanningRollout(rules = [], routes = []) {
   const dir = makeRollout()
   const tools = fakeTools(dir, rules)
+  const github = useGitHub(routes)
 
-  return { manifest: loadManifest(dir), calls: () => tools.calls().map((call) => call.args.join(' ')) }
+  return { manifest: loadManifest(dir), github, gitCalls: () => tools.calls().map((call) => call.args.join(' ')) }
 }
 
-const PR_ALERTS = 'repos/example/widgets/code-scanning/alerts -f ref=refs/pull/11/head -f state=open -f per_page=100'
-const BASE_ALERTS = 'repos/example/widgets/code-scanning/alerts -f ref=refs/heads/main -f state=open -f per_page=100'
+const ALERTS = 'repos/example/widgets/code-scanning/alerts'
+const PR_REF = { ref: 'refs/pull/11/head', state: 'open' }
+const BASE_REF = { ref: 'refs/heads/main', state: 'open' }
+
+function alertsRoute(query, body) {
+  return { path: ALERTS, query, body }
+}
+
+function alertQueries(github) {
+  return github
+    .requests()
+    .filter((request) => request.path === ALERTS)
+    .map((request) => request.query)
+}
 
 test('codeScanningFor reads the PR head and then the base, one page each', async () => {
-  const { manifest, calls } = scanningRollout([
-    { tool: 'gh', args: PR_ALERTS, stdout: [alertJson(3), alertJson(4), alertJson(8, { state: 'dismissed' })] },
-    { tool: 'gh', args: BASE_ALERTS, stdout: [alertJson(3), alertJson(9)] },
-  ])
+  const { manifest, github } = scanningRollout(
+    [],
+    [
+      alertsRoute(PR_REF, [alertJson(3), alertJson(4), alertJson(8, { state: 'dismissed' })]),
+      alertsRoute(BASE_REF, [alertJson(3), alertJson(9)]),
+    ],
+  )
 
   assert.deepEqual(await codeScanningFor(manifest, 11), { available: true, alerts: [mappedAlert(3), mappedAlert(4)], baseOpen: [3, 9] })
-  assert.deepEqual(calls(), [`api -X GET ${PR_ALERTS} -f page=1`, `api -X GET ${BASE_ALERTS} -f page=1`])
+  assert.deepEqual(alertQueries(github), [
+    { ...PR_REF, per_page: '100' },
+    { ...BASE_REF, per_page: '100' },
+  ])
 })
 
 test('codeScanningFor skips the base when the PR head has no open alert', async () => {
-  const { manifest, calls } = scanningRollout([{ tool: 'gh', args: PR_ALERTS, stdout: [alertJson(8, { state: 'fixed' })] }])
+  const { manifest, github } = scanningRollout([], [alertsRoute(PR_REF, [alertJson(8, { state: 'fixed' })])])
 
   assert.deepEqual(await codeScanningFor(manifest, 11), { available: true, alerts: [], baseOpen: [] })
-  assert.deepEqual(calls(), [`api -X GET ${PR_ALERTS} -f page=1`])
+  assert.deepEqual(alertQueries(github), [{ ...PR_REF, per_page: '100' }])
 })
 
-test('codeScanningFor reads the next page after a full one', async () => {
-  const full = Array.from({ length: 100 }, (_, i) => alertJson(i + 1, { state: i === 0 ? 'fixed' : 'open' }))
-  const { manifest, calls } = scanningRollout([
-    { tool: 'gh', args: `${PR_ALERTS} -f page=2`, stdout: [alertJson(101)] },
-    { tool: 'gh', args: PR_ALERTS, stdout: full },
-    { tool: 'gh', args: BASE_ALERTS, stdout: [] },
-  ])
-
+test('codeScanningFor reads the next page GitHub links', async () => {
+  const full = Array.from({ length: 101 }, (_, i) => alertJson(i + 1, { state: i === 0 ? 'fixed' : 'open' }))
+  const { manifest, github } = scanningRollout([], [alertsRoute(PR_REF, full), alertsRoute(BASE_REF, [])])
   const scan = await codeScanningFor(manifest, 11)
 
   assert.equal(scan.alerts.length, 100)
   assert.deepEqual(scan.alerts.at(-1), mappedAlert(101))
   assert.deepEqual(scan.baseOpen, [])
-  assert.deepEqual(calls(), [
-    `api -X GET ${PR_ALERTS} -f page=1`,
-    `api -X GET ${PR_ALERTS} -f page=2`,
-    `api -X GET ${BASE_ALERTS} -f page=1`,
+  assert.deepEqual(alertQueries(github), [
+    { ...PR_REF, per_page: '100' },
+    { ...PR_REF, per_page: '100', page: '2' },
+    { ...BASE_REF, per_page: '100' },
   ])
 })
 
-test('codeScanningFor: a repo without code scanning is unavailable, a server error rejects', async () => {
-  const missing = scanningRollout([{ tool: 'gh', args: 'code-scanning/alerts', code: 1, stderr: 'gh: no analysis found (HTTP 404)' }])
+test('codeScanningFor: a repo without code scanning is unavailable, a server error or a rate limit rejects', async () => {
+  const missing = scanningRollout([], [{ path: ALERTS, status: 404, body: { message: 'no analysis found' } }])
 
   assert.deepEqual(await codeScanningFor(missing.manifest, 11), {
     available: false,
-    reason: 'gh: no analysis found (HTTP 404)',
+    reason: 'HTTP 404: no analysis found',
     alerts: [],
     baseOpen: [],
   })
 
-  const broken = scanningRollout([{ tool: 'gh', args: 'code-scanning/alerts', code: 1, stderr: 'gh: Server Error (HTTP 500)' }])
+  const off = scanningRollout(
+    [],
+    [{ path: ALERTS, status: 403, body: { message: 'Advanced Security must be enabled for this repository.' } }],
+  )
 
-  await assert.rejects(codeScanningFor(broken.manifest, 11), /exited 1: gh: Server Error \(HTTP 500\)/)
+  assert.equal((await codeScanningFor(off.manifest, 11)).reason, 'HTTP 403: Advanced Security must be enabled for this repository.')
+
+  const broken = scanningRollout([], [{ path: ALERTS, status: 500, body: { message: 'Server Error' } }])
+
+  await assert.rejects(
+    codeScanningFor(broken.manifest, 11),
+    /^GitHubError: GET repos\/example\/widgets\/code-scanning\/alerts: HTTP 500: Server Error$/,
+  )
+
+  const limited = scanningRollout(
+    [],
+    [{ path: ALERTS, status: 403, body: { message: 'API rate limit exceeded' }, headers: { 'retry-after': '60' } }],
+  )
+
+  await assert.rejects(codeScanningFor(limited.manifest, 11), (error) => error.kind === 'rate-limit')
 })
 
+const BASE_TIP = 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0'
+
+function runsRoute(sha, runs) {
+  return {
+    path: `repos/example/widgets/commits/${sha}/check-runs`,
+    body: { total_count: runs.length, check_runs: runs },
+    items: 'check_runs',
+  }
+}
+
 test('collectFacts reads code scanning for the PR, and not at all under ignore', async () => {
-  const view = { number: 11, state: 'OPEN', headRefOid: HEAD, labels: [], author: { login: 'demo-bot' } }
+  const view = { ...REST_PR, draft: false, head: { ref: 'feat/a1', sha: HEAD }, labels: [] }
   const rules = [
-    { tool: 'gh', args: 'pr view 11', stdout: view },
-    { tool: 'gh', args: 'pulls/11/reviews', stdout: [] },
-    { tool: 'gh', args: 'check-runs', stdout: { check_runs: [] } },
-    { tool: 'gh', args: PR_ALERTS, stdout: [] },
+    { tool: 'git', args: 'rev-parse origin/main', stdout: `${BASE_TIP}\n` },
     { tool: 'git', stdout: '' },
+  ]
+
+  const routes = [
+    { path: PR_11, body: view },
+    { path: `${PR_11}/reviews`, body: [] },
+    runsRoute(HEAD, []),
+    runsRoute(BASE_TIP, []),
+    alertsRoute(PR_REF, []),
   ]
 
   const ledger = { data: { halted: null }, prs: {} }
 
   const cases = [
-    ['fix', { available: true, alerts: [], baseOpen: [] }, [`api -X GET ${PR_ALERTS} -f page=1`]],
+    ['fix', { available: true, alerts: [], baseOpen: [] }, [{ ...PR_REF, per_page: '100' }]],
     ['ignore', null, []],
   ]
 
-  for (const [action, codeScanning, scanningCalls] of cases) {
-    const { manifest, calls } = scanningRollout(rules)
+  for (const [action, codeScanning, scanningQueries] of cases) {
+    const { manifest, github } = scanningRollout(rules, routes)
     manifest.repo.codeScanning = { action, minSeverity: 'medium' }
 
     const facts = await collectFacts(manifest, manifest.prs[0], { pr: 11 }, ledger)
 
     assert.deepEqual(facts.codeScanning, codeScanning, action)
-    assert.deepEqual(
-      calls().filter((call) => call.includes('code-scanning')),
-      scanningCalls,
-      action,
-    )
+    assert.deepEqual(alertQueries(github), scanningQueries, action)
   }
 
-  const closed = scanningRollout([{ tool: 'gh', args: 'pr view 11', stdout: { ...view, state: 'CLOSED' } }])
+  const closed = scanningRollout([], [{ path: PR_11, body: { ...view, state: 'closed' } }])
 
   assert.equal((await collectFacts(closed.manifest, closed.manifest.prs[0], { pr: 11 }, ledger)).codeScanning, null)
 })
@@ -620,11 +1040,6 @@ test('collectFacts reads code scanning for the PR, and not at all under ignore',
 // Fake commits all have a name of the same length, so no sha is a prefix of
 // another and every rule matches the call it was written for.
 const GREEN_RUN = { id: 1, name: 'test', status: 'completed', conclusion: 'success' }
-const NO_RUNS = { check_runs: [] }
-
-function runsRule(sha, runs) {
-  return { tool: 'gh', args: `commits/${sha}/check-runs`, stdout: { check_runs: runs } }
-}
 
 function historyRules(sha, parent, files) {
   return [
@@ -633,8 +1048,8 @@ function historyRules(sha, parent, files) {
   ]
 }
 
-function quietRollout(rules, globs = ['docs/journal/**']) {
-  const rollout = scanningRollout(rules)
+function quietRollout(rules, routes, globs = ['docs/journal/**']) {
+  const rollout = scanningRollout(rules, routes)
 
   rollout.manifest.repo.baseQuietPaths = globs
 
@@ -642,10 +1057,9 @@ function quietRollout(rules, globs = ['docs/journal/**']) {
 }
 
 test('baseChecks takes the state of the parent when the tip has no runs and only touches the quiet paths', async () => {
-  const { manifest, calls } = quietRollout([
-    runsRule('quiet00', []),
-    runsRule('quiet01', [GREEN_RUN]),
-    ...historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']),
+  const { manifest, gitCalls } = quietRollout(historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']), [
+    runsRoute('quiet00', []),
+    runsRoute('quiet01', [GREEN_RUN]),
   ])
 
   assert.deepEqual(await baseChecks(manifest, 'quiet00'), {
@@ -658,11 +1072,11 @@ test('baseChecks takes the state of the parent when the tip has no runs and only
     skipped: 1,
   })
 
-  assert.equal(calls().filter((call) => call.includes('--name-only')).length, 1)
+  assert.equal(gitCalls().filter((call) => call.includes('--name-only')).length, 1)
 })
 
 test('baseChecks stays on the tip when it changes a file outside the quiet paths', async () => {
-  const { manifest } = quietRollout([runsRule('quiet00', []), ...historyRules('quiet00', 'quiet01', ['lib/driver.mjs'])])
+  const { manifest } = quietRollout(historyRules('quiet00', 'quiet01', ['lib/driver.mjs']), [runsRoute('quiet00', [])])
   const checks = await baseChecks(manifest, 'quiet00')
 
   assert.equal(checks.state, 'pending')
@@ -671,31 +1085,31 @@ test('baseChecks stays on the tip when it changes a file outside the quiet paths
 })
 
 test('baseChecks reads no history without quiet paths, and none when the tip has a run', async () => {
-  const off = quietRollout([runsRule('quiet00', [])], [])
+  const off = quietRollout([], [runsRoute('quiet00', [])], [])
 
   assert.equal((await baseChecks(off.manifest, 'quiet00')).skipped, 0)
   assert.deepEqual(
-    off.calls().filter((call) => call.startsWith('-C')),
+    off.gitCalls().filter((call) => call.startsWith('-C')),
     [],
   )
 
-  const tested = quietRollout([runsRule('quiet00', [GREEN_RUN])])
+  const tested = quietRollout([], [runsRoute('quiet00', [GREEN_RUN])])
 
   assert.equal((await baseChecks(tested.manifest, 'quiet00')).state, 'green')
   assert.deepEqual(
-    tested.calls().filter((call) => call.startsWith('-C')),
+    tested.gitCalls().filter((call) => call.startsWith('-C')),
     [],
   )
 })
 
 test('baseChecks skips at most 20 quiet commits in a row', async () => {
   const names = Array.from({ length: 22 }, (_, i) => `quiet${String(i).padStart(2, '0')}`)
-  const rules = [
-    { tool: 'gh', args: 'check-runs', stdout: NO_RUNS },
-    ...names.slice(0, -1).flatMap((name, i) => historyRules(name, names[i + 1], ['docs/journal/2026-10.md'])),
-  ]
+  const rules = names.slice(0, -1).flatMap((name, i) => historyRules(name, names[i + 1], ['docs/journal/2026-10.md']))
+  const { manifest } = quietRollout(
+    rules,
+    names.map((name) => runsRoute(name, [])),
+  )
 
-  const { manifest } = quietRollout(rules)
   const checks = await baseChecks(manifest, names[0])
 
   assert.equal(checks.state, 'pending')
@@ -706,10 +1120,9 @@ test('baseChecks skips at most 20 quiet commits in a row', async () => {
 const DOCS_RUN = { id: 2, name: 'docs deploy', status: 'completed', conclusion: 'success' }
 
 test('baseChecks skips a quiet tip whose only runs are not required checks', async () => {
-  const { manifest } = quietRollout([
-    runsRule('quiet00', [DOCS_RUN]),
-    runsRule('quiet01', [GREEN_RUN]),
-    ...historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']),
+  const { manifest } = quietRollout(historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']), [
+    runsRoute('quiet00', [DOCS_RUN]),
+    runsRoute('quiet01', [GREEN_RUN]),
   ])
 
   const checks = await baseChecks(manifest, 'quiet00')
@@ -720,33 +1133,37 @@ test('baseChecks skips a quiet tip whose only runs are not required checks', asy
 })
 
 test('baseChecks reads a tip once per map of reads, and a commit shape once at all', async () => {
-  const { manifest, calls } = quietRollout([
-    runsRule('quiet00', []),
-    runsRule('quiet01', [GREEN_RUN]),
-    ...historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']),
+  const { manifest, github, gitCalls } = quietRollout(historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']), [
+    runsRoute('quiet00', []),
+    runsRoute('quiet01', [GREEN_RUN]),
   ])
 
   const reads = new Map()
-  const runsCalls = () => calls().filter((call) => call.includes('/check-runs')).length
-  const historyCalls = () => calls().filter((call) => call.includes('--format=%P') || call.includes('--name-only')).length
+  const runsReads = () => github.requests().filter((request) => request.path.endsWith('/check-runs'))
+  const historyCalls = () => gitCalls().filter((call) => call.includes('--format=%P') || call.includes('--name-only')).length
 
   const first = await baseChecks(manifest, 'quiet00', { reads })
   const second = await baseChecks(manifest, 'quiet00', { reads })
 
   assert.equal(second, first)
-  assert.equal(runsCalls(), 2)
+  assert.equal(runsReads().length, 2)
   assert.equal(historyCalls(), 2)
 
   // A new tick reads the runs again, which can change, but not the history.
+  // Runs that did not change answer 304.
   await baseChecks(manifest, 'quiet00', { reads: new Map() })
 
-  assert.equal(runsCalls(), 4)
+  assert.deepEqual(
+    runsReads().map((request) => request.status),
+    [200, 200, 304, 304],
+  )
+
   assert.equal(historyCalls(), 2)
 })
 
-const RUNS = `repos/example/widgets/commits/${HEAD}/check-runs -f per_page=100`
-const REVIEWS = 'repos/example/widgets/pulls/11/reviews -f per_page=100'
-const CONVERSATION = 'repos/example/widgets/issues/11/comments -f per_page=100'
+const RUNS = `repos/example/widgets/commits/${HEAD}/check-runs`
+const REVIEWS = `${PR_11}/reviews`
+const CONVERSATION = 'repos/example/widgets/issues/11/comments'
 
 function passingRuns(count, nameOf) {
   return Array.from({ length: count }, (_, i) => ({ id: i + 1, name: nameOf(i + 1), status: 'completed', conclusion: 'success' }))
@@ -754,32 +1171,27 @@ function passingRuns(count, nameOf) {
 
 const jobName = (id) => (id === 1 ? 'test' : `job ${id}`)
 
+function queriesOf(github, path) {
+  return github
+    .requests()
+    .filter((request) => request.path === path)
+    .map((request) => request.query)
+}
+
 test('checksFor sees a failing run on the second page', async () => {
-  const { manifest, calls } = scanningRollout([
-    {
-      tool: 'gh',
-      args: `${RUNS} -f page=2`,
-      stdout: { check_runs: [{ id: 101, name: 'lint', status: 'completed', conclusion: 'failure' }] },
-    },
-    { tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(100, jobName) } },
-  ])
+  const lint = { id: 101, name: 'lint', status: 'completed', conclusion: 'failure' }
+  const { manifest, github } = scanningRollout([], [runsRoute(HEAD, [...passingRuns(100, jobName), lint])])
 
   const checks = await checksFor(manifest, HEAD)
 
   assert.equal(checks.state, 'red')
   assert.deepEqual(checks.failing, ['lint: failure'])
-  assert.deepEqual(calls(), [`api -X GET ${RUNS} -f page=1`, `api -X GET ${RUNS} -f page=2`])
+  assert.deepEqual(queriesOf(github, RUNS), [{ per_page: '100' }, { per_page: '100', page: '2' }])
 })
 
 test('checksFor finds a required check on the second page', async () => {
-  const { manifest } = scanningRollout([
-    {
-      tool: 'gh',
-      args: `${RUNS} -f page=2`,
-      stdout: { check_runs: [{ id: 101, name: 'test', status: 'completed', conclusion: 'success' }] },
-    },
-    { tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(100, (id) => `docs ${id}`) } },
-  ])
+  const required = { id: 101, name: 'test', status: 'completed', conclusion: 'success' }
+  const { manifest } = scanningRollout([], [runsRoute(HEAD, [...passingRuns(100, (id) => `docs ${id}`), required])])
 
   const checks = await checksFor(manifest, HEAD)
 
@@ -789,10 +1201,19 @@ test('checksFor finds a required check on the second page', async () => {
 
 test('reviewsFor reads a maintainer approval on the second page', async () => {
   const others = Array.from({ length: 99 }, (_, i) => review(i + 1, 'demo-bot', '2026-10-01T09:00:00Z', 'COMMENTED', 'ok'))
-  const { manifest } = scanningRollout([
-    { tool: 'gh', args: `${REVIEWS} -f page=2`, stdout: [review(101, 'maint', '2026-10-01T12:00:00Z', 'APPROVED', '')] },
-    { tool: 'gh', args: REVIEWS, stdout: [...others, review(100, 'maint', '2026-10-01T10:00:00Z', 'CHANGES_REQUESTED', 'fix it')] },
-  ])
+  const { manifest } = scanningRollout(
+    [],
+    [
+      {
+        path: REVIEWS,
+        body: [
+          ...others,
+          review(100, 'maint', '2026-10-01T10:00:00Z', 'CHANGES_REQUESTED', 'fix it'),
+          review(101, 'maint', '2026-10-01T12:00:00Z', 'APPROVED', ''),
+        ],
+      },
+    ],
+  )
 
   manifest.repo.maintainers = ['maint']
 
@@ -807,42 +1228,74 @@ test('reviewsFor reads a maintainer approval on the second page', async () => {
 
 test('feedbackFor reads a maintainer comment on the second page', async () => {
   const others = Array.from({ length: 100 }, (_, i) => conversationComment(i + 1, 'demo-bot', '2026-10-01T09:00:00Z', 'status'))
-  const { manifest, calls } = scanningRollout([
-    { tool: 'gh', args: `${CONVERSATION} -f page=2`, stdout: [conversationComment(101, 'maint', '2026-10-01T10:00:00Z', 'Rename it.')] },
-    { tool: 'gh', args: CONVERSATION, stdout: others },
-    { tool: 'gh', args: 'pulls/11/comments', stdout: [] },
-    { tool: 'gh', args: 'pulls/11/reviews', stdout: [] },
-  ])
+  const { manifest, github } = scanningRollout(
+    [],
+    [
+      { path: CONVERSATION, body: [...others, conversationComment(101, 'maint', '2026-10-01T10:00:00Z', 'Rename it.')] },
+      { path: `${PR_11}/comments`, body: [] },
+      { path: REVIEWS, body: [] },
+    ],
+  )
 
   manifest.repo.maintainers = ['maint']
 
   assert.deepEqual(await feedbackFor(manifest, 11), [{ id: 'conversation-101', at: '2026-10-01T10:00:00Z', body: 'Rename it.' }])
+  assert.deepEqual(queriesOf(github, CONVERSATION), [{ per_page: '100' }, { per_page: '100', page: '2' }])
+})
+
+test('feedbackFor sees a maintainer comment that comes after exactly 100 others, on a later read of the same client', async () => {
+  const others = Array.from({ length: 100 }, (_, i) => conversationComment(i + 1, 'demo-bot', '2026-10-01T09:00:00Z', 'status'))
+  const empty = [
+    { path: `${PR_11}/comments`, body: [] },
+    { path: REVIEWS, body: [] },
+  ]
+
+  const { manifest, github } = scanningRollout([], [{ path: CONVERSATION, body: others }, ...empty])
+
+  manifest.repo.maintainers = ['maint']
+
+  assert.deepEqual(await feedbackFor(manifest, 11), [])
+
+  github.answer([
+    { path: CONVERSATION, body: [...others, conversationComment(101, 'maint', '2026-10-01T10:00:00Z', 'Rename it.')] },
+    ...empty,
+  ])
+
+  assert.deepEqual(await feedbackFor(manifest, 11), [{ id: 'conversation-101', at: '2026-10-01T10:00:00Z', body: 'Rename it.' }])
   assert.deepEqual(
-    calls().filter((call) => call.includes('issues/11/comments')),
-    [`api -X GET ${CONVERSATION} -f page=1`, `api -X GET ${CONVERSATION} -f page=2`],
+    github
+      .requests()
+      .filter((request) => request.path === CONVERSATION)
+      .map((request) => [request.query.page ?? '1', request.status]),
+    [
+      ['1', 200],
+      ['1', 304],
+      ['2', 200],
+    ],
   )
 })
 
-test('checksFor reads the next page after a full one and stops after a short one', async () => {
-  const full = scanningRollout([
-    { tool: 'gh', args: `${RUNS} -f page=2`, stdout: NO_RUNS },
-    { tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(100, jobName) } },
-  ])
+test('checksFor reads the next page while GitHub links one, and stops at the page that links none', async () => {
+  const full = scanningRollout([], [runsRoute(HEAD, passingRuns(100, jobName))])
 
   assert.equal((await checksFor(full.manifest, HEAD)).runs.length, 100)
-  assert.deepEqual(full.calls(), [`api -X GET ${RUNS} -f page=1`, `api -X GET ${RUNS} -f page=2`])
+  assert.deepEqual(queriesOf(full.github, RUNS), [{ per_page: '100' }])
 
-  const short = scanningRollout([{ tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(99, jobName) } }])
+  const longer = scanningRollout([], [runsRoute(HEAD, passingRuns(201, jobName))])
 
-  assert.equal((await checksFor(short.manifest, HEAD)).runs.length, 99)
-  assert.deepEqual(short.calls(), [`api -X GET ${RUNS} -f page=1`])
+  assert.equal((await checksFor(longer.manifest, HEAD)).runs.length, 201)
+  assert.deepEqual(queriesOf(longer.github, RUNS), [{ per_page: '100' }, { per_page: '100', page: '2' }, { per_page: '100', page: '3' }])
 })
 
 test('checksFor rejects a page without a list instead of returning the runs read so far', async () => {
-  const { manifest } = scanningRollout([
-    { tool: 'gh', args: `${RUNS} -f page=2`, stdout: { message: 'x' } },
-    { tool: 'gh', args: RUNS, stdout: { check_runs: passingRuns(100, jobName) } },
-  ])
+  const next = `<https://api.github.com/${RUNS}?per_page=100&page=2>; rel="next"`
+  const { manifest } = scanningRollout(
+    [],
+    [
+      { path: RUNS, query: { page: '2' }, body: { message: 'x' } },
+      { path: RUNS, body: { check_runs: passingRuns(100, jobName) }, headers: { link: next } },
+    ],
+  )
 
   await assert.rejects(checksFor(manifest, HEAD), /check-runs page 2 has no list/)
 })

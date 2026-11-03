@@ -270,14 +270,18 @@
             <tbody>
               <tr>
                 <td class="nowrap">Driver</td>
-                <td class="nowrap">your <code>gh</code> login</td>
-                <td>Reads PRs, reviews, comments and check runs. Creates the rollout label, merges, and deletes merged branches.</td>
+                <td class="nowrap">your token, from <code>gh auth token</code></td>
+                <td>
+                  Reads PRs, reviews, comments and check runs, creates the rollout label and deletes merged branches, through its REST
+                  client, <code>lib/gh.mjs</code>. Merges with <code>gh pr merge</code>, its one gh call.
+                </td>
               </tr>
               <tr>
                 <td class="nowrap">Driver</td>
                 <td class="nowrap">the bot's token</td>
                 <td>
-                  The <code>--force-with-lease</code> push after a rebase, replies in review threads, and the summary comment after a fix.
+                  The <code>--force-with-lease</code> push after a rebase. Through <code>lib/gh.mjs</code>, replies in review threads and
+                  the summary comment after a fix.
                 </td>
               </tr>
               <tr>
@@ -305,6 +309,12 @@
           runs as you, and preflight warns about that. <a href="accounts.html">Accounts</a> explains the setup.
         </p>
 
+        <p>
+          Every GET the driver repeats sends back the ETag of its last answer, while the driver still holds that answer. GitHub answers 304
+          when the body did not change, and a 304 costs no rate limit. The ETag does not cover the Link header, which names the next page of
+          a list. So when the driver reads a list page by page and a full page answers 304, it reads the page after it too.
+        </p>
+
         <h2 id="tick">One tick <a class="anchor" href="#tick" aria-label="Link to this section">#</a></h2>
 
         <p>Once started, the driver repeats one tick until every PR of the run is merged. A tick does this, in order:</p>
@@ -314,8 +324,8 @@
           <li>
             <strong>Notice a sleep.</strong> A gap since the end of the last tick that is more than a minute longer than
             <a href="manifest.html#policy-tickSeconds"><code>policy.tickSeconds</code></a> is sleep. The driver logs
-            <code>machine-slept</code> with its minutes and opens a two-minute <a href="#sleep">window</a> in which a failed gh or git call
-            is an outage.
+            <code>machine-slept</code> with its minutes and opens a two-minute <a href="#sleep">window</a> in which a failed GitHub request
+            or gh or git call is an outage.
           </li>
           <li><strong>Reload the manifest</strong> if the file changed.</li>
           <li>
@@ -1451,19 +1461,22 @@
               <tr id="outage">
                 <td>GitHub or the network is unreachable</td>
                 <td>
-                  A gh or git call fails with an HTTP 5xx or 429, a rate limit, a DNS or connection failure, or a timeout. The rules are
-                  <code>githubUnavailable</code> in <code>lib/github.mjs</code>. Such a failure counts against no PR and no driver-wide
-                  step. The first one in a tick logs <code>github-unavailable</code>, and the next tick tries again. After 30 minutes in a
-                  row the driver notifies you once. The first tick with no outage logs <code>github-back</code>, and notifies you only if
-                  you got that notice. A 401, a 403 that is no rate limit, a 404 or a 422 is no outage, and counts as an error.
+                  A GitHub request answers a 5xx or a rate limit, cannot connect, or gets no answer within 60 s. A git call fails with one
+                  of six of git's messages: "Could not resolve host", "Connection refused", "Connection reset", "timed out", "early EOF" or
+                  "The remote end hung up". The rules are <code>githubUnavailable</code> in <code>lib/github.mjs</code>, and the status and
+                  kind of a failed request come from <code>lib/gh.mjs</code>. Such a failure counts against no PR and no driver-wide step.
+                  The first one in a tick logs <code>github-unavailable</code>, and the next tick tries again. After 30 minutes in a row the
+                  driver notifies you once. The first tick with no outage logs <code>github-back</code>, and notifies you only if you got
+                  that notice. A 401, a 403 that is no rate limit, a 404 or a 422 is no outage, and counts as an error. So does a failed
+                  <code>gh pr merge</code> that gh does not call a refusal.
                 </td>
               </tr>
               <tr id="sleep">
                 <td>The machine slept</td>
                 <td>
-                  The first tick after a wake logs <code>machine-slept</code> with the minutes slept. For two minutes, every failed gh or
-                  git call is an <a href="#outage">outage</a>, because the network comes back a little after the machine does. Any other
-                  error still counts. Agent runs count only awake time, so the sleep runs down no timeout.
+                  The first tick after a wake logs <code>machine-slept</code> with the minutes slept. For two minutes, every failed GitHub
+                  request or gh or git call is an <a href="#outage">outage</a>, because the network comes back a little after the machine
+                  does. Any other error still counts. Agent runs count only awake time, so the sleep runs down no timeout.
                 </td>
               </tr>
               <tr>
@@ -1478,9 +1491,9 @@
                 <td>
                   The PR becomes <code>interrupted</code> with a <code>report-unchecked</code> event, and the report waits. A later tick
                   checks it again with no agent run and no attempt spent. A report that names a PR GitHub does not know still goes back to
-                  the implementer, but only gh's "Could not resolve to a PullRequest" or "no pull requests found" says so. Any other error,
-                  a 404 included, waits, and counts as an error of the PR on each later tick that fails, unless it is an
-                  <a href="#outage">outage</a>.
+                  the implementer: the PR read answers 404 while the repository still reads. A 404 for both waits like any other error,
+                  because a token that lost access to a private repository gets one for each. A waiting report counts as an error of the PR
+                  on each later tick that fails, unless it is an <a href="#outage">outage</a>.
                 </td>
               </tr>
               <tr>

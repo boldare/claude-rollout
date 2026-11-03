@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -357,6 +358,143 @@ export function fakeTools(dir, rules = []) {
   answer(rules)
 
   return { answer, calls }
+}
+
+const NULL_BODY_STATUSES = [204, 205, 304]
+
+// A string body is text, anything else JSON. Route headers win.
+function respond(status, body, headers) {
+  if (body === undefined || NULL_BODY_STATUSES.includes(status)) {
+    return new Response(null, { status, headers })
+  }
+
+  if (typeof body === 'string') {
+    return new Response(body, { status, headers: { 'content-type': 'text/plain; charset=utf-8', ...headers } })
+  }
+
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', ...headers } })
+}
+
+// The slice of a list answer that the request's page and per_page ask for,
+// with GitHub's default of 30 per page.
+function servedPage(route, url) {
+  const list = Array.isArray(route.body) ? route.body : route.body?.[route.items]
+
+  if (!Array.isArray(list) || (!Array.isArray(route.body) && !route.items)) {
+    return { body: route.body, link: null }
+  }
+
+  const perPage = Number(url.searchParams.get('per_page') ?? 30)
+  const page = Number(url.searchParams.get('page') ?? 1)
+  const items = list.slice((page - 1) * perPage, page * perPage)
+  const next = new URL(url)
+
+  next.searchParams.set('page', String(page + 1))
+
+  return {
+    body: Array.isArray(route.body) ? items : { ...route.body, [route.items]: items },
+    link: list.length > page * perPage ? `<${next.href}>; rel="next"` : null,
+  }
+}
+
+function etagOf(body) {
+  const text = typeof body === 'string' ? body : JSON.stringify(body ?? null)
+
+  return `"${createHash('sha256').update(text).digest('hex').slice(0, 32)}"`
+}
+
+// How undici's fetch rejects when the connection fails.
+function connectionError(code) {
+  const cause = new Error(`read ${code}`)
+  cause.code = code
+
+  return new TypeError('fetch failed', { cause })
+}
+
+function hanging(signal) {
+  return new Promise((_, reject) => {
+    signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+  })
+}
+
+function routeMatches(route, method, path, query) {
+  const entries = Object.entries(route.query ?? {})
+
+  return (route.method ?? 'GET') === method && route.path === path && entries.every(([name, value]) => query[name] === String(value))
+}
+
+// A GitHub for setFetch in lib/github.mjs, so a test never reaches the real
+// one. A route is { method, path, query, status, body, headers, items,
+// error, hang }, and the first whose method and path equal the request's,
+// and whose query entries all equal the request's, answers. An array body,
+// or the array under `items` of an object body, comes in pages with a Link
+// header. Every 200 GET carries an ETag and answers 304 when it comes back
+// in If-None-Match. `error: 'ECONNRESET'` rejects the way undici does, and
+// `hang` answers never and rejects on the request's abort. A request no route
+// matches gets a 400, which means nothing to the driver, so a test's mistake
+// never passes for an unknown PR, a missing code scanning or an outage.
+export function fakeGitHub(routes = []) {
+  let current = routes
+  const log = []
+
+  function answer(next) {
+    current = next
+  }
+
+  function requests() {
+    return log
+  }
+
+  async function fetch(input, init = {}) {
+    const url = new URL(String(input))
+    const method = init.method ?? 'GET'
+    const path = url.pathname.slice(1)
+    const query = Object.fromEntries(url.searchParams)
+    const headers = Object.fromEntries(new Headers(init.headers))
+    const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+    const record = { method, url: url.href, path, query, headers, body, status: null }
+    const route = current.find((candidate) => routeMatches(candidate, method, path, query))
+
+    log.push(record)
+
+    if (!route) {
+      record.status = 400
+
+      return respond(400, { message: `fake GitHub: no route for ${method} ${path}` })
+    }
+
+    if (route.error) {
+      throw connectionError(route.error)
+    }
+
+    if (route.hang) {
+      return hanging(init.signal)
+    }
+
+    const status = route.status ?? 200
+    const served = servedPage(route, url)
+    const answerHeaders = { ...route.headers }
+
+    if (served.link) {
+      answerHeaders.link = served.link
+    }
+
+    if (method === 'GET' && status === 200) {
+      answerHeaders.etag = etagOf(served.body)
+
+      if (headers['if-none-match'] === answerHeaders.etag) {
+        record.status = 304
+
+        return new Response(null, { status: 304 })
+      }
+    }
+
+    record.status = status
+
+    return respond(status, served.body, answerHeaders)
+  }
+
+  return { fetch, answer, requests }
 }
 
 // A root like ~/.rollouts: demo with a ledger and a brief, fresh without a

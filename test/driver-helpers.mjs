@@ -3,22 +3,28 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createDriver } from '../lib/driver.mjs'
+import { setFetch } from '../lib/github.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
-import { at, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
+import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
+
+export const MAINTAINER_TOKEN = 'synthetic-maintainer-token'
 
 export function agentResult(overrides = {}) {
   return { ok: true, output: null, costUsd: 1.25, seconds: 60, denials: [], error: null, stopped: false, ...overrides }
 }
 
-// A driver on a fixture rollout. It never sends a desktop notification: a
-// test that checks them passes its own notify.
-export function driverFor(prs, { policy = {}, ...options } = {}) {
+// A driver on a fixture rollout and a fake GitHub that answers `routes`. It
+// never sends a desktop notification: a test that checks them passes its own notify.
+export function driverFor(prs, { policy = {}, routes = [], ...options } = {}) {
   const manifest = loadManifest(makeRollout({ prs, events: [], policy }))
+  const github = fakeGitHub(routes)
 
-  return { manifest, driver: createDriver(manifest, { notify: () => {}, ...options }) }
+  setFetch(github.fetch, { token: async () => MAINTAINER_TOKEN })
+
+  return { manifest, github, driver: createDriver(manifest, { notify: () => {}, ...options }) }
 }
 
 // Posts the commands, applies them and returns the events they caused.
@@ -42,7 +48,7 @@ export const FETCH = { tool: 'git', args: 'fetch', stdout: '' }
 
 export const GREEN_RUNS = { check_runs: [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }] }
 
-// What `gh pr view` prints for PR_FIELDS: A1's PR at the head it was verified at.
+// A1's PR as viewPr maps it, at the head it was verified at.
 export function prJson(overrides = {}) {
   return {
     number: 11,
@@ -58,15 +64,46 @@ export function prJson(overrides = {}) {
     mergeStateStatus: 'CLEAN',
     mergedAt: null,
     url: 'https://github.com/example/widgets/pull/11',
-    author: { login: 'demo-bot' },
+    author: 'demo-bot',
     ...overrides,
   }
 }
 
-export function viewRule(overrides = {}) {
-  const json = prJson(overrides)
+// What a merged PR carries in the REST API.
+export const MERGED_PR = { state: 'closed', merged_at: at(90), merge_commit_sha: MERGE_SHA }
 
-  return { tool: 'gh', args: `pr view ${json.number}`, stdout: json }
+// A1's PR as the REST API answers it, at the head it was verified at. `head`
+// and `base` are merged into A1's.
+export function restPr({ head = {}, base = {}, ...overrides } = {}) {
+  const number = overrides.number ?? 11
+
+  return {
+    number,
+    state: 'open',
+    draft: false,
+    title: 'feat: A1',
+    body: '',
+    labels: [],
+    user: { login: 'demo-bot' },
+    html_url: `https://github.com/example/widgets/pull/${number}`,
+    base: { ref: 'main', ...base },
+    head: { ref: 'feat/a1', sha: SHA, ...head },
+    mergeable: true,
+    mergeable_state: 'clean',
+    merged_at: null,
+    merge_commit_sha: null,
+    ...overrides,
+  }
+}
+
+export function prRoute(overrides = {}) {
+  const body = restPr(overrides)
+
+  return { path: `repos/example/widgets/pulls/${body.number}`, body }
+}
+
+export function runsRoute(sha, body = GREEN_RUNS) {
+  return { path: `repos/example/widgets/commits/${sha}/check-runs`, body, items: 'check_runs' }
 }
 
 // Facts on which the gate merges A1, in the shape collectFacts returns.
@@ -82,7 +119,7 @@ export function gateFacts(manifest, pr = {}) {
     changesets: [],
     baseIsAncestor: true,
     patchId: samplePrs().A1.verified.patchId,
-    pr: { ...prJson(), author: 'demo-bot', labels: [manifest.label], ...pr },
+    pr: { ...prJson(), labels: [manifest.label], ...pr },
     checks: green,
     mainChecks: green,
     reviews: [],
@@ -94,17 +131,25 @@ function noCommands() {
   return Promise.reject(new Error('this test gives the driver no runCommand'))
 }
 
-// A driver whose gh and git are fakes, with no slot for an agent. Its gate
-// reads gateFacts with `gate.pr` and `gate.facts` on top, or throws `gate.error`.
-// `gate.pr` may be a function of the manifest PR and its ledger entry. A
-// `judge` stands in for the merge gate's own.
-export function tickDriver(prs, { rules = [], only = null, policy = {}, clock, judge, runAgent, runCommand = noCommands } = {}) {
+// A driver whose gh, git and GitHub are fakes, with no slot for an agent. gh
+// and git answer `rules`, GitHub answers `routes`. Its gate reads gateFacts
+// with `gate.pr` and `gate.facts` on top, or throws `gate.error`. `gate.pr`
+// may be a function of the manifest PR and its ledger entry. A `judge` stands
+// in for the merge gate's own.
+export function tickDriver(
+  prs,
+  { rules = [], routes = [], only = null, policy = {}, clock, judge, runAgent, runCommand = noCommands } = {},
+) {
   const dir = makeRollout({ prs, events: [], policy: { concurrency: 0, ...policy } })
   const tools = fakeTools(dir, rules)
+  const github = fakeGitHub(routes)
   const manifest = loadManifest(dir, { only })
   const gate = { calls: 0, error: null, pr: {}, facts: {} }
   const notices = []
   const cleaned = []
+
+  setFetch(github.fetch, { token: async () => MAINTAINER_TOKEN })
+
   const driver = createDriver(manifest, {
     notify: (_, message) => notices.push(message),
     cleanup: async (pr) => cleaned.push(pr.id),
@@ -123,7 +168,7 @@ export function tickDriver(prs, { rules = [], only = null, policy = {}, clock, j
     runCommand,
   })
 
-  return { manifest, driver, tools, gate, notices, cleaned }
+  return { manifest, driver, tools, github, gate, notices, cleaned }
 }
 
 export function eventsSince(manifest, from = 0) {
@@ -189,7 +234,7 @@ export const CLAIMED = { state: 'ready_claimed', pr: 11, claimedSha: SHA, attemp
 
 // A claimed A1 with green CI, a free slot and a worktree at its head, so checkClaim
 // can start the verifier. Its scope is lib/** and it changes README.md. The agent never finishes.
-// `rules` answer before the others, and `answer` swaps them later.
+// `rules` answer before the git rules, and `answer` swaps them later.
 export function verifiableDriver({ gates, deviations, runCommand, rules = [] } = {}) {
   const agentCalls = []
   const prompts = []
@@ -197,6 +242,7 @@ export function verifiableDriver({ gates, deviations, runCommand, rules = [] } =
     { A1: CLAIMED },
     {
       policy: { concurrency: 1 },
+      routes: [prRoute(), runsRoute(SHA)],
       runAgent: (_, pr, options) => {
         agentCalls.push({ id: pr.id, role: options.role })
         prompts.push(options.prompt)
@@ -218,8 +264,6 @@ export function verifiableDriver({ gates, deviations, runCommand, rules = [] } =
   const answer = (first) =>
     setup.tools.answer([
       ...first,
-      viewRule(),
-      { tool: 'gh', args: `commits/${SHA}/check-runs`, stdout: GREEN_RUNS },
       { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
       { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
       { tool: 'git', args: '', stdout: '' },
