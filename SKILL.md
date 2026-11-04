@@ -10,7 +10,7 @@ A rollout is one plan shipped as several PRs. The orchestrator is a **process**,
 Everything lives in two places:
 
 - this skill: its own directory, the installed copy (for example `~/.claude/skills/rollout/`), with the driver, prompts, schemas, guard hook, git hooks, docs and tests.
-- one directory per rollout, outside any repo: `$ROLLOUT_ROOT/<name>/` (default `~/.rollouts`) with `manifest.yaml`, `briefs/<id>.md` (local only: they may name clients), `ledger.json`, `events.jsonl`, `heartbeat`, `driver.lock`, `driver.log`, `logs/`, `inbox/`. Its worktrees live next to it in `<name>.worktrees/`.
+- one directory per rollout, outside any repo: `$ROLLOUT_ROOT/<name>/` (default `~/.rollouts`) with `manifest.yaml`, `briefs/<id>.md` (local only: they may name clients), `ledger.json` (versioned: the driver migrates an older one on start, and the driver, `status` and the UI refuse a newer one), `events.jsonl`, `heartbeat`, `driver.lock`, `driver.log`, `logs/`, `inbox/`. Its worktrees live next to it in `<name>.worktrees/`.
 
 `R` below is `bin/rollout.mjs` in this skill's directory. The full manual for people is `docs/index.html` in the same directory.
 

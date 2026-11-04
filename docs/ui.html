@@ -852,7 +852,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <p>
           The total from the ledger, then bars per PR, per role and a step line of the cumulative cost over time. The per-role bars and the
-          line come from the <code>*-done</code> events of finished runs, so they can differ a little from the ledger's total.
+          line add up finished runs, not the PR totals, so they can differ a little from the ledger's total. The runs come from the ledger,
+          or from the <code>*-done</code> events for a ledger from before version 2.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of the costs view">

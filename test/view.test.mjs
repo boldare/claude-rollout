@@ -1,13 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readLedger } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { isRunName, parseTranscript, readTranscript, succeeded, transcriptParser } from '../lib/transcript.mjs'
-import { costs, liveness, parseEvents, prDetail, prRows, readEvents, rolloutView, runsFromEvents } from '../lib/view.mjs'
-import { START, at, interruptedTranscript, jsonLines, makeRollout, samplePrs, sampleTranscript } from './fixtures.mjs'
+import { runRecords, runsFromEvents, runsFromLedger } from '../lib/runs.mjs'
+import { costs, liveness, parseEvents, prDetail, prRows, readEvents, rolloutView, runsOf } from '../lib/view.mjs'
+import { START, at, interruptedTranscript, jsonLines, makeRollout, sampleEvents, samplePrs, sampleTranscript } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
 
@@ -175,6 +177,91 @@ test('runsFromEvents: a done without a start still counts', () => {
       [null, 'fix', null, at(6), 0.5, 'failed'],
     ],
   )
+})
+
+// Events whose runs all have names of their own, the way a driver with run ids writes them.
+function restartedEvents() {
+  return [
+    start('A1', 'implement', 'A1-01-implement', 0, { model: 'sonnet' }),
+    done('A1', 'implement', 'A1-01-implement', 9, { result: 'READY', cost: 3, denials: 2 }),
+    start('A1', 'fix', 'A1-02-fix', 10),
+    { at: at(11), id: '-', kind: 'driver-start' },
+    start('A2', 'brief', 'A2-01-brief-write', 12, { step: 'write' }),
+    done('A2', 'brief', 'A2-01-brief-write', 15, { step: 'write', ok: false, stopped: true, cost: 0 }),
+    start('A3', 'verify', 'A3-01-verify', 16),
+    done('A3', 'verify', 'A3-01-verify', 18, { ok: false, error: 'timeout after 60 min' }),
+    start('A3', 'delegate', 'A3-02-delegate', 19),
+    done('A1', 'verify', 'A1-03-verify', 20, { cost: 2 }),
+  ]
+}
+
+test('runsFromLedger gives back what runsFromEvents gives, from the records runRecords makes', () => {
+  const sample = parseEvents(jsonLines(sampleEvents()))
+
+  for (const events of [sample, restartedEvents()]) {
+    for (const driverRunning of [true, false]) {
+      const options = { driverRunning }
+
+      assert.deepEqual(
+        runsFromLedger({ runs: runRecords(events, options) }, options),
+        runsFromEvents(events, options),
+        String(driverRunning),
+      )
+    }
+  }
+
+  assert.deepEqual(statuses(runsFromLedger({ runs: runRecords(restartedEvents(), { driverRunning: true }) }, { driverRunning: true })), [
+    'A1-01-implement:ok',
+    'A1-02-fix:interrupted',
+    'A2-01-brief-write:interrupted',
+    'A3-01-verify:failed',
+    'A3-02-delegate:running',
+    'A1-03-verify:ok',
+  ])
+})
+
+test('runRecords: the record of each named run, the later of two with one name, and none for a run without a name', () => {
+  const records = runRecords([
+    { at: at(0), id: 'A1', kind: 'implement-start', effort: 'high', log: 'logs/A1-01-implement.jsonl' },
+    { at: at(1), id: 'A1', kind: 'implement-done', ok: false, cost: 0.5 },
+    start('A2', 'verify', 'A2-01-verify', 2, { model: 'opus' }),
+    { at: at(3), id: 'A1', kind: 'implement-start', effort: 'xhigh', log: 'logs/A1-01-implement.jsonl' },
+    { at: at(4), id: 'A3', kind: 'fix-done', ok: true, cost: 1 },
+    { at: at(5), id: 'A3', kind: 'verify-start' },
+  ])
+
+  assert.deepEqual(Object.keys(records), ['A2-01-verify', 'A1-01-implement'])
+  assert.equal(records['A1-01-implement'].effort, 'xhigh')
+  assert.deepEqual(records['A2-01-verify'], {
+    id: 'A2',
+    role: 'verify',
+    step: null,
+    reason: null,
+    startedAt: at(2),
+    endedAt: null,
+    effort: 'high',
+    model: null,
+    requestedModel: 'opus',
+    resume: null,
+    log: 'logs/A2-01-verify.jsonl',
+    ok: null,
+    result: null,
+    costUsd: null,
+    seconds: null,
+    awakeSeconds: null,
+    denials: null,
+    stopped: true,
+    error: null,
+  })
+})
+
+test('runsOf reads the runs of a version 2 ledger from the ledger, and those of an older one from the events', () => {
+  const events = [start('A1', 'fix', 'A1-02-fix', 0)]
+  const runs = runRecords([start('A2', 'verify', 'A2-01-verify', 1)])
+
+  assert.deepEqual(statuses(runsOf({ version: 2, prs: {}, runs }, events, { driverRunning: true })), ['A2-01-verify:interrupted'])
+  assert.deepEqual(statuses(runsOf({ prs: {}, runs }, events, { driverRunning: true })), ['A1-02-fix:running'])
+  assert.deepEqual(statuses(runsOf({ version: 2, prs: {} }, events)), [])
 })
 
 test('costs: PR totals from the ledger, roles and a cumulative line from runs', () => {
@@ -460,6 +547,134 @@ test('prRows: answered is null for a plain note and for a PR blocked again, esca
 
 test("prRows: answered names the delegate when the delegate's answer applied", () => {
   assert.deepEqual(answeredRow(answeredEntry('needs_fix', { by: 'delegate' }), []), { at: at(10), by: 'delegate', run: null, role: null })
+})
+
+test('prRows: a stamped note names the run it went into, where the heuristic picks another', () => {
+  const events = [start('A1', 'fix', 'A1-02-fix', 11), done('A1', 'fix', 'A1-02-fix', 12), start('A1', 'fix', 'A1-03-fix', 13)]
+  const waits = { at: at(10), by: 'maintainer', run: null, role: null }
+
+  assert.equal(answeredRow(answeredEntry('fixing'), events), null, 'the heuristic takes the first run after the note, which ended')
+  assert.deepEqual(answeredRow(answeredEntry('fixing', { run: 'A1-03-fix' }), events), { ...waits, run: 'A1-03-fix', role: 'fix' })
+  assert.deepEqual(answeredRow(answeredEntry('fixing', { run: null }), events), waits)
+  assert.equal(answeredRow(answeredEntry('verifying', { run: 'A1-02-fix' }), events), null)
+
+  const nameless = [{ at: at(12), id: 'A1', kind: 'fix-done', ok: true, cost: 1 }]
+
+  assert.deepEqual(answeredRow(answeredEntry('needs_fix', { run: null }), nameless), waits, 'null names no run')
+})
+
+test('prRows: a stamped block or escalation names its run and time, where the heuristic picks others', () => {
+  const manifest = loadManifest(makeRollout())
+  const events = [
+    start('A1', 'implement', 'A1-01-implement', 0),
+    done('A1', 'implement', 'A1-01-implement', 5, { result: 'BLOCKED' }),
+    start('A1', 'fix', 'A1-02-fix', 6),
+    done('A1', 'fix', 'A1-02-fix', 20, { result: 'READY' }),
+    { at: at(21), id: 'A1', kind: 'blocked', reason: 'needs-decision' },
+    start('A3', 'verify', 'A3-02-verify', 30),
+    done('A3', 'verify', 'A3-02-verify', 40, { result: 'FAIL' }),
+    start('A3', 'fix', 'A3-03-fix', 41),
+    done('A3', 'fix', 'A3-03-fix', 50, { result: 'READY' }),
+    { at: at(51), id: 'A3', kind: 'escalated', role: 'fix' },
+  ]
+
+  const runs = runsFromEvents(events)
+  const blocked = { kind: 'needs-decision', question: 'Which API?', evidence: '' }
+  const escalated = { state: 'escalated', escalation: 'disputed finding', lastError: 'F2 is open' }
+  const asked = (entry, id) => {
+    const { since, run, byDriver } = prRows(manifest, { prs: { [id]: entry } }, events, runs).find((row) => row.id === id).waiting
+
+    return { since, run, byDriver }
+  }
+
+  assert.deepEqual(asked({ state: 'blocked', blocked }, 'A1'), { since: at(21), run: 'A1-02-fix', byDriver: false })
+  assert.deepEqual(asked({ state: 'blocked', blocked: { ...blocked, run: 'A1-01-implement' } }, 'A1'), {
+    since: at(21),
+    run: 'A1-01-implement',
+    byDriver: false,
+  })
+
+  assert.deepEqual(asked({ state: 'blocked', blocked: { ...blocked, run: null } }, 'A1'), { since: at(21), run: null, byDriver: true })
+
+  assert.deepEqual(asked(escalated, 'A3'), { since: at(51), run: 'A3-03-fix', byDriver: false })
+  assert.deepEqual(asked({ ...escalated, escalatedAt: at(40), escalationRun: 'A3-02-verify' }, 'A3'), {
+    since: at(40),
+    run: 'A3-02-verify',
+    byDriver: false,
+  })
+
+  assert.deepEqual(asked({ ...escalated, escalatedAt: at(40), escalationRun: null }, 'A3'), { since: at(40), run: null, byDriver: false })
+
+  const detail = prDetail(
+    manifest,
+    { prs: { A3: { ...escalated, escalatedAt: at(40), escalationRun: 'A3-02-verify' } } },
+    events,
+    runs,
+    'A3',
+  )
+
+  assert.deepEqual(detail.waiting, {
+    since: at(40),
+    run: 'A3-02-verify',
+    byDriver: false,
+    escalation: 'disputed finding',
+    lastError: 'F2 is open',
+    delegate: null,
+  })
+
+  assert.deepEqual(
+    [detail.escalation, detail.escalatedAt, detail.escalationRun, detail.noteHistory],
+    ['disputed finding', at(40), 'A3-02-verify', []],
+  )
+})
+
+test('prDetail on a ledger from before version 2: the runs from the events, answered and waiting from the heuristic', () => {
+  const note = { at: at(10), by: 'maintainer', kind: 'needs-decision', question: 'Which API?', text: 'the old one' }
+  const prs = {
+    A1: { state: 'blocked', blocked: { kind: 'needs-decision', question: 'Which API?', evidence: '' } },
+    A2: { state: 'fixing', noteHistory: [note] },
+    A3: { state: 'escalated', escalation: 'fix attempts exhausted', lastError: 'fix attempts exhausted (3)' },
+  }
+
+  const events = [
+    start('A1', 'implement', 'A1-01-implement', 0),
+    done('A1', 'implement', 'A1-01-implement', 30, { result: 'BLOCKED' }),
+    { at: at(30), id: 'A1', kind: 'blocked', reason: 'needs-decision' },
+    start('A2', 'fix', 'A2-02-fix', 12),
+    start('A3', 'fix', 'A3-03-fix', 40),
+    done('A3', 'fix', 'A3-03-fix', 50, { result: 'READY' }),
+    { at: at(51), id: 'A3', kind: 'escalated', role: 'fix' },
+  ]
+
+  const manifest = loadManifest(makeRollout({ legacy: true, prs, events }))
+  const ledger = readLedger(manifest)
+  const runs = runsOf(ledger, readEvents(manifest), { driverRunning: true })
+  const detail = (id) => prDetail(manifest, ledger, readEvents(manifest), runs, id)
+
+  assert.equal(ledger.version, undefined)
+  assert.equal(ledger.runs, undefined)
+  assert.deepEqual(statuses(runs), ['A1-01-implement:ok', 'A2-02-fix:running', 'A3-03-fix:ok'])
+  assert.deepEqual(detail('A1').waiting, {
+    since: at(30),
+    run: 'A1-01-implement',
+    byDriver: false,
+    escalation: null,
+    lastError: null,
+    delegate: null,
+  })
+
+  assert.deepEqual(detail('A2').answered, { at: at(10), by: 'maintainer', run: 'A2-02-fix', role: 'fix' })
+  assert.deepEqual(detail('A2').noteHistory, [note])
+  assert.deepEqual(detail('A3').waiting, {
+    since: at(51),
+    run: 'A3-03-fix',
+    byDriver: false,
+    escalation: 'fix attempts exhausted',
+    lastError: 'fix attempts exhausted (3)',
+    delegate: null,
+  })
+
+  assert.deepEqual([detail('A3').escalation, detail('A3').escalatedAt, detail('A3').escalationRun], ['fix attempts exhausted', null, null])
 })
 
 test('prDetail: the merge commit, the fix reason and the last error, for the overview', () => {
@@ -748,6 +963,27 @@ test('status and card without a ledger, or with an empty events file', () => {
   assert.equal(cli('card', 'A1', '--dir', bare).stdout, 'no state yet\n')
   assert.equal(cli('status', '--dir', quiet).status, 0)
   assert.doesNotMatch(cli('status', '--dir', quiet).stdout, /recent events/)
+})
+
+test('status and card refuse a ledger a newer driver wrote, with the reason on stderr', () => {
+  const dir = makeRollout()
+  const file = join(dir, 'ledger.json')
+
+  writeFileSync(file, JSON.stringify({ version: 99, prs: {}, runs: {}, paused: false, halted: null }))
+
+  const before = readFileSync(file, 'utf8')
+
+  for (const args of [
+    ['status', '--dir', dir],
+    ['card', 'A1', '--dir', dir],
+  ]) {
+    const result = cli(...args)
+
+    assert.equal(result.status, 1, args[0])
+    assert.match(result.stderr, /^ledger\.json is version 99, written by a newer driver than this one \(version 2\)\./, args[0])
+  }
+
+  assert.equal(readFileSync(file, 'utf8'), before)
 })
 
 // A FAIL that re-checked the findings of the FAIL before it, as the driver records it.

@@ -4,7 +4,8 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
-import { rolloutView, runsFromEvents } from '../lib/view.mjs'
+import { runsFromEvents } from '../lib/runs.mjs'
+import { rolloutView } from '../lib/view.mjs'
 import { resource, unreachable } from '../ui/api.js'
 import {
   COMMAND_LINES,

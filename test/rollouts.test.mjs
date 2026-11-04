@@ -124,6 +124,20 @@ test('listRollouts counts merged PRs, and an unreadable ledger is an error that 
   assert.match(broken.error, /JSON/)
 })
 
+test('listRollouts: a ledger a newer driver wrote is the error of that rollout, and the others still list', () => {
+  const root = makeRolloutRoot()
+
+  writeFileSync(join(root, 'demo', 'ledger.json'), JSON.stringify({ version: 99, prs: {}, runs: {}, paused: false, halted: null }))
+
+  const [broken, demo, fresh] = listRollouts(root)
+
+  assert.match(broken.error, /invalid manifest/)
+  assert.equal(demo.started, true)
+  assert.equal(demo.rollout, null)
+  assert.match(demo.error, /^ledger\.json is version 99, written by a newer driver than this one \(version 2\)\./)
+  assert.equal(fresh.error, null)
+})
+
 test('findRollout: only names of rollout directories one level below the root', () => {
   const root = makeRolloutRoot()
 

@@ -230,6 +230,33 @@ test('launch: a brief keeps the gates.brief it started with when the manifest ch
   )
 })
 
+test('launch: both brief steps are recorded as runs, and brief questions are blocked on the review step', async () => {
+  const review = briefOutput({ questions: ['Which API does the brief keep?'] })
+  const setup = modelDriver(
+    { A1: { state: 'pending' } },
+    { result: (options) => Promise.resolve(agentResult({ output: options.logName.endsWith('-write') ? briefOutput() : review })) },
+  )
+
+  rmSync(setup.pr.brief)
+  await launched(setup, 'brief')
+  await waitFor(() => !setup.driver.running.has('A1'), 'the brief to finish')
+
+  const runs = setup.driver.ledger.data.runs
+
+  assert.equal(setup.entry.state, 'blocked')
+  assert.equal(setup.entry.blocked.kind, 'brief-questions')
+  assert.equal(setup.entry.blocked.run, 'A1-01-brief-review')
+  assert.deepEqual(
+    Object.entries(runs).map(([name, run]) => [name, run.role, run.step, run.requestedModel, run.ok, run.result, run.costUsd]),
+    [
+      ['A1-01-brief-write', 'brief', 'write', 'opus', true, 'BRIEF', 1.25],
+      ['A1-01-brief-review', 'brief', 'review', 'opus', true, 'QUESTIONS', 1.25],
+    ],
+  )
+
+  assert.ok(Object.values(runs).every((run) => run.startedAt && run.endedAt && run.stopped === false))
+})
+
 const PREFIX = "Answer from the delegate, on the maintainer's behalf, from the plan:\n\n"
 const DECISION = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 still reads it.' }
 const BRIEF_QUESTIONS = { kind: 'brief-questions', question: 'Which API?', evidence: 'The plan names two.' }
@@ -355,6 +382,12 @@ test('delegate: an answer to needs-decision sends the PR to a fix run with the a
   assert.equal(entry.state, 'needs_fix')
   assert.equal(entry.fixReason, 'answer from the delegate')
   assert.ok(entry.fixNote.startsWith(PREFIX), entry.fixNote)
+  assert.equal(entry.noteHistory.at(-1).run, null, 'a delegate run takes no note')
+  assert.deepEqual(
+    Object.entries(driver.ledger.data.runs).map(([name, run]) => [name, run.role, run.reason, run.ok, run.result, Boolean(run.endedAt)]),
+    [['A1-01-delegate', 'delegate', 'needs-decision', true, 'ANSWER', true]],
+  )
+
   assert.deepEqual(kindsSince(manifest), ['delegate-start', 'delegate-done', 'needs-fix', 'delegate-answered'])
   assert.deepEqual(eventsSince(manifest).at(-1), {
     id: 'A1',
@@ -453,7 +486,28 @@ test('delegate: a BLOCKED code-scanning report never starts the delegate and not
   assert.equal(notices.length, 1)
   assert.ok(notices[0].startsWith('A1: blocked (code-scanning): '), notices[0])
   assert.equal(entry.state, 'blocked')
+  assert.deepEqual(entry.blocked, { ...blocked, run: 'A1-02-fix' })
   assert.equal(entry.delegate.runs, 0)
+})
+
+test('onDone: a BLOCKED report is blocked on the run that sent it, also without a blocked of its own', async () => {
+  for (const [role, run] of [
+    ['implement', 'A1-01-implement'],
+    ['fix', 'A1-02-fix'],
+  ]) {
+    const { driver, pr, entry } = delegateDriver({ state: 'fixing', pr: 11, blocked: null }, { policy: {} })
+
+    await driver.onDone(pr, role, blockedReport(DECISION), { run })
+
+    assert.deepEqual(entry.blocked, { ...DECISION, run }, role)
+    assert.equal(driver.ledger.data.runs[run].result, 'BLOCKED', role)
+  }
+
+  const { driver, pr, entry } = delegateDriver({ state: 'implementing', blocked: null }, { policy: {} })
+
+  await driver.onDone(pr, 'implement', blockedReport(undefined), { run: 'A1-01-implement' })
+
+  assert.deepEqual(entry.blocked, { kind: 'unknown', question: 'Blocked on a question.', evidence: '', run: 'A1-01-implement' })
 })
 
 test('delegate: a question it takes notifies once, through its answer or escalation', async () => {

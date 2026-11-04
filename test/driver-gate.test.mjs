@@ -202,6 +202,7 @@ test('mergeCandidate: a block with the code scanning code blocks as code scannin
     assert.equal(await driver.mergeCandidate(pr), false)
     assert.equal(entry.state, 'blocked', code)
     assert.equal(entry.blocked.kind, kind, code)
+    assert.equal(entry.blocked.run, null, code)
   }
 })
 
@@ -438,6 +439,8 @@ test('verified: a disputed finding the next verifier still finds open escalates 
 
   assert.equal(entry.state, 'escalated')
   assert.equal(entry.escalation, 'disputed finding')
+  assert.equal(entry.escalationRun, 'A1-04-verify')
+  assert.ok(Date.parse(entry.escalatedAt) >= Date.parse(setup.driver.ledger.data.runs['A1-04-verify'].endedAt), entry.escalatedAt)
   assert.deepEqual(stageLabels(entry), ['rollout-stage:escalated', 'rollout-reason:disputed-finding'])
   assert.equal(
     entry.lastError,
@@ -797,6 +800,8 @@ test('tick: a catalog that stays missing escalates the PR after five erroring ti
   assert.equal(entry.tickErrors, 5)
   assert.equal(entry.state, 'escalated')
   assert.equal(entry.escalation, 'repeated errors')
+  assert.ok(Number.isFinite(Date.parse(entry.escalatedAt)), entry.escalatedAt)
+  assert.equal(entry.escalationRun, null)
   assert.deepEqual(
     eventsSince(manifest).filter((event) => event.kind === 'escalated'),
     [{ id: 'A1', kind: 'escalated', reason: 'repeated errors' }],
@@ -1055,7 +1060,7 @@ test('note: on a PR escalated over a dispute, the findings go to a fix run with 
   assert.match(dispute, /^the verifier still finds F2 open, which the implementer disputed: The retry flag is not documented\./)
   assert.deepEqual(
     entry.noteHistory.map(({ at: _, ...note }) => note),
-    [{ by: 'maintainer', kind: 'disputed finding', question: dispute, text: 'Document the flag in the README.' }],
+    [{ by: 'maintainer', kind: 'disputed finding', question: dispute, text: 'Document the flag in the README.', run: null }],
   )
 
   assert.ok(
