@@ -14,6 +14,7 @@ import {
   migrate,
   MIGRATIONS,
   openLedger,
+  parseTickNote,
   postCommand,
   readLedger,
   recheckedFindings,
@@ -22,6 +23,7 @@ import {
   recordVerdict,
   reserveRunName,
   startRun,
+  tickNote,
   watchInbox,
   withDefaults,
 } from '../lib/ledger.mjs'
@@ -540,4 +542,47 @@ test('openLedger stops the runs a driver that is gone left open, and saves that'
   assert.equal(data.runs['A1-01-implement'].stopped, false)
   assert.equal(stored(manifest).runs['A2-01-implement'].stopped, true)
   assert.equal(runsFromLedger(data, { driverRunning: true }).at(-1).status, 'interrupted')
+})
+
+test('tickNote and parseTickNote: the numbers of a tick make the round trip, with - for no rate limit, and other notes parse to null', () => {
+  const measured = { ms: 4210, requests: 7, cached: 5, remaining: 4870 }
+  const unlimited = { ...measured, remaining: null }
+
+  assert.equal(tickNote(measured), 'tick 4210 requests=7 cached=5 remaining=4870')
+  assert.equal(tickNote(unlimited), 'tick 4210 requests=7 cached=5 remaining=-')
+  assert.deepEqual(parseTickNote(tickNote(measured)), measured)
+  assert.deepEqual(parseTickNote(tickNote(unlimited)), unlimited)
+
+  for (const note of [
+    'tick',
+    'tick-error boom',
+    '',
+    'tick 4210 requests=7 cached=5',
+    'tick 4210 requests=7 cached=5 remaining=4870 extra',
+  ]) {
+    assert.equal(parseTickNote(note), null, note)
+  }
+})
+
+test('beat: a save keeps the note of the last beat, and a new ledger starts without one', () => {
+  const manifest = loadManifest(makeRollout({ heartbeat: null }))
+  const heartbeat = () => readFileSync(join(manifest.dir, 'heartbeat'), 'utf8')
+  const ledger = openLedger(manifest)
+
+  ledger.save()
+
+  assert.match(heartbeat(), /^\S+$/)
+
+  ledger.beat('x')
+  ledger.save()
+
+  assert.match(heartbeat(), /^\S+ x$/)
+
+  ledger.beat()
+
+  assert.match(heartbeat(), /^\S+ x$/)
+
+  openLedger(manifest).save()
+
+  assert.match(heartbeat(), /^\S+$/)
 })

@@ -16,11 +16,26 @@ function heartbeatAge(driver, state, now) {
   return driver.heartbeatAgeSeconds + Math.floor(secondsSince(state.at, now) ?? 0)
 }
 
+// A measured tick shows its numbers instead of the raw note.
 function heartbeat(driver, age) {
-  const note = driver.heartbeatNote ? ` (${driver.heartbeatNote})` : ''
+  const note = driver.heartbeatNote && !driver.tick ? ` (${driver.heartbeatNote})` : ''
   const stale = age !== null && age > STALE_HEARTBEAT_SECONDS
 
   return element('span', `Heartbeat ${ago(age)}${note}`, stale ? 'warning' : '')
+}
+
+function tickFacts(tick) {
+  if (!tick) {
+    return []
+  }
+
+  const parts = [element('span', `Tick ${(tick.ms / 1000).toFixed(1)}s`)]
+
+  if (tick.remaining !== null) {
+    parts.push(element('span', `${plural(tick.remaining, 'request', 'requests')} left`))
+  }
+
+  return parts
 }
 
 function driverPart(driver, age) {
@@ -30,7 +45,7 @@ function driverPart(driver, age) {
   part.append(badge(status, `driver driver-${status}`))
 
   if (driver?.running) {
-    part.append(element('span', `PID ${driver.pid ?? '-'}`), heartbeat(driver, age))
+    part.append(element('span', `PID ${driver.pid ?? '-'}`), heartbeat(driver, age), ...tickFacts(driver.tick))
   }
 
   if (driver?.halted) {

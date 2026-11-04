@@ -80,7 +80,15 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
   assert.equal(fresh.started, false)
   assert.equal(fresh.total, 3)
   assert.equal(fresh.costUsd, 0)
-  assert.deepEqual(fresh.driver, { running: false, pid: null, heartbeatAgeSeconds: null, heartbeatNote: '', paused: false, halted: null })
+  assert.deepEqual(fresh.driver, {
+    running: false,
+    pid: null,
+    heartbeatAgeSeconds: null,
+    heartbeatNote: '',
+    tick: null,
+    paused: false,
+    halted: null,
+  })
 })
 
 test('listRollouts: the error count follows the event log, and a rollout without one has none', () => {

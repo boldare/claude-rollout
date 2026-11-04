@@ -167,6 +167,28 @@ test('header: the rollout name, the running driver and the document title', () =
   assert.equal(fakeDocument.title, 'demo')
 })
 
+test('header: a measured tick shows its time and the requests left in place of the note, and any other note shows as it is', () => {
+  const note = 'tick 4210 requests=7 cached=5 remaining=4870'
+  const tick = { ms: 4210, requests: 7, cached: 5, remaining: 4870 }
+  const spans = (driver) => texts(renderHeader(viewContext({ view: { ...state.view, driver } })), 'span')
+  const measured = spans({ ...state.view.driver, heartbeatNote: note, tick })
+  const unlimited = spans({ ...state.view.driver, heartbeatNote: note, tick: { ...tick, remaining: null } })
+  const plain = spans(state.view.driver)
+
+  assert.equal(state.view.driver.tick, null)
+  assert.ok(measured.includes('Tick 4.2s'), measured.join(' | '))
+  assert.ok(measured.includes('4870 requests left'), measured.join(' | '))
+  assert.ok(measured.every((text) => !text.includes('requests=')))
+  assert.ok(unlimited.includes('Tick 4.2s'))
+  assert.ok(unlimited.every((text) => !text.includes('requests')))
+  assert.ok(
+    plain.some((text) => /^Heartbeat .+ \(tick\)$/.test(text)),
+    plain.join(' | '),
+  )
+
+  assert.ok(plain.every((text) => !text.includes('Tick ')))
+})
+
 test('detail overview: the gate action, its code when it has one, and its reason', () => {
   const overview = (body) => renderDetail(viewContext({ route: { pr: 'A1', tab: 'overview' }, detail: { status: 200, body } }))
   // A gate stored before gates had codes.

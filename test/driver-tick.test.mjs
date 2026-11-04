@@ -2,10 +2,26 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createDriver } from '../lib/driver.mjs'
 import { GitHubError } from '../lib/gh.mjs'
+import { setFetch } from '../lib/github.mjs'
+import { loadManifest } from '../lib/manifest.mjs'
+import { stageLabels } from '../lib/stage.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { at, samplePrs } from './fixtures.mjs'
-import { MERGE_SHA, MERGED_PR, FETCH, prRoute, restPr, runsRoute, tickDriver, eventsSince, kindsSince } from './driver-helpers.mjs'
+import { at, fakeGitHub, fakeTools, makeRollout, samplePrs } from './fixtures.mjs'
+import {
+  MAINTAINER_TOKEN,
+  MERGE_SHA,
+  MERGED_PR,
+  FETCH,
+  SHA,
+  prRoute,
+  restPr,
+  runsRoute,
+  tickDriver,
+  eventsSince,
+  kindsSince,
+} from './driver-helpers.mjs'
 
 const FETCH_FAILS = { tool: 'git', args: 'fetch', code: 128, stderr: 'fatal: unable to access the remote' }
 const PR_11 = 'repos/example/widgets/pulls/11'
@@ -515,6 +531,115 @@ test('runTick: a failed tick never rejects, and the fifth in a row notifies once
   )
 
   assert.equal(notices.length, 1)
+})
+
+const BASE_TIP = 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0'
+const LIMITED = { 'x-ratelimit-remaining': '4870' }
+
+// A1 verified, unheld and waiting for rollout approve under merge: human,
+// with maintainers set and the real collectFacts. The fake git prints no
+// diff, so the patch is 'empty'. The PR carries the labels it should, so no
+// label is written.
+function countedDriver() {
+  const { A1 } = samplePrs()
+  const dir = makeRollout({
+    prs: { A1: { ...A1, held: null, approved: null, verified: { ...A1.verified, patchId: 'empty' } } },
+    events: [],
+    policy: { concurrency: 0 },
+  })
+
+  fakeTools(dir, [FETCH, { tool: 'git', args: 'rev-parse origin/main', stdout: `${BASE_TIP}\n` }, { tool: 'git', args: '', stdout: '' }])
+
+  const manifest = loadManifest(dir)
+
+  manifest.repo.maintainers = ['maintainer']
+
+  const driver = createDriver(manifest, { notify: () => {}, cleanup: async () => {} })
+  const labels = [manifest.label, ...stageLabels(driver.ledger.prs.A1)].map((name) => ({ name }))
+  const routes = [
+    prRoute({ labels }),
+    runsRoute(SHA),
+    runsRoute(BASE_TIP),
+    { path: `${PR_11}/reviews`, body: [] },
+    { path: `${PR_11}/comments`, body: [] },
+    { path: 'repos/example/widgets/issues/11/comments', body: [] },
+    { path: 'repos/example/widgets/code-scanning/alerts', body: [] },
+  ]
+
+  const github = fakeGitHub(routes.map((route) => ({ ...route, headers: LIMITED })))
+
+  setFetch(github.fetch, { token: async () => MAINTAINER_TOKEN })
+
+  return { manifest, driver, github }
+}
+
+test('tick: a verified PR waiting for approval reads each GitHub fact once, 7 GETs a tick, and the heartbeat counts them', async () => {
+  const { manifest, driver, github } = countedDriver()
+  const heartbeat = () => readFileSync(join(manifest.dir, 'heartbeat'), 'utf8')
+
+  await driver.tick()
+
+  assert.equal(driver.ledger.prs.A1.gate.code, 'awaiting-inbox-approval')
+  assert.deepEqual(
+    github
+      .requests()
+      .map((request) => `${request.method} ${request.path}`)
+      .sort(),
+    [
+      'GET repos/example/widgets/code-scanning/alerts',
+      `GET repos/example/widgets/commits/${SHA}/check-runs`,
+      `GET repos/example/widgets/commits/${BASE_TIP}/check-runs`,
+      'GET repos/example/widgets/issues/11/comments',
+      `GET ${PR_11}`,
+      `GET ${PR_11}/comments`,
+      `GET ${PR_11}/reviews`,
+    ],
+  )
+
+  assert.match(heartbeat(), /^\S+ tick \d+ requests=7 cached=0 remaining=4870$/)
+
+  await driver.tick()
+
+  // The fake's 304s carry no rate limit, so the one from the first tick stays.
+  assert.deepEqual(
+    github
+      .requests()
+      .slice(7)
+      .map((request) => request.status),
+    [304, 304, 304, 304, 304, 304, 304],
+  )
+
+  assert.match(heartbeat(), /^\S+ tick \d+ requests=7 cached=7 remaining=4870$/)
+})
+
+test('tick: a tick longer than policy.tickSeconds logs tick-slow with its numbers, at most once in ten minutes', async () => {
+  const time = fakeClock()
+  const { manifest, driver, gate } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute()], clock: time.clock })
+  const slow = () => eventsSince(manifest).filter((event) => event.kind === 'tick-slow')
+  const logged = []
+
+  // Inside the tick: a gap between ticks would read as sleep.
+  gate.pr = () => {
+    time.move(6 * 60_000)
+
+    return {}
+  }
+
+  for (let i = 0; i < 3; i += 1) {
+    await driver.tick()
+    logged.push(slow().length)
+  }
+
+  assert.equal(gate.calls, 3)
+  assert.deepEqual(logged, [1, 1, 2])
+  // Each tick reads PR 11 and posts a stage label, which the fake refuses.
+  assert.deepEqual(slow(), [
+    { id: '-', kind: 'tick-slow', ms: 360_000, requests: 2, cached: 0, remaining: null },
+    { id: '-', kind: 'tick-slow', ms: 360_000, requests: 2, cached: 1, remaining: null },
+  ])
+
+  assert.ok(!kindsSince(manifest).includes('machine-slept'))
+  assert.match(readFileSync(join(manifest.dir, 'heartbeat'), 'utf8'), / tick 360000 requests=2 cached=1 remaining=-$/)
 })
 
 const REJECTED = { ...samplePrs().A1, state: 'needs_fix', fixReason: 'verifier findings', verified: null, approved: null }

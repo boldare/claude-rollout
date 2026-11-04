@@ -371,6 +371,92 @@ test('client: a 304 keeps the cached answer in use, so the least recently used o
   )
 })
 
+const LIMIT = 'x-ratelimit-remaining'
+
+test('stats: every round trip counts, a failed connection and the retry after a 401 included, and stats gives a copy', async () => {
+  const { github, client } = fakeClient([
+    { path: PR_PATH, body: { number: 11 } },
+    { path: 'user', status: 401, body: { message: 'Bad credentials' } },
+    { path: 'repos/example/widgets', error: 'ECONNRESET' },
+  ])
+
+  assert.deepEqual(client.stats(), { requests: 0, cached: 0, remaining: null })
+
+  await client.request('GET', PR_PATH)
+  await failure(client.request('GET', 'user'))
+  await failure(client.request('GET', 'repos/example/widgets'))
+
+  client.stats().requests = 0
+
+  assert.equal(github.requests().length, 4)
+  assert.deepEqual(client.stats(), { requests: 4, cached: 0, remaining: null })
+})
+
+test('stats: every 304 answered from the cache counts as cached', async () => {
+  const { client } = fakeClient([{ path: PR_PATH, body: { number: 11 } }])
+
+  for (let i = 0; i < 3; i += 1) {
+    await client.request('GET', PR_PATH)
+  }
+
+  assert.deepEqual(client.stats(), { requests: 3, cached: 2, remaining: null })
+})
+
+test("stats: remaining comes from the last maintainer's answer that names it, a 304 and an error included, never from the agents' token", async () => {
+  const github = fakeGitHub([
+    { path: PR_PATH, body: { number: 11 }, headers: { [LIMIT]: '4870' } },
+    { path: 'repos/example/widgets', body: { full_name: 'example/widgets' } },
+    { path: 'repos/example/widgets/pulls/12', status: 404, body: { message: 'Not Found' }, headers: { [LIMIT]: '4868' } },
+    { path: 'user', body: { login: 'maint' }, headers: { [LIMIT]: '4867' } },
+    { path: 'repos/example/widgets/pulls/11/comments', body: [], headers: { [LIMIT]: '12' } },
+  ])
+
+  // GitHub's 304s carry the header, the fake's do not.
+  async function limited(url, init) {
+    const answer = await github.fetch(url, init)
+
+    return answer.status === 304 ? new Response(null, { status: 304, headers: { [LIMIT]: '4869' } }) : answer
+  }
+
+  const { manifest } = rollout([])
+  const client = createClient(manifest, { fetch: limited, token: async () => MAINTAINER_TOKEN })
+  const remaining = []
+  const note = () => remaining.push(client.stats().remaining)
+
+  await client.request('GET', PR_PATH)
+  note()
+  await client.request('GET', PR_PATH)
+  note()
+  await client.request('GET', 'repos/example/widgets')
+  note()
+  await failure(client.request('GET', 'repos/example/widgets/pulls/12'))
+  note()
+  // Without repo.agentToken the agents use the maintainer's token, and its limit.
+  await client.request('GET', 'user', { as: 'agents' })
+  note()
+  manifest.repo.agentToken = join(manifest.dir, 'agent-token')
+  writeFileSync(manifest.repo.agentToken, `${AGENT_TOKEN}\n`)
+  await client.request('GET', 'repos/example/widgets/pulls/11/comments', { as: 'agents' })
+  note()
+
+  assert.deepEqual(remaining, [4870, 4869, 4869, 4868, 4867, 4867])
+  assert.equal(github.requests().at(-1).headers.authorization, `Bearer ${AGENT_TOKEN}`)
+})
+
+test('resetStats: requests and cached start again from 0, and remaining stays', async () => {
+  const { client } = fakeClient([{ path: PR_PATH, body: { number: 11 }, headers: { [LIMIT]: '4870' } }])
+
+  await client.request('GET', PR_PATH)
+  await client.request('GET', PR_PATH)
+  client.resetStats()
+
+  assert.deepEqual(client.stats(), { requests: 0, cached: 0, remaining: 4870 })
+
+  await client.request('GET', PR_PATH)
+
+  assert.deepEqual(client.stats(), { requests: 1, cached: 1, remaining: 4870 })
+})
+
 const REVIEWS = 'repos/example/widgets/pulls/11/reviews'
 
 test('pages: follows the Link header with per_page=100 and stops at the page without rel="next"', async () => {

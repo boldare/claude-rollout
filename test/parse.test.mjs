@@ -18,6 +18,7 @@ import {
   feedbackFor,
   findPr,
   findReleasePr,
+  forgetPr,
   ghError,
   githubUnavailable,
   maintainerFeedback,
@@ -34,6 +35,7 @@ import {
   reviewsFor,
   setFetch,
   setStageLabels,
+  tickReads,
   unmergedHeads,
   viewPr,
 } from '../lib/github.mjs'
@@ -1132,13 +1134,13 @@ test('baseChecks skips a quiet tip whose only runs are not required checks', asy
   assert.equal(checks.skipped, 1)
 })
 
-test('baseChecks reads a tip once per map of reads, and a commit shape once at all', async () => {
+test("baseChecks reads a tip once per tick's reads, and a commit shape once at all", async () => {
   const { manifest, github, gitCalls } = quietRollout(historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md']), [
     runsRoute('quiet00', []),
     runsRoute('quiet01', [GREEN_RUN]),
   ])
 
-  const reads = new Map()
+  const reads = tickReads()
   const runsReads = () => github.requests().filter((request) => request.path.endsWith('/check-runs'))
   const historyCalls = () => gitCalls().filter((call) => call.includes('--format=%P') || call.includes('--name-only')).length
 
@@ -1151,7 +1153,7 @@ test('baseChecks reads a tip once per map of reads, and a commit shape once at a
 
   // A new tick reads the runs again, which can change, but not the history.
   // Runs that did not change answer 304.
-  await baseChecks(manifest, 'quiet00', { reads: new Map() })
+  await baseChecks(manifest, 'quiet00', { reads: tickReads() })
 
   assert.deepEqual(
     runsReads().map((request) => request.status),
@@ -1298,6 +1300,116 @@ test('checksFor rejects a page without a list instead of returning the runs read
   )
 
   await assert.rejects(checksFor(manifest, HEAD), /check-runs page 2 has no list/)
+})
+
+const BASE_RUNS = `repos/example/widgets/commits/${BASE_TIP}/check-runs`
+
+// PR 11, its reviews, the check runs of its head and of the base tip, and no code scanning alert.
+function factRoutes() {
+  return [
+    { path: PR_11, body: REST_PR },
+    { path: REVIEWS, body: [{ ...review(7, 'maint', '2026-10-01T10:00:00Z', 'CHANGES_REQUESTED', 'Rename it.'), commit_id: HEAD }] },
+    runsRoute(HEAD, [GREEN_RUN]),
+    runsRoute(BASE_TIP, [GREEN_RUN]),
+    alertsRoute(PR_REF, []),
+  ]
+}
+
+// Each read the tick shares, with the path it asks for.
+function sharedReads(manifest, reads) {
+  return [
+    [PR_11, () => viewPr(manifest, 11, { reads })],
+    [REVIEWS, () => reviewsFor(manifest, 11, { reads })],
+    [RUNS, () => checksFor(manifest, HEAD, { reads })],
+    [ALERTS, () => codeScanningFor(manifest, 11, { reads })],
+    [BASE_RUNS, () => baseChecks(manifest, BASE_TIP, { reads })],
+  ]
+}
+
+function pathsOf(github) {
+  return github.requests().map((request) => request.path)
+}
+
+test("tickReads: with one tick's reads, two parallel calls and a later one ask GitHub once for each fact", async () => {
+  const { manifest, github } = scanningRollout([], factRoutes())
+  const reads = tickReads()
+
+  for (const [path, read] of sharedReads(manifest, reads)) {
+    const [first, second] = await Promise.all([read(), read()])
+
+    assert.deepEqual(second, first, path)
+    assert.deepEqual(await read(), first, path)
+  }
+
+  assert.deepEqual(pathsOf(github), [PR_11, REVIEWS, RUNS, ALERTS, BASE_RUNS])
+  assert.equal(await viewPr(manifest, 11, { reads }), await viewPr(manifest, 11, { reads }))
+})
+
+test('tickReads: without reads, every call asks GitHub', async () => {
+  const { manifest, github } = scanningRollout([], factRoutes())
+
+  for (const [, read] of sharedReads(manifest)) {
+    await Promise.all([read(), read()])
+  }
+
+  assert.deepEqual(pathsOf(github), [PR_11, PR_11, REVIEWS, REVIEWS, RUNS, RUNS, ALERTS, ALERTS, BASE_RUNS, BASE_RUNS])
+})
+
+test('tickReads: feedbackFor and reviewsFor share one read of the reviews, and the comments are read on every call', async () => {
+  const comments = [
+    { path: `${PR_11}/comments`, body: [] },
+    { path: CONVERSATION, body: [] },
+  ]
+
+  const { manifest, github } = scanningRollout([], [...factRoutes(), ...comments])
+  const reads = tickReads()
+  const count = (path) => pathsOf(github).filter((asked) => asked === path).length
+
+  manifest.repo.maintainers = ['maint']
+
+  const [feedback, reviews] = await Promise.all([feedbackFor(manifest, 11, { reads }), reviewsFor(manifest, 11, { reads })])
+
+  assert.deepEqual(feedback, [{ id: 'review-7', at: '2026-10-01T10:00:00Z', body: 'Rename it.' }])
+  assert.deepEqual(reviews, [{ user: 'maint', state: 'CHANGES_REQUESTED', commit: HEAD, at: '2026-10-01T10:00:00Z' }])
+  assert.deepEqual(await feedbackFor(manifest, 11, { reads }), feedback)
+  assert.deepEqual([REVIEWS, `${PR_11}/comments`, CONVERSATION].map(count), [1, 2, 2])
+})
+
+test('forgetPr: the next read of the PR, its reviews and its code scanning asks again, and the check runs stay', async () => {
+  const { manifest, github } = scanningRollout([], factRoutes())
+  const reads = tickReads()
+
+  for (const [, read] of sharedReads(manifest, reads)) {
+    await read()
+  }
+
+  forgetPr(reads, 11)
+  forgetPr(null, 11)
+
+  for (const [, read] of sharedReads(manifest, reads)) {
+    await read()
+  }
+
+  assert.deepEqual(pathsOf(github), [PR_11, REVIEWS, RUNS, ALERTS, BASE_RUNS, PR_11, REVIEWS, ALERTS])
+})
+
+test('collectFacts: a second call with the same reads asks GitHub nothing', async () => {
+  const rules = [
+    { tool: 'git', args: 'rev-parse origin/main', stdout: `${BASE_TIP}\n` },
+    { tool: 'git', stdout: '' },
+  ]
+
+  const { manifest, github } = scanningRollout(rules, factRoutes())
+  const ledger = { data: { halted: null }, prs: {} }
+  const reads = tickReads()
+
+  manifest.repo.codeScanning = { action: 'fix', minSeverity: 'medium' }
+
+  const first = await collectFacts(manifest, manifest.prs[0], { pr: 11 }, ledger, { reads })
+
+  assert.deepEqual(pathsOf(github), [PR_11, REVIEWS, RUNS, BASE_RUNS, ALERTS])
+  assert.deepEqual(await collectFacts(manifest, manifest.prs[0], { pr: 11 }, ledger, { reads }), first)
+  assert.equal(github.requests().length, 5)
 })
 
 test('unmergedHeads: the verified heads of unmerged dependencies, none while one is held, and a merged one is skipped even when held', () => {

@@ -379,7 +379,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                       <div class="facts">
                         <span
                           ><span class="badge driver driver-running">Running</span><span class="muted">PID 48213</span
-                          ><span class="muted">Heartbeat 14s ago</span></span
+                          ><span class="muted">Heartbeat 14s ago</span><span class="muted">Tick 4.2s</span
+                          ><span class="muted">4870 requests left</span></span
                         >
                         <span><span class="label">Merge</span><span>human</span></span>
                         <span><span class="label">Cost</span><span>$21.44</span></span>
@@ -427,7 +428,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <div class="facts">
               <span
                 ><span class="badge driver driver-running">Running</span><span class="muted">PID 48213</span
-                ><span class="muted">Heartbeat 14s ago</span></span
+                ><span class="muted">Heartbeat 14s ago</span><span class="muted">Tick 4.2s</span
+                ><span class="muted">4870 requests left</span></span
               >
               <span><span class="label">Merge</span><span>human</span></span>
               <span><span class="label">Cost</span><span>$21.44</span></span>
@@ -445,12 +447,17 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <ul>
           <li>
             <strong>Driver badge.</strong> <span class="badge driver driver-running">running</span> while a process holds
-            <code>driver.lock</code>, with its pid and the age of the heartbeat. Otherwise
+            <code>driver.lock</code>, with its pid, the age of the heartbeat and the facts of the last tick. Otherwise
             <span class="badge driver driver-stopped">stopped</span>. <span class="badge driver driver-paused">paused</span> and
             <span class="badge driver driver-halted">halted</span> win over both, because they are recorded in the ledger whether or not a
             driver runs.
           </li>
           <li><strong>Heartbeat.</strong> Turns amber after 5 minutes without a beat. A healthy driver beats at least once a tick.</li>
+          <li>
+            <strong>Tick and requests left.</strong> How long the last tick took, and the GitHub rate limit left on the maintainer's token,
+            from the line the tick wrote to the <a href="how-it-works.html#tick">heartbeat</a>. Before any answer named the limit, only the
+            time shows. A heartbeat without that line, such as one after a failed tick, shows its note after the age instead.
+          </li>
           <li>
             <strong>merge, cost, merged.</strong> The merge policy from the manifest, the ledger's total cost and merged PRs out of all PRs.
           </li>
