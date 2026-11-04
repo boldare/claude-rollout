@@ -75,8 +75,8 @@
             refuses to start. A lock left behind by a dead process, or one without a real pid, is cleared.
           </li>
           <li>
-            <strong>A heartbeat.</strong> Every tick and every save writes <code>heartbeat</code>: a timestamp and a short note.
-            <code>status</code> and the UI read its age to tell a live driver from a stuck one.
+            <strong>A heartbeat.</strong> Every tick and every save writes <code>heartbeat</code>: a timestamp and the line of the last
+            <a href="#tick">tick</a>. <code>status</code> and the UI read its age to tell a live driver from a stuck one.
           </li>
           <li>
             <strong>State on disk.</strong> <code>ledger.json</code> holds the state of every PR and every agent run, and is replaced
@@ -322,7 +322,7 @@
         <p>Once started, the driver repeats one tick until every PR of the run is merged. A tick does this, in order:</p>
 
         <ol class="steps">
-          <li><strong>Beat.</strong> Write the heartbeat.</li>
+          <li><strong>Beat.</strong> Renew the time of the heartbeat.</li>
           <li>
             <strong>Notice a sleep.</strong> A gap since the end of the last tick that is more than a minute longer than
             <a href="manifest.html#policy-tickSeconds"><code>policy.tickSeconds</code></a> is sleep. The driver logs
@@ -365,7 +365,34 @@
             delegates start while slots are free, and READY claims are checked.
           </li>
           <li><strong>Save</strong> the ledger.</li>
+          <li>
+            <strong>Measure.</strong> Write the line of the tick to the heartbeat, such as
+            <code>tick 4210 requests=7 cached=7 remaining=4870</code>. The first number is how long the tick took up to the save, in
+            milliseconds. <code>requests=</code> counts the GitHub API requests made during the tick, a retry included. The merge goes
+            through <code>gh pr merge</code> and is not counted. <code>cached=</code> counts the requests GitHub answered with a 304.
+            <code>remaining=</code> is the rate limit left on the maintainer's token, from the last answer that named it, or
+            <code>-</code> before any did. The agents' token has a limit of its own, so its answers never set it. After a failed tick, the
+            heartbeat says <code>tick-error</code> and the error instead.
+          </li>
         </ol>
+
+        <p>
+          A tick reads each GitHub fact once and shares it with every step that needs it: a PR, its reviews, its code scanning alerts and
+          the check runs of a commit. A run that ends during the tick drops the reads of its PR, so its READY claim is checked against the
+          PR after the push. The next tick reads everything again. For example, a verified PR waiting for approval, with
+          <a href="manifest.html#repo-maintainers"><code>repo.maintainers</code></a> set, no open code scanning alert and check runs on the
+          base tip, costs 7 GETs a tick:
+        </p>
+
+        <ul>
+          <li>the PR, for the sync and the gate</li>
+          <li>its reviews, for the feedback and the approval</li>
+          <li>its inline review comments</li>
+          <li>its conversation comments</li>
+          <li>the check runs of its head</li>
+          <li>the check runs of the base tip</li>
+          <li>its code scanning alerts</li>
+        </ul>
 
         <p>
           Then the driver sleeps for <a href="manifest.html#policy-tickSeconds"><code>policy.tickSeconds</code></a> (60 s). A new file in
@@ -379,6 +406,11 @@
             <a href="manifest.html#policy-concurrency"><code>policy.concurrency</code></a> caps them (2 by default). A brief holds one slot
             for its writer and reviewer together. Verifiers take slots too, and the ready and pre-verify commands of a claim take one slot,
             all of them together. The other checks, rebases and merges do not.
+          </li>
+          <li>
+            <strong>A slow tick is logged.</strong> A tick that takes longer than
+            <a href="manifest.html#policy-tickSeconds"><code>policy.tickSeconds</code></a> logs <code>tick-slow</code> with the numbers of
+            its line, at most once in ten minutes. It is no error and sends no notice.
           </li>
           <li>
             <strong>The gate runs before slots are handed out.</strong> A conflict it finds on a high-priority PR then competes for a slot

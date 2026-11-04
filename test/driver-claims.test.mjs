@@ -835,6 +835,42 @@ test('claimReport: a READY report sent back for GitHub, or parked during an outa
   }
 })
 
+test('onDone: a run that ends mid-tick, after sync read its PR at the old head, makes checkClaim read the PR again', async () => {
+  const { manifest, driver, github, gate } = tickDriver(
+    { A1: { state: 'fixing', pr: 11, claimedSha: SHA, sessionId: 'session-1' } },
+    { rules: [FETCH], routes: [prRoute()] },
+  )
+
+  const pr = manifest.prs.find((item) => item.id === 'A1')
+  const prPath = prRoute().path
+  let ended = false
+
+  // The stubbed collectFacts reads no PR, so its head check takes this one.
+  gate.pr = { headRefOid: NEW_HEAD }
+
+  // The first read of PR 11 is sync's, at the head from before the push. The
+  // run pushes and ends before that answer arrives.
+  async function endingMidTick(url, init) {
+    const answer = await github.fetch(url, init)
+
+    if (!ended && init.method === 'GET' && new URL(url).pathname === `/${prPath}`) {
+      ended = true
+      github.answer([prRoute({ head: { sha: NEW_HEAD } }), runsRoute(NEW_HEAD)])
+      await driver.onDone(pr, 'fix', readyReport(NEW_HEAD), { run: 'A1-02-fix' })
+    }
+
+    return answer
+  }
+
+  setFetch(endingMidTick, { token: async () => MAINTAINER_TOKEN })
+  await driver.tick()
+
+  assert.ok(ended)
+  assert.ok(!kindsSince(manifest).includes('claim-moved'), kindsSince(manifest).join(', '))
+  assert.equal(driver.ledger.prs.A1.claimedSha, NEW_HEAD)
+  assert.equal(github.requests().filter((request) => request.path === prPath).length, 3)
+})
+
 test('claimReport: a finding id in addressed never reaches GitHub, and the review comment is answered as before', async () => {
   const replies = 'repos/example/widgets/pulls/11/comments/55/replies'
   const { driver, pr, entry, github } = answeringDriver(

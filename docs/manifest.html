@@ -695,7 +695,8 @@ prs:
                 <td><code>60</code></td>
                 <td>
                   The pause between ticks. A new command in the inbox wakes the driver sooner. A gap more than a minute longer counts as
-                  <a href="how-it-works.html#sleep">sleep</a>.
+                  <a href="how-it-works.html#sleep">sleep</a>. A tick that takes longer logs <code>tick-slow</code>, at most once in ten
+                  minutes.
                 </td>
               </tr>
               <tr id="policy-mergeDelaySeconds">

@@ -48,12 +48,23 @@ test('liveness: the lock means running, the heartbeat gives its age and note', (
     pid: process.pid,
     heartbeatAgeSeconds: 42,
     heartbeatNote: 'tick-error boom',
+    tick: null,
   })
+})
+
+test('liveness: a measured tick gives its numbers, and the note stays as it is', () => {
+  const note = 'tick 4210 requests=7 cached=5 remaining=4870'
+  const manifest = loadManifest(makeRollout({ heartbeat: note }))
+  const { heartbeatNote, tick } = liveness(manifest)
+
+  assert.equal(heartbeatNote, note)
+  assert.deepEqual(tick, { ms: 4210, requests: 7, cached: 5, remaining: 4870 })
+  assert.equal(liveness(loadManifest(makeRollout({ heartbeat: 'tick 900 requests=0 cached=0 remaining=-' }))).tick.remaining, null)
 })
 
 test('liveness: no lock and no heartbeat', () => {
   const manifest = loadManifest(makeRollout({ lock: false, heartbeat: null }))
-  assert.deepEqual(liveness(manifest), { running: false, pid: null, heartbeatAgeSeconds: null, heartbeatNote: '' })
+  assert.deepEqual(liveness(manifest), { running: false, pid: null, heartbeatAgeSeconds: null, heartbeatNote: '', tick: null })
 })
 
 test('parseEvents skips blank lines, partial lines and JSON that is not an object', () => {
