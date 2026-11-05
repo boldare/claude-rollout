@@ -1,26 +1,34 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import {
   alignWorktree,
-  enableWorktreeConfig,
+  mirrorPath,
   preparePreview,
   prepareWorktree,
   previewPath,
+  rebaseWorktree,
   removePreview,
+  removeWorktree,
   resetWorktree,
+  worktreePath,
 } from '../lib/worktree.mjs'
 import { readEnvFile, withProcessEnv } from './fixtures.mjs'
 
 const HOME = new URL('..', import.meta.url).pathname
 const IDENTITY = ['-c', 'user.name=Test', '-c', 'user.email=test@example.com']
+const GITHUB_URL = 'https://github.com/example/widgets.git'
 
 function git(cwd, ...args) {
   return execFileSync('git', [...IDENTITY, '-C', cwd, ...args], { encoding: 'utf8' }).trim()
+}
+
+function gitCode(cwd, ...args) {
+  return spawnSync('git', ['-C', cwd, ...args], { stdio: 'ignore' }).status
 }
 
 function commit(cwd, file) {
@@ -31,11 +39,45 @@ function commit(cwd, file) {
   return git(cwd, 'rev-parse', 'HEAD')
 }
 
-// A local bare origin and a clone, no GitHub.
-function fixture() {
+// Config that every git started by this process reads, until the test ends.
+// The tests in a file run one at a time, so none sees another's.
+function gitEnvConfig(context, entries) {
+  const names = ['GIT_CONFIG_COUNT', ...entries.flatMap((_, i) => [`GIT_CONFIG_KEY_${i}`, `GIT_CONFIG_VALUE_${i}`])]
+  const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+
+  process.env.GIT_CONFIG_COUNT = String(entries.length)
+
+  for (const [i, [key, value]] of entries.entries()) {
+    process.env[`GIT_CONFIG_KEY_${i}`] = key
+    process.env[`GIT_CONFIG_VALUE_${i}`] = value
+  }
+
+  context.after(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[name]
+      } else {
+        process.env[name] = value
+      }
+    }
+  })
+}
+
+// A local bare origin and repo.path cloned from it. git maps the clones'
+// GitHub origin to the bare one, so no test reaches GitHub. The identity and
+// the signing are for the rebase.
+function fixture(context) {
   const dir = mkdtempSync(join(tmpdir(), 'rollout-wt-'))
   const origin = join(dir, 'origin.git')
   const repo = join(dir, 'repo')
+
+  context.after(() => rmSync(dir, { recursive: true, force: true }))
+  gitEnvConfig(context, [
+    [`url.${origin}.insteadOf`, GITHUB_URL],
+    ['user.name', 'Test'],
+    ['user.email', 'test@example.com'],
+    ['commit.gpgsign', 'false'],
+  ])
 
   execFileSync('git', ['init', '--quiet', '--bare', '--initial-branch=main', origin])
   execFileSync('git', ['clone', '--quiet', origin, repo], { stdio: 'ignore' })
@@ -52,7 +94,7 @@ function fixture() {
 
   mkdirSync(manifest.dir)
 
-  return { dir, manifest, repo, pr: { id: 'A1', branch: 'feat/a1' } }
+  return { dir, origin, manifest, repo, pr: { id: 'A1', branch: 'feat/a1' } }
 }
 
 function mergeElsewhere(repo, file) {
@@ -63,11 +105,28 @@ function mergeElsewhere(repo, file) {
   return sha
 }
 
+// A dependency's PR branch off main with one commit, pushed like an implementer would.
+function pushBranch(repo, branch, file, text = `${file}\n`) {
+  git(repo, 'checkout', '--quiet', '-B', branch, 'origin/main')
+  writeFileSync(join(repo, file), text)
+  git(repo, 'add', file)
+  git(repo, 'commit', '--quiet', '-m', `add ${file}`)
+  git(repo, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`)
+
+  return git(repo, 'rev-parse', 'HEAD')
+}
+
+// Branch names and SHAs under a ref prefix, without the symbolic HEAD.
+function refs(cwd, prefix) {
+  return git(cwd, 'for-each-ref', '--format=%(refname) %(objectname)', prefix)
+    .split('\n')
+    .map((line) => line.slice(prefix.length))
+    .filter((line) => !line.startsWith('HEAD '))
+}
+
 async function started(context) {
-  const setup = fixture()
-  await enableWorktreeConfig(setup.manifest)
+  const setup = fixture(context)
   const wt = await prepareWorktree(setup.manifest, setup.pr)
-  context.after(() => rmSync(setup.dir, { recursive: true, force: true }))
 
   return { ...setup, wt }
 }
@@ -98,6 +157,7 @@ test('prepareWorktree: uncommitted or untracked changes stay where they are', as
 
   await prepareWorktree(manifest, pr)
   assert.equal(git(wt, 'rev-parse', 'HEAD'), head)
+  assert.equal(readFileSync(join(wt, 'draft.txt'), 'utf8'), 'work in progress\n')
 })
 
 test('prepareWorktree: a pushed branch is left to the rebase at the gate', async (context) => {
@@ -110,27 +170,92 @@ test('prepareWorktree: a pushed branch is left to the rebase at the gate', async
   assert.equal(git(wt, 'rev-parse', 'HEAD'), head)
 })
 
-// A dependency's PR branch off main with one commit, pushed like an implementer would.
-function pushBranch(repo, branch, file, text = `${file}\n`) {
-  git(repo, 'checkout', '--quiet', '-B', branch, 'origin/main')
-  writeFileSync(join(repo, file), text)
-  git(repo, 'add', file)
-  git(repo, 'commit', '--quiet', '-m', `add ${file}`)
-  git(repo, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`)
+test('prepareWorktree: two PRs prepared at once each get a clone of the mirror, with its own .git and GitHub as origin', async (context) => {
+  const { manifest, origin, repo } = fixture(context)
+  const prs = [
+    { id: 'A1', branch: 'feat/a1' },
+    { id: 'A2', branch: 'feat/a2' },
+  ]
 
-  return git(repo, 'rev-parse', 'HEAD')
-}
+  pushBranch(repo, 'feat/other', 'other.txt')
 
-async function previewSetup(context) {
-  const setup = fixture()
-  await enableWorktreeConfig(setup.manifest)
-  context.after(() => rmSync(setup.dir, { recursive: true, force: true }))
+  const wts = await Promise.all(prs.map((pr) => prepareWorktree(manifest, pr)))
 
-  return { ...setup, pr: { id: 'A3', branch: 'feat/a3' } }
+  for (const [i, wt] of wts.entries()) {
+    assert.equal(wt, worktreePath(manifest, prs[i]))
+    assert.ok(lstatSync(join(wt, '.git')).isDirectory())
+    assert.equal(git(wt, 'rev-parse', '--abbrev-ref', 'HEAD'), prs[i].branch)
+    assert.deepEqual(refs(wt, 'refs/remotes/origin/'), refs(origin, 'refs/heads/'))
+    assert.equal(git(wt, 'config', 'remote.origin.url'), GITHUB_URL)
+    assert.equal(git(wt, 'remote', 'get-url', 'origin'), origin)
+  }
+
+  assert.equal(git(mirrorPath(manifest), 'rev-parse', '--is-bare-repository'), 'true')
+})
+
+test('prepareWorktree: a local branch in repo.path with the PR branch name neither blocks the PR nor reaches its clone', async (context) => {
+  const { manifest, repo, pr } = fixture(context)
+
+  git(repo, 'checkout', '--quiet', '-b', pr.branch)
+
+  const local = commit(repo, 'local.txt')
+  const wt = await prepareWorktree(manifest, pr)
+
+  assert.equal(git(wt, 'rev-parse', 'HEAD'), git(wt, 'rev-parse', 'origin/main'))
+  assert.equal(git(wt, 'rev-parse', '--abbrev-ref', 'HEAD'), pr.branch)
+  assert.notEqual(gitCode(wt, 'cat-file', '-e', local), 0)
+  assert.equal(git(repo, 'rev-parse', `refs/heads/${pr.branch}`), local)
+})
+
+test('prepareWorktree: refuses a git worktree of repo.path left by an earlier version, and leaves it and repo.path as they are', async (context) => {
+  const { manifest, repo, pr } = fixture(context)
+  const wt = worktreePath(manifest, pr)
+
+  git(repo, 'worktree', 'add', '--quiet', '-b', pr.branch, wt, 'origin/main')
+  writeFileSync(join(git(wt, 'rev-parse', '--absolute-git-dir'), 'rollout-ready'), '')
+  writeFileSync(join(wt, 'draft.txt'), 'work in progress\n')
+
+  await assert.rejects(prepareWorktree(manifest, pr), (error) => error.message.includes(wt))
+  assert.ok(existsSync(join(wt, 'a.txt')))
+  assert.equal(readFileSync(join(wt, 'draft.txt'), 'utf8'), 'work in progress\n')
+  assert.equal(gitCode(repo, 'config', '--get', 'core.hooksPath'), 1)
+})
+
+test('removeWorktree deletes the clone and leaves the branches of repo.path as they were', async (context) => {
+  const { manifest, repo, pr } = fixture(context)
+
+  git(repo, 'branch', pr.branch)
+
+  const branches = refs(repo, 'refs/heads/')
+  const wt = await prepareWorktree(manifest, pr)
+
+  await removeWorktree(manifest, pr)
+
+  assert.equal(existsSync(wt), false)
+  assert.deepEqual(refs(repo, 'refs/heads/'), branches)
+})
+
+test('rebaseWorktree rebases a clone onto the new base and pushes the head to the PR branch', async (context) => {
+  const { manifest, origin, repo, pr, wt } = await started(context)
+  const own = commit(wt, 'own.txt')
+
+  git(wt, 'push', '--quiet', 'origin', `HEAD:refs/heads/${pr.branch}`)
+
+  const base = mergeElsewhere(repo, 'b.txt')
+  const rebased = await rebaseWorktree(manifest, pr, own)
+
+  assert.equal(rebased.ok, true)
+  assert.notEqual(rebased.head, own)
+  assert.equal(git(origin, 'rev-parse', `refs/heads/${pr.branch}`), rebased.head)
+  assert.equal(git(origin, 'rev-parse', `${rebased.head}^`), base)
+})
+
+function previewSetup(context) {
+  return { ...fixture(context), pr: { id: 'A3', branch: 'feat/a3' } }
 }
 
 test('preparePreview: origin/main with each verified head merged in, detached, and the PR branch untouched', async (context) => {
-  const { manifest, repo, pr } = await previewSetup(context)
+  const { manifest, repo, pr } = previewSetup(context)
   const heads = [
     { id: 'A1', sha: pushBranch(repo, 'feat/a1', 'one.txt') },
     { id: 'A2', sha: pushBranch(repo, 'feat/a2', 'two.txt') },
@@ -139,6 +264,7 @@ test('preparePreview: origin/main with each verified head merged in, detached, a
   const wt = await preparePreview(manifest, pr, heads)
 
   assert.equal(wt, previewPath(manifest, pr))
+  assert.ok(lstatSync(join(wt, '.git')).isDirectory())
   assert.ok(existsSync(join(wt, 'one.txt')) && existsSync(join(wt, 'two.txt')) && existsSync(join(wt, 'a.txt')))
   assert.equal(git(wt, 'rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD')
   assert.equal(git(wt, 'log', '-1', '--format=%s'), 'preview: A2 at ' + heads[1].sha.slice(0, 7))
@@ -150,7 +276,7 @@ test('preparePreview: origin/main with each verified head merged in, detached, a
 })
 
 test('preparePreview: heads that conflict give null and leave no preview behind', async (context) => {
-  const { manifest, repo, pr } = await previewSetup(context)
+  const { manifest, repo, pr } = previewSetup(context)
   const heads = [
     { id: 'A1', sha: pushBranch(repo, 'feat/a1', 'same.txt', 'one\n') },
     { id: 'A2', sha: pushBranch(repo, 'feat/a2', 'same.txt', 'two\n') },
@@ -162,7 +288,7 @@ test('preparePreview: heads that conflict give null and leave no preview behind'
 })
 
 test('repo.install runs with the environment of a read-only agent, in a new PR worktree and in a preview', async (context) => {
-  const { dir, manifest, pr } = fixture()
+  const { dir, manifest, pr } = fixture(context)
   const installEnv = join(dir, 'install.env')
   const parent = {
     GH_TOKEN: 'synthetic-maintainer-token',
@@ -172,12 +298,10 @@ test('repo.install runs with the environment of a read-only agent, in a new PR w
     ROLLOUT_ID: 'Z9',
   }
 
-  context.after(() => rmSync(dir, { recursive: true, force: true }))
   manifest.repo.install = `env > '${installEnv}'`
   manifest.repo.agentToken = join(dir, 'agent-token')
   manifest.repo.pushUrl = join(dir, 'origin.git')
   writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
-  await enableWorktreeConfig(manifest)
 
   for (const prepare of [() => prepareWorktree(manifest, pr), () => preparePreview(manifest, pr, [])]) {
     rmSync(installEnv, { force: true })
@@ -197,13 +321,13 @@ test('repo.install runs with the environment of a read-only agent, in a new PR w
 
 const LOCAL_CONFIG = ['.claude/settings.json', '.claude/settings.local.json', 'CLAUDE.local.md']
 
-// The fixture repo's own excludesFile hides .claude/ from git status, like a global gitignore would.
+// The clone's own excludesFile hides .claude/ from git status, like a global gitignore would.
 async function ignoringClaude(context) {
   const setup = await started(context)
   const excludes = join(setup.dir, 'excludes')
 
   writeFileSync(excludes, '.claude/\n')
-  git(setup.repo, 'config', 'core.excludesFile', excludes)
+  git(setup.wt, 'config', 'core.excludesFile', excludes)
 
   return setup
 }

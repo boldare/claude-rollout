@@ -168,8 +168,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           </li>
           <li>
             On start, runs that were in progress get their attempt back and become
-            <a href="how-it-works.html#state-interrupted">interrupted</a>, or pending for a brief. Then it fetches <code>origin</code>,
-            creates the label <code>rollout:&lt;name&gt;</code> and turns on per-worktree git config.
+            <a href="how-it-works.html#state-interrupted">interrupted</a>, or pending for a brief. Then it fetches <code>origin</code> and
+            creates the label <code>rollout:&lt;name&gt;</code>.
           </li>
           <li>
             It ticks every <code>policy.tickSeconds</code> (60 s), and a new command in the inbox wakes it sooner. What one tick does is on

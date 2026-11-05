@@ -312,13 +312,11 @@ function rebasableWorktree(manifest, tools) {
     manifest.prs.find((pr) => pr.id === 'A3'),
   )
 
-  const gitDir = join(wt, '.git-dir')
+  const gitDir = join(wt, '.git')
 
   mkdirSync(gitDir, { recursive: true })
-  writeFileSync(join(wt, '.git'), `gitdir: ${gitDir}\n`)
   writeFileSync(join(gitDir, 'rollout-ready'), '')
   tools.answer([
-    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
     { tool: 'git', args: 'rev-parse HEAD', stdout: REBASED },
     { tool: 'git', args: '', stdout: '' },
   ])

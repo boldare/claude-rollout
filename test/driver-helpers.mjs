@@ -200,19 +200,14 @@ export function modelDriver(prs, { result = () => new Promise(() => {}) } = {}) 
   })
 
   const pr = setup.manifest.all.find((item) => item.id === 'A1')
-  const wt = worktreePath(setup.manifest, pr)
-  const gitDir = join(wt, '.git-dir')
+  const gitDir = join(worktreePath(setup.manifest, pr), '.git')
 
   pr.model = { implement: 'sonnet' }
   mkdirSync(gitDir, { recursive: true })
   mkdirSync(dirname(pr.brief), { recursive: true })
   writeFileSync(pr.brief, '# A1\n')
-  writeFileSync(join(wt, '.git'), `gitdir: ${gitDir}\n`)
   writeFileSync(join(gitDir, 'rollout-ready'), '')
-  setup.tools.answer([
-    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
-    { tool: 'git', args: '', stdout: '' },
-  ])
+  setup.tools.answer([{ tool: 'git', args: '', stdout: '' }])
 
   return { ...setup, pr, entry: setup.driver.ledger.prs.A1, calls }
 }
@@ -254,20 +249,13 @@ export function verifiableDriver({ gates, deviations, runCommand, rules = [] } =
 
   const pr = setup.manifest.prs.find((item) => item.id === 'A1')
   const entry = setup.driver.ledger.prs.A1
-  const wt = worktreePath(setup.manifest, pr)
-  const gitDir = join(wt, '.git-dir')
+  const gitDir = join(worktreePath(setup.manifest, pr), '.git')
 
   mkdirSync(gitDir, { recursive: true })
-  writeFileSync(join(wt, '.git'), `gitdir: ${gitDir}\n`)
   writeFileSync(join(gitDir, 'rollout-ready'), '')
 
   const answer = (first) =>
-    setup.tools.answer([
-      ...first,
-      { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
-      { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
-      { tool: 'git', args: '', stdout: '' },
-    ])
+    setup.tools.answer([...first, { tool: 'git', args: 'rev-parse HEAD', stdout: SHA }, { tool: 'git', args: '', stdout: '' }])
 
   answer(rules)
 
