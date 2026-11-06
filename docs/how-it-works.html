@@ -209,7 +209,7 @@
             </g>
             <rect class="dg-node" x="12" y="586" width="476" height="44" rx="8" />
             <text class="dg-title mono" x="24" y="604">~/.rollouts/&lt;name&gt;.worktrees/&lt;id&gt;/</text>
-            <text class="dg-text" x="24" y="621">One git worktree per PR: its branch, the rollout's git hooks, the HTTPS push URL.</text>
+            <text class="dg-text" x="24" y="621">One clone per PR, from a local mirror: its branch, git hooks and HTTPS push URL.</text>
 
             <rect class="dg-group" x="580" y="360" width="120" height="282" rx="12" />
             <text class="dg-group-title" x="592" y="380">GitHub</text>
@@ -751,8 +751,8 @@
               <tr id="state-merged">
                 <td class="nowrap"><span class="badge state state-merged">merged</span></td>
                 <td>
-                  Merged by the driver, or on GitHub by you. The worktree, the local branch and the remote branch are removed. When an agent
-                  still runs, that waits until its run ends, and its report is ignored.
+                  Merged by the driver, or on GitHub by you. The PR's clone and the remote branch are removed. When an agent still runs,
+                  that waits until its run ends, and its report is ignored.
                 </td>
                 <td>Final.</td>
               </tr>
@@ -1019,7 +1019,10 @@
 
         <h3 id="command">The command</h3>
 
-        <p>The prompt goes in on stdin, because briefs and brief sources get large. The working directory is the PR's worktree.</p>
+        <p>
+          The prompt goes in on stdin, because briefs and brief sources get large. The working directory is the PR's worktree,
+          <a href="manifest.html#layout">a clone of its own</a>.
+        </p>
 
         <pre><code>claude -p --model &lt;model&gt; --effort &lt;effort&gt; \
   --output-format stream-json --verbose \

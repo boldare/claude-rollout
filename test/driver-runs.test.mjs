@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { briefDrift, createDriver, doneDetail } from '../lib/driver.mjs'
 import { endRun, readLedger } from '../lib/ledger.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { previewPath, worktreePath } from '../lib/worktree.mjs'
+import { mirrorPath, previewPath, worktreePath } from '../lib/worktree.mjs'
 import { at, samplePrs, waitFor } from './fixtures.mjs'
 import {
   agentResult,
@@ -313,12 +313,11 @@ test('advance: a brief starts once its dependency is verified, in a preview with
   assert.deepEqual(start.ahead, ['A1@a1a1a1a'])
 
   const gitCalls = tools.calls().filter((call) => call.tool === 'git')
-  assert.ok(
-    gitCalls.some(
-      (call) => call.args.join(' ') === `-C ${manifest.repo.path} worktree add --quiet --detach ${previewPath(manifest, pr)} origin/main`,
-    ),
-  )
+  const preview = previewPath(manifest, pr)
 
+  assert.ok(gitCalls.some((call) => call.args.includes('clone') && call.args.includes(mirrorPath(manifest)) && call.args.includes(preview)))
+  assert.ok(gitCalls.some((call) => call.args.join(' ') === `-C ${preview} checkout --quiet --detach origin/main`))
+  assert.ok(!gitCalls.some((call) => call.args.includes('worktree')))
   assert.ok(gitCalls.some((call) => call.args.includes('merge') && call.args.at(-1) === SHA && call.args.includes('commit.gpgsign=false')))
   assert.ok(!gitCalls.some((call) => call.args.includes(worktreePath(manifest, pr))), 'the PR worktree is not made')
 })
@@ -667,8 +666,7 @@ test('pre-verify: a pass lives in this driver process only, so another driver on
 test('pre-verify: a new head or changed commands run the commands again', async () => {
   const seam = commandSeam()
   const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
-  const { manifest, pr, entry, gate, tools, github } = setup
-  const gitDir = join(worktreePath(manifest, pr), '.git-dir')
+  const { manifest, entry, gate, tools, github } = setup
 
   await preVerified(setup)
 
@@ -683,7 +681,6 @@ test('pre-verify: a new head or changed commands run the commands again', async 
   gate.pr = { headRefOid: NEW_HEAD }
   github.answer([prRoute({ head: { sha: NEW_HEAD } }), runsRoute(NEW_HEAD)])
   tools.answer([
-    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
     { tool: 'git', args: 'rev-parse HEAD', stdout: NEW_HEAD },
     { tool: 'git', args: '', stdout: '' },
   ])
@@ -859,9 +856,8 @@ test('ready: a change to gates.ready alone runs the commands again on the same h
 
 // verifiableDriver's fake git once a command left `leftover` in the
 // worktree. git reports it until a reset, and the reset cleans the tree.
-function leftoverRules(gitDir, leftover) {
+function leftoverRules(leftover) {
   const clean = [
-    { tool: 'git', args: 'rev-parse --absolute-git-dir', stdout: gitDir },
     { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
     { tool: 'git', args: '', stdout: '' },
   ]
@@ -901,12 +897,12 @@ test('pre-verify: what a stopped job left in the worktree is cleaned before the 
   const outcomes = {}
   const seam = commandSeam(outcomes)
   const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
-  const { manifest, pr, tools, gate } = setup
+  const { manifest, tools, gate } = setup
 
   // The first run writes a file and is stopped. The run after it passes.
   outcomes['npm test'] = () => {
     outcomes['npm test'] = commandRun()
-    tools.answer(leftoverRules(join(worktreePath(manifest, pr), '.git-dir'), '?? test-output.log'))
+    tools.answer(leftoverRules('?? test-output.log'))
 
     return Promise.resolve(commandRun({ exitCode: null, signal: 'SIGTERM', stopped: true }))
   }
@@ -946,8 +942,8 @@ test('pre-verify: what a job that threw after a command left is cleaned before t
   const outcomes = {}
   const seam = commandSeam(outcomes)
   const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
-  const { manifest, pr, entry, tools } = setup
-  const leftover = leftoverRules(join(worktreePath(manifest, pr), '.git-dir'), '?? test-output.log')
+  const { manifest, entry, tools } = setup
+  const leftover = leftoverRules('?? test-output.log')
 
   // The command writes a file, and git fails once when the driver reads the worktree after it.
   outcomes['npm test'] = () => {

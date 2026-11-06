@@ -315,7 +315,10 @@ prs:
                 <td>path</td>
                 <td>–</td>
                 <td>yes</td>
-                <td>Your local clone. The driver fetches there and adds the PR worktrees from it.</td>
+                <td>
+                  Your local clone. The driver fetches and reads there. The PR worktrees are <a href="#layout">clones of a mirror</a> of its
+                  <code>origin</code>.
+                </td>
               </tr>
               <tr id="repo-github">
                 <td>github</td>
@@ -1380,12 +1383,46 @@ prs:
         </div>
 
         <p>
-          The worktrees live next to the rollout, not inside it, so agents work nowhere near the ledger, the inbox or the manifest. Each PR
-          gets
-          <code>&lt;name&gt;.worktrees/&lt;id&gt;/</code>, a git worktree of <code>repo.path</code> on the PR's branch. Its git hooks point
-          at the skill's <code>git-hooks/</code>, and with a token its push URL is <code>repo.pushUrl</code>. After the merge the driver
-          removes the worktree, the local branch and the remote branch.
+          The worktrees live next to the rollout in <code>&lt;name&gt;.worktrees/</code>, not inside it, so agents work nowhere near the
+          ledger, the inbox or the manifest.
         </p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>path</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>mirror.git</td>
+                <td>
+                  A bare mirror of the <code>origin</code> of <code>repo.path</code>, cloned with your credentials on first use and updated
+                  before each new clone.
+                </td>
+              </tr>
+              <tr>
+                <td>&lt;id&gt;/</td>
+                <td>
+                  The PR's clone of the mirror, with its own <code>.git</code> and the PR's branch. Its git hooks point at the skill's
+                  <code>git-hooks/</code>, its origin is the repository on GitHub, and with a token its push URL is
+                  <code>repo.pushUrl</code>. After the merge the driver removes it, with the remote branch.
+                </td>
+              </tr>
+              <tr>
+                <td>&lt;id&gt;.brief/</td>
+                <td>
+                  The brief preview, a detached clone of the mirror. A brief is written there while its dependencies are verified but not
+                  merged yet. It refuses every push.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Besides its fetches, the driver creates, changes and deletes nothing in <code>repo.path</code>.</p>
 
         <nav class="pager" aria-label="Pages">
           <a class="prev" href="accounts.html"><span>Previous</span>Accounts</a>

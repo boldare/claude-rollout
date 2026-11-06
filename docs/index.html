@@ -213,8 +213,8 @@
             slots.
           </li>
           <li>
-            Agents run as headless <code>claude -p</code> processes, each in the PR's own git worktree. They push and open PRs as a separate
-            bot account and report back with a JSON document.
+            Agents run as headless <code>claude -p</code> processes, each in its own clone of the repository. They push and open PRs as a
+            separate bot account and report back with a JSON document.
           </li>
           <li>
             The driver never trusts a report. It re-reads CI, the diff and the reviews on GitHub, and merges only what its gate passes.

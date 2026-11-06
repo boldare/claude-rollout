@@ -125,8 +125,8 @@
 
         <div class="callout warn">
           <p>
-            <strong>Without <code>repo.agentToken</code></strong> every row is you. Agents push through your normal remote, which may use
-            your SSH key, and the driver's replies go out under your name. Preflight warns: "agents act on GitHub as you".
+            <strong>Without <code>repo.agentToken</code></strong> every row is you. Agents push over HTTPS with your gh login, and the
+            driver's replies go out under your name. Preflight warns: "agents act on GitHub as you".
           </p>
           <p>
             The driver's replies and summary comment end with a hidden <code>&lt;!-- rollout-driver --&gt;</code> line, so the driver never
@@ -207,7 +207,9 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           Worktrees push over HTTPS to <a href="manifest.html#repo-pushUrl"><code>repo.pushUrl</code></a
           >, by default <code>https://github.com/&lt;github&gt;.git</code>, with <code>gh auth git-credential</code> as the only credential
           helper (<code>lib/worktree.mjs</code>). The <code>pre-push</code> hook refuses any other URL and any branch but the PR's own, so
-          your SSH key is never used for a push. Fetches keep using your normal remote.
+          your SSH key is never used for a push. Each worktree fetches from <code>https://github.com/&lt;github&gt;.git</code> through the
+          same helper, with your gh login when the driver fetches and the bot's token when an agent does. The mirror and
+          <code>repo.path</code> itself still fetch through your normal remote.
         </p>
 
         <p>
