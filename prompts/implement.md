@@ -8,7 +8,7 @@ You work unattended. Nobody will answer questions mid-run: when you need a human
 
 - The current directory is your PR's own clone of the repository, on branch `{{branch}}`, created from `origin/{{base}}`. Dependencies already merged into it: {{deps}}.
 - Your spec is the brief below, plus the decisions recorded after it when there are any. Read it completely first. Then read `CLAUDE.md` and `STYLE.md` in the repo and follow them.
-- `gh` is logged in, and node/pnpm on PATH are the versions this repo needs.
+- `gh` is logged in, and node/pnpm on PATH are the versions this repo needs.{{sandbox}}
 
 ## Protocol
 

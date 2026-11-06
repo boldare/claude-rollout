@@ -11,6 +11,7 @@
 //   rollout.mjs pause | resume | unhalt [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
+//   rollout.mjs sandbox   build [--dir D]   (builds the agents' image for sandbox.runtime docker)
 //   rollout.mjs ui        [--root ROOT] [--port N] [--no-open] [--read-only]
 //                         (serves a local web UI over the rollouts in ROOT, default $ROLLOUT_ROOT or ~/.rollouts)
 //                         (--read-only disables the controls)
@@ -42,6 +43,7 @@ import {
   versionWarning,
 } from '../lib/preflight.mjs'
 import { agentSettings, contextArgs, contextEnv } from '../lib/settings.mjs'
+import { buildImage, runtimeLine, runtimeSummary } from '../lib/sandbox.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
 import { execFile } from 'node:child_process'
@@ -104,6 +106,17 @@ function age(iso) {
   return minutes < 90 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
 }
 
+// status never runs claude, so a default image is the one the last driver start resolved.
+function statusRuntime(manifest, events) {
+  if (manifest.sandbox.runtime !== 'docker') {
+    return { runtime: 'host', image: null }
+  }
+
+  const started = events.findLast((event) => event.kind === 'driver-start')
+
+  return { runtime: 'docker', image: manifest.sandbox.image ?? started?.image ?? 'default' }
+}
+
 function status(manifest) {
   const view = rolloutView(manifest)
 
@@ -118,6 +131,7 @@ function status(manifest) {
     : `NOT RUNNING (last heartbeat ${driver.heartbeatAgeSeconds === null ? 'never' : `${Math.round(driver.heartbeatAgeSeconds / 60)} min ago`})`
 
   console.log(`rollout ${manifest.rollout}  driver: ${driverText}`)
+  console.log(runtimeLine(statusRuntime(manifest, view.events)))
 
   if (driver.paused) {
     console.log('PAUSED (rollout.mjs resume)')
@@ -647,6 +661,8 @@ async function main() {
 
   switch (command) {
     case 'run': {
+      console.log(runtimeLine(runtimeSummary(manifest)))
+
       const warning = await batteryWarning()
 
       if (warning) {
@@ -742,6 +758,24 @@ async function main() {
     case 'preflight':
       await preflight(manifest)
       break
+
+    // The subcommand is checked by value: the docs tests read every case label as a command.
+    case 'sandbox': {
+      if (rest[0] !== 'build') {
+        console.error(`unknown sandbox command ${rest[0] ?? '(none)'}, known: build`)
+        process.exit(1)
+      }
+
+      const { code, image } = await buildImage(manifest)
+
+      if (code !== 0) {
+        console.error(`docker build of ${image} exited ${code}`)
+        process.exit(code ?? 1)
+      }
+
+      console.log(`built ${image}`)
+      break
+    }
 
     default:
       console.error(`unknown command ${command}`)

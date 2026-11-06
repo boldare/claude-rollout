@@ -337,6 +337,19 @@ if (!rule) {
 `
 }
 
+function readCalls(bin) {
+  const log = join(bin, 'calls.jsonl')
+
+  if (!existsSync(log)) {
+    return []
+  }
+
+  return readFileSync(log, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+}
+
 // A fake gh and git for a rollout made by makeRollout, first on the PATH of
 // every manifest load, so a test never reaches the real tools or GitHub.
 // Call it before loadManifest. A rule is { tool, args, stdout, stderr, code, next }:
@@ -360,22 +373,189 @@ export function fakeTools(dir, rules = []) {
     writeFileSync(join(bin, 'rules.json'), JSON.stringify(next))
   }
 
-  function calls() {
-    const log = join(bin, 'calls.jsonl')
-
-    if (!existsSync(log)) {
-      return []
-    }
-
-    return readFileSync(log, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-  }
-
   answer(rules)
 
-  return { answer, calls }
+  return { answer, calls: () => readCalls(bin) }
+}
+
+// The docker client of the Docker runtime, without a daemon. run starts the
+// argv after the image as a local process in its own group, in the -w
+// directory and with the environment the entrypoint would give it. stop and
+// kill signal that group. Every call is recorded like a fakeTools call.
+const FAKE_DOCKER = `#!/usr/bin/env node
+const { spawn } = require('node:child_process')
+const { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
+const { constants } = require('node:os')
+const { join } = require('node:path')
+
+const VALUE_FLAGS = ['--name', '-v', '-e', '-w', '--memory', '--cpus', '--pids-limit', '--cap-add', '--cap-drop', '--security-opt', '--pull']
+const containers = join(__dirname, 'containers')
+const [command, ...rest] = process.argv.slice(2)
+
+appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ tool: 'docker', args: process.argv.slice(2) }) + '\\n')
+
+function pidFile(name) {
+  return join(containers, name + '.pid')
+}
+
+function containerPid(name) {
+  if (!existsSync(pidFile(name))) {
+    process.stderr.write('fake docker: no container ' + name + '\\n')
+    process.exit(1)
+  }
+
+  return Number(readFileSync(pidFile(name), 'utf8'))
+}
+
+function signalGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal)
+
+    return true
+  } catch {
+    return false
+  }
+}
+
+function parseRun(words) {
+  const container = { name: null, volumes: [], env: [], workdir: process.cwd() }
+  let i = 0
+
+  while (i < words.length && words[i].startsWith('-')) {
+    const flag = words[i]
+
+    if (!VALUE_FLAGS.includes(flag)) {
+      i += 1
+      continue
+    }
+
+    const value = words[i + 1]
+
+    if (flag === '--name') {
+      container.name = value
+    } else if (flag === '-v') {
+      container.volumes.push(value)
+    } else if (flag === '-e') {
+      container.env.push(value)
+    } else if (flag === '-w') {
+      container.workdir = value
+    }
+
+    i += 2
+  }
+
+  return { ...container, image: words[i], argv: words.slice(i + 1) }
+}
+
+// Only the names ROLLOUT_ENV lists, as the entrypoint passes them on, plus HOME and a PATH without node.
+function childEnv(container) {
+  const given = new Map()
+
+  for (const entry of container.env) {
+    const equals = entry.indexOf('=')
+
+    if (equals !== -1) {
+      given.set(entry.slice(0, equals), entry.slice(equals + 1))
+    } else if (process.env[entry] !== undefined) {
+      given.set(entry, process.env[entry])
+    }
+  }
+
+  const env = {}
+
+  for (const name of (given.get('ROLLOUT_ENV') ?? '').split(' ').filter(Boolean)) {
+    if (given.has(name)) {
+      env[name] = given.get(name)
+    }
+  }
+
+  const home = container.volumes.map((volume) => volume.split(':')).find((parts) => parts[1] === '/home/agent')
+
+  env.HOME = home ? home[0] : ''
+  env.PATH = __dirname + ':/usr/bin:/bin'
+
+  return env
+}
+
+function run() {
+  const container = parseRun(rest)
+  const [program, ...args] = container.argv
+  const child = spawn(program, args, { cwd: container.workdir, env: childEnv(container), stdio: 'inherit', detached: true })
+
+  mkdirSync(containers, { recursive: true })
+
+  if (child.pid) {
+    writeFileSync(pidFile(container.name), String(child.pid))
+  }
+
+  child.on('error', (error) => {
+    process.stderr.write('fake docker: ' + error.message + '\\n')
+    process.exit(127)
+  })
+
+  // The container ends with its first process, and everything it started goes with it.
+  child.on('exit', (code, signal) => {
+    signalGroup(child.pid, 'SIGKILL')
+    rmSync(pidFile(container.name), { force: true })
+    process.exit(code ?? 128 + constants.signals[signal])
+  })
+}
+
+function stop() {
+  const seconds = rest[0] === '-t' ? Number(rest[1]) : 10
+  const pid = containerPid(rest[rest.length - 1])
+  const deadline = Date.now() + seconds * 1000
+
+  signalGroup(pid, 'SIGTERM')
+
+  const timer = setInterval(() => {
+    if (!signalGroup(pid, 0)) {
+      clearInterval(timer)
+    } else if (Date.now() > deadline) {
+      signalGroup(pid, 'SIGKILL')
+    }
+  }, 25)
+}
+
+function kill() {
+  const named = rest.indexOf('--signal')
+
+  signalGroup(containerPid(rest[rest.length - 1]), named === -1 ? 'SIGKILL' : rest[named + 1])
+}
+
+if (command === 'run') {
+  run()
+} else if (command === 'stop') {
+  stop()
+} else if (command === 'kill') {
+  kill()
+} else if (command !== 'build') {
+  process.stderr.write('fake docker: no fake for ' + command + '\\n')
+  process.exitCode = 1
+}
+`
+
+// A fake docker for the Docker runtime, in <dir>/fake-bin. With a
+// manifest.yaml in dir, the bin goes first on repo.pathPrepend. A fake claude
+// or command that runs inside must be a #!/bin/sh script in the bin, because
+// node is not on the PATH a container gets.
+export function fakeDocker(dir) {
+  const bin = join(dir, 'fake-bin')
+  const file = join(dir, 'manifest.yaml')
+
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'docker'), FAKE_DOCKER, { mode: 0o755 })
+
+  if (existsSync(file)) {
+    const manifest = parse(readFileSync(file, 'utf8'))
+    const pathPrepend = manifest.repo.pathPrepend ?? []
+
+    if (!pathPrepend.includes(bin)) {
+      writeFileSync(file, stringify({ ...manifest, repo: { ...manifest.repo, pathPrepend: [bin, ...pathPrepend] } }))
+    }
+  }
+
+  return { bin, calls: () => readCalls(bin) }
 }
 
 const NULL_BODY_STATUSES = [204, 205, 304]

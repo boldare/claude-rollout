@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
@@ -17,7 +17,7 @@ import {
   resetWorktree,
   worktreePath,
 } from '../lib/worktree.mjs'
-import { readEnvFile, withProcessEnv } from './fixtures.mjs'
+import { fakeDocker, readEnvFile, withProcessEnv } from './fixtures.mjs'
 
 const HOME = new URL('..', import.meta.url).pathname
 const IDENTITY = ['-c', 'user.name=Test', '-c', 'user.email=test@example.com']
@@ -235,6 +235,44 @@ test('removeWorktree deletes the clone and leaves the branches of repo.path as t
   assert.deepEqual(refs(repo, 'refs/heads/'), branches)
 })
 
+test('removeWorktree also deletes the implementer home of the PR', async (context) => {
+  const { manifest, pr } = fixture(context)
+  const home = join(manifest.wtRoot, `${pr.id}.home`)
+
+  await prepareWorktree(manifest, pr)
+  mkdirSync(join(home, '.claude'), { recursive: true })
+  writeFileSync(join(home, '.claude', 'session.jsonl'), '{}\n')
+
+  await removeWorktree(manifest, pr)
+
+  assert.equal(existsSync(home), false)
+})
+
+// Every regular file under a mirror's objects, info/ aside, relative to objects/.
+function objectFiles(objects) {
+  return readdirSync(objects, { recursive: true }).filter((path) => !path.startsWith('info') && statSync(join(objects, path)).isFile())
+}
+
+test('a clone shares no object file with the mirror, so an agent cannot rewrite the mirror through a hard link', async (context) => {
+  const { manifest, wt } = await started(context)
+  const mirrorObjects = join(mirrorPath(manifest), 'objects')
+  const cloneObjects = join(wt, '.git', 'objects')
+  const shared = objectFiles(mirrorObjects).filter((path) => existsSync(join(cloneObjects, path)))
+
+  assert.ok(shared.length > 0)
+
+  for (const path of shared) {
+    assert.notEqual(statSync(join(mirrorObjects, path)).ino, statSync(join(cloneObjects, path)).ino, path)
+  }
+})
+
+test('a clone asks gh from PATH for credentials, after the empty helper that drops every other one', async (context) => {
+  const { wt } = await started(context)
+  const helpers = execFileSync('git', ['-C', wt, 'config', '--local', '--get-all', 'credential.helper'], { encoding: 'utf8' })
+
+  assert.deepEqual(helpers.split('\n').slice(0, -1), ['', '!gh auth git-credential'])
+})
+
 test('rebaseWorktree rebases a clone onto the new base and pushes the head to the PR branch', async (context) => {
   const { manifest, origin, repo, pr, wt } = await started(context)
   const own = commit(wt, 'own.txt')
@@ -317,6 +355,50 @@ test('repo.install runs with the environment of a read-only agent, in a new PR w
     assert.equal('ROLLOUT_BRANCH' in env, false)
     assert.equal('ROLLOUT_ID' in env, false)
   }
+})
+
+test('repo.install in a new clone runs in a container under the Docker runtime, with the clone mounted and no maintainer variable', async (context) => {
+  const { dir, manifest, pr } = fixture(context)
+  const { bin, calls } = fakeDocker(dir)
+  const installEnv = join(dir, 'install.env')
+  const tokenFile = join(dir, 'oauth-token')
+  const parent = { GH_TOKEN: 'synthetic-maintainer-token', SYNTHETIC_MAINTAINER_SECRET: 'synthetic-secret', ROLLOUT_ID: 'Z9' }
+
+  writeFileSync(tokenFile, 'synthetic-oauth-token\n', { mode: 0o600 })
+  manifest.repo.install = `env > '${installEnv}'`
+  manifest.repo.agentToken = join(dir, 'agent-token')
+  manifest.repo.pushUrl = join(dir, 'origin.git')
+  manifest.repo.pathPrepend = [bin]
+  manifest.sandbox = {
+    runtime: 'docker',
+    image: 'rollout-agent:test',
+    oauthTokenFile: tokenFile,
+    allowedDomains: ['api.anthropic.com', 'github.com'],
+    passEnv: [],
+    memory: '4g',
+    cpus: 2,
+    pidsLimit: 512,
+  }
+
+  writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
+
+  const wt = await withProcessEnv(parent, () => prepareWorktree(manifest, pr))
+  const runs = calls().filter((call) => call.args[0] === 'run')
+  const env = readEnvFile(installEnv)
+
+  assert.equal(runs.length, 1)
+
+  const { args } = runs[0]
+
+  assert.ok(args.includes(`${wt}:${wt}`))
+  assert.equal(args[args.indexOf('-w') + 1], wt)
+  assert.deepEqual(args.slice(args.indexOf('rollout-agent:test') + 1), ['sh', '-c', manifest.repo.install])
+  assert.equal(env.ROLLOUT_ROLE, 'install')
+  assert.equal(env.GH_TOKEN, 'synthetic-agent-token')
+  assert.equal(env.NPM_CONFIG_USERCONFIG, '/etc/rollout/npmrc')
+  assert.equal('SYNTHETIC_MAINTAINER_SECRET' in env, false)
+  assert.equal('ROLLOUT_ID' in env, false)
+  assert.ok(existsSync(join(wt, '.git', 'rollout-ready')))
 })
 
 const LOCAL_CONFIG = ['.claude/settings.json', '.claude/settings.local.json', 'CLAUDE.local.md']

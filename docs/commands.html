@@ -140,6 +140,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td><span class="badge where-cli">CLI only</span></td>
               </tr>
               <tr>
+                <td class="name"><a href="#cmd-sandbox">sandbox build</a></td>
+                <td>Builds the agents' image for the Docker runtime.</td>
+                <td><span class="badge where-cli">CLI only</span></td>
+              </tr>
+              <tr>
                 <td class="name"><a href="#cmd-help">help</a></td>
                 <td>Prints the usage.</td>
                 <td><span class="badge where-cli">CLI only</span></td>
@@ -162,6 +167,12 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         </p>
 
         <ul>
+          <li>
+            Its first line is the <a href="manifest.html#sandbox">runtime</a>: <code>runtime host</code>, or
+            <code>runtime docker, image &lt;tag&gt;</code>. Without <code>sandbox.image</code> the tag needs the version
+            <code>claude --version</code> prints, and when it prints none, <code>run</code> stops there. The <code>driver-start</code> event
+            records the runtime and the image too.
+          </li>
           <li>
             It takes <code>driver.lock</code>. A second driver for the same directory refuses to start and names the pid of the first. A
             lock left by a dead process, or one without a real pid, is cleared.
@@ -221,7 +232,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <p>
           <code>status</code> and <code>card</code> only read the rollout directory. They never call GitHub, so they work for a stopped
-          rollout too. Agents may run both.
+          rollout too. Agents may run both, but under the <a href="manifest.html#sandbox">Docker runtime</a> a container does not mount the
+          rollout directory, so there they fail.
         </p>
 
         <h3 id="cmd-status">status <a class="anchor" href="#cmd-status" aria-label="Link to this command">#</a></h3>
@@ -233,6 +245,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <ul>
           <li>
             The driver: running with its pid, heartbeat age and note, or <code>NOT RUNNING</code> with the time of its last heartbeat.
+          </li>
+          <li>
+            The <a href="manifest.html#sandbox">runtime</a> of the manifest: <code>runtime host</code>, or
+            <code>runtime docker, image &lt;tag&gt;</code>. The image is <code>sandbox.image</code>, else the one the last
+            <code>driver-start</code> event records, else <code>default</code>. It never runs <code>claude</code> to find it.
           </li>
           <li><code>PAUSED</code> and <code>HALTED</code> lines when they apply.</li>
           <li>One row per PR: id, state, PR number, head, CI or gate info, attempts as implement/fix/verify, and cost.</li>
@@ -662,6 +679,21 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <code>repo.maintainers</code>, or that <code>repo.install</code> works. <a href="accounts.html">Accounts</a> covers those.
         </p>
 
+        <h3 id="cmd-sandbox">sandbox build <a class="anchor" href="#cmd-sandbox" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R sandbox build --dir D</code></pre>
+
+        <p>
+          Builds the image of the <a href="manifest.html#sandbox">Docker runtime</a> from <code>sandbox/</code> in the skill directory, with
+          <code>docker build</code>. It reads the versions of your <code>claude</code> (<code>claudeBin</code>) and <code>gh</code> and
+          installs the same ones in the image. The tag is <code>sandbox.image</code>, else
+          <code>rollout-agent:&lt;claude version&gt;</code>, the default image of the runtime. When the build succeeds it prints
+          <code>built &lt;image&gt;</code>, and otherwise it exits with the code of <code>docker build</code>. A tool that prints no version
+          stops it before the build. It works under either runtime, so you can build the image before you switch. Run it again after
+          <code>claude</code> updates, because the default tag follows it and the driver never pulls an image. Any other subcommand prints
+          the known ones and exits 1.
+        </p>
+
         <h3 id="cmd-help">help <a class="anchor" href="#cmd-help" aria-label="Link to this command">#</a></h3>
 
         <pre><code>node $R help</code></pre>
@@ -779,7 +811,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td>GH_TOKEN, GH_CONFIG_DIR</td>
                 <td>the driver, for agents</td>
-                <td>The bot's token and an empty gh config directory, when <code>repo.agentToken</code> is set.</td>
+                <td>
+                  The bot's token and an empty gh config directory, when <code>repo.agentToken</code> is set. Under the
+                  <a href="manifest.html#sandbox">Docker runtime</a> a container gets the bot's <code>GH_TOKEN</code> and no
+                  <code>GH_CONFIG_DIR</code>.
+                </td>
               </tr>
               <tr>
                 <td>GH_REPO</td>
@@ -795,7 +831,17 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>
                   <code>repo.pathPrepend</code> goes first for the driver's own commands and for every agent. <code>CLAUDECODE</code> and
                   <code>CLAUDE_CODE_ENTRYPOINT</code> are removed, so a driver started inside a Claude Code session does not make its agents
-                  look nested.
+                  look nested. Under the <a href="manifest.html#sandbox">Docker runtime</a> agents, the install and the commands do not get
+                  it: the driver uses it to find the <code>docker</code> client, and a container has the image's own <code>PATH</code>.
+                </td>
+              </tr>
+              <tr>
+                <td>DOCKER_HOST</td>
+                <td>you</td>
+                <td>
+                  The daemon the <a href="manifest.html#sandbox">Docker runtime</a> and <code>sandbox build</code> use. The driver runs the
+                  <code>docker</code> client with your <code>HOME</code> and every <code>DOCKER_*</code> variable, so without it the current
+                  Docker context picks the daemon, as in your shell.
                 </td>
               </tr>
             </tbody>

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
@@ -727,4 +727,146 @@ test('loadManifest: a rollout that its repository names is an invalid manifest',
         'repo.github example/widgets names the rollout widgets, and the guard refuses every command that does: rename the rollout',
       ),
   )
+})
+
+const DEFAULT_HOSTS = [
+  'api.anthropic.com',
+  'statsig.anthropic.com',
+  'github.com',
+  'api.github.com',
+  'objects.githubusercontent.com',
+  'codeload.github.com',
+  'registry.npmjs.org',
+]
+
+// A rollout with this sandbox mapping, and these keys on top of its repo.
+function withSandbox(sandbox, repo = {}) {
+  const dir = makeRollout()
+  const file = join(dir, 'manifest.yaml')
+  const raw = parse(readFileSync(file, 'utf8'))
+
+  writeFileSync(file, stringify({ ...raw, repo: { ...raw.repo, ...repo }, sandbox }))
+
+  return dir
+}
+
+function sandboxErrors(sandbox, edit = (raw) => raw) {
+  const raw = structuredClone(base)
+
+  raw.sandbox = sandbox
+
+  return validateManifest(edit(raw))
+}
+
+test('loadManifest: the host runtime with the default image, token, hosts and limits when sandbox is not set', () => {
+  assert.deepEqual(loadManifest(makeRollout()).sandbox, {
+    runtime: 'host',
+    image: null,
+    oauthTokenFile: null,
+    allowedDomains: DEFAULT_HOSTS,
+    passEnv: [],
+    memory: '4g',
+    cpus: 2,
+    pidsLimit: 512,
+  })
+})
+
+test('loadManifest: each load gets new sandbox lists, and a given allowedDomains replaces the default one', () => {
+  const first = loadManifest(makeRollout()).sandbox
+  const second = loadManifest(makeRollout()).sandbox
+
+  assert.notEqual(first.allowedDomains, second.allowedDomains)
+  assert.notEqual(first.passEnv, second.passEnv)
+  first.allowedDomains.push('example.com')
+  first.passEnv.push('ANTHROPIC_API_KEY')
+  assert.deepEqual(second.allowedDomains, DEFAULT_HOSTS)
+  assert.deepEqual(second.passEnv, [])
+  assert.deepEqual(loadManifest(makeRollout()).sandbox.allowedDomains, DEFAULT_HOSTS)
+  assert.deepEqual(loadManifest(withSandbox({ allowedDomains: ['github.com'] })).sandbox.allowedDomains, ['github.com'])
+})
+
+test('validateManifest: sandbox, when set, is a mapping of known keys, each with a valid value', () => {
+  const image = 'sandbox.image must be an image tag without whitespace, such as rollout-agent:2.1.309'
+  const hosts = 'sandbox.allowedDomains must be a list of host names, such as api.anthropic.com'
+  const memory = 'sandbox.memory must be a size such as 4g or 512m'
+  const cpus = 'sandbox.cpus must be a positive number'
+  const pids = 'sandbox.pidsLimit must be a positive integer'
+  const valid = {
+    runtime: 'host',
+    image: 'rollout-agent:2.1.309',
+    allowedDomains: [],
+    passEnv: ['HTTPS_PROXY'],
+    memory: '512m',
+    cpus: 1.5,
+    pidsLimit: 256,
+  }
+
+  const cases = [
+    [null, ['sandbox must be a mapping']],
+    ['docker', ['sandbox must be a mapping']],
+    [{ runtime: 'host', network: 'none' }, ['sandbox: unknown key network']],
+    [{ runtime: 'podman' }, ['sandbox.runtime must be host or docker']],
+    [{ image: '' }, [image]],
+    [{ image: 'rollout agent' }, [image]],
+    [{ image: null }, [image]],
+    [{ oauthTokenFile: '' }, ['sandbox.oauthTokenFile must be the path of a file that holds a Claude Code OAuth token']],
+    [{ allowedDomains: 'github.com' }, [hosts]],
+    [{ allowedDomains: ['github.com', '-x.example'] }, [hosts]],
+    [{ allowedDomains: ['https://github.com'] }, [hosts]],
+    [{ passEnv: 'ANTHROPIC_API_KEY' }, ['sandbox.passEnv must be a list of variable names']],
+    [
+      { passEnv: ['1PASSWORD', 'A-B'] },
+      ['sandbox.passEnv: 1PASSWORD is not a variable name', 'sandbox.passEnv: A-B is not a variable name'],
+    ],
+    [{ passEnv: ['GH_TOKEN', 'PATH'] }, ['sandbox.passEnv: GH_TOKEN is set by the runtime', 'sandbox.passEnv: PATH is set by the runtime']],
+    [{ passEnv: ['ROLLOUT_DIR'] }, ['sandbox.passEnv: ROLLOUT_DIR is a rollout variable, and agents get none but ROLLOUT_ROLE']],
+    [{ memory: '4' }, [memory]],
+    [{ memory: 4 }, [memory]],
+    [{ memory: '0g' }, [memory]],
+    [{ cpus: 0 }, [cpus]],
+    [{ cpus: '2' }, [cpus]],
+    [{ pidsLimit: 1.5 }, [pids]],
+    [{ pidsLimit: 0 }, [pids]],
+    [{}, []],
+    [valid, []],
+  ]
+
+  for (const [sandbox, errors] of cases) {
+    assert.deepEqual(sandboxErrors(sandbox), errors, JSON.stringify(sandbox))
+  }
+})
+
+test('validateManifest: runtime docker needs a Claude sign-in and repo.agentToken, and refuses mcpConfig', () => {
+  const signIn = 'sandbox.runtime docker needs sandbox.oauthTokenFile or ANTHROPIC_API_KEY in sandbox.passEnv, so claude can sign in'
+  const bot = 'sandbox.runtime docker needs repo.agentToken: in the container agents act on GitHub only as the bot account'
+  const mcp = 'sandbox.runtime docker does not take mcpConfig yet: the container mounts nothing of the rollout directory'
+  const withToken = (raw) => ({ ...raw, repo: { ...raw.repo, agentToken: '~/agent-token' } })
+  const withMcp = (raw) => ({ ...withToken(raw), mcpConfig: 'mcp.json' })
+
+  assert.deepEqual(sandboxErrors({ runtime: 'docker' }), [signIn, bot])
+  assert.deepEqual(sandboxErrors({ runtime: 'docker', oauthTokenFile: 'claude-token' }, withToken), [])
+  assert.deepEqual(sandboxErrors({ runtime: 'docker', passEnv: ['ANTHROPIC_API_KEY'] }, withToken), [])
+  assert.deepEqual(sandboxErrors({ runtime: 'docker', oauthTokenFile: 'claude-token' }, withMcp), [mcp])
+  assert.deepEqual(sandboxErrors({ runtime: 'host' }, withMcp), [])
+})
+
+test('loadManifest: under Docker the token file resolves against the rollout directory, must exist and be readable by its owner only', () => {
+  const dir = withSandbox({ runtime: 'docker', oauthTokenFile: 'claude-token' }, { agentToken: '~/agent-token' })
+  const token = join(dir, 'claude-token')
+
+  assert.throws(
+    () => loadManifest(dir),
+    (error) => error.message === `sandbox.oauthTokenFile ${token} does not exist`,
+  )
+
+  writeFileSync(token, 'synthetic-oauth-token\n')
+  chmodSync(token, 0o644)
+  assert.throws(
+    () => loadManifest(dir),
+    (error) => error.message.includes(`chmod 600 ${token}`),
+  )
+
+  chmodSync(token, 0o600)
+  assert.equal(loadManifest(dir).sandbox.oauthTokenFile, token)
+  assert.equal(loadManifest(withSandbox({ oauthTokenFile: '~/tokens/claude' })).sandbox.oauthTokenFile, join(homedir(), 'tokens', 'claude'))
 })
