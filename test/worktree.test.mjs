@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import {
   alignWorktree,
+  inspectWorktree,
   mirrorPath,
   preparePreview,
   prepareWorktree,
@@ -481,4 +482,106 @@ test('alignWorktree and resetWorktree never follow a symlinked .claude', async (
   assert.deepEqual(await resetWorktree(manifest, pr, head), ['CLAUDE.local.md'])
   assert.ok(existsSync(join(outside, 'settings.json')))
   assert.ok(existsSync(join(outside, 'settings.local.json')))
+})
+
+const REAL_GIT = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+
+// A git for repo.pathPrepend, after fake-bin, that records each call in the
+// fake's calls.jsonl and runs the real git. A fake container's PATH leaves it
+// out, so git inside a container is never recorded as host git.
+function loggingGit(dir, bin) {
+  const wrapper = join(dir, 'host-git')
+  const script = [
+    '#!/usr/bin/env node',
+    "const { appendFileSync } = require('node:fs')",
+    "const { spawnSync } = require('node:child_process')",
+    'const args = process.argv.slice(2)',
+    `appendFileSync(${JSON.stringify(join(bin, 'calls.jsonl'))}, JSON.stringify({ tool: 'host-git', args }) + '\\n')`,
+    `process.exitCode = spawnSync(${JSON.stringify(REAL_GIT)}, args, { stdio: 'inherit' }).status ?? 1`,
+  ]
+
+  mkdirSync(wrapper)
+  writeFileSync(join(wrapper, 'git'), `${script.join('\n')}\n`, { mode: 0o755 })
+
+  return wrapper
+}
+
+// The host git calls in the clone, after their -C <wt>, with paths and SHAs
+// replaced by names.
+function hostGitIn(calls, wt, names = {}) {
+  const replacements = [[wt, '<wt>'], ...Object.entries(names).map(([name, path]) => [path, `<${name}>`])]
+  const normalized = (arg) =>
+    replacements.reduce((text, [path, name]) => text.replaceAll(path, name), arg).replace(/\b[0-9a-f]{40}\b/g, '<sha>')
+
+  return calls
+    .filter((call) => call.tool === 'host-git' && call.args[0] === '-C' && call.args[1] === wt)
+    .map((call) => call.args.slice(2).map(normalized))
+}
+
+const REFRESH = [
+  ['config', 'remote.origin.url', GITHUB_URL],
+  ['config', 'core.hooksPath', '<home>/git-hooks'],
+  ['config', '--unset-all', 'credential.helper'],
+  ['config', '--add', 'credential.helper', ''],
+  ['config', '--add', 'credential.helper', '!gh auth git-credential'],
+  ['config', 'remote.origin.pushurl', '<origin>'],
+  ['fetch', '--quiet', '--prune', 'origin'],
+  ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/feat/a1'],
+]
+
+// With no remote branch, a ready prepare checks whether the base moved.
+const UNTOUCHED = [
+  ['rev-parse', 'HEAD'],
+  ['rev-parse', 'origin/main'],
+]
+
+const INSPECT = [
+  ['status', '--porcelain'],
+  ['rev-parse', 'HEAD'],
+]
+
+test('the host runtime runs the same git in a clone as before, from a new prepare to a rebase', async (context) => {
+  const { dir, manifest, origin, repo, pr } = fixture(context)
+  const { bin, calls } = fakeDocker(dir)
+  const wt = worktreePath(manifest, pr)
+
+  manifest.repo.agentToken = join(dir, 'agent-token')
+  manifest.repo.pushUrl = origin
+  manifest.repo.pathPrepend = [bin, loggingGit(dir, bin)]
+  writeFileSync(manifest.repo.agentToken, 'synthetic-agent-token\n')
+
+  await prepareWorktree(manifest, pr)
+  await prepareWorktree(manifest, pr)
+
+  const { head } = await inspectWorktree(manifest, pr)
+
+  await alignWorktree(manifest, pr, head)
+  await resetWorktree(manifest, pr, head)
+
+  const own = commit(wt, 'own.txt')
+
+  git(wt, 'push', '--quiet', 'origin', `HEAD:refs/heads/${pr.branch}`)
+  mergeElsewhere(repo, 'b.txt')
+  assert.equal((await rebaseWorktree(manifest, pr, own)).ok, true)
+
+  assert.deepEqual(hostGitIn(calls(), wt, { origin, home: HOME.replace(/\/$/, '') }), [
+    ...REFRESH,
+    ['checkout', '--quiet', '-B', 'feat/a1', 'origin/main'],
+    ['branch', '--unset-upstream'],
+    ...REFRESH,
+    ...UNTOUCHED,
+    ...INSPECT,
+    ...REFRESH,
+    ...UNTOUCHED,
+    ...INSPECT,
+    ['reset', '--quiet', '--hard', '<sha>'],
+    ['clean', '-fdq'],
+    ...REFRESH,
+    ['fetch', '--quiet', 'origin'],
+    ['status', '--porcelain', '--untracked-files=no'],
+    ['checkout', '--quiet', '-B', 'feat/a1', '<sha>'],
+    ['rebase', 'origin/main'],
+    ['push', '--force-with-lease=refs/heads/feat/a1:<sha>', 'origin', 'HEAD:refs/heads/feat/a1'],
+    ['rev-parse', 'HEAD'],
+  ])
 })
