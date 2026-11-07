@@ -151,6 +151,24 @@ policy:
 <span class="dim">#     # Read from the base branch at every verifier launch. Every entry that applies is required.</span>
 <span class="dim">#     criteriaFrom: docs/criteria.yaml</span>
 
+<span class="dim"># Where agents, repo.install and the ready and pre-verify commands run. host, the default, runs agents as you.</span>
+<span class="dim"># sandbox:</span>
+<span class="dim">#   runtime: docker                # one container per run</span>
+<span class="dim">#   image: rollout-agent:2.1.309   # default: rollout-agent:&lt;version of your claude&gt;, as sandbox build tags it</span>
+<span class="dim">#   oauthTokenFile: claude-token   # chmod 600, or ANTHROPIC_API_KEY in passEnv</span>
+<span class="dim">#   allowedDomains:                # the only hosts a container reaches, and a list here replaces these</span>
+<span class="dim">#     - api.anthropic.com</span>
+<span class="dim">#     - statsig.anthropic.com</span>
+<span class="dim">#     - github.com</span>
+<span class="dim">#     - api.github.com</span>
+<span class="dim">#     - objects.githubusercontent.com</span>
+<span class="dim">#     - codeload.github.com</span>
+<span class="dim">#     - registry.npmjs.org</span>
+<span class="dim">#   passEnv: []                    # variables of your environment every container gets</span>
+<span class="dim">#   memory: 4g</span>
+<span class="dim">#   cpus: 2</span>
+<span class="dim">#   pidsLimit: 512</span>
+
 prs:
   - id: P1
     branch: feat/config-loader
@@ -234,7 +252,8 @@ prs:
                   when the first <code>claude</code> on PATH is a wrapper script, such as the shim a terminal like cmux puts there. Agents
                   would run through it, with whatever it adds, and stop when it stops them.
                   <a href="commands.html#cmd-preflight">preflight</a>
-                  warns about one.
+                  warns about one. Under the <a href="#sandbox">Docker runtime</a> agents run the image's <code>claude</code>, and
+                  <code>claudeBin</code> only gives the version that <code>sandbox build</code> installs and the default image tag names.
                 </td>
               </tr>
               <tr id="manifest-mcpConfig">
@@ -248,7 +267,9 @@ prs:
                   never get it: an MCP tool never passes the Bash guard, so a server that writes files or posts would break the read-only
                   roles. Without it agents get no MCP server at all, not your claude.ai connectors, plugin servers or configured ones. Add
                   only servers that cannot publish, send messages or merge. See
-                  <a href="security.html#agent-context">What an agent loads</a>.
+                  <a href="security.html#agent-context">What an agent loads</a>. Under
+                  <a href="#sandbox-runtime"><code>sandbox.runtime: docker</code></a> loading refuses it, because a container mounts nothing
+                  of the rollout directory.
                 </td>
               </tr>
               <tr id="manifest-repo">
@@ -283,6 +304,16 @@ prs:
                 <td>
                   Extra checks before a stage of a PR, run by the driver or, for a brief, by the brief reviewer for the driver, and criteria
                   the verifier checks. See <a href="#gates">gates</a>.
+                </td>
+              </tr>
+              <tr id="manifest-sandbox">
+                <td>sandbox</td>
+                <td>object</td>
+                <td>the host runtime</td>
+                <td>no</td>
+                <td>
+                  Where agents, <code>repo.install</code> and the ready and pre-verify commands run: on your machine as you, or each in a
+                  container of its own. See <a href="#sandbox">sandbox</a>.
                 </td>
               </tr>
               <tr id="manifest-prs">
@@ -357,7 +388,10 @@ prs:
                 <td>list of paths</td>
                 <td><code>[]</code></td>
                 <td>no</td>
-                <td>Directories that go first on PATH for the driver and every agent, for example a pinned node, pnpm or gh.</td>
+                <td>
+                  Directories that go first on PATH for the driver and every agent, for example a pinned node, pnpm or gh. Under the
+                  <a href="#sandbox">Docker runtime</a> only the driver uses them: a container has the image's own PATH.
+                </td>
               </tr>
               <tr id="repo-install">
                 <td>install</td>
@@ -368,7 +402,8 @@ prs:
                   A shell command that runs through <code>sh -c</code>, with a 20 minute limit. It runs in a new PR worktree, when an
                   untouched worktree moves to the base, and in a brief preview. It runs scripts from a worktree an agent may have written,
                   so it gets the agents' environment: an empty npmrc, no npm tokens and, with <code>repo.agentToken</code>, the bot's token.
-                  See <a href="security.html#environment">The environment</a>.
+                  See <a href="security.html#environment">The environment</a>. It starts through the <a href="#sandbox">runtime</a>, so
+                  under Docker it runs in a container of its own. At the limit the driver stops its whole process group, or its container.
                 </td>
               </tr>
               <tr id="repo-requiredChecks">
@@ -402,8 +437,9 @@ prs:
                 <td>no</td>
                 <td>
                   A file with the bot account's token. Agents get it as <code>GH_TOKEN</code>, and worktrees push over HTTPS with it.
-                  Without it agents act on GitHub as you, and preflight warns. <code>policy.approval: github</code> requires it. See
-                  <a href="accounts.html">Accounts</a>.
+                  Without it agents act on GitHub as you, and preflight warns. <code>policy.approval: github</code> requires it, and so does
+                  <a href="#sandbox-runtime"><code>sandbox.runtime: docker</code></a
+                  >. See <a href="accounts.html">Accounts</a>.
                 </td>
               </tr>
               <tr id="repo-maintainers">
@@ -1014,6 +1050,181 @@ prs:
           </li>
         </ul>
 
+        <h2 id="sandbox">sandbox <a class="anchor" href="#sandbox" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          Every process that runs code from a PR's clone starts through a runtime: the agents, <code>repo.install</code> and the
+          <a href="#gates-ready-required">ready</a> and <a href="#gates-preVerify-required">pre-verify commands</a>. The
+          <code>host</code> runtime, the default, runs them on your machine as you, with your files and logins in reach. The
+          <code>docker</code> runtime runs each one in a container of its own. Every key is optional, and any other key fails validation.
+        </p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>type</th>
+                <th>default</th>
+                <th>meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="sandbox-runtime">
+                <td>runtime</td>
+                <td><code>host</code> or <code>docker</code></td>
+                <td><code>host</code></td>
+                <td>
+                  Where the processes run. Under <code>docker</code> loading also needs <code>oauthTokenFile</code> or
+                  <code>ANTHROPIC_API_KEY</code> in <code>passEnv</code>, so claude can sign in, and
+                  <a href="#repo-agentToken"><code>repo.agentToken</code></a
+                  >, because in a container agents act on GitHub only as the bot account. It refuses
+                  <a href="#manifest-mcpConfig"><code>mcpConfig</code></a
+                  >, because a container mounts nothing of the rollout directory, where the servers would run from.
+                </td>
+              </tr>
+              <tr id="sandbox-image">
+                <td>image</td>
+                <td>image tag</td>
+                <td><code>rollout-agent:&lt;version&gt;</code></td>
+                <td>
+                  The image every container runs. The default tag carries the version <code>claudeBin --version</code> prints, the tag
+                  <a href="commands.html#cmd-sandbox"><code>sandbox build</code></a> gives. <code>run</code> stops when it finds no version.
+                  Set it to pin an image, for example to keep an older one while you update <code>claude</code>.
+                </td>
+              </tr>
+              <tr id="sandbox-oauthTokenFile">
+                <td>oauthTokenFile</td>
+                <td>path</td>
+                <td>none</td>
+                <td>
+                  A file that holds a Claude Code OAuth token, such as one <code>claude setup-token</code> prints. Containers get it as
+                  <code>CLAUDE_CODE_OAUTH_TOKEN</code>, read again at every start, so a new token applies to the next run. A relative path
+                  resolves against the rollout directory. Under <code>docker</code> the file must exist and no other user may read it (<code
+                    >chmod 600</code
+                  >).
+                </td>
+              </tr>
+              <tr id="sandbox-allowedDomains">
+                <td>allowedDomains</td>
+                <td>list of host names</td>
+                <td>
+                  <code>api.anthropic.com</code>, <code>statsig.anthropic.com</code>, <code>github.com</code>, <code>api.github.com</code>,
+                  <code>objects.githubusercontent.com</code>, <code>codeload.github.com</code>, <code>registry.npmjs.org</code>
+                </td>
+                <td>
+                  The hosts a container reaches over HTTPS. A given list replaces the default one, so keep the Anthropic and GitHub hosts in
+                  yours. A name has letters, digits, dots and hyphens, and starts with a letter or a digit.
+                </td>
+              </tr>
+              <tr id="sandbox-passEnv">
+                <td>passEnv</td>
+                <td>list of variable names</td>
+                <td><code>[]</code></td>
+                <td>
+                  Variables of the driver's environment that every container gets, each one when it is set.
+                  <code>ANTHROPIC_API_KEY</code> here signs claude in without an OAuth token. A name the runtime sets is refused, so a
+                  passed variable never replaces the bot's token or the container's paths: <code>GH_TOKEN</code>, <code>GH_REPO</code>,
+                  <code>GIT_TERMINAL_PROMPT</code>, <code>NPM_TOKEN</code>, <code>NODE_AUTH_TOKEN</code>, <code>ROLLOUT_ROLE</code>,
+                  <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY</code>, <code>CLAUDE_CODE_PROMPT_CACHE_TTL</code>,
+                  <code>NPM_CONFIG_USERCONFIG</code>, <code>CLAUDE_CODE_OAUTH_TOKEN</code>, <code>GIT_AUTHOR_NAME</code>,
+                  <code>GIT_COMMITTER_NAME</code>, <code>GIT_AUTHOR_EMAIL</code>, <code>GIT_COMMITTER_EMAIL</code>, <code>HOME</code>,
+                  <code>PATH</code>, <code>TMPDIR</code>, <code>HOST_UID</code>, <code>HOST_GID</code> and <code>ALLOWED_DOMAINS</code>. So
+                  is any name that starts with <code>ROLLOUT_</code>.
+                </td>
+              </tr>
+              <tr id="sandbox-memory">
+                <td>memory</td>
+                <td>size</td>
+                <td><code>4g</code></td>
+                <td>The memory limit of each container: a whole number with <code>k</code>, <code>m</code> or <code>g</code>.</td>
+              </tr>
+              <tr id="sandbox-cpus">
+                <td>cpus</td>
+                <td>positive number</td>
+                <td><code>2</code></td>
+                <td>The CPU limit of each container. <code>1.5</code> is one and a half CPUs.</td>
+              </tr>
+              <tr id="sandbox-pidsLimit">
+                <td>pidsLimit</td>
+                <td>positive integer</td>
+                <td><code>512</code></td>
+                <td>The most processes one container runs at once.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Under <code>runtime: docker</code>:</p>
+
+        <ul>
+          <li>
+            <strong>One container per run.</strong> Each agent run, install and ready or pre-verify command gets a container of its own,
+            removed when it ends. It mounts three directories, each at its path on your machine: the PR's clone or its brief preview, the
+            skill directory read-only, and a home directory at <code>/home/agent</code>. Nothing else: not the rollout directory, not
+            <code>repo.path</code>, not the mirror, not your home directory. The runtime refuses to start a container in any other
+            directory.
+          </li>
+          <li>
+            <strong>As you, with no privileges.</strong> The command runs with your uid and gid, so the files it writes are yours. It has no
+            Linux capability and cannot gain one: the image has no setuid file, and the command and everything it starts run with
+            <code>no_new_privs</code>. A driver running as root is refused: the container exits before its command runs.
+          </li>
+          <li>
+            <strong>Only the variables it needs.</strong> A container gets the bot's <code>GH_TOKEN</code>, <code>GH_REPO</code>,
+            <code>ROLLOUT_ROLE</code>, empty <code>NPM_TOKEN</code> and <code>NODE_AUTH_TOKEN</code>, an
+            <code>NPM_CONFIG_USERCONFIG</code> that names an empty file in the image, the OAuth token, the git identity, Claude Code's own
+            settings, the names in <code>passEnv</code>, and its own <code>HOME</code>, <code>PATH</code> and <code>TMPDIR</code>. No
+            <code>GH_CONFIG_DIR</code>, no <code>GITHUB_TOKEN</code> and nothing else of the driver's environment. Their values never appear
+            on the docker command line.
+          </li>
+          <li>
+            <strong>Two kinds of home.</strong> The implementer and its fixes share <code>&lt;id&gt;.home/</code> next to the clone. It is
+            kept between runs, so a fix's <code>--resume</code> finds the session, and it goes with the clone after the merge. Every other
+            run, the verifier, the brief writer and reviewer, the delegate, the install and each command, starts in an empty home under
+            <code>homes/</code> that is removed when it ends. No read-only role or command ever reads what an implementer left in its home.
+          </li>
+          <li>
+            <strong>Allowed hosts only.</strong> Before the command starts, the container sets its firewall as root, and a container whose
+            firewall fails exits before its command runs. It lets out HTTPS to the IPv4 addresses of the
+            <a href="#sandbox-allowedDomains"><code>allowedDomains</code></a
+            >, DNS to the container's resolvers, loopback and connections already open. Everything else is rejected, and IPv6 is dropped. A
+            root process the command cannot stop resolves the hosts again every 5 minutes. A rebuild that finds no address for any host
+            keeps the rules in force, and at the start of a run it fails the run. The agents' prompts name the hosts they reach.
+          </li>
+          <li>
+            <strong>The image.</strong> <a href="commands.html#cmd-sandbox"><code>node $R sandbox build</code></a> builds it from
+            <code>sandbox/</code> in the skill directory, with the versions of your <code>claude</code> and <code>gh</code>. The driver
+            never pulls it: it runs containers with <code>--pull never</code>, so an image of that name on a registry is never fetched. The
+            default tag follows your <code>claude</code>, so after <code>claude</code> updates, run <code>sandbox build</code> again or pin
+            <a href="#sandbox-image"><code>sandbox.image</code></a
+            >. The image has node 24 with npm and the Yarn 1 of the node image, and no pnpm.
+          </li>
+          <li>
+            <strong>claudeBin and repo.pathPrepend do not apply inside.</strong> Agents run the image's <code>claude</code>, and commands
+            find their tools on the image's <code>PATH</code>.
+          </li>
+          <li>
+            <strong>Git identity.</strong> Commits made in a container carry the <code>user.name</code> and <code>user.email</code> that
+            <code>git config</code> gives in <code>repo.path</code>, read once per driver process. Without them <code>git commit</code>
+            fails in the container. The commits are not signed.
+          </li>
+          <li>
+            <strong>The Docker daemon.</strong> The driver runs the <code>docker</code> client on its <code>PATH</code> with your
+            <code>HOME</code> and every <code>DOCKER_*</code> variable, so <code>DOCKER_HOST</code> and the current Docker context pick the
+            daemon, as they do in your shell.
+          </li>
+          <li>
+            <strong>A Docker VM.</strong> Where the daemon runs in a VM, as on macOS, the clones, the homes and the skill directory must be
+            in a directory the VM shares. colima shares your home directory by default. The VM also needs room for
+            <code>policy.concurrency</code> containers at once, each with <code>memory</code> and <code>cpus</code>.
+          </li>
+          <li>
+            <strong>Switching runtimes.</strong> A fix cannot resume a session started under the other runtime, because the session lives in
+            the other home. The resume finds no session, and the driver starts a fresh implementer in the same clone.
+          </li>
+        </ul>
+
         <h2 id="prs">prs <a class="anchor" href="#prs" aria-label="Link to this section">#</a></h2>
 
         <p>
@@ -1239,6 +1450,17 @@ prs:
             <code>/</code> or <code>~</code>.
           </li>
           <li>
+            <code>sandbox</code>, when set, is a mapping with at most these keys: <code>runtime</code>, <code>host</code> or
+            <code>docker</code>, <code>image</code>, a tag without whitespace, <code>oauthTokenFile</code>, a path that is not empty,
+            <code>allowedDomains</code>, a list of host names, <code>passEnv</code>, a list of variable names that the runtime does not set
+            and that do not start with <code>ROLLOUT_</code>, <code>memory</code>, a size such as <code>4g</code> or <code>512m</code>,
+            <code>cpus</code>, a positive number, and <code>pidsLimit</code>, a positive integer.
+          </li>
+          <li>
+            Under <code>sandbox.runtime: docker</code>, <code>sandbox.oauthTokenFile</code> or <code>ANTHROPIC_API_KEY</code> in
+            <code>sandbox.passEnv</code> is set, and so is <code>repo.agentToken</code>, and <code>mcpConfig</code> is not.
+          </li>
+          <li>
             Every PR has an id, a branch, a title and a brief, ids and branches are unique, and both required efforts are known levels.
             <code>effort.brief</code>, when set, is a known level too.
           </li>
@@ -1252,7 +1474,8 @@ prs:
 
         <p>
           Loading also fails when a brief file is missing and there are no briefing sources, and when <code>--only</code> names an unknown
-          PR.
+          PR. Under <code>sandbox.runtime: docker</code> it fails when <code>sandbox.oauthTokenFile</code> does not exist, or when its group
+          or other users have any access to it: <code>chmod 600</code> it.
         </p>
 
         <h2 id="gotchas">Gotchas <a class="anchor" href="#gotchas" aria-label="Link to this section">#</a></h2>
@@ -1370,13 +1593,17 @@ prs:
                 <td>driver, preflight</td>
                 <td>
                   An empty gh config directory for the agents, so gh finds no stored login in it. Agents never get <code>GH_HOST</code>,
-                  which would make gh read your keyring login anyway.
+                  which would make gh read your keyring login anyway. The Docker runtime does not use it: a container gets no
+                  <code>GH_CONFIG_DIR</code>.
                 </td>
               </tr>
               <tr>
                 <td>.npmrc-agents</td>
                 <td>driver</td>
-                <td>An npm config without credentials for the agents, <code>repo.install</code> and the ready and pre-verify commands.</td>
+                <td>
+                  An npm config without credentials for the agents, <code>repo.install</code> and the ready and pre-verify commands. The
+                  Docker runtime does not use it: a container's npm reads an empty file in the image.
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1406,9 +1633,25 @@ prs:
               <tr>
                 <td>&lt;id&gt;/</td>
                 <td>
-                  The PR's clone of the mirror, with its own <code>.git</code> and the PR's branch. Its git hooks point at the skill's
-                  <code>git-hooks/</code>, its origin is the repository on GitHub, and with a token its push URL is
-                  <code>repo.pushUrl</code>. After the merge the driver removes it, with the remote branch.
+                  The PR's clone of the mirror, with its own <code>.git</code>, its own copy of the objects and the PR's branch. It shares
+                  no file with the mirror, so rewriting a file in the clone never changes the mirror or a later clone. Its git hooks point
+                  at the skill's <code>git-hooks/</code>, its origin is the repository on GitHub, its credential helper is
+                  <code>gh auth git-credential</code> from <code>PATH</code>, and with a token its push URL is <code>repo.pushUrl</code>.
+                  After the merge the driver removes it, with the remote branch.
+                </td>
+              </tr>
+              <tr>
+                <td>&lt;id&gt;.home/</td>
+                <td>
+                  The home directory of the PR's implementer and its fixes under the <a href="#sandbox">Docker runtime</a>, with their
+                  Claude Code sessions. Kept between runs, and removed with the clone after the merge.
+                </td>
+              </tr>
+              <tr>
+                <td>homes/</td>
+                <td>
+                  The empty home directories of every other run under the Docker runtime, one per container. Each is removed when its run
+                  ends.
                 </td>
               </tr>
               <tr>
@@ -1442,6 +1685,7 @@ prs:
           <li><a href="#repo">repo</a></li>
           <li><a href="#briefing">briefing.sources</a></li>
           <li><a href="#policy">policy</a></li>
+          <li><a href="#sandbox">sandbox</a></li>
           <li><a href="#prs">prs</a></li>
           <li><a href="#validation">What loading checks</a></li>
           <li><a href="#gotchas">Gotchas</a></li>

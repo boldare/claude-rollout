@@ -23,12 +23,13 @@ import { makeRollout } from './fixtures.mjs'
 
 const STATE = { ...freshPr(), pr: 12, ready: { status: 'READY' } }
 
-function render({ public: isPublic, denylist }) {
+function render({ public: isPublic, denylist, runtime = 'host' }) {
   const manifest = loadManifest(makeRollout())
   const pr = manifest.all[0]
 
   manifest.repo.public = isPublic
   manifest.repo.denylist = denylist
+  manifest.sandbox.runtime = runtime
 
   return {
     implement: implementPrompt(manifest, pr, STATE),
@@ -106,6 +107,30 @@ test('prompts: a private repo without a denylist gets neither rule', () => {
   assert.ok(prompts.briefReview.includes('4. Check for scope leaking in from other PRs.\n'))
   assert.ok(prompts.verify.includes('- The PR text: `gh pr view 12 --json title,body`.'))
   assertFilled(prompts)
+})
+
+test('prompts: under Docker every role but fix learns it runs in a container and which hosts it reaches, and the host prompts say nothing of it', () => {
+  const hosts = loadManifest(makeRollout()).sandbox.allowedDomains
+  const paragraph = `You run in a container. Its network reaches only these hosts: ${hosts.map((host) => `\`${host}\``).join(', ')}. Any other host fails, \`WebFetch\` included. Outside \`/tmp\`, only this worktree and your home directory are writable.`
+  const host = render({ public: true, denylist: [], runtime: 'host' })
+  const docker = render({ public: true, denylist: [], runtime: 'docker' })
+
+  for (const [name, text] of Object.entries(host)) {
+    assert.equal(text.includes('You run in a container'), false, name)
+  }
+
+  for (const [name, text] of Object.entries(docker)) {
+    assert.ok(text.includes(`\n\n${paragraph}\n`), name)
+
+    for (const allowed of hosts) {
+      assert.ok(text.includes(`\`${allowed}\``), `${name}: ${allowed}`)
+    }
+  }
+
+  assert.ok(host.implement.includes('the versions this repo needs.\n\n## Protocol'))
+  assert.ok(docker.implement.includes(`the versions this repo needs.\n\n${paragraph}\n\n## Protocol`))
+  assertFilled(host)
+  assertFilled(docker)
 })
 
 test('prompts: the brief writer and the reviewer see every earlier answer, oldest first, under one heading', () => {
