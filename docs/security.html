@@ -101,6 +101,13 @@
             <code>Origin</code> (<code>handle</code> in <code>lib/server.mjs</code>), so other web pages cannot reach it through DNS
             rebinding or CSRF. See <a href="#ui">The web UI</a>.
           </li>
+          <li>
+            <strong>No host git in a clone an agent has worked in.</strong> Under the Docker runtime an agent can write its clone's
+            <code>.git/config</code>, where <code>core.fsmonitor</code>, a filter or a hooks path names a program that git runs. So once
+            code from the checkout may have run in a clone, the driver runs every git command there, and writes its markers there, in a
+            container over the clone. Such a program runs only in that container, with the bot's token and the git identity and nothing else
+            of your environment. Under the host runtime the same git runs as you, like everything else.
+          </li>
         </ul>
 
         <div class="callout danger">
