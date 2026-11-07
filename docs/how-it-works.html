@@ -282,8 +282,8 @@
                 <td class="nowrap">Driver</td>
                 <td class="nowrap">the bot's token</td>
                 <td>
-                  The <code>--force-with-lease</code> push after a rebase. Through <code>lib/gh.mjs</code>, replies in review threads and
-                  the summary comment after a fix.
+                  The <code>--force-with-lease</code> push after a rebase. Under the Docker runtime, also the fetches in a PR's clone once
+                  the clone is set up. Through <code>lib/gh.mjs</code>, replies in review threads and the summary comment after a fix.
                 </td>
               </tr>
               <tr>
@@ -1433,7 +1433,9 @@
           <li>
             <strong>Rebases</strong> are the driver's own work. It rebases the judged head onto the base in the worktree and pushes with
             <code>--force-with-lease</code> on that head, as the bot. A conflict aborts the rebase and goes back to the implementer with the
-            conflicting files. When the patch id stays the same, the verification and the approval carry over to the new head.
+            conflicting files. When the patch id stays the same, the verification and the approval carry over to the new head. Under the
+            Docker runtime the rebase and its push run in a container over the clone, with the bot's token, like every git command the
+            driver runs in a PR's clone once the clone is set up.
           </li>
           <li>
             <strong>The release PR</strong> ("chore: version packages" by default) is never merged, because merging it publishes. After the

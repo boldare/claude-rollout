@@ -380,7 +380,8 @@ test('mergeNext: under human merge nothing waits for another PR', async () => {
 const NEW_FINDING = 'README.md:3 still names the old flag.'
 
 // A1 under verification of SHA, with the findings of the FAIL before it and
-// the implementer's answers. Its fake git shows a clean worktree at SHA.
+// the implementer's answers. Its fake git shows a clean worktree at SHA, in a
+// clone directory that git starts in.
 function recheckDriver(state = {}) {
   const setup = tickDriver(
     {
@@ -403,7 +404,11 @@ function recheckDriver(state = {}) {
     },
   )
 
-  return { ...setup, pr: setup.manifest.prs.find((item) => item.id === 'A1'), entry: setup.driver.ledger.prs.A1 }
+  const pr = setup.manifest.prs.find((item) => item.id === 'A1')
+
+  mkdirSync(worktreePath(setup.manifest, pr), { recursive: true })
+
+  return { ...setup, pr, entry: setup.driver.ledger.prs.A1 }
 }
 
 // The next verifier's FAIL on SHA, with `recheck` mapping each id to its status.
