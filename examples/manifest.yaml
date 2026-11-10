@@ -92,15 +92,17 @@ policy:
 #     # Read from the base branch at every verifier launch. Every entry that applies is required.
 #     criteriaFrom: docs/criteria.yaml
 
-# Where agents, repo.install and the ready and pre-verify commands run (see docs/manifest.html#sandbox).
-# host is the default and runs agents as you. docker runs each one in a container of its own.
+# Where agents, repo.install and the ready and pre-verify commands run (see docs/manifest.html#sandbox
+# and docs/security.html#boundaries). host is the default and runs them as you. docker runs each one in
+# a container that sees only its clone and reaches only allowedDomains.
+# docker needs repo.agentToken and takes no mcpConfig.
 # sandbox:
 #   runtime: docker
 #   # Built by `node $R sandbox build`, never pulled. The image has npm, not pnpm.
 #   # Default: rollout-agent:<version of your claude>, the tag sandbox build gives.
 #   image: rollout-agent:2.1.309
-#   # A Claude Code OAuth token, chmod 600. Or ANTHROPIC_API_KEY in passEnv.
-#   oauthTokenFile: claude-token
+#   # The token `claude setup-token` prints, in a file you chmod 600. Or ANTHROPIC_API_KEY in passEnv.
+#   oauthTokenFile: ~/.config/rollout/claude-token
 #   # The only hosts a container reaches. A list here replaces this default.
 #   allowedDomains:
 #     - api.anthropic.com

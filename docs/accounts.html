@@ -204,11 +204,18 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
         </p>
 
         <p>
+          Under <code>sandbox.runtime: docker</code> a container gets <code>GH_TOKEN</code>, <code>GH_REPO</code> and
+          <code>GIT_TERMINAL_PROMPT</code>, and no <code>GITHUB_TOKEN</code> and no <code>GH_CONFIG_DIR</code>. It has no stored login and
+          no keyring to fall back to.
+        </p>
+
+        <p>
           Worktrees push over HTTPS to <a href="manifest.html#repo-pushUrl"><code>repo.pushUrl</code></a
           >, by default <code>https://github.com/&lt;github&gt;.git</code>, with <code>gh auth git-credential</code> as the only credential
           helper (<code>lib/worktree.mjs</code>). The <code>pre-push</code> hook refuses any other URL and any branch but the PR's own, so
           your SSH key is never used for a push. Each worktree fetches from <code>https://github.com/&lt;github&gt;.git</code> through the
-          same helper, with your gh login when the driver fetches and the bot's token when an agent does. The mirror and
+          same helper, with your gh login when the driver fetches and the bot's token when an agent does. Under Docker the driver's fetches
+          in a ready clone go as the bot too, see <a href="how-it-works.html#identities">Identities</a>. The mirror and
           <code>repo.path</code> itself still fetch through your normal remote.
         </p>
 
@@ -443,9 +450,10 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
         <h3 id="claude-login">The login the agents use</h3>
 
         <p>
-          There is no Anthropic account in the manifest. The driver starts every agent with its own environment (<code>makeEnv</code> in
-          <code>lib/sh.mjs</code>), which drops only <code>CLAUDECODE</code> and <code>CLAUDE_CODE_ENTRYPOINT</code>.
-          <code>HOME</code> stays the same. So each agent's <code>claude</code> authenticates exactly as it would in your shell:
+          There is no Anthropic account in the manifest. Under the default host runtime, claude in an agent signs in as it does in your
+          shell. The driver starts every agent with its own environment (<code>makeEnv</code> in <code>lib/sh.mjs</code>), which drops only
+          <code>CLAUDECODE</code> and <code>CLAUDE_CODE_ENTRYPOINT</code>. <code>HOME</code> stays the same. So each agent's
+          <code>claude</code> authenticates exactly as it would in your shell:
         </p>
 
         <ul>
@@ -467,6 +475,36 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
             that "never ran".
           </p>
         </div>
+
+        <h3 id="claude-token">The token for containers</h3>
+
+        <p>
+          Under <code>sandbox.runtime: docker</code> nothing of your Claude Code configuration, keychain or environment reaches a container.
+          Claude there signs in with <code>CLAUDE_CODE_OAUTH_TOKEN</code>, read from
+          <a href="manifest.html#sandbox-oauthTokenFile"><code>sandbox.oauthTokenFile</code></a> at every container start, so a new token in
+          the file applies to the next run. The host runtime does not use the file.
+        </p>
+
+        <ul>
+          <li>
+            <code>claude setup-token</code> prints a long-lived OAuth token for your Claude subscription and stores it nowhere. Save it in a
+            file only you can read, with the commands on <a href="getting-started.html#container">Getting started</a>, and point
+            <code>sandbox.oauthTokenFile</code> at it. When it expires, put a new one in the file.
+          </li>
+          <li>
+            Loading refuses a missing file and one that is open to group or others, so <code>chmod 600</code> it. Preflight fails an empty
+            one.
+          </li>
+          <li>
+            With an API key instead, name <code>ANTHROPIC_API_KEY</code> in
+            <a href="manifest.html#sandbox-passEnv"><code>sandbox.passEnv</code></a> and export it in the shell that starts the driver.
+          </li>
+        </ul>
+
+        <p>
+          This token is one of the two an agent holds, next to the bot's. See
+          <a href="security.html#boundaries">Hard boundaries</a>.
+        </p>
 
         <h3 id="model">Model and effort</h3>
 
