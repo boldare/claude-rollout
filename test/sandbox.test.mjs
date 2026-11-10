@@ -1,12 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { appendFileSync, chmodSync, existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse, stringify } from 'yaml'
 import { loadManifest } from '../lib/manifest.mjs'
+import { BOUNDARY_PROBES, boundaryProof, liveGuardTest, runtimeCheck } from '../lib/preflight.mjs'
 import { runCommand } from '../lib/runner.mjs'
 import {
   buildImage,
@@ -23,6 +24,7 @@ import {
   runtimeSummary,
 } from '../lib/sandbox.mjs'
 import { runAgent, stopAllAgents } from '../lib/spawn.mjs'
+import { mirrorPath } from '../lib/worktree.mjs'
 import { fakeDocker, jsonLines, makeRollout, readEnvFile, waitFor, withProcessEnv } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
@@ -588,6 +590,359 @@ test('runtimeSummary and runtimeLine for both runtimes', () => {
   assert.deepEqual(runtimeSummary(manifest), { runtime: 'docker', image: 'rollout-agent:pinned' })
   assert.equal(runtimeLine(runtimeSummary(host)), 'runtime host')
   assert.equal(runtimeLine(runtimeSummary(manifest)), 'runtime docker, image rollout-agent:pinned')
+})
+
+// The image's claude and gh, which the fake docker runs through --entrypoint.
+function imageTools(docker, claude = '2.1.309') {
+  fakeClaude(docker, `echo '${claude} (Claude Code)'`)
+  writeFileSync(join(docker.bin, 'gh'), "#!/bin/sh\necho 'gh version 2.103.3 (2026-10-26)'\n", { mode: 0o755 })
+}
+
+function dockerCalls(docker) {
+  return docker.calls().map((call) => call.args)
+}
+
+function versionRun(tool) {
+  return ['run', '--rm', '--pull', 'never', '--network', 'none', '--entrypoint', tool, IMAGE, '--version']
+}
+
+const RUNTIME_INFO =
+  "info claudeBin and repo.pathPrepend apply on the host only. In the container agents run the image's claude, gh and node"
+
+test('runtimeCheck under Docker: the daemon, the image, its claude and gh and the token pass, through the docker calls preflight makes', async () => {
+  const { docker, manifest } = dockerRollout()
+
+  docker.setState({ images: [IMAGE] })
+  imageTools(docker)
+
+  const { lines, problems, warnings } = await runtimeCheck(manifest, '2.1.309 (Claude Code)\n')
+
+  assert.deepEqual(problems, [])
+  assert.deepEqual(warnings, [])
+  assert.deepEqual(lines, [
+    'ok   docker: server 27.3.1',
+    `ok   image ${IMAGE}`,
+    'ok   claude in the image: 2.1.309',
+    'ok   gh in the image: 2.103.3',
+    'ok   sandbox.oauthTokenFile: mode 600, not empty',
+    RUNTIME_INFO,
+  ])
+
+  assert.deepEqual(dockerCalls(docker), [
+    ['version', '--format', '{{.Server.Version}}'],
+    ['image', 'inspect', '--format', '{{.Id}}', IMAGE],
+    versionRun('claude'),
+    versionRun('gh'),
+  ])
+})
+
+test('runtimeCheck under Docker: a missing image is one problem that says to build it, and nothing runs', async () => {
+  const { docker, manifest } = dockerRollout()
+
+  imageTools(docker)
+
+  const { lines, problems } = await runtimeCheck(manifest, null)
+
+  assert.deepEqual(problems, [`image ${IMAGE} is missing: build it with rollout.mjs sandbox build --dir ${manifest.dir}`])
+  assert.ok(lines.includes(`FAIL image ${IMAGE} is missing`), lines.join('\n'))
+  assert.deepEqual(lines.slice(-2), ['ok   sandbox.oauthTokenFile: mode 600, not empty', RUNTIME_INFO])
+  assert.deepEqual(runs(docker), [])
+})
+
+test('runtimeCheck under Docker: a daemon that does not answer fails before the image is inspected', async () => {
+  const { docker, manifest } = dockerRollout()
+
+  docker.setState({ server: null, images: [IMAGE] })
+
+  const { lines, problems } = await runtimeCheck(manifest, null)
+
+  assert.equal(lines[0], 'FAIL docker: Cannot connect to the Docker daemon')
+  assert.deepEqual(problems, ['docker version failed: Cannot connect to the Docker daemon. Start the Docker daemon'])
+  assert.deepEqual(dockerCalls(docker), [['version', '--format', '{{.Server.Version}}']])
+})
+
+test('runtimeCheck under Docker: no docker client on PATH fails before any call', async () => {
+  const { dir, docker, manifest } = dockerRollout()
+  const empty = join(dir, 'empty-path')
+  const bare = { ...manifest, repo: { ...manifest.repo, pathPrepend: [] } }
+
+  mkdirSync(empty)
+
+  const { lines, problems } = await withProcessEnv({ PATH: empty }, () => runtimeCheck(bare, null))
+
+  assert.equal(lines[0], 'FAIL docker: no docker client on PATH')
+  assert.deepEqual(problems, [
+    'sandbox.runtime docker needs a docker client on PATH: install Docker or colima, or set sandbox.runtime: host',
+  ])
+
+  assert.deepEqual(dockerCalls(docker), [])
+})
+
+test('runtimeCheck under Docker: an image claude below the verified version fails, and one other than yours warns', async () => {
+  const old = dockerRollout()
+
+  old.docker.setState({ images: [IMAGE] })
+  imageTools(old.docker, '2.1.200')
+
+  const stale = await runtimeCheck(old.manifest, '2.1.309 (Claude Code)')
+
+  assert.deepEqual(stale.problems, [
+    `claude 2.1.200 in the image is older than 2.1.303: update it on the host and rebuild with rollout.mjs sandbox build --dir ${old.manifest.dir}`,
+  ])
+
+  assert.ok(stale.lines.includes('FAIL claude in the image: 2.1.200, older than 2.1.303'), stale.lines.join('\n'))
+  assert.deepEqual(stale.warnings, [])
+  assert.deepEqual(dockerCalls(old.docker).at(-1), versionRun('claude'))
+
+  const newer = dockerRollout()
+
+  newer.docker.setState({ images: [IMAGE] })
+  imageTools(newer.docker, '2.1.400')
+
+  const ahead = await runtimeCheck(newer.manifest, '2.1.309 (Claude Code)')
+
+  assert.deepEqual(ahead.problems, [])
+  assert.deepEqual(ahead.warnings, [
+    `the image has claude 2.1.400 and your claude is 2.1.309. Agents run the image's: rebuild with rollout.mjs sandbox build --dir ${newer.manifest.dir}`,
+  ])
+
+  for (const host of [null, 'Claude Code']) {
+    assert.deepEqual((await runtimeCheck(newer.manifest, host)).warnings, [], String(host))
+  }
+})
+
+test('runtimeCheck under Docker: an empty token file, or ANTHROPIC_API_KEY in passEnv but unset, is a problem', async () => {
+  const withFile = dockerRollout()
+  const file = withFile.manifest.sandbox.oauthTokenFile
+
+  withFile.docker.setState({ images: [IMAGE] })
+  imageTools(withFile.docker)
+  writeFileSync(file, '\n')
+
+  const empty = await runtimeCheck(withFile.manifest, null)
+
+  assert.deepEqual(empty.problems, [`sandbox.oauthTokenFile ${file} is empty: put a Claude token in it`])
+  assert.ok(empty.lines.includes(`FAIL sandbox.oauthTokenFile: ${file} is empty`), empty.lines.join('\n'))
+
+  const withKey = dockerRollout({ oauthTokenFile: undefined, passEnv: ['ANTHROPIC_API_KEY'] })
+
+  withKey.docker.setState({ images: [IMAGE] })
+  imageTools(withKey.docker)
+
+  const unset = await withProcessEnv({ ANTHROPIC_API_KEY: '' }, () => runtimeCheck(withKey.manifest, null))
+  const set = await withProcessEnv({ ANTHROPIC_API_KEY: 'synthetic-api-key' }, () => runtimeCheck(withKey.manifest, null))
+
+  assert.equal(withKey.manifest.sandbox.oauthTokenFile, null)
+  assert.deepEqual(unset.problems, ["sandbox.passEnv names ANTHROPIC_API_KEY, but it is not set in the driver's environment"])
+  assert.deepEqual(set.problems, [])
+  assert.ok(set.lines.includes('ok   sandbox.passEnv: ANTHROPIC_API_KEY is set'), set.lines.join('\n'))
+})
+
+const GIT_IDENTITY = ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false']
+
+function git(cwd, ...args) {
+  return execFileSync('git', [...GIT_IDENTITY, '-C', cwd, ...args], { encoding: 'utf8' })
+}
+
+// The driver's mirror, cloned from a local bare origin with one pushed
+// commit, so its objects are loose. repo.path's origin is that origin.
+function withMirror(manifest) {
+  const origin = join(manifest.dir, 'origin.git')
+  const repo = manifest.repo.path
+
+  git(manifest.dir, 'init', '--quiet', '--bare', origin)
+  git(repo, 'init', '--quiet')
+  writeFileSync(join(repo, 'README.md'), '# widgets\n')
+  git(repo, 'add', 'README.md')
+  git(repo, 'commit', '--quiet', '-m', 'init')
+  git(repo, 'remote', 'add', 'origin', origin)
+  git(repo, 'push', '--quiet', 'origin', 'HEAD:refs/heads/main')
+  git(manifest.dir, 'clone', '--mirror', '--quiet', origin, mirrorPath(manifest))
+}
+
+// Stands in for BOUNDARY_SCRIPT, which would write into this checkout and
+// reach the network under the fake docker. `lines` replaces a probe's line.
+function cannedProbes(lines = {}) {
+  const probes = BOUNDARY_PROBES.filter(({ name }) => name !== 'stop').map(({ name }) => lines[name] ?? `echo 'probe ${name} ok'`)
+
+  return [
+    ...probes,
+    ': > rollout-owner-probe',
+    'chmod u+w ".git/${10}"',
+    'printf "rewritten\\n" > ".git/${10}"',
+    'echo probes-done',
+    'exec sleep 30',
+  ].join('\n')
+}
+
+function scratchClones(manifest) {
+  return readdirSync(manifest.wtRoot).filter((name) => name.startsWith('preflight-'))
+}
+
+test('boundaryProof under Docker: one container over a scratch clone with the real mounts, stopped by docker stop, and nothing left behind', async () => {
+  const { docker, manifest } = dockerRollout()
+
+  withMirror(manifest)
+
+  const { lines, problems } = await boundaryProof(manifest, { script: cannedProbes() })
+  const [run, ...others] = runs(docker)
+  const [workdir] = values(run.args, '-w')
+  const [name] = values(run.args, '--name')
+  const volumes = values(run.args, '-v')
+  const sources = volumes.map((volume) => volume.split(':')[0])
+  const passed = BOUNDARY_PROBES.map((probe) => `ok   boundary: ${probe.text}`)
+
+  assert.deepEqual(problems, [])
+  assert.deepEqual(lines, passed)
+  assert.deepEqual(others, [])
+  assert.equal(dirname(workdir), manifest.wtRoot)
+  assert.match(basename(workdir), /^preflight-[0-9a-f]{8}$/)
+  assert.ok(volumes.includes(`${manifest.home}:${manifest.home}:ro`), volumes.join(' '))
+
+  for (const root of [manifest.dir, manifest.repo.path, mirrorPath(manifest)]) {
+    const mounted = sources.filter((source) => source === root || source.startsWith(`${root}/`))
+
+    assert.deepEqual(mounted, [], root)
+  }
+
+  assert.ok(docker.calls().some((call) => call.args.join(' ') === `stop -t 10 ${name}`))
+  assert.equal(existsSync(workdir), false)
+  assert.deepEqual(scratchClones(manifest), [])
+  await waitFor(() => !existsSync(join(manifest.wtRoot, 'homes', name)), 'the fresh home to be removed')
+})
+
+test('boundaryProof under Docker: a probe the container reports as failed is a problem that names it', async () => {
+  const { manifest } = dockerRollout()
+
+  withMirror(manifest)
+
+  const script = cannedProbes({ 'egress-blocked': "echo 'probe egress-blocked fail curl connected'" })
+  const { lines, problems } = await boundaryProof(manifest, { script })
+
+  assert.deepEqual(problems, ['boundary probe egress-blocked: curl connected'])
+  assert.ok(lines.includes('FAIL boundary: HTTPS to a host outside sandbox.allowedDomains fails (curl connected)'), lines.join('\n'))
+})
+
+test('boundaryProof under Docker: without a scratch clone it is one problem, and no container starts', async () => {
+  const { docker, manifest } = dockerRollout()
+  const { lines, problems } = await boundaryProof(manifest, { script: cannedProbes() })
+
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /^boundary: cannot make a scratch clone \(/)
+  assert.deepEqual(lines, [`FAIL ${problems[0]}`])
+  assert.deepEqual(runs(docker), [])
+  assert.deepEqual(scratchClones(manifest), [])
+})
+
+test('boundaryProof under the host runtime returns nothing and calls no docker', async () => {
+  const dir = makeRollout()
+  const docker = fakeDocker(dir)
+  const manifest = loadManifest(dir)
+
+  assert.deepEqual(await boundaryProof(manifest, { script: 'exit 1' }), { lines: [], problems: [] })
+  assert.deepEqual(docker.calls(), [])
+})
+
+const GUARD_COMMANDS = [
+  'gh pr --repo o/r merge 999999 --admin',
+  'echo x && git push origin x:main --dry-run',
+  'pnpm --filter nothing publish --dry-run',
+  'gh api -X PUT repos/o/r/pulls/999999/merge',
+  'echo allowed',
+]
+
+// The live guard test's agent: the guard refused the four forbidden
+// commands, and `echo allowed` printed `allowedOutput`.
+function guardStream(allowedOutput = 'allowed') {
+  return GUARD_COMMANDS.flatMap((command, i) => {
+    const content = command === 'echo allowed' ? allowedOutput : 'rollout guard: refused'
+
+    return [
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: `tool-${i}`, name: 'Bash', input: { command } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `tool-${i}`, content }] } },
+    ]
+  })
+}
+
+// A rollout under the host runtime whose claudeBin records its directory,
+// its first argument and its role, then prints `stream`.
+function hostGuardRollout(stream) {
+  const dir = makeRollout()
+  const claude = join(dir, 'fake-claude')
+  const record = join(dir, 'claude.txt')
+  const transcript = join(dir, 'guard.jsonl')
+
+  writeFileSync(transcript, `${jsonLines(stream)}\n`)
+  writeFileSync(claude, `#!/bin/sh\npwd > '${record}'\nprintf '%s\\n' "$1" "$ROLLOUT_ROLE" >> '${record}'\ncat '${transcript}'\n`, {
+    mode: 0o755,
+  })
+
+  editManifest(dir, (raw) => ({ ...raw, claudeBin: claude }))
+
+  return { manifest: loadManifest(dir), record }
+}
+
+function notOk(lines) {
+  return lines.filter((line) => !line.startsWith('ok   live guard: '))
+}
+
+test('liveGuardTest under the host runtime: claudeBin in a scratch directory that is gone afterwards, five ok lines', async () => {
+  const { manifest, record } = hostGuardRollout(guardStream())
+  const { lines, problems } = await liveGuardTest(manifest)
+  const [cwd, first, role] = readFileSync(record, 'utf8').trim().split('\n')
+
+  assert.deepEqual(problems, [])
+  assert.equal(lines.length, 5)
+  assert.deepEqual(notOk(lines), [])
+  assert.equal(first, '-p')
+  assert.equal(role, 'implement')
+  assert.match(basename(cwd), /^rollout-guard-/)
+  assert.equal(existsSync(cwd), false)
+})
+
+test('liveGuardTest: an echo allowed that the guard refused is a FAIL line and a problem', async () => {
+  const { manifest } = hostGuardRollout(guardStream('rollout guard: refused'))
+  const { lines, problems } = await liveGuardTest(manifest)
+
+  assert.deepEqual(problems, ['live guard test: ^echo allowed$ was not allowed'])
+  assert.equal(lines[4], 'FAIL live guard: ^echo allowed$ allowed → rollout guard: refused')
+})
+
+test('liveGuardTest under Docker: claude -p runs in a container over a scratch clone that is gone afterwards, five ok lines', async () => {
+  const { dir, docker, manifest } = dockerRollout()
+  const transcript = join(dir, 'guard.jsonl')
+
+  withMirror(manifest)
+  writeFileSync(transcript, `${jsonLines(guardStream())}\n`)
+  fakeClaude(docker, `cat '${transcript}'`)
+
+  const { lines, problems } = await liveGuardTest(manifest)
+  const [run, ...others] = runs(docker)
+  const [workdir] = values(run.args, '-w')
+  const image = run.args.indexOf(IMAGE)
+
+  assert.deepEqual(problems, [])
+  assert.equal(lines.length, 5)
+  assert.deepEqual(notOk(lines), [])
+  assert.deepEqual(others, [])
+  assert.deepEqual(run.args.slice(image + 1, image + 3), ['claude', '-p'])
+  assert.equal(dirname(workdir), manifest.wtRoot)
+  assert.match(basename(workdir), /^preflight-[0-9a-f]{8}$/)
+  assert.equal(existsSync(workdir), false)
+  assert.equal(existsSync(`${workdir}.home`), false)
+})
+
+test('liveGuardTest under Docker: a throw is a problem, and the scratch clone is gone', async () => {
+  const { docker, manifest } = dockerRollout()
+
+  withMirror(manifest)
+  rmSync(manifest.repo.agentToken)
+
+  const { problems } = await liveGuardTest(manifest)
+
+  assert.deepEqual(problems, [`live guard test: repo.agentToken ${manifest.repo.agentToken} does not exist`])
+  assert.deepEqual(runs(docker), [])
+  assert.deepEqual(scratchClones(manifest), [])
 })
 
 // Last: stopAllAgents also stops every runAgent this process would start.

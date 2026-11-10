@@ -593,8 +593,11 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
               <tr>
                 <td class="nowrap">Claude</td>
                 <td>
-                  <code>claude --version</code>. With <code>--live</code>, a real headless agent whose guard must refuse four forbidden
-                  commands and allow one harmless command.
+                  <code>claude --version</code>. Under <code>sandbox.runtime: docker</code>, also that
+                  <code>sandbox.oauthTokenFile</code> is not empty, or that <code>ANTHROPIC_API_KEY</code> is set when
+                  <code>sandbox.passEnv</code> names it, and that the claude in the image runs and is not older than the verified version.
+                  With <code>--live</code>, a real headless agent whose guard must refuse four forbidden commands and allow one harmless
+                  command. Under Docker the container's boundary is proved first, and the agent runs in a container.
                 </td>
               </tr>
             </tbody>

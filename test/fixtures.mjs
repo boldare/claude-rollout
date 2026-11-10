@@ -380,16 +380,36 @@ export function fakeTools(dir, rules = []) {
 
 // The docker client of the Docker runtime, without a daemon. run starts the
 // argv after the image as a local process in its own group, in the -w
-// directory and with the environment the entrypoint would give it. stop and
-// kill signal that group. Every call is recorded like a fakeTools call.
+// directory and with the environment the entrypoint would give it. With
+// --entrypoint X the argv is X and the words after the image. stop and kill
+// signal the group of a run with --name. version and image inspect answer
+// from docker.json: the server version, null for a daemon that does not
+// answer, and the images that exist. Every call is recorded like a fakeTools
+// call.
 const FAKE_DOCKER = `#!/usr/bin/env node
 const { spawn } = require('node:child_process')
 const { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
 const { constants } = require('node:os')
 const { join } = require('node:path')
 
-const VALUE_FLAGS = ['--name', '-v', '-e', '-w', '--memory', '--cpus', '--pids-limit', '--cap-add', '--cap-drop', '--security-opt', '--pull']
+const VALUE_FLAGS = [
+  '--name',
+  '-v',
+  '-e',
+  '-w',
+  '--memory',
+  '--cpus',
+  '--pids-limit',
+  '--cap-add',
+  '--cap-drop',
+  '--security-opt',
+  '--pull',
+  '--entrypoint',
+  '--network',
+]
+
 const containers = join(__dirname, 'containers')
+const state = JSON.parse(readFileSync(join(__dirname, 'docker.json'), 'utf8'))
 const [command, ...rest] = process.argv.slice(2)
 
 appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ tool: 'docker', args: process.argv.slice(2) }) + '\\n')
@@ -418,7 +438,7 @@ function signalGroup(pid, signal) {
 }
 
 function parseRun(words) {
-  const container = { name: null, volumes: [], env: [], workdir: process.cwd() }
+  const container = { name: null, entrypoint: null, volumes: [], env: [], workdir: process.cwd() }
   let i = 0
 
   while (i < words.length && words[i].startsWith('-')) {
@@ -433,6 +453,8 @@ function parseRun(words) {
 
     if (flag === '--name') {
       container.name = value
+    } else if (flag === '--entrypoint') {
+      container.entrypoint = value
     } else if (flag === '-v') {
       container.volumes.push(value)
     } else if (flag === '-e') {
@@ -444,7 +466,9 @@ function parseRun(words) {
     i += 2
   }
 
-  return { ...container, image: words[i], argv: words.slice(i + 1) }
+  const argv = words.slice(i + 1)
+
+  return { ...container, image: words[i], argv: container.entrypoint ? [container.entrypoint, ...argv] : argv }
 }
 
 // Only the names ROLLOUT_ENV lists, as the entrypoint passes them on, plus HOME and a PATH without node.
@@ -484,7 +508,7 @@ function run() {
 
   mkdirSync(containers, { recursive: true })
 
-  if (child.pid) {
+  if (child.pid && container.name) {
     writeFileSync(pidFile(container.name), String(child.pid))
   }
 
@@ -496,7 +520,11 @@ function run() {
   // The container ends with its first process, and everything it started goes with it.
   child.on('exit', (code, signal) => {
     signalGroup(child.pid, 'SIGKILL')
-    rmSync(pidFile(container.name), { force: true })
+
+    if (container.name) {
+      rmSync(pidFile(container.name), { force: true })
+    }
+
     process.exit(code ?? 128 + constants.signals[signal])
   })
 }
@@ -523,8 +551,32 @@ function kill() {
   signalGroup(containerPid(rest[rest.length - 1]), named === -1 ? 'SIGKILL' : rest[named + 1])
 }
 
+function version() {
+  if (state.server === null) {
+    process.stderr.write('Cannot connect to the Docker daemon\\n')
+    process.exitCode = 1
+  } else {
+    process.stdout.write(state.server + '\\n')
+  }
+}
+
+function inspectImage() {
+  const tag = rest[rest.length - 1]
+
+  if (state.images.includes(tag)) {
+    process.stdout.write('sha256:' + '0'.repeat(64) + '\\n')
+  } else {
+    process.stderr.write('Error: No such image: ' + tag + '\\n')
+    process.exitCode = 1
+  }
+}
+
 if (command === 'run') {
   run()
+} else if (command === 'version') {
+  version()
+} else if (command === 'image' && rest[0] === 'inspect') {
+  inspectImage()
 } else if (command === 'stop') {
   stop()
 } else if (command === 'kill') {
@@ -538,13 +590,19 @@ if (command === 'run') {
 // A fake docker for the Docker runtime, in <dir>/fake-bin. With a
 // manifest.yaml in dir, the bin goes first on repo.pathPrepend. A fake claude
 // or command that runs inside must be a #!/bin/sh script in the bin, because
-// node is not on the PATH a container gets.
-export function fakeDocker(dir) {
+// node is not on the PATH a container gets. `state` and setState are the
+// daemon's answers, { server, images }.
+export function fakeDocker(dir, state = {}) {
   const bin = join(dir, 'fake-bin')
   const file = join(dir, 'manifest.yaml')
 
+  function setState(next) {
+    writeFileSync(join(bin, 'docker.json'), JSON.stringify({ server: '27.3.1', images: [], ...next }))
+  }
+
   mkdirSync(bin, { recursive: true })
   writeFileSync(join(bin, 'docker'), FAKE_DOCKER, { mode: 0o755 })
+  setState(state)
 
   if (existsSync(file)) {
     const manifest = parse(readFileSync(file, 'utf8'))
@@ -555,7 +613,7 @@ export function fakeDocker(dir) {
     }
   }
 
-  return { bin, calls: () => readCalls(bin) }
+  return { bin, calls: () => readCalls(bin), setState }
 }
 
 const NULL_BODY_STATUSES = [204, 205, 304]
