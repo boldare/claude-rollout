@@ -1053,10 +1053,11 @@ prs:
         <h2 id="sandbox">sandbox <a class="anchor" href="#sandbox" aria-label="Link to this section">#</a></h2>
 
         <p>
-          Every process that runs code from a PR's clone starts through a runtime: the agents, <code>repo.install</code> and the
-          <a href="#gates-ready-required">ready</a> and <a href="#gates-preVerify-required">pre-verify commands</a>. The
-          <code>host</code> runtime, the default, runs them on your machine as you, with your files and logins in reach. The
-          <code>docker</code> runtime runs each one in a container of its own. Every key is optional, and any other key fails validation.
+          Every process that runs code from a PR's clone starts through a runtime: the agents, <code>repo.install</code>, the
+          <a href="#gates-ready-required">ready</a> and <a href="#gates-preVerify-required">pre-verify commands</a>, and the driver's own
+          git in the clone once the clone is set up, because git runs programs that the clone's config names. The <code>host</code> runtime,
+          the default, runs them on your machine as you, with your files and logins in reach. The <code>docker</code> runtime runs each one
+          in a container of its own. Every key is optional, and any other key fails validation.
         </p>
 
         <div class="scroll">
@@ -1160,10 +1161,11 @@ prs:
         <ul>
           <li>
             <strong>One container per run.</strong> Each agent run, install and ready or pre-verify command gets a container of its own,
-            removed when it ends. It mounts three directories, each at its path on your machine: the PR's clone or its brief preview, the
-            skill directory read-only, and a home directory at <code>/home/agent</code>. Nothing else: not the rollout directory, not
-            <code>repo.path</code>, not the mirror, not your home directory. The runtime refuses to start a container in any other
-            directory.
+            removed when it ends. So does each git command the driver runs in a PR's clone once the clone is set up, after
+            <code>repo.install</code> when there is one, and each marker it writes there. A container mounts three directories, each at its
+            path on your machine: the PR's clone or its brief preview, the skill directory read-only, and a home directory at
+            <code>/home/agent</code>. Nothing else: not the rollout directory, not <code>repo.path</code>, not the mirror, not your home
+            directory. The runtime refuses to start a container in any other directory.
           </li>
           <li>
             <strong>As you, with no privileges.</strong> The command runs with your uid and gid, so the files it writes are yours. It has no
@@ -1175,14 +1177,16 @@ prs:
             <code>ROLLOUT_ROLE</code>, empty <code>NPM_TOKEN</code> and <code>NODE_AUTH_TOKEN</code>, an
             <code>NPM_CONFIG_USERCONFIG</code> that names an empty file in the image, the OAuth token, the git identity, Claude Code's own
             settings, the names in <code>passEnv</code>, and its own <code>HOME</code>, <code>PATH</code> and <code>TMPDIR</code>. No
-            <code>GH_CONFIG_DIR</code>, no <code>GITHUB_TOKEN</code> and nothing else of the driver's environment. Their values never appear
-            on the docker command line.
+            <code>GH_CONFIG_DIR</code>, no <code>GITHUB_TOKEN</code> and nothing else of the driver's environment. A container of the
+            driver's git gets less: the bot's <code>GH_TOKEN</code>, <code>GIT_TERMINAL_PROMPT</code> and the git identity, and its own
+            <code>HOME</code>, <code>PATH</code> and <code>TMPDIR</code>. Their values never appear on the docker command line.
           </li>
           <li>
             <strong>Two kinds of home.</strong> The implementer and its fixes share <code>&lt;id&gt;.home/</code> next to the clone. It is
             kept between runs, so a fix's <code>--resume</code> finds the session, and it goes with the clone after the merge. Every other
-            run, the verifier, the brief writer and reviewer, the delegate, the install and each command, starts in an empty home under
-            <code>homes/</code> that is removed when it ends. No read-only role or command ever reads what an implementer left in its home.
+            run, the verifier, the brief writer and reviewer, the delegate, the install, each command and each git command of the driver,
+            starts in an empty home under <code>homes/</code> that is removed when it ends. No read-only role or command ever reads what an
+            implementer left in its home.
           </li>
           <li>
             <strong>Allowed hosts only.</strong> Before the command starts, the container sets its firewall as root, and a container whose

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { appendFileSync, chmodSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse, stringify } from 'yaml'
@@ -319,6 +319,55 @@ test('containerEnv and dockerEnv: passEnv and the runtime variables reach them, 
   for (const name of Object.keys(client)) {
     assert.ok(['PATH', 'HOME'].includes(name) || name.startsWith('DOCKER_') || name in container, name)
   }
+})
+
+test('containerEnv for a git container: the bot token, the prompt switch and the identity, nothing else of the spec or passEnv, and no token file read', async () => {
+  const { dir, manifest, pr, clone } = dockerRollout({ passEnv: ['SYNTHETIC_PASSED'] })
+  const spec = {
+    command: 'git',
+    args: ['-C', clone, 'status', '--porcelain'],
+    cwd: clone,
+    env: {
+      GH_TOKEN: BOT_TOKEN,
+      GITHUB_TOKEN: '',
+      GH_CONFIG_DIR: join(manifest.dir, '.gh-agents'),
+      GIT_TERMINAL_PROMPT: '0',
+      GH_REPO: 'github.com/example/widgets',
+      NPM_TOKEN: '',
+      ROLLOUT_ROLE: 'gate',
+      PATH: 'synthetic-path',
+      SYNTHETIC_MAINTAINER_SECRET: 'synthetic-secret',
+    },
+    role: 'git',
+    pr,
+    run: 'A1-git-0123abcd',
+    stdin: 'ignore',
+    group: true,
+  }
+
+  const parent = {
+    SYNTHETIC_PASSED: PASSED,
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'user.name',
+    GIT_CONFIG_VALUE_0: 'Demo Maintainer',
+    GIT_CONFIG_KEY_1: 'user.email',
+    GIT_CONFIG_VALUE_1: 'maintainer@example.com',
+  }
+
+  rmSync(join(dir, 'oauth-token'))
+
+  const container = await withProcessEnv(parent, () => containerEnv(manifest, spec))
+
+  assert.deepEqual(container, {
+    GH_TOKEN: BOT_TOKEN,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_AUTHOR_NAME: 'Demo Maintainer',
+    GIT_COMMITTER_NAME: 'Demo Maintainer',
+    GIT_AUTHOR_EMAIL: 'maintainer@example.com',
+    GIT_COMMITTER_EMAIL: 'maintainer@example.com',
+  })
+
+  assert.throws(() => containerEnv(manifest, { ...spec, role: 'gate' }), /ENOENT/)
 })
 
 test('the Docker runtime refuses any cwd but the clone and the preview: error, then close, and docker never runs', async () => {
