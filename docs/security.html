@@ -6,7 +6,7 @@
     <title>Security · rollout docs</title>
     <meta
       name="description"
-      content="What protects what in a rollout: hard boundaries, the merge gate, the seatbelts around every agent, and the web UI's checks."
+      content="What protects what in a rollout: hard boundaries such as the container under the Docker runtime, the merge gate, the seatbelts around every agent, and the web UI's checks."
     />
     <link rel="icon" href="favicon.svg" />
     <link rel="stylesheet" href="docs.css" />
@@ -54,7 +54,7 @@
       <main class="page">
         <header class="page-head">
           <h1>Security</h1>
-          <p class="page-meta">hooks/guard-bash.mjs · lib/settings.mjs · lib/server.mjs</p>
+          <p class="page-meta">hooks/guard-bash.mjs · lib/settings.mjs · lib/sandbox.mjs · lib/server.mjs</p>
         </header>
 
         <p class="lead">
@@ -65,7 +65,11 @@
         <h2 id="who">Who and what <a class="anchor" href="#who" aria-label="Link to this section">#</a></h2>
 
         <ul>
-          <li>Agents run headless as the maintainer's OS user, with the settings from <code>lib/settings.mjs</code>.</li>
+          <li>
+            Agents run headless, with the settings from <code>lib/settings.mjs</code>. Under the host runtime, the default, they run as the
+            maintainer's OS user. Under <code>sandbox.runtime: docker</code> each run is a container with the maintainer's uid and gid and
+            no Linux capability.
+          </li>
           <li>
             They read untrusted input: repo content, CI logs and PR comments. The driver passes on only comments by
             <code>repo.maintainers</code> (<code>feedbackFor</code> in <code>lib/github.mjs</code>) and code scanning alerts. Bot comments
@@ -87,6 +91,32 @@
         <p>These are enforced where the agent cannot edit them.</p>
 
         <ul>
+          <li>
+            <strong>The container, under <code>sandbox.runtime: docker</code>.</strong> Each agent run, <code>repo.install</code>, each
+            ready and pre-verify command, and the driver's git in a clone once the clone is set up run in a container. There is one
+            container per run, from an image you build with <code>sandbox build</code> and the driver never pulls. It runs with your uid and
+            gid, no capability and <code>no_new_privs</code>. It mounts only the PR's clone or brief preview, the skill directory read-only
+            and a home of its own. Its firewall lets out HTTPS to the addresses of <code>sandbox.allowedDomains</code> and DNS to the
+            container's resolvers, and nothing else. See <a href="manifest.html#sandbox"><code>sandbox</code></a
+            >. It holds against:
+            <ul>
+              <li>
+                Your files, keys and logins. Of your home directory a container sees only the PR's clone, its own home and the skill
+                directory, read-only. Your SSH keys, <code>~/.npmrc</code>, your gh login and your Claude Code configuration and login are
+                not in it.
+              </li>
+              <li>
+                Your environment. A container gets only the variables it is given by name, see <a href="#environment">The environment</a>.
+              </li>
+              <li>Every host but <code>sandbox.allowedDomains</code>.</li>
+              <li>
+                The control plane and the briefs. The rollout directory (manifest, inbox, ledger, briefs, logs), <code>repo.path</code>, the
+                mirror and the other PRs' clones are not mounted. The skill directory, which holds the driver, the guard, the git hooks and
+                the prompts, is read-only.
+              </li>
+            </ul>
+            Under Docker, <a href="commands.html#cmd-preflight"><code>rollout preflight --live</code></a> proves this boundary.
+          </li>
           <li>
             <strong>The bot account's GitHub role and the rulesets.</strong> The bot has the Write role and no bypass. A merge needs a
             maintainer's review and green checks. See <a href="accounts.html">Accounts</a> and the preflight check of
@@ -112,14 +142,27 @@
 
         <div class="callout danger">
           <p>
-            <strong>The limit, stated plainly.</strong> These hold against the bot's token. Agents run as you, so any credential your user
-            can read (your <code>gh</code> login, <code>~/.npmrc</code>, SSH keys) is within their reach. A boundary against a hostile agent
-            needs another OS user, a VM or a container. This repo provides none.
+            <strong>The limit, stated plainly.</strong> Under Docker an agent holds the two tokens it works with: the bot's GitHub token and
+            the Claude OAuth token (or <code>ANTHROPIC_API_KEY</code>). It can send either to an allowed host, for example in a PR comment.
+            Both are revocable, and neither reaches the base branch without the gate. Installs and gate commands get the same two tokens,
+            because they run code from the clone. Every variable named in <code>sandbox.passEnv</code> is in reach too. In the container
+            only the seatbelts stop the bot's token from doing what its Write role allows outside the PR, such as a push to another branch.
           </p>
           <p>
-            gh reads your keyring login whenever <code>GH_HOST</code> is set, even with the agents' empty <code>GH_CONFIG_DIR</code>. Agents
-            never get <code>GH_HOST</code>, and the <a href="#guard">guard</a> is what stands between an agent and that login. It refuses
-            setting <code>GH_HOST</code> and dropping the token, but it is a seatbelt: a command it does not model gets past it.
+            The firewall allows addresses, not names. A site served from the same address as an allowed host, as on a shared CDN, is
+            reachable too. DNS lookups go to the container's resolvers, which look up any name, so a lookup can carry data out.
+          </p>
+          <p>
+            Under the host runtime the other boundaries above hold against the bot's token only. Agents run as you, so any credential your
+            user can read (your <code>gh</code> login, <code>~/.npmrc</code>, SSH keys) is within their reach. For a boundary against a
+            hostile agent, set <a href="manifest.html#sandbox-runtime"><code>sandbox.runtime: docker</code></a
+            >. Preflight warns about the host runtime.
+          </p>
+          <p>
+            Under the host runtime gh reads your keyring login whenever <code>GH_HOST</code> is set, even with the agents' empty
+            <code>GH_CONFIG_DIR</code>. Agents never get <code>GH_HOST</code>, and the <a href="#guard">guard</a> is what stands between an
+            agent and that login. It refuses setting <code>GH_HOST</code> and dropping the token, but it is a seatbelt: a command it does
+            not model gets past it. A container has no stored gh login and no keyring to fall back to.
           </p>
         </div>
 
@@ -138,11 +181,18 @@
         </p>
 
         <p>
-          It is not a boundary against an agent that attacks the driver's own files (code, ledger, inbox). Only the seatbelts below protect
-          those.
+          It is not a boundary against an agent that attacks the driver's own files (code, ledger, inbox). Under the host runtime only the
+          seatbelts below protect those. Under Docker the ledger and the inbox are outside the container, and the skill directory, which
+          holds the driver's code, is read-only.
         </p>
 
         <h2 id="seatbelts">Seatbelts <a class="anchor" href="#seatbelts" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          Under the host runtime the seatbelts stand between an agent and your files and the control plane. Under
+          <code>sandbox.runtime: docker</code> they are the second layer, inside the container. There they still keep an agent to its own
+          branch, <code>gh api</code> to GET and the read-only roles from writing, which the bot's Write role alone would allow.
+        </p>
 
         <div class="scroll">
           <table class="wide">
@@ -176,7 +226,8 @@
                 <td class="nowrap">Agent context</td>
                 <td>
                   Built-in tools as an allowlist per role, the project's settings only, no MCP server but <code>mcpConfig</code> for
-                  implement and fix, no skills and no auto-memory. <a href="#agent-context">Details</a>.
+                  implement and fix, no skills and no auto-memory. The Docker runtime refuses <code>mcpConfig</code>.
+                  <a href="#agent-context">Details</a>.
                 </td>
                 <td class="name">lib/settings.mjs</td>
               </tr>
@@ -195,7 +246,8 @@
                   <code>repo.github</code>, no <code>GH_HOST</code>, an empty npmrc and empty npm tokens. <code>ROLLOUT_ROLE</code> is the
                   only <code>ROLLOUT_*</code> variable, and any other one the driver inherited is removed. <code>repo.install</code> and the
                   ready and pre-verify commands the driver runs, with <code>ROLLOUT_ROLE=install</code> or <code>gate</code>, run with the
-                  same environment. <a href="#environment">Details</a>.
+                  same environment. In a container only these variables and a few more named ones arrive.
+                  <a href="#environment">Details</a>.
                 </td>
                 <td class="name">lib/identity.mjs<br />lib/spawn.mjs<br />lib/worktree.mjs<br />lib/runner.mjs</td>
               </tr>
@@ -560,7 +612,9 @@
 
         <p>
           Each example below gets past the guard today, because the guard reads it differently from the shell or the tool, or does not model
-          it.
+          it. Under <code>sandbox.runtime: docker</code> a command that gets past the guard still runs in the container. It reaches none of
+          your files, logins or environment and nothing of the control plane. What is left is what the tokens in the container allow, see
+          <a href="#boundaries">Hard boundaries</a>. Under the host runtime it runs as you, with all of that in reach.
         </p>
 
         <ul>
@@ -640,9 +694,11 @@
           <p>
             <strong>A seatbelt, not a sandbox.</strong> A regex guard can be fooled by a command it does not model, as the known limits
             show. The base branch, merges and publishing are also protected elsewhere: the rulesets, the pre-push hook, no npm credentials
-            in the agent environment, and the gate re-checking every claim on GitHub. The control plane has only the seatbelts.
+            in the agent environment, and the gate re-checking every claim on GitHub. Under the host runtime the control plane has only the
+            seatbelts. Under <code>sandbox.runtime: docker</code> the container is the sandbox and the guard is the layer inside it.
             <code>rollout preflight --live</code> proves in a real headless agent that the guard refuses a merge, a push to
-            <code>main</code>, a publish and a <code>gh api</code> write.
+            <code>main</code>, a publish and a <code>gh api</code> write. Under Docker it proves the container's boundary before it proves
+            the guard.
           </p>
           <p>
             The hook has a 30 s timeout. Claude Code runs a command whose hook timed out, so a timeout is the one failure of the guard that
@@ -676,8 +732,9 @@
         <h3 id="environment">The environment</h3>
 
         <p>
-          Each agent starts from the driver's environment, with <code>repo.pathPrepend</code> first on <code>PATH</code> and these changes
-          (<code>agentEnv</code> and <code>readOnlyEnv</code> in <code>lib/identity.mjs</code>, <code>runAgent</code>).
+          Under the host runtime, the default, each agent starts from the driver's environment, with <code>repo.pathPrepend</code> first on
+          <code>PATH</code> and these changes (<code>agentEnv</code> and <code>readOnlyEnv</code> in <code>lib/identity.mjs</code>,
+          <code>runAgent</code>). A container gets far less, see the last paragraph of this section.
         </p>
 
         <p>
@@ -773,11 +830,24 @@
         </div>
 
         <p>
-          Everything else passes through, <code>HOME</code> and your Claude login included. That is why the limit under
-          <a href="#boundaries">Hard boundaries</a> holds. Without <code>repo.agentToken</code> the bot's variables are not set, agents,
-          <code>repo.install</code> and the ready and pre-verify commands the driver runs act on GitHub as you, and preflight warns about
-          it. <code>GH_REPO</code> is still set and <code>GH_HOST</code> is still removed. The install and those commands still run as your
-          OS user and can read your files, so their environment is a seatbelt, not a boundary.
+          Under the host runtime everything else passes through, <code>HOME</code> and your Claude login included. That is why the limit of
+          the host runtime under <a href="#boundaries">Hard boundaries</a> holds. <code>sandbox.runtime: docker</code> requires
+          <code>repo.agentToken</code>, so the case without a bot token exists only under the host runtime. There the bot's variables are
+          not set, agents, <code>repo.install</code> and the ready and pre-verify commands the driver runs act on GitHub as you, and
+          preflight warns about it. <code>GH_REPO</code> is still set and <code>GH_HOST</code> is still removed. The install and those
+          commands still run as your OS user and can read your files, so their environment is a seatbelt, not a boundary.
+        </p>
+
+        <p>
+          Under <code>sandbox.runtime: docker</code> nothing of the driver's environment arrives. A container gets, by name, the values of
+          the table that apply (<code>GH_TOKEN</code>, <code>GH_REPO</code>, <code>GIT_TERMINAL_PROMPT</code>, <code>ROLLOUT_ROLE</code>,
+          empty <code>NPM_TOKEN</code> and <code>NODE_AUTH_TOKEN</code>), an <code>NPM_CONFIG_USERCONFIG</code> that names an empty file in
+          the image, the Claude token, the git identity, Claude Code's two settings, the names in
+          <a href="manifest.html#sandbox-passEnv"><code>sandbox.passEnv</code></a
+          >, and its own <code>HOME</code>, <code>PATH</code> and <code>TMPDIR</code>. It gets no <code>GH_CONFIG_DIR</code> and no
+          <code>GITHUB_TOKEN</code>. A container of the driver's git gets only the bot's token, <code>GIT_TERMINAL_PROMPT</code> and the git
+          identity. See <a href="manifest.html#sandbox"><code>sandbox</code></a
+          >.
         </p>
 
         <h3 id="cli-role">The CLI refuses agents</h3>
@@ -791,8 +861,9 @@
         <h2 id="ui">The web UI <a class="anchor" href="#ui" aria-label="Link to this section">#</a></h2>
 
         <p>
-          <code>rollout ui</code> runs as your user on a local port. Agents run as your user too and can reach any local port, so the server
-          trusts no caller by default (<code>lib/server.mjs</code>).
+          <code>rollout ui</code> runs as your user on a local port. Under the host runtime agents run as your user too and can reach any
+          local port, so the server trusts no caller by default (<code>lib/server.mjs</code>). Under Docker the firewall lets a container
+          reach only the allowed addresses and its DNS resolvers, so the UI's port is out of its reach.
         </p>
 
         <ul>
@@ -836,8 +907,8 @@
 
         <p>
           The token stops a plain <code>curl</code> from another local process. It does not stop code that can read your terminal, your
-          browser history or your files, which is everything an agent running as you can do. Use <code>rollout ui --read-only</code> when
-          you only watch.
+          browser history or your files, which is everything an agent running as you under the host runtime can do. Use
+          <code>rollout ui --read-only</code> when you only watch.
         </p>
 
         <h2 id="todo">What to do <a class="anchor" href="#todo" aria-label="Link to this section">#</a></h2>
@@ -845,8 +916,13 @@
         <ul>
           <li>Set up the repository as <a href="accounts.html">Accounts</a> describes.</li>
           <li>
+            Run agents in containers: set <a href="manifest.html#sandbox-runtime"><code>sandbox.runtime: docker</code></a
+            >, build the image with <a href="commands.html#cmd-sandbox"><code>rollout sandbox build</code></a> and run
+            <code>rollout preflight --live</code>.
+          </li>
+          <li>
             Run <a href="commands.html#cmd-preflight"><code>rollout preflight --live</code></a> before the first run. It proves the guard in
-            a real headless agent.
+            a real headless agent. Under Docker it proves the container's boundary first.
           </li>
           <li>
             Review the workflow files that <a href="commands.html#cmd-card"><code>rollout card</code></a> flags before you approve a PR.

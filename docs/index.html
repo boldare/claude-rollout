@@ -213,8 +213,9 @@
             slots.
           </li>
           <li>
-            Agents run as headless <code>claude -p</code> processes, each in its own clone of the repository. They push and open PRs as a
-            separate bot account and report back with a JSON document.
+            Agents run as headless <code>claude -p</code> processes, each in its own clone of the repository, on your machine, or with
+            <code>sandbox.runtime: docker</code> in a container that sees only that clone. They push and open PRs as a separate bot account
+            and report back with a JSON document.
           </li>
           <li>
             The driver never trusts a report. It re-reads CI, the diff and the reviews on GitHub, and merges only what its gate passes.
@@ -270,8 +271,10 @@
 
         <p>
           Agents push and open PRs as a separate GitHub account with the Write role and no ruleset bypass. A Bash guard, deny rules and git
-          hooks keep them on their own branch. The gate decides on facts read from GitHub, never on what an agent says. The limits of all
-          this are spelled out on <a href="security.html">Security</a>.
+          hooks keep them on their own branch. With <code>sandbox.runtime: docker</code> each agent runs in a container that sees only its
+          clone, its home and an allowlist of hosts. Under the default host runtime agents run as you, and the guard is a seatbelt. The gate
+          decides on facts read from GitHub, never on what an agent says. The limits of all this are spelled out on
+          <a href="security.html">Security</a>.
         </p>
 
         <h2 id="next">Where next <a class="anchor" href="#next" aria-label="Link to this section">#</a></h2>

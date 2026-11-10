@@ -61,7 +61,11 @@
 
         <h2 id="requirements">Requirements <a class="anchor" href="#requirements" aria-label="Link to this section">#</a></h2>
 
-        <p>Everything runs on your machine, as your OS user. <code>rollout preflight</code> checks most of this list before a first run.</p>
+        <p>
+          The driver, the UI and every GitHub call run on your machine, as your OS user. So do agents, <code>repo.install</code> and the
+          ready and pre-verify commands under the default host runtime. Under <code>sandbox.runtime: docker</code> each of those runs in a
+          container. <code>rollout preflight</code> checks most of this list before a first run.
+        </p>
 
         <div class="scroll">
           <table class="wide">
@@ -80,7 +84,7 @@
               </tr>
               <tr>
                 <td class="nowrap">git</td>
-                <td>Worktrees, fetches and rebases.</td>
+                <td>Clones, fetches and rebases.</td>
                 <td>
                   <code>git fetch origin</code> in <code>repo.path</code>, and <code>origin</code> must be <code>repo.github</code> on
                   github.com
@@ -104,6 +108,17 @@
                   puts a wrapper script first on PATH.
                 </td>
                 <td><code>claude --version</code>, which warns below 2.1.303. Only <code>--live</code> proves the login.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">Docker</td>
+                <td>
+                  Optional, for <code>sandbox.runtime: docker</code>. A Docker daemon that the <code>docker</code> client on PATH reaches,
+                  such as Docker Engine on Linux or a Docker VM such as colima on macOS. See <a href="#container">the container step</a>.
+                </td>
+                <td>
+                  Under <code>sandbox.runtime: docker</code>, <code>docker version</code> must answer, the image must exist, and its claude
+                  and gh must run at the verified versions or later. See <a href="commands.html#cmd-preflight">preflight</a>.
+                </td>
               </tr>
               <tr>
                 <td class="nowrap">osascript, notify-send</td>
@@ -205,8 +220,8 @@ node $R run --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             <p>One directory per rollout, outside any repo. The driver keeps its state there.</p>
             <pre><code>mkdir -p ~/.rollouts/my-lib-1.2.0/briefs</code></pre>
             <p>
-              The PR worktrees go next to it, in <code>~/.rollouts/my-lib-1.2.0.worktrees/</code>. Briefs stay local on purpose: they may
-              name clients.
+              The PR clones go next to it, in <code>~/.rollouts/my-lib-1.2.0.worktrees/</code>. Briefs stay local on purpose: they may name
+              clients.
             </p>
           </li>
           <li>
@@ -246,6 +261,40 @@ prs:
               <a href="manifest.html">Manifest</a> describes every field and its default.
             </p>
           </li>
+          <li id="container">
+            <strong>Optional: run the agents in containers</strong>
+            <p>
+              Claude in a container cannot use your login, so give it a token of its own.
+              <a href="accounts.html#claude-token">The token for containers</a> explains why.
+            </p>
+            <pre><code>claude setup-token
+mkdir -p ~/.config/rollout
+<span class="dim"># paste the token, then Ctrl-D</span>
+cat &gt; ~/.config/rollout/claude-token
+chmod 600 ~/.config/rollout/claude-token</code></pre>
+            <p>Add this to the manifest:</p>
+            <pre><code>sandbox:
+  runtime: docker
+  oauthTokenFile: ~/.config/rollout/claude-token</code></pre>
+            <p>Then build the image. <code>sandbox build</code> loads the manifest, so it runs once the manifest is written.</p>
+            <pre><code>node $R sandbox build --dir ~/.rollouts/my-lib-1.2.0</code></pre>
+            <p>
+              What to know, with the details in <a href="manifest.html#sandbox"><code>sandbox</code></a
+              >:
+            </p>
+            <ul>
+              <li><code>repo.agentToken</code> is required, and <code>mcpConfig</code> is refused.</li>
+              <li>
+                The image has node 24 and npm and no pnpm. <code>repo.install</code> and the ready and pre-verify commands run in it, so the
+                <code>pnpm install</code> of the example above does not work there.
+              </li>
+              <li>
+                A Docker VM must share the directories of the clones and the skill (colima shares your home directory by default), and it
+                needs room for <code>policy.concurrency</code> containers.
+              </li>
+              <li>Run <code>sandbox build</code> again after <code>claude</code> updates.</li>
+            </ul>
+          </li>
           <li>
             <strong>Give every PR a brief</strong>
             <p>
@@ -278,7 +327,8 @@ node $R preflight --dir ~/.rollouts/my-lib-1.2.0 --live</code></pre>
             <p>
               The first checks your tools, both GitHub identities and the repository settings. <code>--live</code> also starts a real
               headless agent with a small model and makes sure the guard refuses a merge, a push to <code>main</code>, a publish and a merge
-              through the API. It is also the only check that proves your Claude login works.
+              through the API. It is also the only check that proves your Claude login works. Under <code>sandbox.runtime: docker</code>,
+              <code>--live</code> first proves the container's boundary and then runs its agent in a container.
             </p>
           </li>
           <li>
@@ -351,6 +401,11 @@ node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li>
             After a wake the driver logs <code>machine-slept</code>. For two minutes it counts every failed GitHub request or gh or git call
             as an <a href="how-it-works.html#outage">outage</a>, because the network comes back a little after the machine does.
+          </li>
+          <li>
+            Under <code>sandbox.runtime: docker</code> the Docker daemon, and on macOS its VM, must stay up for the whole run. Start it
+            before <code>run</code>. See <a href="manifest.html#sandbox"><code>sandbox</code></a
+            >.
           </li>
         </ul>
 

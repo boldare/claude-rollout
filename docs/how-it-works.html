@@ -102,15 +102,15 @@
         <h2 id="map">System map <a class="anchor" href="#map" aria-label="Link to this section">#</a></h2>
 
         <p>
-          The overview has a short version of this map. This one adds the UI server and the worktrees, and the table below it shows which
-          identity makes which GitHub call.
+          The overview has a short version of this map. This one adds the UI server and the clones, and the table below it shows which
+          identity makes which GitHub call. Agents run on your machine, or in containers under <code>sandbox.runtime: docker</code>.
         </p>
 
         <figure class="diagram">
           <svg viewBox="-2 -2 704 648" role="img" aria-labelledby="hiw-map-title">
             <title id="hiw-map-title">
-              The CLI and the UI server write commands into the rollout directory. The driver reads them, runs agents in worktrees and talks
-              to GitHub as you, while the agents push as the bot.
+              The CLI and the UI server write commands into the rollout directory. The driver reads them, runs agents in clones, on your
+              machine or in containers, and talks to GitHub as you, while the agents push as the bot.
             </title>
             <defs>
               <marker
@@ -182,7 +182,7 @@
             <text class="dg-text" x="16" y="425">Holds driver.lock, beats the heartbeat, ticks every minute.</text>
 
             <rect class="dg-group" x="0" y="490" width="500" height="152" rx="12" />
-            <text class="dg-group-title" x="12" y="510">Agents: headless claude -p</text>
+            <text class="dg-group-title" x="12" y="510">Agents: headless claude -p, on the host or in a container</text>
             <g class="role-brief">
               <rect class="dg-node toned" x="12" y="522" width="113" height="54" rx="8" />
               <circle class="dg-dot" cx="25" cy="541" r="4" />
@@ -624,26 +624,26 @@
                   >, it then checks that every changed file outside the PR's scope is listed in the READY report's <code>deviations</code>.
                   With <a href="manifest.html#gates-ready-required">ready</a> or
                   <a href="manifest.html#gates-preVerify-required">pre-verify commands</a>, it then runs them itself in a slot, in the
-                  worktree at that head, one at a time, in this order: <code>gates.ready.required</code>,
-                  <code>gates.ready.recommended</code>, <code>gates.preVerify.required</code>, <code>gates.preVerify.recommended</code>.
-                  Only its own result for a ready command counts, whatever the READY report says. The PR stays here while they run. A failed
-                  required command of either stage ends the run. Their results stay with that head, on the card and the PR page, and a
-                  failed recommended command also reaches the verifier's prompt. A stop, or a claim that moved on while they ran, drops the
-                  results. A run that throws logs <code>on-done-error</code> and backs off like a failed agent run. When a stop, a crash or
-                  an error cuts a run short, the driver cleans what it left in the worktree on the PR's next step, before an agent or a
-                  command works there, so the clean-tree check does not count it against the implementer. Each check with a result logs a
-                  <code>gate-check</code> event with its stage (<code>ready</code> for a ready command, <code>preVerify</code> for every
-                  other check before the verifier), the item (<code>ci</code>, <code>policy</code>, <code>code-scanning</code>,
-                  <code>scope</code>, or the command itself), its level (<code>required</code>, or <code>recommended</code> for a
-                  recommended command), the result, the short SHA and short evidence. The result is pass, fail, or skip for code scanning
-                  that is off or unavailable. A <code>ci</code> pass lists every run on the SHA with its conclusion. A command's evidence is
-                  its summary, such as <code>exit 1</code>, then as much of the end of its output as fits. A pass or skip is logged once per
-                  claim and head, and a READY report or any new head starts a new list. A fail is always logged, a required one right before
-                  the send-back or block it causes. Only a required fail starts the list over, so the next round of checks logs every result
-                  again. Before the ready and pre-verify commands and before the verifier, the driver deletes untracked
-                  <code>.claude/settings.json</code>, <code>.claude/settings.local.json</code> and <code>CLAUDE.local.md</code> at the root
-                  of the worktree and logs <code>local-config-removed</code> with their paths. A global gitignore can hide them from the
-                  clean-tree check.
+                  worktree at that head (under <code>sandbox.runtime: docker</code> each command in a container of its own), one at a time,
+                  in this order: <code>gates.ready.required</code>, <code>gates.ready.recommended</code>,
+                  <code>gates.preVerify.required</code>, <code>gates.preVerify.recommended</code>. Only its own result for a ready command
+                  counts, whatever the READY report says. The PR stays here while they run. A failed required command of either stage ends
+                  the run. Their results stay with that head, on the card and the PR page, and a failed recommended command also reaches the
+                  verifier's prompt. A stop, or a claim that moved on while they ran, drops the results. A run that throws logs
+                  <code>on-done-error</code> and backs off like a failed agent run. When a stop, a crash or an error cuts a run short, the
+                  driver cleans what it left in the worktree on the PR's next step, before an agent or a command works there, so the
+                  clean-tree check does not count it against the implementer. Each check with a result logs a <code>gate-check</code> event
+                  with its stage (<code>ready</code> for a ready command, <code>preVerify</code> for every other check before the verifier),
+                  the item (<code>ci</code>, <code>policy</code>, <code>code-scanning</code>, <code>scope</code>, or the command itself),
+                  its level (<code>required</code>, or <code>recommended</code> for a recommended command), the result, the short SHA and
+                  short evidence. The result is pass, fail, or skip for code scanning that is off or unavailable. A <code>ci</code> pass
+                  lists every run on the SHA with its conclusion. A command's evidence is its summary, such as <code>exit 1</code>, then as
+                  much of the end of its output as fits. A pass or skip is logged once per claim and head, and a READY report or any new
+                  head starts a new list. A fail is always logged, a required one right before the send-back or block it causes. Only a
+                  required fail starts the list over, so the next round of checks logs every result again. Before the ready and pre-verify
+                  commands and before the verifier, the driver deletes untracked <code>.claude/settings.json</code>,
+                  <code>.claude/settings.local.json</code> and <code>CLAUDE.local.md</code> at the root of the worktree and logs
+                  <code>local-config-removed</code> with their paths. A global gitignore can hide them from the clean-tree check.
                 </td>
                 <td>
                   A note that still waits for the implementer: <code>needs_fix</code>, before any check. CI green, no policy violation, no
@@ -909,14 +909,17 @@
 
         <p>
           The driver talks to a running agent in two ways. It writes the prompt to the agent's stdin, and it reads the agent's stdout and
-          stderr. Everything else the agent does goes through the worktree and GitHub, where the driver checks it.
+          stderr. Everything else the agent does goes through the worktree and GitHub, where the driver checks it. Under
+          <code>sandbox.runtime: docker</code> the agent runs in a container, and its stdin, stdout and stderr pass through the
+          <code>docker</code> client.
         </p>
 
         <figure class="diagram">
           <svg viewBox="-2 -2 704 524" role="img" aria-labelledby="hiw-run-title">
             <title id="hiw-run-title">
-              The driver prepares the worktree and starts claude -p with the prompt on stdin. The agent works in the worktree and on GitHub,
-              streams JSON back and ends with a structured report. The driver records the transcript, checks the claim and moves the PR on.
+              The driver prepares the worktree and starts claude -p, on the host or in a container, with the prompt on stdin. The agent
+              works in the worktree and on GitHub, streams JSON back and ends with a structured report. The driver records the transcript,
+              checks the claim and moves the PR on.
             </title>
             <defs>
               <marker
@@ -1012,8 +1015,9 @@
             <text class="dg-label" x="165" y="503" text-anchor="middle">later: --resume, the reason</text>
           </svg>
           <figcaption>
-            The agent does not need the rollout directory. Its stdout reaches <code>logs/</code> through the driver. Deny rules and the
-            guard keep its tools out of the rollout and skill directories, as seatbelts, not a sandbox.
+            The agent does not need the rollout directory. Its stdout reaches <code>logs/</code> through the driver. Under the host runtime,
+            deny rules and the guard keep its tools out of the rollout and skill directories, as seatbelts, not a sandbox. Under Docker the
+            rollout directory is not in the container at all, and the skill directory is read-only.
           </figcaption>
         </figure>
 
@@ -1038,15 +1042,32 @@
                     ScheduleWakeup CronCreate CronDelete CronList RemoteTrigger Monitor
   --session-id &lt;new uuid&gt; | --resume &lt;the PR's session&gt;</code></pre>
 
+        <p>
+          Under <code>sandbox.runtime: docker</code> the same argv runs as the command of a <code>docker run</code>. The clone and the skill
+          directory sit at their host paths, so <code>--settings</code>, the guard's hook command and the git hooks path are the same
+          inside. The entrypoint sets the firewall as root and then runs <code>claude</code> as your uid and gid, with no capabilities and
+          only the named variables. The image's <code>claude</code> runs, so <code>claudeBin</code> and <code>repo.pathPrepend</code> do not
+          apply. See <a href="manifest.html#sandbox"><code>sandbox</code></a
+          >.
+        </p>
+
+        <pre><code>docker run --rm --init --pull never --name rollout-&lt;name&gt;-&lt;run&gt; \
+  --cap-drop ALL --cap-add NET_ADMIN … \
+  --memory &lt;memory&gt; --cpus &lt;cpus&gt; --pids-limit &lt;pidsLimit&gt; -i \
+  -v &lt;clone&gt;:&lt;clone&gt; -v &lt;skill&gt;:&lt;skill&gt;:ro -v &lt;home&gt;:/home/agent -w &lt;clone&gt; \
+  -e HOST_UID=… -e HOST_GID=… -e ALLOWED_DOMAINS=… -e ROLLOUT_ENV=… -e GH_TOKEN -e … \
+  &lt;image&gt; claude -p …</code></pre>
+
         <dl class="kv">
           <dt>Environment</dt>
           <dd>
-            Yours, with <a href="manifest.html#repo-pathPrepend"><code>repo.pathPrepend</code></a> first on <code>PATH</code>, plus
-            <code>ROLLOUT_ROLE</code> and no other <code>ROLLOUT_*</code> variable, <code>GH_REPO</code> pinned to <code>repo.github</code>,
-            no <code>GH_HOST</code> and no npm credentials. With a bot token also its <code>GH_TOKEN</code>, an empty
-            <code>GITHUB_TOKEN</code>, a <code>GH_CONFIG_DIR</code> that points at an empty directory and
+            Under the host runtime, yours, with <a href="manifest.html#repo-pathPrepend"><code>repo.pathPrepend</code></a> first on
+            <code>PATH</code>, plus <code>ROLLOUT_ROLE</code> and no other <code>ROLLOUT_*</code> variable, <code>GH_REPO</code> pinned to
+            <code>repo.github</code>, no <code>GH_HOST</code> and no npm credentials. With a bot token also its <code>GH_TOKEN</code>, an
+            empty <code>GITHUB_TOKEN</code>, a <code>GH_CONFIG_DIR</code> that points at an empty directory and
             <code>GIT_TERMINAL_PROMPT=0</code>. Every agent gets <code>CLAUDE_CODE_DISABLE_AUTO_MEMORY=1</code>, and the verifier, the brief
-            writers and the delegate <code>CLAUDE_CODE_PROMPT_CACHE_TTL=5m</code>.
+            writers and the delegate <code>CLAUDE_CODE_PROMPT_CACHE_TTL=5m</code>. Under Docker only the named variables arrive, see
+            <a href="security.html#environment">Security</a>.
           </dd>
           <dt>Context</dt>
           <dd>
@@ -1071,7 +1092,9 @@
             No output for <a href="manifest.html#policy-stallMinutes"><code>policy.stallMinutes</code></a> (20) ends the run, and so does
             the role's <a href="manifest.html#policy-timeouts"><code>policy.timeouts</code></a
             >. Both count awake time, checked once a minute. A check that comes more than a minute late counts the gap as sleep, so a
-            sleeping machine kills no run. SIGTERM first, SIGKILL 10 s later.
+            sleeping machine kills no run. SIGTERM first, SIGKILL 10 s later. Under Docker the SIGTERM is <code>docker stop -t 10</code> and
+            the SIGKILL is <code>docker kill</code>, because a signal to the <code>docker</code> client alone does not reliably end the
+            container.
           </dd>
           <dt>One turn</dt>
           <dd>
