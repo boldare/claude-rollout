@@ -8,10 +8,15 @@ import { readCatalog, setFetch } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import {
   agentTokenCheck,
+  BOUNDARY_PROBES,
+  BOUNDARY_SCRIPT,
+  boundaryVerdict,
   catalogCheck,
   claudeWrapperWarning,
+  imageToolCheck,
   originCheck,
   probeTools,
+  runtimeCheck,
   sshHostname,
   storedLoginCheck,
   userSettingsCheck,
@@ -763,4 +768,166 @@ test('versionWarning: warns when the output holds no version', () => {
     assert.match(warning, /no version/, output)
     assert.match(warning, /2\.1\.303/, output)
   }
+})
+
+test('runtimeCheck under the host runtime: no lines, no problems, one warning that names the Docker runtime', async () => {
+  for (const sandbox of [{ runtime: 'host' }, undefined]) {
+    const { lines, problems, warnings } = await runtimeCheck({ sandbox, dir: '/rollouts/demo' }, '2.1.309 (Claude Code)')
+
+    assert.deepEqual(lines, [])
+    assert.deepEqual(problems, [])
+    assert.equal(warnings.length, 1)
+    assert.match(warnings[0], /^sandbox\.runtime is host: agents, installs and gate commands run as you/)
+    assert.match(warnings[0], /Set sandbox\.runtime: docker/)
+    assert.match(warnings[0], /security\.html#boundaries$/)
+  }
+})
+
+test('imageToolCheck: fails on a failed run, no version or one below the floor, unlike the host check', () => {
+  const ran = (stdout, code = 0, stderr = '') => ({ code, stdout, stderr })
+
+  assert.deepEqual(imageToolCheck('claude', ran('2.1.309 (Claude Code)\n'), '/rollouts/demo'), {
+    found: '2.1.309',
+    line: 'ok   claude in the image: 2.1.309',
+    problem: null,
+  })
+
+  const old = imageToolCheck('gh', ran('gh version 2.39.9 (2023-11-01)\n'), '/rollouts/demo')
+
+  assert.equal(old.line, 'FAIL gh in the image: 2.39.9, older than 2.40.0')
+  assert.equal(
+    old.problem,
+    'gh 2.39.9 in the image is older than 2.40.0: update it on the host and rebuild with rollout.mjs sandbox build --dir /rollouts/demo',
+  )
+
+  const silent = imageToolCheck('claude', ran('Claude Code\n'), '/rollouts/demo')
+
+  assert.equal(silent.line, 'FAIL claude in the image printed no version ("Claude Code")')
+  assert.match(silent.problem, /sandbox build --dir \/rollouts\/demo$/)
+
+  const failed = imageToolCheck('claude', ran('', 127, 'exec: "claude": executable file not found in $PATH\n'), '/rollouts/demo')
+
+  assert.equal(failed.line, 'FAIL claude in the image: exec: "claude": executable file not found in $PATH')
+  assert.ok(failed.problem)
+})
+
+const CONTAINER_PROBES = BOUNDARY_PROBES.map((probe) => probe.name).filter((name) => name !== 'stop')
+
+// The stdout of a container where every probe passed, with one probe's line
+// replaced, or dropped when `line` is null.
+function probeOutput(name = null, line = null) {
+  const lines = CONTAINER_PROBES.flatMap((other) => {
+    if (other !== name) {
+      return [`probe ${other} ok`]
+    }
+
+    return line === null ? [] : [line]
+  })
+
+  return `${[...lines, 'probes-done'].join('\n')}\n`
+}
+
+function passingReport(changes = {}) {
+  return {
+    stdout: probeOutput(),
+    stderr: '',
+    done: true,
+    stopMs: 400,
+    ownerUid: 501,
+    hostUid: 501,
+    sameObject: false,
+    mirrorChanged: false,
+    ...changes,
+  }
+}
+
+// Every way the probe can fail on its own.
+function failuresOf(name) {
+  if (name === 'stop') {
+    return [{ stopMs: 6000 }, { stopMs: null }, { done: false, stopMs: null }]
+  }
+
+  const reported = [{ stdout: probeOutput(name, `probe ${name} fail synthetic detail`) }, { stdout: probeOutput(name, null) }]
+
+  if (name === 'owner') {
+    return [...reported, { ownerUid: 0 }, { ownerUid: null }]
+  }
+
+  if (name === 'mirror-object') {
+    return [...reported, { sameObject: true }, { mirrorChanged: true }]
+  }
+
+  return reported
+}
+
+test('boundaryVerdict: a report where everything passed gives one ok line per probe, in order', () => {
+  assert.equal(BOUNDARY_PROBES.length, 12)
+  assert.deepEqual(boundaryVerdict(passingReport()), {
+    lines: BOUNDARY_PROBES.map((probe) => `ok   boundary: ${probe.text}`),
+    problems: [],
+  })
+})
+
+test('boundaryVerdict: each probe that fails alone, in every way it can, gives exactly one problem that names it', () => {
+  for (const { name } of BOUNDARY_PROBES) {
+    for (const changes of failuresOf(name)) {
+      const { lines, problems } = boundaryVerdict(passingReport(changes))
+      const shown = `${name} ${JSON.stringify(changes)}`
+
+      assert.equal(problems.length, 1, shown)
+      assert.ok(problems[0].startsWith(`boundary probe ${name}: `), `${shown}: ${problems[0]}`)
+      assert.equal(lines.length, 12, shown)
+      assert.equal(lines.filter((line) => line.startsWith('FAIL boundary: ')).length, 1, shown)
+    }
+  }
+})
+
+test('boundaryVerdict: the details say what went wrong', () => {
+  const problem = (changes) => boundaryVerdict(passingReport(changes)).problems[0]
+
+  assert.equal(
+    problem({ stdout: probeOutput('etc-readonly', 'probe etc-readonly fail the write succeeded') }),
+    'boundary probe etc-readonly: the write succeeded',
+  )
+
+  assert.equal(problem({ stdout: probeOutput('no-mirror', null) }), 'boundary probe no-mirror: never reported')
+  assert.equal(problem({ ownerUid: 0 }), 'boundary probe owner: owned by uid 0, you are 501')
+  assert.equal(problem({ ownerUid: null }), 'boundary probe owner: no file')
+  assert.equal(problem({ sameObject: true }), 'boundary probe mirror-object: the clone and the mirror share one file')
+  assert.equal(problem({ mirrorChanged: true }), "boundary probe mirror-object: the mirror's copy changed")
+  assert.equal(problem({ stopMs: 6000 }), 'boundary probe stop: took 6000 ms')
+  assert.equal(problem({ stopMs: null }), 'boundary probe stop: did not end')
+  assert.equal(problem({ done: false, stopMs: null }), 'boundary probe stop: the container never reached the stop')
+
+  const { lines } = boundaryVerdict(passingReport({ ownerUid: 0 }))
+
+  assert.ok(lines.includes('FAIL boundary: a file created in the clone belongs to you (owned by uid 0, you are 501)'), lines.join('\n'))
+})
+
+test('boundaryVerdict: a container that ended before its probes is one line and one problem', () => {
+  const report = passingReport({
+    stdout: '',
+    stderr: 'docker: Error response from daemon: no such image\nmore\n',
+    done: false,
+    stopMs: null,
+  })
+
+  const text = 'boundary: the container ended before its probes (docker: Error response from daemon: no such image)'
+
+  assert.deepEqual(boundaryVerdict(report), { lines: [`FAIL ${text}`], problems: [text] })
+})
+
+test('BOUNDARY_SCRIPT: valid sh without set -e that names every container probe and tests a file inside each absent path', () => {
+  execFileSync('sh', ['-n', '-c', BOUNDARY_SCRIPT])
+
+  for (const name of CONTAINER_PROBES) {
+    assert.match(BOUNDARY_SCRIPT, new RegExp(`\\b${name}\\b`), name)
+  }
+
+  for (const path of ['"$2/manifest.yaml"', '"$3/.git"', '"$4/HEAD"']) {
+    assert.ok(BOUNDARY_SCRIPT.includes(path), path)
+  }
+
+  assert.doesNotMatch(BOUNDARY_SCRIPT, /set -e/)
+  assert.match(BOUNDARY_SCRIPT, /^echo probes-done$/m)
 })

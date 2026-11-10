@@ -592,8 +592,20 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td>claude and gh versions</td>
                 <td>
-                  Warns when claude is older than 2.1.303 or gh older than 2.40.0, the versions the driver was verified on, or when either
-                  prints no version. It never fails.
+                  The versions on your machine. Warns when claude is older than 2.1.303 or gh older than 2.40.0, the versions the driver was
+                  verified on, or when either prints no version. It never fails.
+                </td>
+              </tr>
+              <tr>
+                <td>runtime</td>
+                <td>
+                  Under the host runtime, one warning: agents, installs and gate commands run as you. Under
+                  <code>sandbox.runtime: docker</code> it fails when there is no docker client on PATH, when
+                  <code>docker version</code> gets no answer from the daemon, when the image is missing (build it with
+                  <a href="#cmd-sandbox">sandbox build</a>), when claude or gh in the image is older than the verified versions or prints
+                  none, when <code>sandbox.oauthTokenFile</code> is empty, or when <code>sandbox.passEnv</code> names
+                  <code>ANTHROPIC_API_KEY</code> and it is not set. It warns when the image's claude differs from yours. An
+                  <code>info</code> line says that <code>claudeBin</code> and <code>repo.pathPrepend</code> apply on the host only.
                 </td>
               </tr>
               <tr>
@@ -664,10 +676,18 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               <tr>
                 <td class="name">--live</td>
                 <td>
-                  Starts a real headless <code>claude -p</code> (haiku, low effort) with the implementer's settings in a scratch directory.
-                  The guard must refuse a <code>gh pr merge</code>, a push to <code>main</code>, a <code>pnpm publish</code> and a
+                  Under <code>sandbox.runtime: docker</code> it first proves the boundary: one container of the image over a scratch clone
+                  of the mirror, with the real mounts, the firewall and no agent, runs shell probes. A write to the skill directory and to
+                  <code>/etc</code> must fail. The rollout directory, <code>repo.path</code> and the mirror must be absent. A file created
+                  in the clone must belong to you. HTTPS to a host outside <code>sandbox.allowedDomains</code> must fail and HTTPS to
+                  api.anthropic.com must connect. The guard hook command must refuse <code>gh pr merge</code> and let
+                  <code>echo</code> through. An object rewritten in the clone must leave the mirror's copy unchanged.
+                  <code>docker stop</code> must end the container within 5 s. The first run creates the mirror when it is missing. Then,
+                  under either runtime, it starts a real headless <code>claude -p</code> (haiku, low effort) with the implementer's settings
+                  through the runtime: on the host in a scratch directory, under Docker in a container over a second scratch clone. The
+                  guard must refuse a <code>gh pr merge</code>, a push to <code>main</code>, a <code>pnpm publish</code> and a
                   <code>gh api -X PUT</code> merge, and <code>echo allowed</code> must run. A command that never ran fails too, so a Claude
-                  login or quota problem shows up here.
+                  login or quota problem shows up here. When the runtime checks fail, both are skipped.
                 </td>
               </tr>
             </tbody>
@@ -743,7 +763,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>--live</td>
                 <td>off</td>
                 <td>preflight</td>
-                <td>Also proves the guard in a real headless agent.</td>
+                <td>
+                  Also proves the guard in a real headless agent. Under <code>sandbox.runtime: docker</code> it proves the container's
+                  boundary first.
+                </td>
               </tr>
               <tr id="flag-root">
                 <td>--root ROOT</td>
