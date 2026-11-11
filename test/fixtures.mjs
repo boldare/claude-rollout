@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -605,15 +606,23 @@ export function fakeDocker(dir, state = {}) {
   setState(state)
 
   if (existsSync(file)) {
-    const manifest = parse(readFileSync(file, 'utf8'))
-    const pathPrepend = manifest.repo.pathPrepend ?? []
-
-    if (!pathPrepend.includes(bin)) {
-      writeFileSync(file, stringify({ ...manifest, repo: { ...manifest.repo, pathPrepend: [bin, ...pathPrepend] } }))
-    }
+    prependBin(file, bin)
   }
 
   return { bin, calls: () => readCalls(bin), setState }
+}
+
+// Puts bin first on repo.pathPrepend of the manifest file, once, and returns
+// the manifest as it was read.
+function prependBin(file, bin) {
+  const manifest = parse(readFileSync(file, 'utf8'))
+  const pathPrepend = manifest.repo.pathPrepend ?? []
+
+  if (!pathPrepend.includes(bin)) {
+    writeFileSync(file, stringify({ ...manifest, repo: { ...manifest.repo, pathPrepend: [bin, ...pathPrepend] } }))
+  }
+
+  return manifest
 }
 
 const NULL_BODY_STATUSES = [204, 205, 304]
@@ -751,6 +760,338 @@ export function fakeGitHub(routes = []) {
   }
 
   return { fetch, answer, requests }
+}
+
+// The gh of fakeGitHubRepo, for `pr merge` alone. It squashes the PR head onto
+// the base of the bare origin that github.json names, and fails for a PR that
+// is not open, a head that moved or a head without the base tip. Every call is
+// recorded like a fakeTools call.
+const FAKE_GH = `#!/usr/bin/env node
+const { execFileSync } = require('node:child_process')
+const { appendFileSync, readFileSync, writeFileSync } = require('node:fs')
+const { join } = require('node:path')
+
+const IDENTITY = {
+  GIT_AUTHOR_NAME: 'Fake GitHub',
+  GIT_AUTHOR_EMAIL: 'merge@example.com',
+  GIT_COMMITTER_NAME: 'Fake GitHub',
+  GIT_COMMITTER_EMAIL: 'merge@example.com',
+}
+
+const VALUE_FLAGS = ['--match-head-commit', '--subject', '--body']
+const args = process.argv.slice(2)
+const file = join(__dirname, 'github.json')
+
+appendFileSync(join(__dirname, 'calls.jsonl'), JSON.stringify({ tool: 'gh', args }) + '\\n')
+
+function fail(message) {
+  process.stderr.write(message + '\\n')
+  process.exit(1)
+}
+
+function git(state, words) {
+  return execFileSync('git', ['-C', state.origin, ...words], { encoding: 'utf8', env: { ...process.env, ...IDENTITY } }).trim()
+}
+
+function succeeds(state, words) {
+  try {
+    git(state, words)
+
+    return true
+  } catch {
+    return false
+  }
+}
+
+function refSha(state, ref) {
+  try {
+    return git(state, ['rev-parse', '--verify', '--quiet', ref])
+  } catch {
+    return null
+  }
+}
+
+// --squash and a value for each of VALUE_FLAGS, or null for anything else.
+function mergeOptions(words) {
+  const options = { squash: false }
+
+  for (let i = 0; i < words.length; i += 1) {
+    if (words[i] === '--squash') {
+      options.squash = true
+    } else if (VALUE_FLAGS.includes(words[i]) && i + 1 < words.length) {
+      options[words[i].slice(2)] = words[i + 1]
+      i += 1
+    } else {
+      return null
+    }
+  }
+
+  const complete = options.squash && VALUE_FLAGS.every((flag) => options[flag.slice(2)] !== undefined)
+
+  return complete ? options : null
+}
+
+function merge(number, options) {
+  const state = JSON.parse(readFileSync(file, 'utf8'))
+  const pr = state.prs.find((item) => item.number === number)
+
+  if (!pr || pr.merged) {
+    fail('fake gh: pull request #' + number + ' is not open')
+  }
+
+  const head = refSha(state, 'refs/heads/' + pr.branch)
+
+  if (head !== options['match-head-commit']) {
+    fail('GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)')
+  }
+
+  const tip = refSha(state, 'refs/heads/' + state.base)
+
+  // The head's tree on a base it does not contain would drop the base's newer changes.
+  if (!succeeds(state, ['merge-base', '--is-ancestor', tip, head])) {
+    fail('Pull request is not mergeable')
+  }
+
+  const sha = git(state, ['commit-tree', head + '^{tree}', '-p', tip, '-m', options.subject])
+
+  git(state, ['update-ref', 'refs/heads/' + state.base, sha, tip])
+  pr.merged = { sha, head, at: new Date().toISOString() }
+  writeFileSync(file, JSON.stringify(state, null, 2))
+}
+
+const [group, command, prNumber, ...rest] = args
+const requested = group === 'pr' && command === 'merge' && /^[0-9]+$/.test(prNumber ?? '') ? mergeOptions(rest) : null
+
+if (requested) {
+  merge(Number(prNumber), requested)
+} else {
+  fail('fake gh: no fake for ' + args.join(' '))
+}
+`
+
+const GREEN_RUN = { id: 1, name: 'test', status: 'completed', conclusion: 'success' }
+const PAGING = ['per_page', 'page']
+
+function originRef(origin, ref) {
+  try {
+    return execFileSync('git', ['-C', origin, 'rev-parse', '--verify', '--quiet', ref], { encoding: 'utf8' }).trim()
+  } catch {
+    return null
+  }
+}
+
+function pullOf(state, number) {
+  return state.prs.find((pr) => pr.number === Number(number)) ?? null
+}
+
+function labelObjects(pr) {
+  return pr.labels.map((name) => ({ name }))
+}
+
+// The REST shape of a PR, with the fields prFacts reads. An open PR's head is
+// its branch in the origin at the time of the request.
+function restPull(state, pr) {
+  const fields = {
+    number: pr.number,
+    draft: false,
+    title: pr.title,
+    body: '',
+    labels: labelObjects(pr),
+    user: { login: pr.author },
+    html_url: `https://github.com/${state.repo}/pull/${pr.number}`,
+    base: { ref: state.base },
+  }
+
+  if (pr.merged) {
+    const head = { ref: pr.branch, sha: pr.merged.head }
+    const merged = { merged_at: pr.merged.at, merge_commit_sha: pr.merged.sha }
+
+    return { ...fields, state: 'closed', head, mergeable: null, mergeable_state: 'unknown', ...merged }
+  }
+
+  const branchHead = originRef(state.origin, `refs/heads/${pr.branch}`)
+
+  return {
+    ...fields,
+    state: 'open',
+    head: { ref: pr.branch, sha: branchHead },
+    mergeable: true,
+    mergeable_state: 'clean',
+    merged_at: null,
+    merge_commit_sha: null,
+  }
+}
+
+function openPulls(state, request) {
+  const filters = Object.keys(request.query).filter((name) => !PAGING.includes(name))
+
+  if (filters.length !== 1 || request.query.state !== 'open') {
+    return null
+  }
+
+  return { status: 200, body: state.prs.filter((pr) => !pr.merged).map((pr) => restPull(state, pr)) }
+}
+
+function onePull(state, _, number) {
+  const pr = pullOf(state, number)
+
+  return pr ? { status: 200, body: restPull(state, pr) } : null
+}
+
+function reviews(state, _, number) {
+  return pullOf(state, number) ? { status: 200, body: [] } : null
+}
+
+function addLabels(state, request, number) {
+  const pr = pullOf(state, number)
+
+  if (!pr || !Array.isArray(request.body?.labels)) {
+    return null
+  }
+
+  pr.labels = [...new Set([...pr.labels, ...request.body.labels])]
+
+  return { status: 200, body: labelObjects(pr) }
+}
+
+function removeLabel(state, _, number, encoded) {
+  const pr = pullOf(state, number)
+  const name = decodeURIComponent(encoded)
+
+  if (!pr) {
+    return null
+  }
+
+  if (!pr.labels.includes(name)) {
+    return { status: 404, body: { message: 'Label does not exist' } }
+  }
+
+  pr.labels = pr.labels.filter((label) => label !== name)
+
+  return { status: 200, body: labelObjects(pr) }
+}
+
+function deleteBranch(state, _, encoded) {
+  const ref = `refs/heads/${encoded.split('/').map(decodeURIComponent).join('/')}`
+
+  if (!originRef(state.origin, ref)) {
+    return { status: 422, body: { message: 'Reference does not exist' } }
+  }
+
+  execFileSync('git', ['-C', state.origin, 'update-ref', '-d', ref])
+
+  return { status: 204 }
+}
+
+// Paths under repos/<repo>/, whatever the paging. An answer is { status, body },
+// and null means no fake.
+const REPO_ROUTES = [
+  { method: 'GET', path: /^pulls$/, answer: openPulls },
+  { method: 'GET', path: /^pulls\/(\d+)$/, answer: onePull },
+  { method: 'GET', path: /^pulls\/(\d+)\/reviews$/, answer: reviews },
+  { method: 'GET', path: /^code-scanning\/alerts$/, answer: () => ({ status: 200, body: [] }) },
+  {
+    method: 'GET',
+    path: /^commits\/[0-9a-f]{40}\/check-runs$/,
+    answer: () => ({ status: 200, body: { total_count: 1, check_runs: [GREEN_RUN] } }),
+  },
+  { method: 'POST', path: /^labels$/, answer: (_, request) => ({ status: 201, body: request.body }) },
+  { method: 'POST', path: /^issues\/(\d+)\/labels$/, answer: addLabels },
+  { method: 'DELETE', path: /^issues\/(\d+)\/labels\/([^/]+)$/, answer: removeLabel },
+  { method: 'DELETE', path: /^git\/refs\/heads\/(.+)$/, answer: deleteBranch },
+]
+
+function repoAnswer(state, request, path) {
+  for (const route of REPO_ROUTES) {
+    const match = route.method === request.method ? path.match(route.path) : null
+
+    if (match) {
+      return route.answer(state, request, ...match.slice(1))
+    }
+  }
+
+  return null
+}
+
+// A GitHub that keeps state for the repository of the manifest in dir, for
+// setFetch, and a fake gh first on its repo.pathPrepend. Call it before
+// loadManifest. git stays real: an open PR's head is its branch in the bare
+// `origin` at each request, and `gh pr merge` squashes into the origin's base.
+// The state is a file because the fake gh is another process. A request with
+// no fake gets a 400, as in fakeGitHub.
+export function fakeGitHubRepo(dir, { origin, base = 'main' }) {
+  const bin = join(dir, 'fake-bin')
+  const file = join(bin, 'github.json')
+  const manifest = prependBin(join(dir, 'manifest.yaml'), bin)
+  const prefix = `repos/${manifest.repo.github}/`
+  const log = []
+
+  const readState = () => JSON.parse(readFileSync(file, 'utf8'))
+  const writeState = (state) => writeFileSync(file, JSON.stringify(state, null, 2))
+
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'gh'), FAKE_GH, { mode: 0o755 })
+  writeState({ repo: manifest.repo.github, origin, base, prs: [] })
+
+  // As gh pr create: the number of the branch's open PR, or of a new one. A PR
+  // is { number, branch, title, labels, author, merged }, and merged is null
+  // or { sha, head, at }.
+  function openPr({ branch, title, labels = [] }) {
+    const state = readState()
+    const open = state.prs.find((pr) => pr.branch === branch && !pr.merged)
+
+    if (open) {
+      return open.number
+    }
+
+    const number = state.prs.length + 1
+
+    state.prs.push({ number, branch, title, labels, author: 'demo-bot', merged: null })
+    writeState(state)
+
+    return number
+  }
+
+  async function fetch(input, init = {}) {
+    const url = new URL(String(input))
+    const method = init.method ?? 'GET'
+    const path = url.pathname.slice(1)
+    const headers = Object.fromEntries(new Headers(init.headers))
+    const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+    const record = { method, path, query: Object.fromEntries(url.searchParams), body, status: null }
+    const state = readState()
+    const answer = path.startsWith(prefix) ? repoAnswer(state, record, path.slice(prefix.length)) : null
+
+    log.push(record)
+
+    if (!answer) {
+      record.status = 400
+
+      return respond(400, { message: `fake GitHub: no route for ${method} ${path}` })
+    }
+
+    if (method !== 'GET') {
+      writeState(state)
+    }
+
+    record.status = answer.status
+
+    if (method !== 'GET' || answer.status !== 200) {
+      return respond(answer.status, answer.body)
+    }
+
+    const etag = etagOf(answer.body)
+
+    if (headers['if-none-match'] === etag) {
+      record.status = 304
+
+      return new Response(null, { status: 304 })
+    }
+
+    return respond(200, answer.body, { etag })
+  }
+
+  return { fetch, openPr, requests: () => log, ghCalls: () => readCalls(bin).map((call) => call.args) }
 }
 
 // A root like ~/.rollouts: demo with a ledger and a brief, fresh without a
