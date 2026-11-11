@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentEnv } from '../lib/identity.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
@@ -422,6 +422,74 @@ test('runAgent: a run that hits its budget cap fails as a normal attempt', async
   assert.equal(result.costUsd, 20.4)
   assert.equal(result.transient, false)
   assert.equal(result.account, false)
+})
+
+const UNICODE_RESULT = {
+  type: 'result',
+  subtype: 'success',
+  is_error: false,
+  total_cost_usd: 0.5,
+  session_id: 'session-1',
+  structured_output: { status: 'READY', summary: 'Łódź, żółw' },
+}
+
+// A fake claude that writes `parts` of its stdout with a pause between them,
+// so each part reaches the driver as its own read.
+function fakeStream(manifest, parts) {
+  const files = parts.map((part, index) => {
+    const file = join(manifest.dir, `stream-${index + 1}.bin`)
+    writeFileSync(file, part)
+
+    return file
+  })
+
+  fakeClaude(manifest, files.map((file) => `cat '${file}'`).join('\nsleep 0.2\n'))
+}
+
+test('runAgent: a character split between two reads reaches the report whole, and the log holds every byte when the run resolves', async () => {
+  const manifest = loadManifest(makeRollout())
+  const bytes = Buffer.from(`${JSON.stringify(UNICODE_RESULT)}\n`)
+  const cut = bytes.indexOf(Buffer.from('ł')) + 1
+
+  fakeStream(manifest, [bytes.subarray(0, cut), bytes.subarray(cut)])
+
+  const result = await run(manifest, 'A1-01-split')
+  const log = readFileSync(join(manifest.dir, 'logs', 'A1-01-split.jsonl'))
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.output, UNICODE_RESULT.structured_output)
+  assert.equal(result.logError, null)
+  assert.deepEqual(log, bytes)
+})
+
+test('runAgent: a result line that ends the stream without a newline keeps the run and its cost', async () => {
+  const manifest = loadManifest(makeRollout())
+
+  fakeStream(manifest, [JSON.stringify(UNICODE_RESULT)])
+
+  const result = await run(manifest, 'A1-01-no-newline')
+
+  assert.equal(result.ok, true)
+  assert.equal(result.costUsd, 0.5)
+})
+
+test('runAgent: a log that cannot be written ends neither the run nor the process, and the result carries its error', async (context) => {
+  const manifest = loadManifest(makeRollout())
+  const exceptions = []
+  const record = (error) => exceptions.push(error)
+
+  process.on('uncaughtException', record)
+  context.after(() => process.off('uncaughtException', record))
+  // A directory fails the write for root too, unlike a file without write permission.
+  mkdirSync(join(manifest.dir, 'logs', 'A1-01-unwritable.jsonl'))
+  fakeStream(manifest, [`${JSON.stringify(UNICODE_RESULT)}\n`])
+
+  const result = await run(manifest, 'A1-01-unwritable')
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.output, UNICODE_RESULT.structured_output)
+  assert.match(result.logError, /EISDIR/)
+  assert.deepEqual(exceptions, [])
 })
 
 test('runAgent: the delegate runs read-only, with no branch on its guard and its own schema', async () => {

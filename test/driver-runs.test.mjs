@@ -983,3 +983,156 @@ test('pre-verify: a cleanup owed for a worktree that is gone only clears', async
   assert.deepEqual(tools.calls(), [])
   assert.deepEqual(github.requests(), [])
 })
+
+test('log-failed: a run whose transcript could not be written says so once, right after its done event', async () => {
+  const result = agentResult({ ok: false, error: 'error_during_execution', logError: 'EISDIR: illegal operation on a directory' })
+  const setup = modelDriver({ A1: { state: 'pending' } }, { result: () => Promise.resolve(result) })
+
+  const { logName: run } = await launched(setup, 'implement')
+  await waitFor(() => setup.driver.running.size === 0, 'the run to end')
+
+  assert.equal(run, 'A1-01-implement-2')
+  assert.deepEqual(kindsSince(setup.manifest), ['implement-start', 'implement-done', 'log-failed'])
+  assert.deepEqual(eventsSince(setup.manifest).at(-1), { id: 'A1', kind: 'log-failed', run, error: result.logError })
+})
+
+// What reaches process.on(name) until the test ends.
+function recorded(context, name) {
+  const seen = []
+  const record = (reason) => seen.push(reason)
+
+  process.on(name, record)
+  context.after(() => process.off(name, record))
+
+  return seen
+}
+
+const FAILED_RUN = agentResult({ ok: false, error: 'error_during_execution' })
+
+// `start` starts a job and returns its driver and a `finish` that ends it.
+// The job ends while a directory blocks the ledger's temp file. Returns the
+// ledger as stored once the directory is gone and a tick saved it.
+async function endWithSaveBlocked(context, start) {
+  const rejections = recorded(context, 'unhandledRejection')
+  const { manifest, driver, finish } = await start()
+  const blocker = join(manifest.dir, 'ledger.json.' + process.pid + '.tmp')
+
+  mkdirSync(blocker)
+  finish()
+  await waitFor(() => driver.running.size === 0, 'the job to end')
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.deepEqual(rejections, [])
+  assert.equal(driver.running.size, 0)
+
+  // The fixture has other PRs and free slots.
+  driver.ledger.data.paused = true
+
+  const before = readEvents(manifest).length
+  await driver.runTick()
+  const tickErrors = eventsSince(manifest, before).filter((event) => event.kind === 'tick-error')
+
+  assert.equal(tickErrors.length, 1)
+  assert.equal(tickErrors[0].count, 1)
+  assert.match(tickErrors[0].error, /EISDIR/)
+
+  rmSync(blocker, { recursive: true })
+  await driver.runTick()
+
+  return readLedger(manifest)
+}
+
+test('job end: a ledger save that fails after an implement run is printed, the driver goes on, and the next tick counts one failed tick', async (context) => {
+  const job = deferred()
+
+  const stored = await endWithSaveBlocked(context, async () => {
+    const setup = modelDriver({ A1: { state: 'pending' } }, { result: () => job.promise })
+
+    await launched(setup, 'implement')
+
+    return { ...setup, finish: () => job.resolve(FAILED_RUN) }
+  })
+
+  assert.equal(stored.prs.A1.state, 'interrupted')
+})
+
+test('job end: a ledger save that fails after a brief is printed, the driver goes on, and the next tick counts one failed tick', async (context) => {
+  const job = deferred()
+
+  const stored = await endWithSaveBlocked(context, async () => {
+    const setup = modelDriver({ A1: { state: 'pending' } }, { result: () => job.promise })
+
+    rmSync(setup.pr.brief)
+    await launched(setup, 'brief')
+
+    return { ...setup, finish: () => job.resolve(FAILED_RUN) }
+  })
+
+  assert.ok(stored.runs['A1-01-brief-write'].endedAt, JSON.stringify(stored.runs))
+})
+
+test('job end: a ledger save that fails after a delegate is printed, the driver goes on, and the next tick counts one failed tick', async (context) => {
+  const job = deferred()
+  const calls = []
+
+  const stored = await endWithSaveBlocked(context, async () => {
+    const runAgent = (_, pr, options) => {
+      calls.push(options)
+
+      return job.promise
+    }
+
+    const setup = tickDriver(
+      { A1: { state: 'blocked', blocked: { kind: 'needs-decision', question: 'Keep the old flag?', evidence: '' }, pr: 11 } },
+      { policy: { concurrency: 5, delegate: {} }, runAgent },
+    )
+
+    const pr = setup.manifest.all.find((item) => item.id === 'A1')
+
+    mkdirSync(worktreePath(setup.manifest, pr), { recursive: true })
+    mkdirSync(dirname(pr.brief), { recursive: true })
+    writeFileSync(pr.brief, '# A1\n')
+    setup.tools.answer([{ tool: 'git', args: '', stdout: '' }])
+    await setup.driver.advance(pr)
+    await waitFor(() => calls.length > 0, 'the delegate run')
+
+    return { ...setup, finish: () => job.resolve(FAILED_RUN) }
+  })
+
+  assert.ok(stored.runs['A1-01-delegate'].endedAt, JSON.stringify(stored.runs))
+})
+
+test('job end: a ledger save that fails after a pre-verify job is printed, the driver goes on, and the next tick counts one failed tick', async (context) => {
+  const job = deferred()
+
+  const stored = await endWithSaveBlocked(context, async () => {
+    const seam = commandSeam({ 'npm test': () => job.promise })
+    const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+    await setup.driver.advance(setup.pr)
+    await waitFor(() => seam.calls.length > 0, 'the command')
+
+    return { ...setup, finish: () => job.resolve(commandRun({ exitCode: 1 })) }
+  })
+
+  assert.equal(stored.prs.A1.state, 'needs_fix')
+})
+
+test('job end: an error handler that throws when the event log fails is printed, and the job still leaves running and saves the ledger', async (context) => {
+  const rejections = recorded(context, 'unhandledRejection')
+  const job = deferred()
+  const setup = modelDriver({ A1: { state: 'pending' } }, { result: () => job.promise })
+  const events = join(setup.manifest.dir, 'events.jsonl')
+
+  await launched(setup, 'implement')
+  rmSync(events)
+  mkdirSync(events)
+  job.resolve(FAILED_RUN)
+  await waitFor(() => setup.driver.running.size === 0, 'the job to end')
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.deepEqual(rejections, [])
+  assert.equal(setup.driver.running.size, 0)
+  // onDone threw on its first event, before it moved the state on.
+  assert.equal(readLedger(setup.manifest).prs.A1.state, 'implementing')
+})
