@@ -8,13 +8,17 @@ import { setFetch } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { stageLabels } from '../lib/stage.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { at, fakeGitHub, fakeTools, makeRollout, samplePrs } from './fixtures.mjs'
+import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
 import {
   MAINTAINER_TOKEN,
   MERGE_SHA,
   MERGED_PR,
   FETCH,
+  MERGE_RULE,
   SHA,
+  apply,
+  mergeCalls,
+  modelDriver,
   prRoute,
   restPr,
   runsRoute,
@@ -25,6 +29,7 @@ import {
 
 const FETCH_FAILS = { tool: 'git', args: 'fetch', code: 128, stderr: 'fatal: unable to access the remote' }
 const PR_11 = 'repos/example/widgets/pulls/11'
+const RED_RUNS = { check_runs: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }] }
 
 test('tick: a failed fetch counts against no PR, skips the gate and lets the other PRs advance', async () => {
   const { manifest, driver, tools, gate } = tickDriver(samplePrs(), { rules: [FETCH_FAILS], routes: [prRoute()] })
@@ -157,7 +162,6 @@ test('tick: a failed base watch halts nothing and is tried again on the next tic
 
 test('tick: the base watch reads only the merge commit, never a quiet ancestor', async () => {
   const parent = 'e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0'
-  const red = { check_runs: [{ id: 1, name: 'test', status: 'completed', conclusion: 'failure' }] }
   const { manifest, driver, tools, github } = tickDriver(
     { ...samplePrs(), A3: { state: 'merged', pr: 13, mergeSha: MERGE_SHA } },
     {
@@ -173,7 +177,7 @@ test('tick: the base watch reads only the merge commit, never a quiet ancestor',
           stdout: 'docs/notes.md\0',
         },
       ],
-      routes: [prRoute(), runsRoute(MERGE_SHA, { check_runs: [] }), runsRoute(parent, red)],
+      routes: [prRoute(), runsRoute(MERGE_SHA, { check_runs: [] }), runsRoute(parent, RED_RUNS)],
     },
   )
 
@@ -187,6 +191,121 @@ test('tick: the base watch reads only the merge commit, never a quiet ancestor',
   assert.equal(driver.ledger.data.lastMerge.checked, undefined)
   assert.ok(!tools.calls().some((call) => call.tool === 'git' && call.args.includes('--format=%P')))
   assert.ok(!github.requests().some((request) => request.path.includes(parent)))
+})
+
+test('tick: a red base after a merge halts the rollout, notifies and merges nothing more', async () => {
+  const { manifest, driver, tools, notices } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null }, A3: { state: 'merged', pr: 13, mergeSha: MERGE_SHA } },
+    { rules: [FETCH, MERGE_RULE], routes: [prRoute(), runsRoute(MERGE_SHA, RED_RUNS)] },
+  )
+
+  driver.ledger.data.lastMerge = { id: 'A3', sha: MERGE_SHA, at: at(90) }
+
+  await driver.tick()
+
+  assert.match(driver.ledger.data.halted, /^main is red after merging A3/)
+  assert.deepEqual(
+    kindsSince(manifest).filter((kind) => kind === 'halted'),
+    ['halted'],
+  )
+
+  assert.equal(notices.length, 1)
+  assert.match(notices[0], /^A3: main is red after the merge\. Merges stopped/)
+  assert.deepEqual(mergeCalls(tools), [])
+
+  await driver.tick()
+
+  assert.deepEqual(mergeCalls(tools), [])
+})
+
+test('tick: a pause stops the merge of an approved PR, and a resume lets it merge', async () => {
+  const { manifest, driver, tools, gate } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null }, A3: { state: 'merged', pr: 13 } },
+    { rules: [FETCH, MERGE_RULE], routes: [prRoute()] },
+  )
+
+  apply(manifest, driver, { cmd: 'pause' })
+  await driver.tick()
+
+  assert.deepEqual(mergeCalls(tools), [])
+  assert.equal(gate.calls, 0)
+
+  apply(manifest, driver, { cmd: 'resume' })
+  await driver.tick()
+
+  assert.equal(mergeCalls(tools).length, 1)
+})
+
+test('tick: a pause starts no agent, and a resume starts the implementer', async () => {
+  const setup = modelDriver({ A1: { state: 'pending' }, A3: { state: 'merged', pr: 13 } })
+  const { manifest, driver, entry, calls } = setup
+
+  apply(manifest, driver, { cmd: 'pause' })
+  await driver.tick()
+
+  assert.ok(!kindsSince(manifest).includes('implement-start'))
+  assert.deepEqual(calls, [])
+  assert.equal(entry.state, 'pending')
+
+  const before = eventsSince(manifest).length
+
+  apply(manifest, driver, { cmd: 'resume' })
+  await driver.tick()
+
+  assert.ok(kindsSince(manifest, before).includes('implement-start'))
+
+  await waitFor(() => setup.calls.length > 0, 'implement run')
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].role, 'implement')
+})
+
+test('start: run states a stopped driver left are recovered, the label is ensured and driver-start is logged', async () => {
+  const labels = 'repos/example/widgets/labels'
+  const { manifest, driver, github } = tickDriver(samplePrs(), {
+    rules: [FETCH],
+    routes: [{ method: 'POST', path: labels, status: 201, body: {} }],
+  })
+
+  await driver.start()
+
+  const entry = driver.ledger.prs.A2
+  const posts = github.requests().filter((request) => request.method === 'POST' && request.path === labels)
+
+  assert.equal(entry.state, 'interrupted')
+  assert.equal(entry.interruptedRole, 'implement')
+  assert.equal(entry.attempts.implement, 0)
+  assert.deepEqual(eventsSince(manifest)[0], { id: 'A2', kind: 'recovered-interrupted', role: 'implement' })
+  assert.equal(posts.length, 1)
+  assert.equal(posts[0].body.name, 'rollout:demo')
+  assert.deepEqual(kindsSince(manifest), ['recovered-interrupted', 'driver-start'])
+})
+
+test('tick: maintainer feedback waits for a quiet window, then sends the PR to a fix run', async () => {
+  const comment = { id: 501, user: { login: 'maint' }, body: 'Please rename the flag.' }
+  const routesAt = (createdAt) => [
+    prRoute(),
+    { path: `${PR_11}/comments`, body: [] },
+    { path: `${PR_11}/reviews`, body: [] },
+    { path: 'repos/example/widgets/issues/11/comments', body: [{ ...comment, created_at: createdAt }] },
+  ]
+
+  const { manifest, driver, github } = tickDriver(samplePrs(), { rules: [FETCH], routes: routesAt(new Date().toISOString()) })
+  const entry = driver.ledger.prs.A1
+
+  manifest.repo.maintainers = ['maint']
+  await driver.tick()
+
+  assert.equal(entry.state, 'verified')
+  assert.equal(entry.feedbackWaiting, true)
+  assert.ok(!kindsSince(manifest).includes('review-feedback'))
+
+  // minutesSince reads Date.now(), not the driver's clock, so the comment ages instead.
+  github.answer(routesAt(new Date(Date.now() - 10 * 60_000).toISOString()))
+  await driver.tick()
+
+  assert.ok(kindsSince(manifest).includes('review-feedback'))
+  assert.equal(entry.state, 'needs_fix')
 })
 
 test('tick: a deleted manifest.yaml is rejected once, and loads again when it is back', async () => {

@@ -9,6 +9,7 @@ Follow `STYLE.md`.
 ```sh
 npm ci
 npm test               # all suites, must stay green
+npm run test:mutations # each brake's test, proven by a mutation
 npm run format:check   # prettier, run `npm run format` to fix
 npm run lint           # eslint with the STYLE.md rules, run `npm run lint:fix` to fix
 ```
@@ -18,6 +19,7 @@ npm run lint           # eslint with the STYLE.md rules, run `npm run lint:fix` 
 - No new runtime dependencies without a good reason. Today there is one (`yaml`). The UI, when it exists, is plain HTML, CSS and ES modules served by `node:http`, with no build step.
 - The driver must keep working unattended for hours. Every GitHub or git call can fail. Errors belong to one PR (`guarded()` in `lib/driver.mjs`), never to the whole tick.
 - `lib/judge.mjs` and `lib/checks.mjs` stay pure and fully tested. Anything that decides whether a PR may merge goes there.
+- A change to how the driver pauses, halts, merges or drops a verification keeps `npm run test:mutations` green.
 - Never weaken the guard (`hooks/guard-bash.mjs`) or the git hooks to make a test pass. Add a test for every rule and every bypass you close.
 - Tests never start real agents, never call GitHub and never touch `~/.claude` or a real rollout directory. Build fixtures in a temp dir.
 - Never copy data from a real rollout (briefs, logs, ledgers) into the repo. It can contain client names and local paths. Generate synthetic fixtures instead.

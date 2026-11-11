@@ -1612,3 +1612,31 @@ test('HTTP_HOSTS: each host is refused to raw HTTP, in any case, for both roles'
     }
   }
 })
+
+// The tests above loop over the lists they test, so an entry removed from a
+// list also removes its check. These name each command, so each pins its entry.
+test('guard: gh workflow, gh variable and gh ruleset are refused, each with its own name', () => {
+  assertReason('gh workflow run ci.yml', ['worker'], /^gh workflow is not allowed for rollout agents$/)
+  assertReason('gh variable set X', ['worker'], /^gh variable is not allowed for rollout agents$/)
+  assertReason('gh ruleset list', ['worker'], /^gh ruleset is not allowed for rollout agents$/)
+})
+
+test('guard: git push --tags, --mirror and --prune are refused, each with its own name', () => {
+  assertReason('git push --tags origin fix/thing', ['worker'], /^git push --tags is not allowed/)
+  // A push that names no target is refused anyway, so only the reason pins --mirror.
+  assertReason('git push --mirror origin', ['worker'], /^git push --mirror is not allowed/)
+  assertReason('git push --prune origin fix/thing', ['worker'], /^git push --prune is not allowed/)
+})
+
+test('guard: npm unpublish, dist-tag, deprecate and owner are refused, each with its own word', () => {
+  assertReason('npm unpublish', ['worker'], /^`unpublish` belongs to the release PR and the maintainer/)
+  assertReason('npm dist-tag add x@1 latest', ['worker'], /^`dist-tag` belongs to the release PR and the maintainer/)
+  assertReason('npm deprecate x gone', ['worker'], /^`deprecate` belongs to the release PR and the maintainer/)
+  assertReason('npm owner add me x', ['worker'], /^`owner` belongs to the release PR and the maintainer/)
+})
+
+test('guard: raw HTTP to registry.npmjs.org, uploads.github.com and registry.yarnpkg.com is refused', () => {
+  assertReason('curl -X PUT https://registry.npmjs.org/x', ['worker'], RULES.rawHttp)
+  assertReason('curl https://uploads.github.com/x', ['worker'], RULES.rawHttp)
+  assertReason('wget https://registry.yarnpkg.com/x', ['worker'], RULES.rawHttp)
+})

@@ -45,6 +45,11 @@ export function apply(manifest, driver, ...commands) {
 export const SHA = samplePrs().A1.verified.sha
 export const MERGE_SHA = 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0'
 export const FETCH = { tool: 'git', args: 'fetch', stdout: '' }
+export const MERGE_RULE = { tool: 'gh', args: 'pr merge 11', stdout: '' }
+
+export function mergeCalls(tools) {
+  return tools.calls().filter((call) => call.tool === 'gh' && call.args.join(' ').startsWith('pr merge 11'))
+}
 
 export const GREEN_RUNS = { check_runs: [{ id: 1, name: 'test', status: 'completed', conclusion: 'success' }] }
 

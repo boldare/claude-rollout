@@ -604,6 +604,34 @@ test('githubApproval: changes requested, a stale approval and no approval each h
   assert.deepEqual(githubApproval(GM, onVerified, botFacts([APPROVAL])), { approved: true, by: 'maint', at: APPROVAL.at })
 })
 
+test('githubApproval: a maintainer review dismissed after their approval takes the approval away', () => {
+  const dismissed = { ...APPROVAL, state: 'DISMISSED', at: '2026-09-27T11:00:00Z' }
+
+  assert.deepEqual(githubApproval(GM, onVerified, botFacts([APPROVAL, dismissed])), {
+    approved: false,
+    code: 'awaiting-github-review',
+    reason: 'awaiting a maintainer review on GitHub (approve PR #7)',
+  })
+
+  assertVerdict(judge(GM, pr, onVerified, botFacts([APPROVAL, dismissed])), 'wait', 'awaiting-github-review')
+})
+
+test('judge: without a bypass, CLEAN, HAS_HOOKS and UNSTABLE merge, and BLOCKED, DIRTY, UNKNOWN and DRAFT wait', () => {
+  const noBypass = { ...GM, repo: { ...GM.repo, merge: { admin: 'auto' } } }
+  const verdictFor = (mergeStateStatus) =>
+    judge(noBypass, pr, onVerified, botFacts([APPROVAL], { pr: { ...facts().pr, author: 'bot', mergeStateStatus } }))
+
+  for (const state of ['CLEAN', 'HAS_HOOKS', 'UNSTABLE']) {
+    assertVerdict(verdictFor(state), 'merge', 'merge', state)
+  }
+
+  assertVerdict(verdictFor('BLOCKED'), 'wait', 'github-blocked')
+
+  for (const state of ['DIRTY', 'UNKNOWN', 'DRAFT']) {
+    assertVerdict(verdictFor(state), 'wait', 'github-merge-state', state)
+  }
+})
+
 test('judge: every gate code, each with its action', () => {
   const withPr = (change) => facts({ pr: { ...facts().pr, ...change } })
   const red = { state: 'red', missing: [], pending: [], failing: ['check'] }

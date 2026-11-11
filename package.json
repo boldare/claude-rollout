@@ -12,6 +12,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "test:mutations": "node test/mutations.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

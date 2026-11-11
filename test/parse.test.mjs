@@ -433,6 +433,34 @@ test('every request goes to api.github.com for the manifest repo, and gh pr merg
   }
 })
 
+test("merge: with admin auto, gh pr merge gets --admin for a maintainer's PR and not for the agents' PR", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rollout-gh-'))
+  const factsBy = (author) => ({ pr: { number: 11, headRefOid: HEAD, title: 'feat: A1', author } })
+
+  useGitHub([{ path: PR_11, body: { number: 11, state: 'closed', merged_at: '2026-10-01T12:00:00Z', merge_commit_sha: MERGE_SHA } }])
+
+  try {
+    writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 })
+
+    const manifest = plainManifest({ path: dir, pathPrepend: [dir], merge: { method: 'squash', admin: 'auto' }, maintainers: ['maint'] })
+
+    await merge(manifest, {}, {}, factsBy('maint'))
+    await merge(manifest, {}, {}, factsBy('demo-bot'))
+
+    const [byMaintainer, byAgents] = readFileSync(join(dir, 'calls.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line).args)
+
+    assert.deepEqual(byMaintainer.slice(0, 3), ['pr', 'merge', '11'])
+    assert.ok(byMaintainer.includes('--admin'))
+    assert.deepEqual(byAgents.slice(0, 3), ['pr', 'merge', '11'])
+    assert.ok(!byAgents.includes('--admin'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('deleteRemoteBranch encodes each segment of the branch, and keeps its slashes', async () => {
   const github = useGitHub([{ method: 'DELETE', path: 'repos/example/widgets/git/refs/heads/fix/a%20b%231/c', status: 204 }])
 
