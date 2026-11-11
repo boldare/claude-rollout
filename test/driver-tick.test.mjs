@@ -163,8 +163,15 @@ test('tick: the base watch reads only the merge commit, never a quiet ancestor',
     {
       rules: [
         FETCH,
-        { tool: 'git', args: `log -1 --format=%P ${MERGE_SHA}`, stdout: `${parent}\n` },
-        { tool: 'git', args: `diff --no-renames --name-only ${parent} ${MERGE_SHA}`, stdout: 'docs/notes.md\n' },
+        { tool: 'git', args: `log --no-show-signature --no-color --encoding=UTF-8 -1 --format=%P ${MERGE_SHA}`, stdout: `${parent}\n` },
+        {
+          tool: 'git',
+          args: [
+            'diff --no-ext-diff --no-textconv --no-color --src-prefix=a/ --dst-prefix=b/ --diff-algorithm=myers --indent-heuristic',
+            `--inter-hunk-context=0 -O/dev/null --no-relative --submodule=short --ignore-submodules=none --no-renames --name-only -z ${parent} ${MERGE_SHA}`,
+          ].join(' '),
+          stdout: 'docs/notes.md\0',
+        },
       ],
       routes: [prRoute(), runsRoute(MERGE_SHA, { check_runs: [] }), runsRoute(parent, red)],
     },

@@ -275,10 +275,13 @@
               <tr>
                 <td class="nowrap">The gate's denylist check</td>
                 <td>
-                  <a href="manifest.html#repo-denylist"><code>repo.denylist</code></a> is checked in the diff, the PR and the commits. It
-                  catches a leak before the merge, but a pushed branch of a public repo is already visible.
+                  <a href="manifest.html#repo-denylist"><code>repo.denylist</code></a> is checked in the diff, the PR and the commits. The
+                  diff is read with <code>--text</code> by its hunk counts, so binary files, files an attribute marks <code>-diff</code> and
+                  lines that look like a diff header are read too. File names reach <code>repo.forbid</code>, the workflow rule, the Claude
+                  Code rule and the denylist as they are. The check catches a leak before the merge, but a pushed branch of a public repo is
+                  already visible.
                 </td>
-                <td class="name">lib/judge.mjs</td>
+                <td class="name">lib/judge.mjs<br />lib/github.mjs</td>
               </tr>
             </tbody>
           </table>

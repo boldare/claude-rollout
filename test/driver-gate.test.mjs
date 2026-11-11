@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyPrompt } from '../lib/prompts.mjs'
 import { stageLabels } from '../lib/stage.mjs'
@@ -243,6 +243,38 @@ test('mergeCandidate: a new gate event needs a new action or code, new prose alo
     { id: 'A1', kind: 'gate-wait', code: 'ci-pending', reasons: [missing] },
     { id: 'A1', kind: 'gate-wait', code: 'base-not-green', reasons: ['main is not green (pending)'] },
   ])
+})
+
+test('mergeCandidate: a verified PR whose patch id the gate no longer matches is verified again, and its approval asked for again', async (context) => {
+  const agents = []
+  const sample = samplePrs().A1
+  const emptyApproval = { ...sample.approved, patchId: '', channel: 'inbox' }
+  const { manifest, driver } = tickDriver(
+    { A1: { ...sample, held: null, verified: { ...sample.verified, patchId: '' }, approved: emptyApproval } },
+    { runAgent: async (...call) => agents.push(call) },
+  )
+
+  context.after(() => rmSync(manifest.dir, { recursive: true, force: true }))
+
+  const pr = manifest.prs.find((item) => item.id === 'A1')
+  const entry = driver.ledger.prs.A1
+  const gateBefore = entry.gate
+
+  assert.equal(await driver.mergeCandidate(pr), false)
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.verified, null)
+  assert.equal(entry.claimedSha, SHA)
+  assert.equal(entry.gate, gateBefore)
+  assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'head-moved-reverify', sha: SHA.slice(0, 7), reason: 'not-verified' }])
+  assert.deepEqual(agents, [])
+
+  entry.state = 'verified'
+  entry.verified = { sha: SHA, patchId: 'patch-a1', at: at(90) }
+
+  assert.equal(await driver.mergeCandidate(pr), false)
+  assert.equal(entry.gate.code, 'awaiting-inbox-approval')
+  assert.deepEqual(entry.approved, emptyApproval)
+  assert.equal(kindsSince(manifest).filter((kind) => kind === 'head-moved-reverify').length, 1)
 })
 
 // Two verified PRs under merge: manual, both passing the gate on the same facts.

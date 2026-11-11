@@ -160,6 +160,10 @@ test('globs', () => {
   assert.ok(!matchesAny('.changeset/sub/a.md', ['.changeset/*.md']))
   assert.ok(globToRegExp('packages/*/package.json').test('packages/core/package.json'))
   assert.ok(!globToRegExp('smoke*').test('check'))
+  assert.ok(matchesAny('secrets/a\nb.txt', ['secrets/**']))
+  assert.ok(matchesAny('a\nb/c.txt', ['**/c.txt']))
+  assert.ok(matchesAny('secrets/a\nb.txt', ['secrets/*']))
+  assert.ok(!matchesAny('docs/a\nsecrets/b.txt', ['secrets/**']))
 })
 
 test('effort raises and caps at max', () => {
