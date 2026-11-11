@@ -28,6 +28,7 @@ import {
   parseAddedLines,
   parseCommits,
   parseNameStatus,
+  patchId,
   prNotFound,
   refreshOutsideDeps,
   remoteRepo,
@@ -43,31 +44,164 @@ import { githubApproval } from '../lib/judge.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { fakeGitHub, fakeTools, makeRollout, withProcessEnv } from './fixtures.mjs'
 
-test('name-status with renames and deletions', () => {
-  const files = parseNameStatus('M\tREADME.md\nA\t.changeset/a.md\nD\tpackages/core/src/quick-hash.ts\nR087\told/x.ts\tnew/x.ts\n')
-  assert.deepEqual(files, [
+function nulRecords(...records) {
+  return records.map((record) => `${record.join('\0')}\0`).join('')
+}
+
+test('name-status reads NUL records with renames, deletions, type changes and names that hold any byte but NUL', () => {
+  const out = nulRecords(
+    ['M', 'README.md'],
+    ['A', '.changeset/a.md'],
+    ['D', 'packages/core/src/quick-hash.ts'],
+    ['R087', 'old/x.ts', 'new/x.ts'],
+    ['T', 'bin/link'],
+    ['A', 'secrets/a\tb.txt'],
+    ['A', 'secrets/a\nb.txt'],
+    ['M', 'docs/"quoted".md'],
+  )
+
+  assert.deepEqual(parseNameStatus(out), [
     { status: 'modified', path: 'README.md' },
     { status: 'added', path: '.changeset/a.md' },
     { status: 'removed', path: 'packages/core/src/quick-hash.ts' },
     { status: 'renamed', path: 'new/x.ts', previousPath: 'old/x.ts' },
+    { status: 'type-changed', path: 'bin/link' },
+    { status: 'added', path: 'secrets/a\tb.txt' },
+    { status: 'added', path: 'secrets/a\nb.txt' },
+    { status: 'modified', path: 'docs/"quoted".md' },
   ])
+
+  assert.deepEqual(parseNameStatus(''), [])
 })
 
-test('added lines keep their file and skip headers and deletions', () => {
-  const diff = [
-    'diff --git a/package.json b/package.json',
-    '--- a/package.json',
-    '+++ b/package.json',
-    '@@ -3 +3 @@',
-    '-  "version": "0.4.0",',
-    '+  "version": "0.5.0",',
-    'diff --git a/gone.txt b/gone.txt',
-    '--- a/gone.txt',
-    '+++ /dev/null',
-    '-bye',
-  ].join('\n')
+test('name-status throws on an unknown status and on a record cut short', () => {
+  assert.throws(() => parseNameStatus(nulRecords(['M', 'a.txt'], ['X', 'b.txt'])), /unknown status "X"/)
+  assert.throws(() => parseNameStatus(nulRecords(['U', 'a.txt'])), /unknown status "U"/)
+  assert.throws(() => parseNameStatus(nulRecords(['M', 'a.txt'], ['R100', 'old.txt'])), /ends inside the record of "R100"/)
+  assert.throws(() => parseNameStatus(nulRecords(['M'])), /ends inside the record of "M"/)
+})
 
-  assert.deepEqual(parseAddedLines(diff), [{ path: 'package.json', text: '  "version": "0.5.0",' }])
+// One section of each shape `diff -U0 --text` prints, in the order of SECTION_FILES.
+const SECTIONS = [
+  'diff --git a/notes.md b/notes.md',
+  'index 1111111..2222222 100644',
+  '--- a/notes.md',
+  '+++ b/notes.md',
+  '@@ -2 +2,4 @@',
+  '-old line',
+  '\\ No newline at end of file',
+  '+++ starts like a file header',
+  '+-- starts like the other one',
+  '+diff --git a/x b/x',
+  '+after them',
+  '@@ -9,0 +12 @@ function context',
+  '+second hunk',
+  'diff --git a/gone.txt b/gone.txt',
+  'deleted file mode 100644',
+  'index 3333333..0000000',
+  '--- a/gone.txt',
+  '+++ /dev/null',
+  '@@ -1,2 +0,0 @@',
+  '-bye',
+  '-again',
+  'diff --git a/link b/link',
+  'deleted file mode 100644',
+  'index 4444444..0000000',
+  '--- a/link',
+  '+++ /dev/null',
+  '@@ -1 +0,0 @@',
+  '-was a file',
+  'diff --git a/link b/link',
+  'new file mode 120000',
+  'index 0000000..5555555',
+  '--- /dev/null',
+  '+++ b/link',
+  '@@ -0,0 +1 @@',
+  '+target.txt',
+  '\\ No newline at end of file',
+  'diff --git a/run.sh b/run.sh',
+  'old mode 100644',
+  'new mode 100755',
+  'diff --git a/old/name.txt b/new/name.txt',
+  'similarity index 90%',
+  'rename from old/name.txt',
+  'rename to new/name.txt',
+  'index 6666666..7777777 100644',
+  '--- a/old/name.txt',
+  '+++ b/new/name.txt',
+  '@@ -3 +3 @@',
+  '-three',
+  '+drei',
+  'diff --git "a/caf\\303\\251.md" "b/caf\\303\\251.md"',
+  'new file mode 100644',
+  'index 0000000..8888888',
+  '--- /dev/null',
+  '+++ "b/caf\\303\\251.md"',
+  '@@ -0,0 +1 @@',
+  '+quoted name',
+]
+
+const SECTION_FILES = [
+  { status: 'modified', path: 'notes.md' },
+  { status: 'removed', path: 'gone.txt' },
+  { status: 'type-changed', path: 'link' },
+  { status: 'modified', path: 'run.sh' },
+  { status: 'renamed', path: 'new/name.txt', previousPath: 'old/name.txt' },
+  { status: 'added', path: 'caf\u00e9.md' },
+]
+
+function diffOf(lines) {
+  return `${lines.join('\n')}\n`
+}
+
+test('added lines are read by hunk counts, never by what a line looks like', () => {
+  assert.deepEqual(parseAddedLines(diffOf(SECTIONS), SECTION_FILES), [
+    { path: 'notes.md', text: '++ starts like a file header' },
+    { path: 'notes.md', text: '-- starts like the other one' },
+    { path: 'notes.md', text: 'diff --git a/x b/x' },
+    { path: 'notes.md', text: 'after them' },
+    { path: 'notes.md', text: 'second hunk' },
+    { path: 'link', text: 'target.txt' },
+    { path: 'new/name.txt', text: 'drei' },
+    { path: 'caf\u00e9.md', text: 'quoted name' },
+  ])
+
+  assert.deepEqual(parseAddedLines('', []), [])
+})
+
+test('added lines throw on a diff that does not fit the file list or its hunk counts', () => {
+  const notes = SECTIONS.slice(0, 13)
+  const gone = SECTIONS.slice(13, 21)
+  const [notesFile, goneFile] = SECTION_FILES
+
+  assert.equal(parseAddedLines(diffOf([...notes, ...gone]), [notesFile, goneFile]).length, 5)
+
+  const cases = [
+    [[...notes, ...gone], [notesFile], /^line 14 of the diff starts a section the file list does not have/],
+    [notes, [notesFile, goneFile], /^the diff ends after section 1 of 2$/],
+    [notes, [{ status: 'type-changed', path: 'notes.md' }], /^the diff ends after section 1 of 2$/],
+    [['index 1111111..2222222', ...notes], [notesFile], /^line 1 of the diff comes before the first section/],
+    [notes.toSpliced(6, 0, 'stray'), [notesFile], /^line 7 of the diff does not fit its hunk: "stray"$/],
+    [notes.toSpliced(6, 0, ''), [notesFile], /^line 7 of the diff does not fit its hunk: ""$/],
+    [[...notes, '+one too many'], [notesFile], /^line 14 of the diff follows a finished hunk/],
+    [notes.slice(0, -1), [notesFile], /^the diff ends inside a hunk of "notes\.md"$/],
+    [notes.toSpliced(4, 1, '@@ -2 +2,x @@'), [notesFile], /^line 5 of the diff is not a hunk header/],
+  ]
+
+  for (const [diffLines, files, message] of cases) {
+    assert.throws(() => parseAddedLines(diffOf(diffLines), files), { message }, String(message))
+  }
+
+  const binary = ['diff --git a/logo.png b/logo.png', 'index 1111111..2222222 100644', 'Binary files a/logo.png and b/logo.png differ']
+
+  assert.throws(
+    () => parseAddedLines(diffOf(binary), [{ status: 'modified', path: 'logo.png' }]),
+    /line 3 of the diff is a binary patch, which --text should have printed as lines/,
+  )
+
+  const literal = ['diff --git a/logo.png b/logo.png', 'index 1111111..2222222 100644', 'GIT binary patch', 'literal 3']
+
+  assert.throws(() => parseAddedLines(diffOf(literal), [{ status: 'modified', path: 'logo.png' }]), /line 3 of the diff is a binary patch/)
 })
 
 test('commits split on record separators and keep bodies', () => {
@@ -1039,14 +1173,135 @@ test('collectFacts reads code scanning for the PR, and not at all under ignore',
   assert.equal((await collectFacts(closed.manifest, closed.manifest.prs[0], { pr: 11 }, ledger)).codeScanning, null)
 })
 
+// An open PR at HEAD whose every git read answers empty unless `rules` say otherwise.
+function readsRollout(context, rules) {
+  const view = { ...REST_PR, draft: false, head: { ref: 'feat/a1', sha: HEAD }, labels: [] }
+  const rollout = scanningRollout(
+    [...rules, { tool: 'git', args: 'rev-parse origin/main', stdout: `${BASE_TIP}\n` }, { tool: 'git', stdout: '' }],
+    [{ path: PR_11, body: view }, { path: `${PR_11}/reviews`, body: [] }, runsRoute(HEAD, []), runsRoute(BASE_TIP, [])],
+  )
+
+  rollout.manifest.repo.codeScanning = { action: 'ignore' }
+  context.after(() => rmSync(rollout.manifest.dir, { recursive: true, force: true }))
+
+  return rollout
+}
+
+test('collectFacts states the options of every git read it makes', async (context) => {
+  const { manifest, gitCalls } = readsRollout(context, [])
+  const facts = await collectFacts(manifest, manifest.prs[0], { pr: 11 }, { data: { halted: null }, prs: {} })
+  const repo = `-C ${manifest.repo.path}`
+
+  assert.equal(facts.patchId, 'empty')
+  assert.equal(facts.baseIsAncestor, true)
+  assert.deepEqual(gitCalls(), [
+    `${repo} cat-file -e ${HEAD}^{commit}`,
+    `${repo} diff ${DIFF_FLAGS} -M -l1000 --name-status -z origin/main...${HEAD}`,
+    `${repo} diff ${DIFF_FLAGS} -M -l1000 -U0 --text origin/main...${HEAD}`,
+    `${repo} log --no-show-signature --no-color --encoding=UTF-8 --format=%H%x1f%B%x1e origin/main..${HEAD}`,
+    `${repo} -c diff.suppressBlankEmpty=false -c core.quotePath=true diff ${DIFF_FLAGS} -M -l1000 -U3 --full-index origin/main...${HEAD}`,
+    `${repo} merge-base --is-ancestor origin/main ${HEAD}`,
+    `${repo} rev-parse origin/main`,
+  ])
+})
+
+test('collectFacts throws when git cannot tell whether the base is an ancestor', async (context) => {
+  const outcomes = [
+    [{ code: 1 }, false],
+    [
+      { code: 128, stderr: 'fatal: Not a valid commit name\n' },
+      /^cannot tell whether origin\/main is an ancestor of a1a1\w+: fatal: Not a valid commit name$/,
+    ],
+    [{ code: 2 }, /^cannot tell whether origin\/main is an ancestor of a1a1\w+: exit 2$/],
+  ]
+
+  for (const [answer, expected] of outcomes) {
+    const { manifest } = readsRollout(context, [{ tool: 'git', args: 'merge-base --is-ancestor', ...answer }])
+    const read = collectFacts(manifest, manifest.prs[0], { pr: 11 }, { data: { halted: null }, prs: {} })
+
+    if (expected === false) {
+      assert.equal((await read).baseIsAncestor, false)
+    } else {
+      await assert.rejects(read, (error) => {
+        assert.match(error.message, expected)
+        assert.equal(githubUnavailable(error, { afterSleep: true }), false)
+
+        return true
+      })
+    }
+  }
+})
+
+const SMALL_DIFF = diffOf([
+  'diff --git a/a.txt b/a.txt',
+  'index 1111111..2222222 100644',
+  '--- a/a.txt',
+  '+++ b/a.txt',
+  '@@ -1 +1 @@',
+  '-one',
+  '+two',
+])
+
+test('patchId pipes the diff to patch-id and takes only a 40 or 64 digit hex id', async (context) => {
+  async function idFrom(stdout) {
+    const { manifest, gitCalls } = scanningRollout([
+      { tool: 'git', args: 'patch-id', stdout },
+      { tool: 'git', args: 'diff', stdout: SMALL_DIFF },
+    ])
+
+    context.after(() => rmSync(manifest.dir, { recursive: true, force: true }))
+
+    return { read: patchId(manifest, 'origin/main', HEAD), calls: gitCalls, repo: manifest.repo.path }
+  }
+
+  const hex40 = 'a'.repeat(40)
+  const zeros = '0'.repeat(40)
+  const plain = await idFrom(`${hex40} ${zeros}\n`)
+
+  assert.equal(await plain.read, hex40)
+  assert.deepEqual(plain.calls(), [
+    `-C ${plain.repo} -c diff.suppressBlankEmpty=false -c core.quotePath=true diff ${DIFF_FLAGS} -M -l1000 -U3 --full-index origin/main...${HEAD}`,
+    `-C ${plain.repo} patch-id --verbatim`,
+  ])
+
+  assert.equal(await (await idFrom(`${'b'.repeat(64)} ${'0'.repeat(64)}\n`)).read, 'b'.repeat(64))
+
+  const silent = await idFrom('')
+
+  await assert.rejects(silent.read, (error) => {
+    assert.equal(error.message, `patch-id printed no id for origin/main...${HEAD}: ""`)
+    assert.equal(githubUnavailable(error, { afterSleep: true }), false)
+
+    return true
+  })
+
+  for (const stdout of [
+    `not-an-id ${zeros}\n`,
+    `${'A'.repeat(40)} ${zeros}\n`,
+    `${'a'.repeat(39)} ${zeros}\n`,
+    'diff --git a/a.txt b/a.txt\n',
+  ]) {
+    await assert.rejects((await idFrom(stdout)).read, /^Error: patch-id printed no id for origin\/main\.\.\.a1a1\w+: "/, stdout)
+  }
+})
+
 // Fake commits all have a name of the same length, so no sha is a prefix of
 // another and every rule matches the call it was written for.
 const GREEN_RUN = { id: 1, name: 'test', status: 'completed', conclusion: 'success' }
 
+const DIFF_FLAGS = [
+  '--no-ext-diff --no-textconv --no-color --src-prefix=a/ --dst-prefix=b/ --diff-algorithm=myers',
+  '--indent-heuristic --inter-hunk-context=0 -O/dev/null --no-relative --submodule=short --ignore-submodules=none',
+].join(' ')
+
 function historyRules(sha, parent, files) {
   return [
-    { tool: 'git', args: `log -1 --format=%P ${sha}`, stdout: `${parent}\n` },
-    { tool: 'git', args: `diff --no-renames --name-only ${parent} ${sha}`, stdout: files.map((file) => `${file}\n`).join('') },
+    { tool: 'git', args: `log --no-show-signature --no-color --encoding=UTF-8 -1 --format=%P ${sha}`, stdout: `${parent}\n` },
+    {
+      tool: 'git',
+      args: `diff ${DIFF_FLAGS} --no-renames --name-only -z ${parent} ${sha}`,
+      stdout: files.map((file) => `${file}\0`).join(''),
+    },
   ]
 }
 

@@ -691,7 +691,9 @@
                 <td>The verification is bound to the head SHA and the patch id. The gate runs on every tick.</td>
                 <td>
                   Gate merge: <code>merged</code>. Rebase: the driver rebases the branch itself. Fix, a conflict or a maintainer review:
-                  <code>needs_fix</code>. Block: <code>blocked</code>. A new head with a different patch: <code>ready_claimed</code>.
+                  <code>needs_fix</code>. Block: <code>blocked</code>. A new head with a different patch: <code>ready_claimed</code>. A
+                  patch id the gate no longer matches, on the same head too (<a href="#gate-not-verified"><code>not-verified</code></a
+                  >): <code>ready_claimed</code>.
                 </td>
               </tr>
               <tr id="state-needs_fix">
@@ -1208,8 +1210,12 @@
 
         <p>
           <code>judge()</code> in <code>lib/judge.mjs</code> is a pure function of facts the driver read from GitHub and git. It never looks
-          at what an agent said. For a verified PR it returns one action: merge, rebase, fix, wait or block. It checks, in this order:
+          at what an agent said. The driver reads the git facts with the global and system git config off and every diff option stated. File
+          names come NUL-separated, and added lines are read by their hunk counts from a diff with <code>--text</code>. The patch id is
+          computed from the bytes of the diff, with full blob ids. A read the driver cannot parse is an error of that PR, never a fact.
         </p>
+
+        <p>For a verified PR <code>judge()</code> returns one action: merge, rebase, fix, wait or block. It checks, in this order:</p>
 
         <ol>
           <li><strong>Wait</strong> while the rollout is halted or the PR is held.</li>
@@ -1220,7 +1226,11 @@
             >), it is a draft, its base or head branch is wrong, or the rollout label is missing. A PR merged on GitHub while the gate reads
             it waits instead, and the next sync records the merge.
           </li>
-          <li><strong>Wait</strong> for dependencies, and for a verification of the current patch id.</li>
+          <li>
+            <strong>Wait</strong> for dependencies, and for a verification of the current patch id. A verified PR whose patch id no longer
+            matches goes back to be verified again (<a href="#gate-not-verified"><code>not-verified</code></a
+            >).
+          </li>
           <li>
             <strong>Wait for approval</strong>, with <a href="manifest.html#policy-merge"><code>policy.merge: human</code></a> only. With
             <a href="manifest.html#policy-approval"><code>policy.approval: github</code></a> and a PR that no maintainer authored, that is a
@@ -1338,7 +1348,11 @@
               <tr id="gate-not-verified">
                 <td class="nowrap"><code>not-verified</code></td>
                 <td>wait</td>
-                <td>No verification of the current patch.</td>
+                <td>
+                  No verification of the current patch. For a PR in <code>verified</code> the driver drops the verification and sends the PR
+                  back to <code>ready_claimed</code>, and logs <code>head-moved-reverify</code> with reason <code>not-verified</code>. Under
+                  <code>merge: human</code> the approval was for the old patch id, so it is asked for again after the next PASS.
+                </td>
               </tr>
               <tr id="gate-awaiting-github-review">
                 <td class="nowrap"><code>awaiting-github-review</code></td>

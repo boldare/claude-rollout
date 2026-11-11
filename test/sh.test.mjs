@@ -27,6 +27,25 @@ test('sh: a kill for the timeout resolves as timed out with code 1, any other en
   assert.deepEqual(await sh(process.execPath, ['-e', 'process.exit(2)']), { code: 2, stdout: '', stderr: '', timedOut: false })
 })
 
+test('sh: encoding buffer resolves the bytes the child wrote, and stdout is a string without it', async () => {
+  const script = 'process.stdout.write(Buffer.from([0xe9]))'
+  const bytes = await sh(process.execPath, ['-e', script], { encoding: 'buffer' })
+
+  assert.ok(Buffer.isBuffer(bytes.stdout))
+  assert.deepEqual(bytes.stdout, Buffer.from([0xe9]))
+  assert.equal(bytes.stderr, '')
+
+  const text = await sh(process.execPath, ['-e', script])
+
+  assert.equal(text.stdout, '\ufffd')
+})
+
+test('shOk: a failed call with encoding buffer still shows its stdout in the error', async () => {
+  const script = "process.stdout.write('no id'); process.exit(4)"
+
+  await assert.rejects(shOk(process.execPath, ['-e', script], { encoding: 'buffer' }), / exited 4: no id$/)
+})
+
 test('shOk: a plain non-zero exit keeps its code and stderr', async () => {
   const script = "process.stderr.write('HTTP 404: Not Found\\n'); process.exit(3)"
 
