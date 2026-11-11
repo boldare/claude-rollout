@@ -14,6 +14,8 @@ import {
   MERGE_SHA,
   MERGED_PR,
   FETCH,
+  MERGE_RULE,
+  mergeCalls,
   prRoute,
   tickDriver,
   eventsSince,
@@ -73,6 +75,41 @@ test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sy
   assert.deepEqual(cleaned, ['A1'])
   assert.deepEqual(notices, ['A1: merged PR #11'])
   assert.deepEqual(eventsSince(manifest, events.length), [{ id: 'A1', kind: 'merged', pr: 11 }])
+})
+
+test('mergeCandidate: a merge GitHub confirms is recorded as merged, with its commit as the last merge, and cleaned up', async () => {
+  const { manifest, driver, tools, cleaned } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto' }, rules: [MERGE_RULE], routes: [prRoute(MERGED_PR)] },
+  )
+
+  const pr = manifest.prs.find((item) => item.id === 'A1')
+  const entry = driver.ledger.prs.A1
+
+  assert.equal(await driver.mergeCandidate(pr), true)
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.equal(entry.state, 'merged')
+  assert.equal(entry.mergeSha, MERGE_SHA)
+  assert.equal(driver.ledger.data.lastMerge.id, 'A1')
+  assert.equal(driver.ledger.data.lastMerge.sha, MERGE_SHA)
+  assert.deepEqual(cleaned, ['A1'])
+  assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'merged', pr: 11, sha: MERGE_SHA.slice(0, 7) })
+})
+
+test('mergeNext: unread maintainer feedback holds the merge, and the PR merges once it is read', async () => {
+  const { driver, tools, gate } = tickDriver({ A1: { ...samplePrs().A1, held: null } }, { rules: [MERGE_RULE], routes: [prRoute()] })
+  const entry = driver.ledger.prs.A1
+
+  entry.feedbackWaiting = true
+  await driver.mergeNext()
+
+  assert.equal(gate.calls, 0)
+  assert.deepEqual(mergeCalls(tools), [])
+
+  entry.feedbackWaiting = false
+  await driver.mergeNext()
+
+  assert.equal(mergeCalls(tools).length, 1)
 })
 
 test('mergeCandidate: a PR merged on GitHub while the gate reads it waits for sync, with no notification', async () => {

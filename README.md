@@ -40,6 +40,7 @@ A rollout directory holds `manifest.yaml` (see `examples/manifest.yaml`), option
 
 ```sh
 npm test               # node:test suites in test/
+npm run test:mutations # each brake's test, proven by a mutation
 npm run format:check   # prettier
 ```
 

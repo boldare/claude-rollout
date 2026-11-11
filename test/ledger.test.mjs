@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { doneDetail } from '../lib/driver.mjs'
@@ -529,6 +529,24 @@ test('startRun and endRun change nothing without a run name', () => {
   endRun(data, { id: 'A1', role: 'implement' }, doneDetail('implement', null, { ok: false, costUsd: 0 }))
 
   assert.deepEqual(data, {})
+})
+
+test('save replaces ledger.json, so a reader that opened the old file still reads all of it', () => {
+  const manifest = loadManifest(makeRollout())
+  const ledger = openLedger(manifest)
+  const path = join(manifest.dir, 'ledger.json')
+  const before = readFileSync(path, 'utf8')
+  const reader = openSync(path, 'r')
+
+  try {
+    ledger.data.paused = true
+    ledger.save()
+
+    assert.equal(readFileSync(reader, 'utf8'), before)
+    assert.equal(JSON.parse(readFileSync(path, 'utf8')).paused, true)
+  } finally {
+    closeSync(reader)
+  }
 })
 
 test('openLedger stops the runs a driver that is gone left open, and saves that', () => {

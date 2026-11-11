@@ -233,6 +233,42 @@ test('retry: a parked READY report stays parked, and the next tick claims it wit
   assert.deepEqual(kindsSince(manifest, before), ['ready-claimed'])
 })
 
+test('sync: a head moved to another patch drops the verification, and the PR is claimed again at the new head', async () => {
+  const { manifest, driver, gate } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute({ head: { sha: NEW_HEAD } })] })
+  const entry = driver.ledger.prs.A1
+
+  // A1 stays held, so the gate waits on held before its own re-verification
+  // on not-verified could claim it again. Only sync claims it here.
+  gate.pr = { headRefOid: NEW_HEAD }
+  gate.facts = { patchId: 'patch-other' }
+  await driver.tick()
+
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.verified, null)
+  assert.equal(entry.claimedSha, NEW_HEAD)
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind === 'head-moved-reverify'),
+    [{ id: 'A1', kind: 'head-moved-reverify', sha: NEW_HEAD.slice(0, 7), reason: 'new-patch' }],
+  )
+})
+
+test('sync: a PR closed on GitHub is blocked as closed, with a notice', async () => {
+  const { manifest, driver, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute({ state: 'closed' })] })
+  const entry = driver.ledger.prs.A1
+
+  await driver.tick()
+
+  // A gate that read the closed PR would block it too, as kind gate.
+  assert.equal(entry.state, 'blocked')
+  assert.equal(entry.blocked.kind, 'closed')
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind === 'blocked'),
+    [{ id: 'A1', kind: 'blocked', reason: 'closed' }],
+  )
+
+  assert.deepEqual(notices, ['A1: PR #11 was closed'])
+})
+
 test('checkClaim: a claimed PR merged or closed since sync is left to the next sync', async () => {
   const claimed = { state: 'ready_claimed', pr: 11, claimedSha: SHA, attempts: { implement: 1, fix: 0, verify: 0, brief: 0 } }
 
