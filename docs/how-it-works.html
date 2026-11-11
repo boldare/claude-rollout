@@ -1105,7 +1105,8 @@
           <dt>Transcript</dt>
           <dd>
             stdout goes unchanged into <code>logs/&lt;id&gt;-&lt;NN&gt;-&lt;role&gt;.jsonl</code>. The UI shows it on the PR page's runs
-            tab.
+            tab. A transcript that cannot be written does not stop the run. The driver logs <code>log-failed</code> once for that run, with
+            the error.
           </dd>
           <dt>Result</dt>
           <dd>
@@ -1113,7 +1114,8 @@
             <code>session_id</code> and the permission denials. A run without that line, with <code>is_error</code>, or without a report has
             failed. The driver also reads claude's API error lines (<code>is_api_error_message</code> with an <code>error</code> kind) and
             rejected <code>rate_limit_event</code> lines. They tell an outage or an account problem apart from a real failure. The agent's
-            own <code>result</code> text is shown as the error but never classifies it.
+            own <code>result</code> text is shown as the error but never classifies it. stdout is read as one UTF-8 stream, so a character
+            split between two reads arrives whole. A last line without a newline counts like any other.
           </dd>
         </dl>
 
@@ -1546,6 +1548,13 @@
                 <td>
                   Each failed tick is a <code>tick-error</code> event with the number of failed ticks in a row, and the next tick starts as
                   usual. The fifth in a row notifies you.
+                </td>
+              </tr>
+              <tr>
+                <td>A write that failed as a job ended</td>
+                <td>
+                  The end of an agent run, a brief, a delegate or a pre-verify job never stops the driver. A ledger save or event write that
+                  fails there is printed to the driver's output. The next tick saves what the job changed, or fails like any other tick.
                 </td>
               </tr>
               <tr>
