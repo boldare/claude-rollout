@@ -14,6 +14,23 @@ export const ROLES = ['brief', 'implement', 'fix', 'verify', 'delegate'] as cons
 export type Role = (typeof ROLES)[number]
 export type BudgetRole = Exclude<Role, 'delegate'>
 
+// Who acted. `github` is whoever acted on GitHub, outside the driver.
+export const ACTORS = ['maintainer', 'driver', 'delegate', 'github'] as const
+export type Actor = (typeof ACTORS)[number]
+
+// Where an approval or a note came in: a command in the rollout's inbox, or GitHub.
+export const CHANNELS = ['inbox', 'github'] as const
+export type Channel = (typeof CHANNELS)[number]
+
+// An ISO 8601 time in UTC, as toISOString() and GitHub write it. It is a plain
+// string, because tsc cannot check the format of a time made at run time or read from JSON.
+export type IsoTime = string
+
+export type GitHubLogin = string
+
+// Some members of a union. Unlike Extract, it refuses a member the union does not have.
+type Subset<Union, Members extends Union> = Members
+
 // Why the implementer is sent back. A fix in progress keeps its reason when a
 // note joins it or its run fails.
 export const FIX_REASONS = [
@@ -38,14 +55,14 @@ export type FixReason = (typeof FIX_REASONS)[number]
 export interface Fix {
   reason: FixReason
   note: string
-  since: string
+  since: IsoTime
 }
 
 // One brake, in two scopes: on a PR and on the rollout. The driver holds the
 // rollout itself on an account limit.
 export interface Hold {
-  at: string
-  by: 'maintainer' | 'driver'
+  at: IsoTime
+  by: Subset<Actor, 'maintainer' | 'driver'>
   reason: string | null
 }
 
@@ -96,7 +113,7 @@ export interface RunningDetails {
 
 export interface WaitingDetails {
   slot: { code: 'slot' }
-  backoff: { code: 'backoff'; until: string; failures: number }
+  backoff: { code: 'backoff'; until: IsoTime; failures: number }
   held: { code: 'held'; scope: 'pr' | 'rollout' }
   dependencies: { code: 'dependencies'; on: string[] }
   'dependencies-merge': { code: 'dependencies-merge'; heads: Head[] }
@@ -108,9 +125,9 @@ export interface WaitingDetails {
   'base-pending': { code: 'base-pending'; sha: string }
   'mergeable-unknown': { code: 'mergeable-unknown' }
   'github-merge-state': { code: 'github-merge-state'; mergeState: string }
-  'merge-delay': { code: 'merge-delay'; until: string }
+  'merge-delay': { code: 'merge-delay'; until: IsoTime }
   queued: { code: 'queued'; after: number }
-  'review-in-progress': { code: 'review-in-progress'; lastCommentAt: string }
+  'review-in-progress': { code: 'review-in-progress'; lastCommentAt: IsoTime }
 }
 
 export interface NeedsYouDetails {
@@ -135,9 +152,15 @@ export type RunningCode = keyof RunningDetails
 export type WaitingCode = keyof WaitingDetails
 export type NeedsYouCode = keyof NeedsYouDetails
 
-export type RunningOf<Code extends RunningCode> = RunningDetails[Code] & { kind: 'running'; run: string; since: string }
-export type WaitingOf<Code extends WaitingCode> = WaitingDetails[Code] & { kind: 'waiting'; since: string }
-export type NeedsYouOf<Code extends NeedsYouCode> = NeedsYouDetails[Code] & { kind: 'needs-you'; since: string }
+// What every status carries, whatever its kind.
+export interface StatusBase<Kind extends StatusKind> {
+  kind: Kind
+  since: IsoTime
+}
+
+export type RunningOf<Code extends RunningCode> = RunningDetails[Code] & StatusBase<'running'> & { run: string }
+export type WaitingOf<Code extends WaitingCode> = WaitingDetails[Code] & StatusBase<'waiting'>
+export type NeedsYouOf<Code extends NeedsYouCode> = NeedsYouDetails[Code] & StatusBase<'needs-you'>
 
 // What takes a needs-you status away. The CLI and the UI print it beside the status.
 export type WayOut = 'note' | 'retry' | 'retry-or-note' | 'approve' | 'github'
@@ -230,34 +253,37 @@ export type MergeStatus = StatusAt<'merge'>
 export type Status = StatusAt<OpenStage>
 
 // What the view may show in place of a stored status: a dead driver cannot write one.
-export type ShownStatus = Status | { kind: 'waiting'; code: 'driver-stopped'; since: string }
+export type ShownStatus = Status | (StatusBase<'waiting'> & { code: 'driver-stopped' })
 
-// A READY report's claim, as the driver confirmed it on GitHub.
-export interface Claim {
+// A commit, and when the driver recorded something about it.
+export interface CommitStamp {
   sha: string
-  at: string
+  at: IsoTime
+}
+
+// A READY report's claim, as the driver confirmed it on GitHub. The patch id is
+// null until pre-verify computes it. Verify and merge require it.
+export interface Claim extends CommitStamp {
   patchId: string | null
 }
 
 // A PASS binds the patch, not the head: the same patch on a new head keeps it.
-export interface Verification {
-  sha: string
+export interface Verification extends CommitStamp {
   patchId: string
-  at: string
   run: string
 }
 
-export interface Approval {
-  sha: string
+export interface Approval extends CommitStamp {
   patchId: string
-  at: string
-  channel: 'inbox' | 'github'
-  by: string | null
+  channel: Channel
+  // The maintainer who approved on GitHub. Null for an approval from the inbox.
+  by: GitHubLogin | null
 }
 
 export interface Merged {
-  by: 'driver' | 'github'
-  at: string
+  by: Subset<Actor, 'driver' | 'github'>
+  at: IsoTime
+  // Null when GitHub did not give the merge commit back.
   sha: string | null
   // Where the PR was when it merged, so a merge before verification stays visible.
   from: OpenStage
@@ -271,9 +297,9 @@ export interface Finding {
 }
 
 export interface NoteRecord {
-  at: string
-  by: 'maintainer' | 'delegate'
-  channel: 'inbox' | 'github'
+  at: IsoTime
+  by: Subset<Actor, 'maintainer' | 'delegate'>
+  channel: Channel
   text: string
   // What it answered, when the PR waited on a question or a dispute.
   answers: NeedsYouCode | null
@@ -282,27 +308,26 @@ export interface NoteRecord {
 }
 
 // What every entry carries, whatever its stage.
-export interface EntryBase {
+export interface EntryBase<At extends Stage = Stage> {
+  stage: At
   attempts: Record<BudgetRole, number>
   refunds: number
   failures: number
   hold: Hold | null
   notes: NoteRecord[]
   costUsd: number
-  author: string | null
+  author: GitHubLogin | null
   lastError: string | null
 }
 
-export interface BriefEntry extends EntryBase {
-  stage: 'brief'
+export interface BriefEntry extends EntryBase<'brief'> {
   status: BriefStatus
   pr: null
   answers: { question: string | null; answer: string }[]
 }
 
 // A fix is owed exactly when `fix` is set. Without one the next run is the first implement run.
-export interface ImplementEntry extends EntryBase {
-  stage: 'implement'
+export interface ImplementEntry extends EntryBase<'implement'> {
   status: ImplementStatus
   pr: number | null
   sessionId: string | null
@@ -311,18 +336,16 @@ export interface ImplementEntry extends EntryBase {
   claim: Claim | null
 }
 
-export interface PreVerifyEntry extends EntryBase {
-  stage: 'pre-verify'
+export interface PreVerifyEntry extends EntryBase<'pre-verify'> {
   status: PreVerifyStatus
   pr: number
   sessionId: string | null
   claim: Claim
   // The commands' pass for this head, kept so a restart does not run them again.
-  commands: { sha: string; key: string; at: string } | null
+  commands: (CommitStamp & { key: string }) | null
 }
 
-export interface VerifyEntry extends EntryBase {
-  stage: 'verify'
+export interface VerifyEntry extends EntryBase<'verify'> {
   status: VerifyStatus
   pr: number
   sessionId: string | null
@@ -330,8 +353,7 @@ export interface VerifyEntry extends EntryBase {
   findings: Finding[]
 }
 
-export interface MergeEntry extends EntryBase {
-  stage: 'merge'
+export interface MergeEntry extends EntryBase<'merge'> {
   status: MergeStatus
   pr: number
   sessionId: string | null
@@ -340,8 +362,7 @@ export interface MergeEntry extends EntryBase {
   approval: Approval | null
 }
 
-export interface MergedEntry extends EntryBase {
-  stage: 'merged'
+export interface MergedEntry extends EntryBase<'merged'> {
   status: null
   pr: number | null
   merged: Merged
@@ -363,8 +384,8 @@ export interface RunRecord {
   run: string
   id: string
   role: Role
-  startedAt: string
-  endedAt: string | null
+  startedAt: IsoTime
+  endedAt: IsoTime | null
   process: { pid: number } | { container: string } | null
 }
 
@@ -382,6 +403,6 @@ export interface Ledger {
   prs: Record<string, Entry>
   runs: Record<string, RunRecord>
   hold: Hold | null
-  githubUnavailable: { since: string; notified: boolean } | null
-  lastMerge: { id: string; sha: string; at: string; baseRedNotified: boolean } | null
+  githubUnavailable: { since: IsoTime; notified: boolean } | null
+  lastMerge: (CommitStamp & { id: string; baseRedNotified: boolean }) | null
 }

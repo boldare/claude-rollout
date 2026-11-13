@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import {
+  ACTORS,
+  CHANNELS,
   COMMANDS,
   FIX_REASONS,
   GATE_BLOCK_CODES,
@@ -24,7 +26,7 @@ function codeLists() {
 }
 
 test('state: no list spells a value twice', () => {
-  const named = Object.entries({ STAGES, STATUS_KINDS, ROLES, FIX_REASONS, QUESTION_KINDS, GATE_BLOCK_CODES, COMMANDS })
+  const named = Object.entries({ STAGES, STATUS_KINDS, ROLES, ACTORS, CHANNELS, FIX_REASONS, QUESTION_KINDS, GATE_BLOCK_CODES, COMMANDS })
 
   for (const [name, list] of [...named, ...codeLists()]) {
     assert.deepEqual(duplicates(list), [], name)
