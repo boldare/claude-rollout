@@ -332,8 +332,9 @@
           <li><strong>Reload the manifest</strong> if the file changed.</li>
           <li>
             <strong>Apply the inbox.</strong> Every command file is read and deleted, then applied: approve, note, retry, hold, release,
-            pause, resume and unhalt. Each command applies on its own, and a rejected one never stops the rest. A command that cannot apply
-            is logged as <code>command-rejected</code>, a refused approval as <code>approval-rejected</code>.
+            pause and resume. <code>unhalt</code> is refused as no longer needed. Each command applies on its own, and a rejected one never
+            stops the rest. A command that cannot apply is logged as <code>command-rejected</code>, a refused approval as
+            <code>approval-rejected</code>.
           </li>
           <li>
             <strong>Fetch.</strong> <code>git fetch --prune origin</code> in the repository. A failed fetch logs <code>fetch-failed</code>,
@@ -348,8 +349,8 @@
           </li>
           <li>
             <strong>Watch the base.</strong> After a rollout PR merges, by the driver or on GitHub, read the check runs on its merge commit.
-            Red halts the rollout, green clears the watch. A failed read logs <code>watch-base-failed</code> and is tried again on the next
-            tick.
+            Red logs <code>base-red</code> and notifies once per merge. Green clears the watch. The watch stops nothing, because the gate
+            waits on a red base by itself. A failed read logs <code>watch-base-failed</code> and is tried again on the next tick.
           </li>
           <li>
             <strong>Sync every PR with GitHub.</strong> A merge or a close made on GitHub wins. A head that moved after verification is
@@ -358,7 +359,7 @@
           <li>
             <strong>Run the gate.</strong> Verified PRs go through the gate in priority order, then manifest order. PRs with an agent
             running or feedback waiting are skipped. The first merge or rebase ends this step, so there is at most one per tick. The step is
-            skipped while the rollout is paused, halted or stopping, and in a tick whose fetch failed.
+            skipped while the rollout is paused or stopping, and in a tick whose fetch failed.
           </li>
           <li>
             <strong>Advance every PR</strong> in priority order, unless the rollout is paused. Briefs, implementers, fixers, verifiers and
@@ -762,7 +763,7 @@
           </table>
         </div>
 
-        <p>Three flags sit next to the states:</p>
+        <p>Two flags sit next to the states:</p>
 
         <ul>
           <li>
@@ -772,12 +773,6 @@
             running finishes.
           </li>
           <li><strong>Paused</strong> applies to the whole rollout. No new runs start and nothing merges. Running agents finish.</li>
-          <li>
-            <strong>Halted</strong> applies to the whole rollout after the base went red behind a merge. The gate step stops, so nothing
-            merges or rebases and no ready notice goes out. Agents keep working until
-            <a href="commands.html#cmd-unhalt"><code>unhalt</code></a
-            >.
-          </li>
         </ul>
 
         <h2 id="roles">Roles <a class="anchor" href="#roles" aria-label="Link to this section">#</a></h2>
@@ -1218,7 +1213,7 @@
         <p>For a verified PR <code>judge()</code> returns one action: merge, rebase, fix, wait or block. It checks, in this order:</p>
 
         <ol>
-          <li><strong>Wait</strong> while the rollout is halted or the PR is held.</li>
+          <li><strong>Wait</strong> while the PR is held.</li>
           <li>
             <strong>Block</strong> when there is no PR for the branch, the PR is closed, it is the release PR (<a
               href="manifest.html#repo-neverMerge"
@@ -1243,6 +1238,10 @@
             <code>.claude/</code> without <code>allowClaudeConfig</code>, a package version edit, a removed or missing changeset, a bump
             above <code>maxBump</code>, a denylisted term, or a commit with more than one line.
           </li>
+          <li>
+            <strong>Wait</strong> while the base branch is red (<a href="#gate-base-red"><code>base-red</code></a
+            >). Nothing is rebased onto it, sent back for its failure or merged until it is green. An approval can still be given meanwhile.
+          </li>
           <li><strong>Rebase</strong> when the branch is behind the base or conflicts with it.</li>
           <li><strong>Wait</strong> until GitHub reports the PR as mergeable.</li>
           <li>
@@ -1254,7 +1253,10 @@
             >, as its <code>action</code> says. <strong>Wait</strong> while an alert comes from an analysis of an older commit. A fix run
             sure of a false positive reports BLOCKED with kind <code>code-scanning</code>, which only you answer.
           </li>
-          <li><strong>Wait</strong> while the base branch is not green.</li>
+          <li>
+            <strong>Wait</strong> while the base branch's CI still runs (<a href="#gate-base-pending"><code>base-pending</code></a
+            >).
+          </li>
           <li>
             <strong>Wait</strong> for GitHub's own merge state, unless the merge uses <code>--admin</code> or the mode is manual. It must be
             clean, or has hooks, or unstable. <code>BLOCKED</code> usually means a ruleset requirement such as a review or code scanning
@@ -1281,11 +1283,6 @@
               </tr>
             </thead>
             <tbody>
-              <tr id="gate-halted">
-                <td class="nowrap"><code>halted</code></td>
-                <td>wait</td>
-                <td>The rollout is halted.</td>
-              </tr>
               <tr id="gate-held">
                 <td class="nowrap"><code>held</code></td>
                 <td>wait</td>
@@ -1381,6 +1378,11 @@
                 <td>fix</td>
                 <td>A policy rule is broken.</td>
               </tr>
+              <tr id="gate-base-red">
+                <td class="nowrap"><code>base-red</code></td>
+                <td>wait</td>
+                <td>The base branch is red. Merges, rebases and fixes from the gate wait until it is green.</td>
+              </tr>
               <tr id="gate-behind-base">
                 <td class="nowrap"><code>behind-base</code></td>
                 <td>rebase</td>
@@ -1406,10 +1408,10 @@
                 <td>fix, block or wait</td>
                 <td>New code scanning alerts, or an analysis of an older commit.</td>
               </tr>
-              <tr id="gate-base-not-green">
-                <td class="nowrap"><code>base-not-green</code></td>
+              <tr id="gate-base-pending">
+                <td class="nowrap"><code>base-pending</code></td>
                 <td>wait</td>
-                <td>The base branch is not green.</td>
+                <td>The base branch's CI still runs.</td>
               </tr>
               <tr id="gate-github-blocked">
                 <td class="nowrap"><code>github-blocked</code></td>
@@ -1615,7 +1617,11 @@
               </tr>
               <tr>
                 <td>The base went red after a merge</td>
-                <td>The rollout halts. Merges stop, agents go on, until you fix the base and run <code>unhalt</code>.</td>
+                <td>
+                  The driver logs <code>base-red</code> and notifies once. The gate waits with
+                  <a href="#gate-base-red"><code>base-red</code></a
+                  >, and agents go on. Merges start again by themselves when the base is green.
+                </td>
               </tr>
               <tr>
                 <td>An account limit</td>
@@ -1705,9 +1711,9 @@
             run, an answer from the delegate.
           </li>
           <li>
-            <strong>Trouble:</strong> halted, paused by an account limit, merge refused or blocked by GitHub, the head moved after
-            verification, the verifier changed the tree, a dependency outside the run, a rejected manifest, five failed ticks in a row, five
-            failures in a row of a driver-wide step, GitHub unreachable for 30 minutes, and GitHub back after that.
+            <strong>Trouble:</strong> the base red after a merge, paused by an account limit, merge refused or blocked by GitHub, the head
+            moved after verification, the verifier changed the tree, a dependency outside the run, a rejected manifest, five failed ticks in
+            a row, five failures in a row of a driver-wide step, GitHub unreachable for 30 minutes, and GitHub back after that.
           </li>
           <li><strong>The end:</strong> all PRs merged, with the release PR to merge.</li>
         </ul>

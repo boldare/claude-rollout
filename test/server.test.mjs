@@ -889,6 +889,25 @@ test('cli: card and approve follow policy.merge', () => {
   assert.ok(card.stdout.includes('Approve with: rollout.mjs approve A1'), card.stdout)
 })
 
+test('cli: unhalt is refused as no longer needed, writes no inbox file, and status prints no halt', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+  const dir = makeRollout()
+  const unhalt = cli('unhalt', '--dir', dir)
+
+  assert.equal(unhalt.status, 1, unhalt.stdout)
+  assert.equal(unhalt.stderr, 'unhalt: no longer needed: merges start again when main is green\n')
+  assert.deepEqual(inboxFiles(dir), [])
+
+  const ledgerFile = join(dir, 'ledger.json')
+
+  writeFileSync(ledgerFile, JSON.stringify({ ...JSON.parse(readFileSync(ledgerFile, 'utf8')), halted: 'main is red' }))
+
+  const status = cli('status', '--dir', dir)
+
+  assert.equal(status.status, 0, status.stderr)
+  assert.doesNotMatch(status.stdout, /HALTED/)
+})
+
 test('cli: card lists the delegate runs and answers with their plan references', () => {
   const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
   const answer = {
@@ -1020,7 +1039,6 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
   const cases = [
     [{ cmd: 'pause', id: 'A1' }, { cmd: 'pause' }],
     [{ cmd: 'resume' }, { cmd: 'resume' }],
-    [{ cmd: 'unhalt', sha: 'a1a1a1a' }, { cmd: 'unhalt' }],
     [
       { cmd: 'retry', id: 'A2', patchId: 'patch-a1' },
       { cmd: 'retry', id: 'A2' },
@@ -1052,6 +1070,12 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
     assert.deepEqual(written, command)
     rmSync(join(dir, 'inbox', files[0]))
   }
+
+  const unhalt = await post(server, 'demo', { cmd: 'unhalt' })
+
+  assert.equal(unhalt.status, 400)
+  assert.deepEqual(unhalt.json, { error: 'no longer needed: merges start again when main is green' })
+  assert.deepEqual(inboxFiles(dir), [])
 
   const mixedCase = await post(server, 'demo', { cmd: 'pause' }, { contentType: 'Application/JSON; charset=utf-8' })
   assert.equal(mixedCase.status, 202)
@@ -1137,14 +1161,13 @@ test('commands: the error answers leave no inbox file', async (context) => {
   assert.deepEqual(calls, [])
 })
 
-test('commands: read-only refuses all nine and says so in every state', async (context) => {
+test('commands: read-only refuses all eight and says so in every state', async (context) => {
   const calls = []
   const { server, root } = await serve(context, { readOnly: true, driverCommand: refusedDriver(calls), pollMs: 60_000 })
   const dir = join(root, 'demo')
   const bodies = [
     { cmd: 'pause' },
     { cmd: 'resume' },
-    { cmd: 'unhalt' },
     { cmd: 'retry', id: 'A2' },
     { cmd: 'note', id: 'A1', text: 'hi' },
     { cmd: 'hold', id: 'A3' },

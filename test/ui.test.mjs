@@ -282,11 +282,11 @@ test('errorCount: counts only error kinds', () => {
   assert.equal(errorCount([]), 0)
 })
 
-test('driverStatus: halted, paused, running, stopped and unknown', () => {
-  assert.equal(driverStatus({ running: true, paused: true, halted: 'out of budget' }), 'halted')
-  assert.equal(driverStatus({ running: true, paused: true, halted: null }), 'paused')
-  assert.equal(driverStatus({ running: true, paused: false, halted: null }), 'running')
-  assert.equal(driverStatus({ running: false, paused: false, halted: null }), 'stopped')
+test('driverStatus: paused, running, stopped and unknown', () => {
+  assert.equal(driverStatus({ running: true, paused: true }), 'paused')
+  assert.equal(driverStatus({ running: true, paused: false }), 'running')
+  assert.equal(driverStatus({ running: true, paused: false, halted: 'x' }), 'running')
+  assert.equal(driverStatus({ running: false, paused: false }), 'stopped')
   assert.equal(driverStatus(null), 'unknown')
 })
 
@@ -785,11 +785,11 @@ test('tookText and resultTone: a finished run in one line, and the tone of its r
   }
 })
 
-test('rolloutControls: pause or resume, unhalt when halted, stop or start', () => {
+test('rolloutControls: pause or resume, stop or start', () => {
   const { view } = demo()
 
   assert.deepEqual(rolloutControls(view, false), ['pause', 'stop'])
-  assert.deepEqual(rolloutControls(viewWith({ paused: true, halted: 'main is red', running: false }), false), ['resume', 'unhalt', 'start'])
+  assert.deepEqual(rolloutControls(viewWith({ paused: true, halted: 'main is red', running: false }), false), ['resume', 'start'])
   assert.deepEqual(rolloutControls(null, false), ['start'])
   assert.deepEqual(rolloutControls(view, true), [])
   assert.deepEqual(rolloutControls(null, true), [])
@@ -887,8 +887,8 @@ test('dialogFor: answer shows the question and the evidence, never an empty sect
   })
 })
 
-test('dialogFor: confirmations for stop, start, retry and unhalt, a text for note, nothing for the rest', () => {
-  const driver = { pid: 4242, halted: 'main is red' }
+test('dialogFor: confirmations for stop, start and retry, a text for note, nothing for the rest', () => {
+  const driver = { pid: 4242 }
   const pr = { id: 'A2', state: 'escalated' }
   const context = { rollout: 'demo', driver, pr }
 
@@ -906,11 +906,7 @@ test('dialogFor: confirmations for stop, start, retry and unhalt, a text for not
   })
 
   assert.deepEqual(dialogFor('retry', context), { title: 'Retry A2?', text: 'Its attempts start from zero.', confirmLabel: 'Retry' })
-  assert.deepEqual(dialogFor('unhalt', context), {
-    title: 'Unhalt demo?',
-    text: 'Halted: main is red. Unhalt lets the driver merge again.',
-    confirmLabel: 'Unhalt',
-  })
+  assert.equal(dialogFor('unhalt', context), null)
 
   assert.deepEqual(dialogFor('note', context), { title: 'Note for A2', confirmLabel: 'Send', withText: true })
 
@@ -931,7 +927,7 @@ test('dialogFor: confirmations for stop, start, retry and unhalt, a text for not
 test('commandBody: the fields each command needs, and no pid for stop', () => {
   const pr = { id: 'A1', state: 'verified' }
 
-  for (const command of ['pause', 'resume', 'unhalt', 'stop']) {
+  for (const command of ['pause', 'resume', 'stop']) {
     assert.deepEqual(commandBody(command, null, command === 'stop' ? { text: '', dryRun: false } : null), { cmd: command })
   }
 

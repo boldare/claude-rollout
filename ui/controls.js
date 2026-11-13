@@ -5,7 +5,6 @@ import { element } from './dom.js'
 const LABELS = {
   pause: 'Pause',
   resume: 'Resume',
-  unhalt: 'Unhalt',
   stop: 'Stop',
   start: 'Start',
   hold: 'Hold',

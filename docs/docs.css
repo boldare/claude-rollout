@@ -823,7 +823,6 @@ ol.steps > li > strong:first-child {
 
 .state-blocked,
 .state-escalated,
-.driver-halted,
 .verdict-fail,
 .result-error {
   --tone: var(--fail);

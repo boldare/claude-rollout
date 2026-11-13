@@ -243,22 +243,21 @@ function sampleManifest(dir, policy) {
 // other records the runs of the events, as the driver that holds the lock
 // would, unless `runs` gives them.
 function ledgerOf(options, prs) {
-  const { paused, halted } = options
+  const { paused } = options
 
   if (options.legacy) {
-    return { prs, paused, halted }
+    return { prs, paused }
   }
 
   const events = (options.events ?? []).filter((event) => typeof event !== 'string')
 
-  return { version: 2, prs, runs: options.runs ?? runRecords(events, { driverRunning: true }), paused, halted }
+  return { version: 2, prs, runs: options.runs ?? runRecords(events, { driverRunning: true }), paused }
 }
 
 export function makeRollout(overrides = {}) {
   const options = {
     prs: samplePrs(),
     paused: false,
-    halted: null,
     legacy: false,
     runs: null,
     events: sampleEvents(),

@@ -32,7 +32,6 @@ const PATCH = 'p1'
 
 function facts(overrides = {}) {
   return {
-    halted: null,
     pr: {
       number: 7,
       state: 'OPEN',
@@ -126,37 +125,34 @@ test('does not merge onto a red base branch', () => {
     manifest,
     pr,
     verifiedAndApproved,
-    facts({ mainChecks: { state: 'red', missing: [], pending: [], failing: ['check'] } }),
+    facts({ mainChecks: { state: 'red', missing: [], pending: [], failing: ['check'], sha: 'abc1234def5678' } }),
   )
 
-  assertVerdict(verdict, 'wait', 'base-not-green')
+  assertVerdict(verdict, 'wait', 'base-red')
+  assert.deepEqual(verdict.reasons, ['main is red at abc1234: check. Merges wait until it is green'])
 })
 
 test('the wait on a base that is not green names the commit it was read from', () => {
   const pending = { state: 'pending', missing: [], pending: [], failing: [], sha: 'abc1234def5678', skipped: 1 }
   const one = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: pending }))
 
-  assertVerdict(one, 'wait', 'base-not-green')
+  assertVerdict(one, 'wait', 'base-pending')
   assert.match(one.reasons.join(), /main is not green \(pending at abc1234, 1 quiet commit skipped\)/)
 
   const three = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { ...pending, skipped: 3 } }))
 
-  assertVerdict(three, 'wait', 'base-not-green')
+  assertVerdict(three, 'wait', 'base-pending')
   assert.match(three.reasons.join(), /pending at abc1234, 3 quiet commits skipped/)
 
   const tip = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { ...pending, skipped: 0 } }))
 
-  assertVerdict(tip, 'wait', 'base-not-green')
+  assertVerdict(tip, 'wait', 'base-pending')
   assert.match(tip.reasons.join(), /main is not green \(pending\)/)
 
   const bare = judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: { state: 'pending' } }))
 
-  assertVerdict(bare, 'wait', 'base-not-green')
+  assertVerdict(bare, 'wait', 'base-pending')
   assert.match(bare.reasons.join(), /\(pending\)/)
-})
-
-test('a halted rollout waits instead of blocking verified PRs', () => {
-  assertVerdict(judge(manifest, pr, verifiedAndApproved, facts({ halted: 'main red' })), 'wait', 'halted')
 })
 
 test('changeset parsing follows @changesets/parse: comments, CRLF, flow style; unknown means violation', () => {
@@ -350,6 +346,38 @@ test('github approval: maintainer-authored PRs fall back to rollout approve', ()
   const own = facts({ pr: { ...facts().pr, author: 'maint' }, reviews: [] })
   assertVerdict(judge(GM, pr, { ...onVerified, approved: { patchId: PATCH } }, own), 'merge', 'merge')
   assertVerdict(judge(GM, pr, onVerified, own), 'wait', 'awaiting-inbox-approval')
+})
+
+test('judge: a red base waits with base-red after the approval and the policy, and before the rebase and red CI', () => {
+  const redBase = { state: 'red', missing: [], pending: [], failing: ['test: failure'], sha: 'abc1234def5678' }
+  const onRedBase = (overrides = {}) => facts({ mainChecks: redBase, ...overrides })
+  const redCi = { state: 'red', missing: [], pending: [], failing: ['smoke: failure'] }
+  const forbidden = onRedBase({ files: [...facts().files, { status: 'modified', path: 'packages/core/CHANGELOG.md' }] })
+
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, onRedBase({ baseIsAncestor: false })), 'wait', 'base-red')
+  assertVerdict(
+    judge(manifest, pr, verifiedAndApproved, onRedBase({ pr: { ...facts().pr, mergeable: 'CONFLICTING' } })),
+    'wait',
+    'base-red',
+  )
+
+  const onRedCi = judge(manifest, pr, verifiedAndApproved, onRedBase({ checks: redCi }))
+
+  assertVerdict(onRedCi, 'wait', 'base-red')
+  assert.deepEqual(onRedCi.reasons, ['main is red at abc1234: test: failure. Merges wait until it is green'])
+  assertVerdict(judge(manifest, pr, onVerified, onRedBase()), 'wait', 'awaiting-inbox-approval')
+  assertVerdict(judge(GM, pr, onVerified, botFacts([], { mainChecks: redBase })), 'wait', 'awaiting-github-review')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, forbidden), 'fix', 'policy-violations')
+})
+
+test('judge: a base whose CI still runs keeps its place as base-pending', () => {
+  const pendingBase = { state: 'pending', missing: [], pending: ['test'], failing: [], sha: 'abc1234def5678' }
+  const onPendingBase = (overrides = {}) => facts({ mainChecks: pendingBase, ...overrides })
+  const redCi = { state: 'red', missing: [], pending: [], failing: ['smoke: failure'] }
+
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, onPendingBase({ baseIsAncestor: false })), 'rebase', 'behind-base')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, onPendingBase({ checks: redCi })), 'fix', 'ci-red')
+  assertVerdict(judge(manifest, pr, verifiedAndApproved, onPendingBase()), 'wait', 'base-pending')
 })
 
 test('without a bypass, a merge waits while GitHub reports BLOCKED', () => {
@@ -546,7 +574,7 @@ test('codeScanningFindings: block blocks, and ignore never reads the facts', () 
 test('judge: code scanning comes after red and pending CI, and before the base and the merge', () => {
   const red = { state: 'red', missing: [], pending: [], failing: ['smoke: failure'] }
   const pending = { state: 'pending', missing: [], pending: ['test'], failing: [] }
-  const redBase = { state: 'red', missing: [], pending: [], failing: ['check'] }
+  const pendingBase = { state: 'pending', missing: [], pending: ['check'], failing: [] }
   const flagged = { action: 'fix', code: 'code-scanning', reasons: [ALERT_REASON] }
 
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { checks: red })), {
@@ -562,7 +590,7 @@ test('judge: code scanning comes after red and pending CI, and before the base a
   })
 
   assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()])), flagged)
-  assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { mainChecks: redBase })), flagged)
+  assert.deepEqual(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [], { mainChecks: pendingBase })), flagged)
   assert.deepEqual(judge(withScanning({ action: 'block' }), pr, verifiedAndApproved, scanned([alert()])), { ...flagged, action: 'block' })
   assertVerdict(judge(manifest, pr, verifiedAndApproved, scanned([alert()], [4])), 'merge', 'merge')
 })
@@ -642,7 +670,6 @@ test('judge: every gate code, each with its action', () => {
   const mergeState = (mergeStateStatus) => botFacts([APPROVAL], { pr: { ...facts().pr, author: 'bot', mergeStateStatus } })
 
   const rows = [
-    ['halted', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ halted: 'main red' }))],
     ['held', 'wait', judge(manifest, pr, { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z' } }, facts())],
     ['no-pr', 'block', judge(manifest, pr, verifiedAndApproved, facts({ pr: null }))],
     ['merged-on-github', 'wait', judge(manifest, pr, verifiedAndApproved, withPr({ state: 'MERGED' }))],
@@ -659,12 +686,13 @@ test('judge: every gate code, each with its action', () => {
     ['changes-requested', 'wait', judge(GM, pr, onVerified, botFacts([APPROVAL, CHANGES_REQUESTED]))],
     ['awaiting-inbox-approval', 'wait', judge(manifest, pr, onVerified, facts())],
     ['policy-violations', 'fix', judge(manifest, pr, verifiedAndApproved, forbidden)],
+    ['base-red', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: red }))],
     ['behind-base', 'rebase', judge(manifest, pr, verifiedAndApproved, facts({ baseIsAncestor: false }))],
     ['mergeable-unknown', 'wait', judge(manifest, pr, verifiedAndApproved, withPr({ mergeable: 'UNKNOWN' }))],
     ['ci-red', 'fix', judge(manifest, pr, verifiedAndApproved, facts({ checks: red }))],
     ['ci-pending', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ checks: pending }))],
     ['code-scanning', 'block', judge(withScanning({ action: 'block' }), pr, verifiedAndApproved, scanned([alert()]))],
-    ['base-not-green', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: red }))],
+    ['base-pending', 'wait', judge(manifest, pr, verifiedAndApproved, facts({ mainChecks: pending }))],
     ['github-blocked', 'wait', judge(noBypass, pr, onVerified, mergeState('BLOCKED'))],
     ['github-merge-state', 'wait', judge(noBypass, pr, onVerified, mergeState('BEHIND'))],
     ['merge', 'merge', judge(manifest, pr, verifiedAndApproved, facts())],

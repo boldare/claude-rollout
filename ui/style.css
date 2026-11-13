@@ -680,7 +680,6 @@ td > .badge {
 
 .state-blocked,
 .state-escalated,
-.driver-halted,
 .verdict-fail {
   --tone: var(--fail);
 }

@@ -76,7 +76,7 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
   assert.equal(demo.driver.pid, process.pid)
   assert.equal(demo.driver.heartbeatNote, 'tick')
   assert.equal(demo.driver.paused, false)
-  assert.equal(demo.driver.halted, null)
+  assert.equal(Object.hasOwn(demo.driver, 'halted'), false)
   assert.equal(fresh.started, false)
   assert.equal(fresh.total, 3)
   assert.equal(fresh.costUsd, 0)
@@ -87,7 +87,6 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
     heartbeatNote: '',
     tick: null,
     paused: false,
-    halted: null,
   })
 })
 
@@ -120,7 +119,7 @@ test('listRollouts counts merged PRs, and an unreadable ledger is an error that 
   assert.equal(demo.merged, 1)
   assert.equal(demo.costUsd, 2)
   assert.equal(demo.driver.paused, true)
-  assert.equal(demo.driver.halted, 'base is red')
+  assert.equal(Object.hasOwn(demo.driver, 'halted'), false)
 
   writeFileSync(ledger, '{"prs":')
 

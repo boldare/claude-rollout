@@ -116,7 +116,6 @@ export function gateFacts(manifest, pr = {}) {
   const green = { state: 'green', missing: [], pending: [], failing: [], runs: [] }
 
   return {
-    halted: null,
     depsPending: [],
     files: [],
     addedLines: [],

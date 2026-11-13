@@ -41,7 +41,7 @@ function readyLine(stream) {
 }
 
 test('COMMANDS: the inbox commands, stop and start, without approve', () => {
-  assert.deepEqual(COMMANDS, ['pause', 'resume', 'unhalt', 'retry', 'note', 'hold', 'release', 'stop', 'start'])
+  assert.deepEqual(COMMANDS, ['pause', 'resume', 'retry', 'note', 'hold', 'release', 'stop', 'start'])
 })
 
 test('parseCommand: every command keeps only its own fields', () => {
@@ -50,7 +50,6 @@ test('parseCommand: every command keeps only its own fields', () => {
   const cases = [
     [{ cmd: 'pause', id: 'A1', ...extra }, { cmd: 'pause' }],
     [{ cmd: 'resume', ...extra }, { cmd: 'resume' }],
-    [{ cmd: 'unhalt', text: 'x', ...extra }, { cmd: 'unhalt' }],
     [
       { cmd: 'retry', id: 'A2', text: 'x', ...extra },
       { cmd: 'retry', id: 'A2' },
@@ -89,6 +88,7 @@ test('parseCommand: the errors', () => {
     [{ cmd: 'launch' }, 'unknown command launch'],
     [{ cmd: 'approve', id: 'A1', sha: 'a1a1a1a', patchId: 'patch-a1' }, 'unknown command approve'],
     [{}, 'unknown command undefined'],
+    [{ cmd: 'unhalt' }, 'no longer needed: merges start again when main is green'],
     [{ cmd: 'hold' }, 'unknown or missing PR id'],
     [{ cmd: 'retry', id: 'Z9' }, 'unknown or missing PR id'],
     [{ cmd: 'release', id: ['A1'] }, 'unknown or missing PR id'],

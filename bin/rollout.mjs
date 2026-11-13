@@ -22,7 +22,7 @@ import { parseArgs } from 'node:util'
 import { loadManifest } from '../lib/manifest.mjs'
 import { approveRefusal } from '../lib/judge.mjs'
 import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
-import { stopDriver } from '../lib/control.mjs'
+import { stopDriver, unhaltRefusal } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { batteryWarning } from '../lib/machine.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsOf } from '../lib/view.mjs'
@@ -137,10 +137,6 @@ function status(manifest) {
 
   if (driver.paused) {
     console.log('PAUSED (rollout.mjs resume)')
-  }
-
-  if (driver.halted) {
-    console.log(`HALTED: ${driver.halted} (rollout.mjs unhalt)`)
   }
 
   console.log('')
@@ -708,9 +704,13 @@ async function main() {
 
     case 'pause':
     case 'resume':
-    case 'unhalt':
       postCommand(manifest, { cmd: command })
       console.log('queued')
+      break
+
+    case 'unhalt':
+      console.error(`unhalt: ${unhaltRefusal(manifest)}`)
+      process.exit(1)
       break
 
     case 'preflight':
