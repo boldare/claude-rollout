@@ -130,11 +130,6 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td><span class="badge where-ui">Rollout header</span></td>
               </tr>
               <tr>
-                <td class="name"><a href="#cmd-unhalt">unhalt</a></td>
-                <td>No longer needed. Refused, since merges start again by themselves when the base is green.</td>
-                <td><span class="badge where-cli">CLI only</span></td>
-              </tr>
-              <tr>
                 <td class="name"><a href="#cmd-preflight">preflight</a></td>
                 <td>Checks tools, logins, the repository and the guard.</td>
                 <td><span class="badge where-cli">CLI only</span></td>
@@ -513,18 +508,6 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <p>
           Lifts the pause. The driver pauses itself when an agent run fails on an account problem, such as a spend limit, the credit balance
           or billing, and waits for this command. In the UI: <a href="ui.html#control-resume">Resume</a>.
-        </p>
-
-        <h3 id="cmd-unhalt">unhalt <a class="anchor" href="#cmd-unhalt" aria-label="Link to this command">#</a></h3>
-
-        <pre><code>node $R unhalt --dir D</code></pre>
-
-        <p>
-          No longer needed. The CLI refuses it, exits 1 and queues nothing. A red base branch holds the merge gate by a rule of its own (<a
-            href="how-it-works.html#gate-base-red"
-            ><code>base-red</code></a
-          >), so nothing is rebased onto it, sent back for its failure or merged. Merges start again by themselves when the base is green.
-          The command stays for one release, so an older script gets this answer instead of an unknown command.
         </p>
 
         <h2 id="setting-up">Set up <a class="anchor" href="#setting-up" aria-label="Link to this section">#</a></h2>

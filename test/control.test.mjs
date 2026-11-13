@@ -88,7 +88,7 @@ test('parseCommand: the errors', () => {
     [{ cmd: 'launch' }, 'unknown command launch'],
     [{ cmd: 'approve', id: 'A1', sha: 'a1a1a1a', patchId: 'patch-a1' }, 'unknown command approve'],
     [{}, 'unknown command undefined'],
-    [{ cmd: 'unhalt' }, 'no longer needed: merges start again when main is green'],
+    [{ cmd: 'unhalt' }, 'unknown command unhalt'],
     [{ cmd: 'hold' }, 'unknown or missing PR id'],
     [{ cmd: 'retry', id: 'Z9' }, 'unknown or missing PR id'],
     [{ cmd: 'release', id: ['A1'] }, 'unknown or missing PR id'],

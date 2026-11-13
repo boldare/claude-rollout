@@ -8,7 +8,7 @@
 //   rollout.mjs note      <id> "<answer>" [--dir D]
 //   rollout.mjs retry     <id> [--dir D]
 //   rollout.mjs hold | release <id> [--dir D]
-//   rollout.mjs pause | resume | unhalt [--dir D]
+//   rollout.mjs pause | resume [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
 //   rollout.mjs sandbox   build [--dir D]   (builds the agents' image for sandbox.runtime docker)
@@ -22,7 +22,7 @@ import { parseArgs } from 'node:util'
 import { loadManifest } from '../lib/manifest.mjs'
 import { approveRefusal } from '../lib/judge.mjs'
 import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
-import { stopDriver, unhaltRefusal } from '../lib/control.mjs'
+import { stopDriver } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { batteryWarning } from '../lib/machine.mjs'
 import { liveness, prDetail, readEvents, rolloutView, runsOf } from '../lib/view.mjs'
@@ -706,11 +706,6 @@ async function main() {
     case 'resume':
       postCommand(manifest, { cmd: command })
       console.log('queued')
-      break
-
-    case 'unhalt':
-      console.error(`unhalt: ${unhaltRefusal(manifest)}`)
-      process.exit(1)
       break
 
     case 'preflight':

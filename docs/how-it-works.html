@@ -332,9 +332,8 @@
           <li><strong>Reload the manifest</strong> if the file changed.</li>
           <li>
             <strong>Apply the inbox.</strong> Every command file is read and deleted, then applied: approve, note, retry, hold, release,
-            pause and resume. <code>unhalt</code> is refused as no longer needed. Each command applies on its own, and a rejected one never
-            stops the rest. A command that cannot apply is logged as <code>command-rejected</code>, a refused approval as
-            <code>approval-rejected</code>.
+            pause and resume. Each command applies on its own, and a rejected one never stops the rest. A command that cannot apply is
+            logged as <code>command-rejected</code>, a refused approval as <code>approval-rejected</code>.
           </li>
           <li>
             <strong>Fetch.</strong> <code>git fetch --prune origin</code> in the repository. A failed fetch logs <code>fetch-failed</code>,

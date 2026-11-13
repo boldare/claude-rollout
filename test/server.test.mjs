@@ -889,13 +889,13 @@ test('cli: card and approve follow policy.merge', () => {
   assert.ok(card.stdout.includes('Approve with: rollout.mjs approve A1'), card.stdout)
 })
 
-test('cli: unhalt is refused as no longer needed, writes no inbox file, and status prints no halt', () => {
+test('cli: unhalt is an unknown command, writes no inbox file, and status prints no halt', () => {
   const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
   const dir = makeRollout()
   const unhalt = cli('unhalt', '--dir', dir)
 
   assert.equal(unhalt.status, 1, unhalt.stdout)
-  assert.equal(unhalt.stderr, 'unhalt: no longer needed: merges start again when main is green\n')
+  assert.equal(unhalt.stderr, 'unknown command unhalt\n')
   assert.deepEqual(inboxFiles(dir), [])
 
   const ledgerFile = join(dir, 'ledger.json')
@@ -1074,7 +1074,7 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
   const unhalt = await post(server, 'demo', { cmd: 'unhalt' })
 
   assert.equal(unhalt.status, 400)
-  assert.deepEqual(unhalt.json, { error: 'no longer needed: merges start again when main is green' })
+  assert.deepEqual(unhalt.json, { error: 'unknown command unhalt' })
   assert.deepEqual(inboxFiles(dir), [])
 
   const mixedCase = await post(server, 'demo', { cmd: 'pause' }, { contentType: 'Application/JSON; charset=utf-8' })

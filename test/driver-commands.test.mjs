@@ -150,7 +150,7 @@ test('a PR still in the ledger but gone from the manifest is unknown, and a paus
   assert.equal(driver.ledger.data.paused, true)
 })
 
-test('unhalt is refused as no longer needed and leaves the last merge as it was', () => {
+test('an unhalt from an older CLI is an unknown command and leaves the last merge as it was', () => {
   const merge = { id: 'A3', sha: 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0', at: at(90) }
 
   for (const lastMerge of [merge, { ...merge, checked: 'red' }]) {
@@ -159,7 +159,7 @@ test('unhalt is refused as no longer needed and leaves the last merge as it was'
     driver.ledger.data.lastMerge = structuredClone(lastMerge)
 
     assert.deepEqual(apply(manifest, driver, { cmd: 'unhalt' }), [
-      { id: '-', kind: 'command-rejected', command: 'unhalt', reason: 'no longer needed: merges start again when main is green' },
+      { id: '-', kind: 'command-rejected', command: 'unhalt', reason: 'unknown command' },
     ])
 
     assert.deepEqual(driver.ledger.data.lastMerge, lastMerge)
