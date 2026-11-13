@@ -13,6 +13,15 @@ Code here is written for people first. Machines read anything. Humans need light
 - Prettier: no semicolons, single quotes, 140 columns, trailing commas.
 - `npm run lint` checks the rules above that Prettier cannot (ESLint, `eslint.config.js`), plus `no-shadow`.
 
+## TypeScript
+
+- New modules under `lib/` are `.ts`. Node 24 and later run them as they are, with no build step.
+- **Erasable syntax only.** Node strips the types and runs what is left. So no `enum`, no `namespace`, no parameter property. `tsc` refuses them (`erasableSyntaxOnly`).
+- **Imports spell the extension.** `import type { Entry } from './state.ts'`. A type-only import says `import type`.
+- **A closed list is an `as const` array, and its type comes from it.** Each value is spelled once.
+- **Types and type parameters get names too.** `Code`, not `T`. ESLint checks them like any other name.
+- `npm run typecheck` runs `tsc --noEmit`. `npm run lint` applies the rules above to `.ts` files too.
+
 ## Prose
 
 Comments, docs, prompts, commit subjects and PR descriptions follow the same idea: written for people and no longer than they need to be.

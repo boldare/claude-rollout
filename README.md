@@ -42,6 +42,8 @@ A rollout directory holds `manifest.yaml` (see `examples/manifest.yaml`), option
 npm test               # node:test suites in test/
 npm run test:mutations # each brake's test, proven by a mutation
 npm run format:check   # prettier
+npm run lint           # eslint with the STYLE.md rules
+npm run typecheck      # tsc on the .ts modules in lib/
 ```
 
-Read `CLAUDE.md` and `STYLE.md` before changing code. The docs are plain HTML and CSS in `docs/` with no build step. `test/docs.test.mjs` keeps them in step with the code: one sidebar on every page, links that resolve, the UI's tokens, and a place for every command, manifest field and PR state.
+Read `CLAUDE.md` and `STYLE.md` before changing code. New modules in `lib/` are TypeScript that Node runs as it is, with no build step, and `npm run typecheck` checks them. The docs are plain HTML and CSS in `docs/` with no build step. `test/docs.test.mjs` keeps them in step with the code: one sidebar on every page, links that resolve, the UI's tokens, and a place for every command, manifest field and PR state.
