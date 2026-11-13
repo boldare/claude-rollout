@@ -150,6 +150,22 @@ test('a PR still in the ledger but gone from the manifest is unknown, and a paus
   assert.equal(driver.ledger.data.paused, true)
 })
 
+test('an unhalt from an older CLI is an unknown command and leaves the last merge as it was', () => {
+  const merge = { id: 'A3', sha: 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0', at: at(90) }
+
+  for (const lastMerge of [merge, { ...merge, checked: 'red' }]) {
+    const { manifest, driver } = driverFor({ A1: { state: 'pending' } })
+
+    driver.ledger.data.lastMerge = structuredClone(lastMerge)
+
+    assert.deepEqual(apply(manifest, driver, { cmd: 'unhalt' }), [
+      { id: '-', kind: 'command-rejected', command: 'unhalt', reason: 'unknown command' },
+    ])
+
+    assert.deepEqual(driver.ledger.data.lastMerge, lastMerge)
+  }
+})
+
 test('retry rejects a merged PR and changes nothing', () => {
   const attempts = { implement: 1, fix: 2, verify: 1, brief: 1 }
   const { manifest, driver } = driverFor({ A1: { state: 'merged', pr: 7, attempts } })
@@ -390,7 +406,6 @@ test('a GitHub approval is noticed once, and the merge delay counts from when th
   const { manifest, driver } = driverFor(ledger, {
     notify: (_, message) => notices.push(message),
     collectFacts: async () => ({
-      halted: null,
       depsPending: [],
       files: [],
       addedLines: [],

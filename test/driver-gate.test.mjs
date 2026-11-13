@@ -273,12 +273,12 @@ test('mergeCandidate: a new gate event needs a new action or code, new prose alo
   assert.deepEqual(entry.gate.reasons, [running])
   assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'gate-wait', code: 'ci-pending', reasons: [missing] }])
 
-  stub.verdict = { action: 'wait', code: 'base-not-green', reasons: ['main is not green (pending)'] }
+  stub.verdict = { action: 'wait', code: 'base-pending', reasons: ['main is not green (pending)'] }
   await driver.mergeCandidate(pr)
 
   assert.deepEqual(eventsSince(manifest), [
     { id: 'A1', kind: 'gate-wait', code: 'ci-pending', reasons: [missing] },
-    { id: 'A1', kind: 'gate-wait', code: 'base-not-green', reasons: ['main is not green (pending)'] },
+    { id: 'A1', kind: 'gate-wait', code: 'base-pending', reasons: ['main is not green (pending)'] },
   ])
 })
 

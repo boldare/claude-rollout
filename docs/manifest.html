@@ -368,8 +368,8 @@ prs:
                 <td><code>main</code></td>
                 <td>no</td>
                 <td>
-                  The branch every PR targets. After each merge the driver watches its checks and halts when they turn red. It must not name
-                  the rollout, and that includes the default <code>main</code>.
+                  The branch every PR targets. After each merge the driver reads the merge commit's checks and notifies once when they are
+                  red. The gate waits on a red base. It must not name the rollout, and that includes the default <code>main</code>.
                 </td>
               </tr>
               <tr id="repo-public">
@@ -1551,8 +1551,8 @@ prs:
                 <td>ledger.json</td>
                 <td>driver</td>
                 <td>
-                  The state of every PR, every agent run and the rollout (paused, halted, last merge), with the <code>version</code> of its
-                  shape. Written to a temp file and renamed, so it is never half written.
+                  The state of every PR, every agent run and the rollout (paused, last merge), with the <code>version</code> of its shape.
+                  Written to a temp file and renamed, so it is never half written.
                 </td>
               </tr>
               <tr>

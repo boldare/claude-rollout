@@ -48,10 +48,6 @@ function driverPart(driver, age) {
     part.append(element('span', `PID ${driver.pid ?? '-'}`), heartbeat(driver, age), ...tickFacts(driver.tick))
   }
 
-  if (driver?.halted) {
-    part.append(element('span', `Halted: ${driver.halted}`, 'error'))
-  }
-
   return part
 }
 

@@ -909,7 +909,7 @@ test('rolloutView: null without a ledger, the whole model with one', () => {
   assert.equal(view.merge, 'human')
   assert.equal(view.driver.running, true)
   assert.equal(view.driver.paused, true)
-  assert.equal(view.driver.halted, null)
+  assert.equal(Object.hasOwn(view.driver, 'halted'), false)
   assert.equal(view.events.length, 9)
   assert.deepEqual(statuses(view.runs), ['A2-01-brief-write:ok', 'A1-01-implement:ok', 'A1-02-verify:ok', 'A2-01-implement:running'])
   assert.equal(view.costs.totalUsd, 7.75)

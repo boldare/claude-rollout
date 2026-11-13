@@ -135,7 +135,7 @@ test('tick: outside dependencies are looked up one by one, and one already merge
   assert.deepEqual(kindsSince(manifest, events.length), [])
 })
 
-test('tick: a failed base watch halts nothing and is tried again on the next tick', async () => {
+test('tick: a failed base watch notifies nothing and is tried again on the next tick', async () => {
   const { manifest, driver, github } = tickDriver(
     { ...samplePrs(), A3: { state: 'merged', pr: 13, mergeSha: MERGE_SHA } },
     { rules: [FETCH], routes: [prRoute()] },
@@ -150,7 +150,7 @@ test('tick: a failed base watch halts nothing and is tried again on the next tic
   assert.equal(failed.length, 1)
   assert.equal(failed[0].id, '-')
   assert.match(failed[0].error, /fake GitHub: no route for GET repos\/example\/widgets\/commits\/f0f0f0f\w+\/check-runs$/)
-  assert.equal(driver.ledger.data.halted, null)
+  assert.ok(!kindsSince(manifest).includes('base-red'))
   assert.equal(driver.ledger.prs.A2.state, 'interrupted')
 
   github.answer([prRoute(), runsRoute(MERGE_SHA)])
@@ -181,41 +181,64 @@ test('tick: the base watch reads only the merge commit, never a quiet ancestor',
     },
   )
 
-  // A quiet merge commit with a red parent: a walk would halt, or go green from a green one.
+  // A quiet merge commit with a red parent: a walk would see red, or go green from a green one.
   manifest.repo.baseQuietPaths = ['**']
   driver.ledger.data.lastMerge = { id: 'A3', sha: MERGE_SHA, at: at(90) }
 
   await driver.tick()
 
-  assert.equal(driver.ledger.data.halted, null)
+  assert.ok(!kindsSince(manifest).includes('base-red'))
   assert.equal(driver.ledger.data.lastMerge.checked, undefined)
   assert.ok(!tools.calls().some((call) => call.tool === 'git' && call.args.includes('--format=%P')))
   assert.ok(!github.requests().some((request) => request.path.includes(parent)))
 })
 
-test('tick: a red base after a merge halts the rollout, notifies and merges nothing more', async () => {
-  const { manifest, driver, tools, notices } = tickDriver(
+test('tick: a red base after a merge notifies once, and for five ticks merges, rebases and sends back nothing, then merges when it is green', async () => {
+  const { manifest, driver, tools, gate, notices } = tickDriver(
     { A1: { ...samplePrs().A1, held: null }, A3: { state: 'merged', pr: 13, mergeSha: MERGE_SHA } },
     { rules: [FETCH, MERGE_RULE], routes: [prRoute(), runsRoute(MERGE_SHA, RED_RUNS)] },
   )
 
+  const red = { state: 'red', failing: ['test: failure'], missing: [], pending: [], runs: [], skipped: 0 }
+
   driver.ledger.data.lastMerge = { id: 'A3', sha: MERGE_SHA, at: at(90) }
+  // Behind a red base and red on its own head: without the gate's base-red,
+  // A1 would be rebased onto the red base or sent back for its failure.
+  gate.facts = { baseIsAncestor: false, checks: red, mainChecks: { ...red, sha: MERGE_SHA } }
 
-  await driver.tick()
+  for (let i = 0; i < 5; i += 1) {
+    await driver.tick()
+  }
 
-  assert.match(driver.ledger.data.halted, /^main is red after merging A3/)
+  const events = eventsSince(manifest)
+  const gateWaits = events.filter((event) => event.kind === 'gate-wait')
+
   assert.deepEqual(
-    kindsSince(manifest).filter((kind) => kind === 'halted'),
-    ['halted'],
+    events.filter((event) => event.kind === 'base-red').map((event) => event.id),
+    ['A3'],
   )
 
-  assert.equal(notices.length, 1)
-  assert.match(notices[0], /^A3: main is red after the merge\. Merges stopped/)
+  assert.deepEqual(notices, [
+    'A3: main is red after the merge (f0f0f0f): test: failure, required check test did not run (test: failure). Merges wait until it is green',
+  ])
+
   assert.deepEqual(mergeCalls(tools), [])
 
+  for (const kind of ['rebased', 'needs-fix', 'gate-rebase', 'gate-fix']) {
+    assert.ok(!events.some((event) => event.kind === kind), kind)
+  }
+
+  assert.equal(gateWaits.length, 1)
+  assert.equal(gateWaits[0].id, 'A1')
+  assert.equal(gateWaits[0].code, 'base-red')
+  assert.equal(driver.ledger.prs.A1.state, 'verified')
+  assert.equal(driver.ledger.prs.A1.gate.code, 'base-red')
+  assert.equal(driver.ledger.data.lastMerge.checked, 'red')
+
+  gate.facts = {}
   await driver.tick()
 
-  assert.deepEqual(mergeCalls(tools), [])
+  assert.equal(mergeCalls(tools).length, 1)
 })
 
 test('tick: a pause stops the merge of an approved PR, and a resume lets it merge', async () => {

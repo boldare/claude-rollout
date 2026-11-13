@@ -49,10 +49,6 @@ export function driverStatus(driver) {
     return 'unknown'
   }
 
-  if (driver.halted) {
-    return 'halted'
-  }
-
   if (driver.paused) {
     return 'paused'
   }

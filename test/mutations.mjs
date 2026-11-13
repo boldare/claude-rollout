@@ -13,12 +13,48 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
+// Blocks of judge() as Prettier leaves them, for the mutations that move the
+// base-red check further down the gate.
+const BASE_RED_BLOCK = [
+  "  if (facts.mainChecks.state === 'red') {",
+  '    return verdict(',
+  "      'wait',",
+  "      'base-red',",
+  "      `${manifest.repo.base} is red at ${shortSha(facts.mainChecks.sha)}: ${facts.mainChecks.failing.join(', ')}. Merges wait until it is green`,",
+  '    )',
+  '  }',
+  '',
+].join('\n')
+
+const BEHIND_BASE_BLOCK = [
+  "  if (!facts.baseIsAncestor || githubPr.mergeable === 'CONFLICTING') {",
+  "    return verdict('rebase', 'behind-base', `branch is behind ${manifest.repo.base}`)",
+  '  }',
+  '',
+].join('\n')
+
+const MERGEABLE_UNKNOWN_BLOCK = [
+  "  if (githubPr.mergeable !== 'MERGEABLE') {",
+  "    return verdict('wait', 'mergeable-unknown', `mergeable state is ${githubPr.mergeable}`)",
+  '  }',
+  '',
+].join('\n')
+
+const CI_RED_BLOCK = [
+  "  if (facts.checks.state === 'red') {",
+  '    reasons.push(...facts.checks.failing)',
+  '',
+  "    return verdict('fix', 'ci-red', 'CI is red on the PR head')",
+  '  }',
+  '',
+].join('\n')
+
 const MUTATIONS = [
   {
     id: 'merge-ignores-pause',
     file: 'lib/driver.mjs',
-    find: 'if (ledger.data.paused || ledger.data.halted || stopping) {',
-    replace: 'if (ledger.data.halted || stopping) {',
+    find: 'if (ledger.data.paused || stopping) {',
+    replace: 'if (stopping) {',
     tests: ['test/driver-tick.test.mjs'],
   },
   {
@@ -29,11 +65,18 @@ const MUTATIONS = [
     tests: ['test/driver-tick.test.mjs'],
   },
   {
-    id: 'red-base-never-halts',
-    file: 'lib/driver.mjs',
-    find: "if (checks.state === 'red') {",
-    replace: 'if (false) {',
-    tests: ['test/driver-tick.test.mjs'],
+    id: 'base-red-after-behind-base',
+    file: 'lib/judge.mjs',
+    find: [BASE_RED_BLOCK, BEHIND_BASE_BLOCK].join('\n'),
+    replace: [BEHIND_BASE_BLOCK, BASE_RED_BLOCK].join('\n'),
+    tests: ['test/judge.test.mjs'],
+  },
+  {
+    id: 'base-red-after-ci-red',
+    file: 'lib/judge.mjs',
+    find: [BASE_RED_BLOCK, BEHIND_BASE_BLOCK, MERGEABLE_UNKNOWN_BLOCK, CI_RED_BLOCK].join('\n'),
+    replace: [BEHIND_BASE_BLOCK, MERGEABLE_UNKNOWN_BLOCK, CI_RED_BLOCK, BASE_RED_BLOCK].join('\n'),
+    tests: ['test/judge.test.mjs'],
   },
   {
     id: 'merge-not-recorded',

@@ -74,7 +74,7 @@
             <code>rollout status</code> (<code>lib/view.mjs</code>), so the CLI and the UI never disagree.
           </li>
           <li>
-            <strong>A remote control.</strong> Pause, resume, unhalt, retry, note, hold and release become files in the rollout's
+            <strong>A remote control.</strong> Pause, resume, retry, note, hold and release become files in the rollout's
             <code>inbox/</code>, exactly the files the CLI writes. Stop and start act on the driver process itself.
           </li>
         </ul>
@@ -313,8 +313,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <ul>
           <li>
-            <strong>Inbox commands.</strong> Pause, resume, unhalt, retry, note, hold and release are written to <code>inbox/</code> through
-            a temporary file and a rename, so the driver never reads half a command. A running driver watches the inbox and applies the
+            <strong>Inbox commands.</strong> Pause, resume, retry, note, hold and release are written to <code>inbox/</code> through a
+            temporary file and a rename, so the driver never reads half a command. A running driver watches the inbox and applies the
             command at the start of its next tick. When it sleeps between ticks, that is about half a second later. With no driver running,
             the file waits for the next start.
           </li>
@@ -448,9 +448,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
           <li>
             <strong>Driver badge.</strong> <span class="badge driver driver-running">running</span> while a process holds
             <code>driver.lock</code>, with its pid, the age of the heartbeat and the facts of the last tick. Otherwise
-            <span class="badge driver driver-stopped">stopped</span>. <span class="badge driver driver-paused">paused</span> and
-            <span class="badge driver driver-halted">halted</span> win over both, because they are recorded in the ledger whether or not a
-            driver runs.
+            <span class="badge driver driver-stopped">stopped</span>. <span class="badge driver driver-paused">paused</span> wins over both,
+            because it is recorded in the ledger whether or not a driver runs.
           </li>
           <li><strong>Heartbeat.</strong> Turns amber after 5 minutes without a beat. A healthy driver beats at least once a tick.</li>
           <li>
@@ -1217,15 +1216,6 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                 <td>
                   Queues <a href="commands.html#cmd-resume"><code>resume</code></a
                   >. Also the way out of a pause the driver made itself after an account limit.
-                </td>
-              </tr>
-              <tr id="control-unhalt">
-                <td>Unhalt</td>
-                <td>Header, while the rollout is halted.</td>
-                <td>yes, with the halt's reason</td>
-                <td>
-                  Queues <a href="commands.html#cmd-unhalt"><code>unhalt</code></a
-                  >. Clears the halt after a red base branch, so the driver merges again.
                 </td>
               </tr>
               <tr id="control-stop">

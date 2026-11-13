@@ -14,15 +14,8 @@ export function rolloutControls(view, readOnly) {
   }
 
   const { driver } = view
-  const controls = [driver.paused ? 'resume' : 'pause']
 
-  if (driver.halted) {
-    controls.push('unhalt')
-  }
-
-  controls.push(driver.running ? 'stop' : 'start')
-
-  return controls
+  return [driver.paused ? 'resume' : 'pause', driver.running ? 'stop' : 'start']
 }
 
 export function prControls(pr, readOnly) {
@@ -99,13 +92,6 @@ export function dialogFor(command, { rollout, driver, pr }) {
 
     case 'retry':
       return { title: `Retry ${pr.id}?`, text: 'Its attempts start from zero.', confirmLabel: 'Retry' }
-
-    case 'unhalt':
-      return {
-        title: `Unhalt ${rollout}?`,
-        text: `Halted: ${driver?.halted}. Unhalt lets the driver merge again.`,
-        confirmLabel: 'Unhalt',
-      }
 
     case 'note':
       return noteDialog(pr)

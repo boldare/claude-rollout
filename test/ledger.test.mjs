@@ -562,6 +562,15 @@ test('openLedger stops the runs a driver that is gone left open, and saves that'
   assert.equal(runsFromLedger(data, { driverRunning: true }).at(-1).status, 'interrupted')
 })
 
+test('openLedger drops a halt an older driver stored, and saves that', () => {
+  const manifest = withLedger({ version: 2, prs: {}, runs: {}, paused: false, halted: 'main is red' })
+  const { data } = openLedger(manifest)
+
+  assert.equal(Object.hasOwn(data, 'halted'), false)
+  assert.equal(Object.hasOwn(stored(manifest), 'halted'), false)
+  assert.equal(stored(manifest).version, 2)
+})
+
 test('tickNote and parseTickNote: the numbers of a tick make the round trip, with - for no rate limit, and other notes parse to null', () => {
   const measured = { ms: 4210, requests: 7, cached: 5, remaining: 4870 }
   const unlimited = { ...measured, remaining: null }

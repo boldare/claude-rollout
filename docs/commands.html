@@ -130,11 +130,6 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td><span class="badge where-ui">Rollout header</span></td>
               </tr>
               <tr>
-                <td class="name"><a href="#cmd-unhalt">unhalt</a></td>
-                <td>Clears a halt after a red base branch.</td>
-                <td><span class="badge where-ui">Rollout header</span></td>
-              </tr>
-              <tr>
                 <td class="name"><a href="#cmd-preflight">preflight</a></td>
                 <td>Checks tools, logins, the repository and the guard.</td>
                 <td><span class="badge where-cli">CLI only</span></td>
@@ -251,7 +246,7 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             <code>runtime docker, image &lt;tag&gt;</code>. The image is <code>sandbox.image</code>, else the one the last
             <code>driver-start</code> event records, else <code>default</code>. It never runs <code>claude</code> to find it.
           </li>
-          <li><code>PAUSED</code> and <code>HALTED</code> lines when they apply.</li>
+          <li>A <code>PAUSED</code> line when it applies.</li>
           <li>One row per PR: id, state, PR number, head, CI or gate info, attempts as implement/fix/verify, and cost.</li>
           <li>The last 8 events.</li>
         </ul>
@@ -513,16 +508,6 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <p>
           Lifts the pause. The driver pauses itself when an agent run fails on an account problem, such as a spend limit, the credit balance
           or billing, and waits for this command. In the UI: <a href="ui.html#control-resume">Resume</a>.
-        </p>
-
-        <h3 id="cmd-unhalt">unhalt <a class="anchor" href="#cmd-unhalt" aria-label="Link to this command">#</a></h3>
-
-        <pre><code>node $R unhalt --dir D</code></pre>
-
-        <p>
-          The driver halts when the base branch turns red after a rollout PR merges, by the driver or by you on GitHub. A halted rollout
-          merges nothing, while agents keep working. Fix the base, then unhalt. It clears the halt and marks the last merge as acknowledged,
-          so the same red commit does not halt the rollout again. In the UI: <a href="ui.html#control-unhalt">Unhalt</a>.
         </p>
 
         <h2 id="setting-up">Set up <a class="anchor" href="#setting-up" aria-label="Link to this section">#</a></h2>
@@ -874,10 +859,9 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <h2 id="inbox">How commands reach the driver <a class="anchor" href="#inbox" aria-label="Link to this section">#</a></h2>
 
         <p>
-          <code>approve</code>, <code>note</code>, <code>retry</code>, <code>hold</code>, <code>release</code>, <code>pause</code>,
-          <code>resume</code> and <code>unhalt</code> never write the ledger. Each writes one small JSON file into <code>inbox/</code>,
-          first under a dot-prefixed name and then renamed, so the driver never reads half a command. The CLI prints a short confirmation
-          and returns.
+          <code>approve</code>, <code>note</code>, <code>retry</code>, <code>hold</code>, <code>release</code>, <code>pause</code> and
+          <code>resume</code> never write the ledger. Each writes one small JSON file into <code>inbox/</code>, first under a dot-prefixed
+          name and then renamed, so the driver never reads half a command. The CLI prints a short confirmation and returns.
         </p>
 
         <ul>

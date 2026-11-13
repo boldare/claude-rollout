@@ -8,7 +8,7 @@
 //   rollout.mjs note      <id> "<answer>" [--dir D]
 //   rollout.mjs retry     <id> [--dir D]
 //   rollout.mjs hold | release <id> [--dir D]
-//   rollout.mjs pause | resume | unhalt [--dir D]
+//   rollout.mjs pause | resume [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
 //   rollout.mjs sandbox   build [--dir D]   (builds the agents' image for sandbox.runtime docker)
@@ -137,10 +137,6 @@ function status(manifest) {
 
   if (driver.paused) {
     console.log('PAUSED (rollout.mjs resume)')
-  }
-
-  if (driver.halted) {
-    console.log(`HALTED: ${driver.halted} (rollout.mjs unhalt)`)
   }
 
   console.log('')
@@ -708,7 +704,6 @@ async function main() {
 
     case 'pause':
     case 'resume':
-    case 'unhalt':
       postCommand(manifest, { cmd: command })
       console.log('queued')
       break
