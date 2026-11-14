@@ -331,9 +331,9 @@
           </li>
           <li><strong>Reload the manifest</strong> if the file changed.</li>
           <li>
-            <strong>Apply the inbox.</strong> Every command file is read and deleted, then applied: approve, note, retry, hold, release,
-            pause and resume. Each command applies on its own, and a rejected one never stops the rest. A command that cannot apply is
-            logged as <code>command-rejected</code>, a refused approval as <code>approval-rejected</code>.
+            <strong>Apply the inbox.</strong> Every command file is read and deleted, then applied: approve, note, retry, hold and release.
+            Each command applies on its own, and so does each PR of a hold or release. A rejected one never stops the rest. A command that
+            cannot apply is logged as <code>command-rejected</code>, a refused approval as <code>approval-rejected</code>.
           </li>
           <li>
             <strong>Fetch.</strong> <code>git fetch --prune origin</code> in the repository. A failed fetch logs <code>fetch-failed</code>,
@@ -358,10 +358,10 @@
           <li>
             <strong>Run the gate.</strong> Verified PRs go through the gate in priority order, then manifest order. PRs with an agent
             running or feedback waiting are skipped. The first merge or rebase ends this step, so there is at most one per tick. The step is
-            skipped while the rollout is paused or stopping, and in a tick whose fetch failed.
+            skipped while the rollout is held or stopping, and in a tick whose fetch failed.
           </li>
           <li>
-            <strong>Advance every PR</strong> in priority order, unless the rollout is paused. Briefs, implementers, fixers, verifiers and
+            <strong>Advance every PR</strong> in priority order, unless the rollout is held. Briefs, implementers, fixers, verifiers and
             delegates start while slots are free, and READY claims are checked.
           </li>
           <li><strong>Save</strong> the ledger.</li>
@@ -762,17 +762,28 @@
           </table>
         </div>
 
-        <p>Two flags sit next to the states:</p>
+        <p>
+          One hold sits next to the states, in two scopes. <a href="commands.html#cmd-hold"><code>hold</code></a> sets it and
+          <a href="commands.html#cmd-release"><code>release</code></a> lifts it. Each hold records who set it (<code>maintainer</code> or
+          <code>driver</code>), since when, and a reason when there is one.
+        </p>
 
         <ul>
           <li>
-            <strong>Held</strong> is set on one PR by <a href="commands.html#cmd-hold"><code>hold</code></a
-            >. It gets no new runs, rebases, ready notices or merges until <code>release</code>. A running agent finishes its step. Sync and
-            feedback still run. A PR that depends on the held one gets no brief until <code>release</code> or the merge. A brief already
-            running finishes.
+            <strong>A PR's hold</strong> is set on the PRs you name. Such a PR gets no new runs, rebases, ready notices or merges until
+            <code>release</code>. A running agent finishes its step. Sync and feedback still run. A PR that depends on the held one gets no
+            brief until <code>release</code> or the merge. A brief already running finishes.
           </li>
-          <li><strong>Paused</strong> applies to the whole rollout. No new runs start and nothing merges. Running agents finish.</li>
+          <li>
+            <strong>The rollout's hold</strong> is set by <code>hold --all</code>, or by the driver itself after an account limit. No new
+            runs start and nothing merges. Running agents finish.
+          </li>
         </ul>
+
+        <p>
+          The two stay apart. <code>release --all</code> lifts only the rollout's hold, and its <code>released</code> event names the PRs
+          still held on their own. <code>release P1</code> never lifts the rollout's hold.
+        </p>
 
         <h2 id="roles">Roles <a class="anchor" href="#roles" aria-label="Link to this section">#</a></h2>
 
@@ -1287,7 +1298,7 @@
                 <td>wait</td>
                 <td>
                   The PR is held (<a href="commands.html#cmd-hold"><code>rollout hold</code></a
-                  >).
+                  >). The reason names who held it, as in <code>held by maintainer (rollout release P1)</code>.
                 </td>
               </tr>
               <tr id="gate-no-pr">
@@ -1449,8 +1460,8 @@
         <p>
           With <code>merge: human</code> the driver then waits
           <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a> (120 s), counted from when it first
-          sees the approval, so a <code>pause</code> can still stop it. A dry run logs <code>would-merge</code> and stops there. Otherwise
-          it merges the exact head it judged:
+          sees the approval, so <code>rollout hold P1</code> can still stop it. A dry run logs <code>would-merge</code> and stops there.
+          Otherwise it merges the exact head it judged:
         </p>
 
         <pre><code>gh pr merge &lt;n&gt; --&lt;method&gt; --match-head-commit &lt;sha&gt; \
@@ -1610,8 +1621,8 @@
               <tr>
                 <td>A run hit its budget cap</td>
                 <td>
-                  It reached <code>--max-budget-usd</code> and fails with "hit its budget cap ($N)". It counts as an attempt, and the
-                  rollout does not pause.
+                  It reached <code>--max-budget-usd</code> and fails with "hit its budget cap ($N)". It counts as an attempt, and the driver
+                  does not hold the rollout.
                 </td>
               </tr>
               <tr>
@@ -1626,9 +1637,10 @@
                 <td>An account limit</td>
                 <td>
                   A spend limit, credit balance, billing or account budget error, or claude's <code>billing_error</code>,
-                  <code>account_on_hold</code> or <code>authentication_failed</code>, pauses the whole rollout until
-                  <a href="commands.html#cmd-resume"><code>resume</code></a
-                  >. A notification says so.
+                  <code>account_on_hold</code> or <code>authentication_failed</code>, holds the whole rollout until
+                  <a href="commands.html#cmd-release"><code>release --all</code></a
+                  >. The hold names <code>driver</code> and the run's error. A notification says so. A hold already in place stays as it is,
+                  a maintainer's included, and the notification still comes.
                 </td>
               </tr>
               <tr>
@@ -1710,7 +1722,7 @@
             run, an answer from the delegate.
           </li>
           <li>
-            <strong>Trouble:</strong> the base red after a merge, paused by an account limit, merge refused or blocked by GitHub, the head
+            <strong>Trouble:</strong> the base red after a merge, held by an account limit, merge refused or blocked by GitHub, the head
             moved after verification, the verifier changed the tree, a dependency outside the run, a rejected manifest, five failed ticks in
             a row, five failures in a row of a driver-wide step, GitHub unreachable for 30 minutes, and GitHub back after that.
           </li>

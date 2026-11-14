@@ -830,7 +830,7 @@ ol.steps > li > strong:first-child {
 
 .state-interrupted,
 .held,
-.driver-paused,
+.driver-held,
 .alpha,
 .refused {
   --tone: var(--warn);

@@ -335,7 +335,7 @@ test('prRows: held goes outside approved, and a PR missing from the ledger is fr
   const view = rolloutView(loadManifest(makeRollout()))
   const [first, second, third] = view.rows
 
-  assert.equal(first.info, 'held; approved; wait: held (rollout release A1)')
+  assert.equal(first.info, 'held; approved; wait: held by maintainer (rollout release A1)')
   assert.equal(first.head, 'a1a1a1a')
   assert.equal(first.url, 'https://github.com/example/widgets/pull/11')
   assert.equal(first.lastEventAt, at(81))
@@ -904,12 +904,16 @@ test('readTranscript reads logs/<run>.jsonl and refuses names outside it', () =>
 test('rolloutView: null without a ledger, the whole model with one', () => {
   assert.equal(rolloutView(loadManifest(makeRollout({ prs: null }))), null)
 
-  const view = rolloutView(loadManifest(makeRollout({ paused: true })))
+  const hold = { at: at(5), by: 'maintainer', reason: null }
+  const view = rolloutView(loadManifest(makeRollout({ hold })))
   assert.equal(view.rollout, 'demo')
   assert.equal(view.merge, 'human')
   assert.equal(view.driver.running, true)
-  assert.equal(view.driver.paused, true)
+  assert.deepEqual(view.driver.hold, hold)
+  assert.equal(Object.hasOwn(view.driver, 'paused'), false)
   assert.equal(Object.hasOwn(view.driver, 'halted'), false)
+  assert.equal(rolloutView(loadManifest(makeRollout())).driver.hold, null)
+  assert.equal(rolloutView(loadManifest(makeRollout({ legacy: true }))).driver.hold, null)
   assert.equal(view.events.length, 9)
   assert.deepEqual(statuses(view.runs), ['A2-01-brief-write:ok', 'A1-01-implement:ok', 'A1-02-verify:ok', 'A2-01-implement:running'])
   assert.equal(view.costs.totalUsd, 7.75)
@@ -944,7 +948,7 @@ test('help lists hold, release and preflight', () => {
   const result = cli('help')
 
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /rollout\.mjs hold \| release <id>/)
+  assert.ok(result.stdout.includes('rollout.mjs hold | release <id>... | --all [--dir D]'), result.stdout)
   assert.match(result.stdout, /rollout\.mjs preflight/)
 })
 
@@ -957,13 +961,30 @@ test('status and card read the fixture, partial events line included', () => {
   assert.match(status.stdout, /A1 {4}verified {7}#11 {4}a1a1a1a {2}held; approved; wait/)
   assert.match(status.stdout, /A3 {4}pending/)
   assert.match(status.stdout, /recent events:\n[\s\S]*A2 {3}implement-start/)
+  assert.doesNotMatch(status.stdout, /HELD|PAUSED/)
   assert.equal(card.status, 0, card.stderr)
   assert.match(
     card.stdout,
-    /^state: verified {3}PR: https:\/\/github\.com\/example\/widgets\/pull\/11 {3}cost: \$6\.25\nheld since 2026-09-01T11:21:00\.000Z \(rollout\.mjs release A1\)$/m,
+    /^state: verified {3}PR: https:\/\/github\.com\/example\/widgets\/pull\/11 {3}cost: \$6\.25\nheld since 2026-09-01T11:21:00\.000Z by maintainer \(rollout\.mjs release A1\)$/m,
   )
 
   assert.match(card.stdout, /verifier: PASS on a1a1a1a/)
+})
+
+test('status prints the hold of the rollout with who set it, since when and why, and card prints a PR hold the same way', () => {
+  const byMaintainer = cli('status', '--dir', makeRollout({ hold: { at: at(5), by: 'maintainer', reason: null } }))
+  const byDriver = cli('status', '--dir', makeRollout({ hold: { at: at(6), by: 'driver', reason: 'usage limit reached' } }))
+  const card = cli(
+    'card',
+    'A1',
+    '--dir',
+    makeRollout({ prs: { A1: { state: 'pending', held: { at: at(7), by: 'driver', reason: 'why' } } } }),
+  )
+
+  assert.equal(byMaintainer.status, 0, byMaintainer.stderr)
+  assert.ok(byMaintainer.stdout.includes(`\nHELD since ${at(5)} by maintainer (rollout.mjs release --all)\n`), byMaintainer.stdout)
+  assert.ok(byDriver.stdout.includes(`\nHELD since ${at(6)} by driver: usage limit reached (rollout.mjs release --all)\n`), byDriver.stdout)
+  assert.ok(card.stdout.includes(`\nheld since ${at(7)} by driver: why (rollout.mjs release A1)\n`), card.stdout)
 })
 
 test('status and card without a ledger, or with an empty events file', () => {

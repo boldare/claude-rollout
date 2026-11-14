@@ -908,6 +908,96 @@ test('cli: unhalt is an unknown command, writes no inbox file, and status prints
   assert.doesNotMatch(status.stdout, /HALTED/)
 })
 
+// The one inbox file of dir, without its time.
+function onlyCommand(dir) {
+  const files = inboxFiles(dir)
+
+  assert.equal(files.length, 1, files.join(', '))
+
+  const { at, ...command } = JSON.parse(readFileSync(join(dir, 'inbox', files[0]), 'utf8'))
+  assert.ok(Number.isFinite(Date.parse(at)), at)
+
+  return command
+}
+
+test('cli: hold A1 A2 posts one command for both, and a driver that applies it holds both', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+  const dir = makeRollout({ prs: { A1: { state: 'pending' }, A2: { state: 'needs_fix' } }, events: [] })
+  const hold = cli('hold', 'A1', 'A2', 'A1', '--dir', dir)
+
+  assert.equal(hold.status, 0, hold.stderr)
+  assert.equal(hold.stdout, 'queued\n')
+  assert.deepEqual(onlyCommand(dir), { cmd: 'hold', ids: ['A1', 'A2'] })
+
+  const driver = createDriver(loadManifest(dir), { notify: () => {} })
+  driver.applyCommands()
+
+  for (const id of ['A1', 'A2']) {
+    const held = driver.ledger.prs[id].held
+
+    assert.ok(Date.parse(held?.at), `${id}: ${JSON.stringify(held)}`)
+    assert.deepEqual(held, { at: held.at, by: 'maintainer', reason: null }, id)
+  }
+
+  assert.equal(driver.ledger.prs.A3.held, null)
+  assert.equal(driver.ledger.data.hold, null)
+  assert.deepEqual(inboxFiles(dir), [])
+})
+
+test('cli: hold --all and release --all post the command for the whole rollout', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+
+  for (const cmd of ['hold', 'release']) {
+    const dir = makeRollout()
+    const result = cli(cmd, '--all', '--dir', dir)
+
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout, 'queued\n')
+    assert.deepEqual(onlyCommand(dir), { cmd, all: true })
+  }
+})
+
+test('cli: hold and release refuse ids with --all, no id at all and an unknown id, and post nothing', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+  const dir = makeRollout()
+  const cases = [
+    [['hold', '--all', 'A1'], 'hold takes PR ids or --all, not both\n'],
+    [['release', 'A1', '--all'], 'release takes PR ids or --all, not both\n'],
+    [['hold'], 'unknown or missing PR id: (none); known: A1, A2, A3\n'],
+    [['release', 'A1', 'Z9'], 'unknown or missing PR id: Z9; known: A1, A2, A3\n'],
+  ]
+
+  for (const [args, stderr] of cases) {
+    const result = cli(...args, '--dir', dir)
+
+    assert.equal(result.status, 1, args.join(' '))
+    assert.equal(result.stderr, stderr, args.join(' '))
+    assert.equal(result.stdout, '', args.join(' '))
+  }
+
+  assert.deepEqual(inboxFiles(dir), [])
+})
+
+test('cli: pause and resume are unknown commands and post nothing, and help lists hold and release with ids or --all', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+  const dir = makeRollout()
+
+  for (const command of ['pause', 'resume']) {
+    const result = cli(command, '--dir', dir)
+
+    assert.equal(result.status, 1, result.stdout)
+    assert.equal(result.stderr, `unknown command ${command}\n`)
+  }
+
+  assert.deepEqual(inboxFiles(dir), [])
+
+  const help = cli('help')
+
+  assert.equal(help.status, 0, help.stderr)
+  assert.ok(help.stdout.includes('rollout.mjs hold | release <id>... | --all [--dir D]'), help.stdout)
+  assert.doesNotMatch(help.stdout, /pause|resume \[/)
+})
+
 test('cli: card lists the delegate runs and answers with their plan references', () => {
   const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
   const answer = {
@@ -1037,8 +1127,14 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
   const { server, root } = await serve(context, { driverCommand: refusedDriver([]) })
   const dir = join(root, 'demo')
   const cases = [
-    [{ cmd: 'pause', id: 'A1' }, { cmd: 'pause' }],
-    [{ cmd: 'resume' }, { cmd: 'resume' }],
+    [
+      { cmd: 'hold', all: true, id: 'A1' },
+      { cmd: 'hold', all: true },
+    ],
+    [
+      { cmd: 'release', all: true },
+      { cmd: 'release', all: true },
+    ],
     [
       { cmd: 'retry', id: 'A2', patchId: 'patch-a1' },
       { cmd: 'retry', id: 'A2' },
@@ -1049,11 +1145,15 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
     ],
     [
       { cmd: 'hold', id: 'A3', sha: 'a1a1a1a', patchId: 'patch-a1' },
-      { cmd: 'hold', id: 'A3' },
+      { cmd: 'hold', ids: ['A3'] },
+    ],
+    [
+      { cmd: 'hold', ids: ['A1', 'A2'] },
+      { cmd: 'hold', ids: ['A1', 'A2'] },
     ],
     [
       { cmd: 'release', id: 'A1' },
-      { cmd: 'release', id: 'A1' },
+      { cmd: 'release', ids: ['A1'] },
     ],
   ]
 
@@ -1071,13 +1171,15 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
     rmSync(join(dir, 'inbox', files[0]))
   }
 
-  const unhalt = await post(server, 'demo', { cmd: 'unhalt' })
+  for (const cmd of ['unhalt', 'pause', 'resume']) {
+    const gone = await post(server, 'demo', { cmd })
 
-  assert.equal(unhalt.status, 400)
-  assert.deepEqual(unhalt.json, { error: 'unknown command unhalt' })
-  assert.deepEqual(inboxFiles(dir), [])
+    assert.equal(gone.status, 400, cmd)
+    assert.deepEqual(gone.json, { error: `unknown command ${cmd}` })
+    assert.deepEqual(inboxFiles(dir), [], cmd)
+  }
 
-  const mixedCase = await post(server, 'demo', { cmd: 'pause' }, { contentType: 'Application/JSON; charset=utf-8' })
+  const mixedCase = await post(server, 'demo', { cmd: 'hold', all: true }, { contentType: 'Application/JSON; charset=utf-8' })
   assert.equal(mixedCase.status, 202)
 })
 
@@ -1105,37 +1207,40 @@ test('commands: the error answers leave no inbox file', async (context) => {
   const calls = []
   const { server, root } = await serve(context, { driverCommand: refusedDriver(calls) })
   const dir = join(root, 'demo')
-  const pause = { cmd: 'pause' }
+  const holdAll = { cmd: 'hold', all: true }
   const cases = [
-    ['no token', await post(server, 'demo', pause, { token: null }), 401, 'unauthorized'],
-    ['a foreign Origin', await post(server, 'demo', pause, { origin: 'http://evil.example' }), 403, 'bad origin'],
-    ['no Origin', await post(server, 'demo', pause, { origin: null }), 403, 'bad origin'],
+    ['no token', await post(server, 'demo', holdAll, { token: null }), 401, 'unauthorized'],
+    ['a foreign Origin', await post(server, 'demo', holdAll, { origin: 'http://evil.example' }), 403, 'bad origin'],
+    ['no Origin', await post(server, 'demo', holdAll, { origin: null }), 403, 'bad origin'],
     [
       'text/plain',
-      await post(server, 'demo', pause, { contentType: 'text/plain;charset=UTF-8' }),
+      await post(server, 'demo', holdAll, { contentType: 'text/plain;charset=UTF-8' }),
       415,
       'content type must be application/json',
     ],
-    ['no Content-Type', await post(server, 'demo', pause, { contentType: null }), 415, 'content type must be application/json'],
+    ['no Content-Type', await post(server, 'demo', holdAll, { contentType: null }), 415, 'content type must be application/json'],
     [
       'a JSON look-alike',
-      await post(server, 'demo', pause, { contentType: 'application/jsonp' }),
+      await post(server, 'demo', holdAll, { contentType: 'application/jsonp' }),
       415,
       'content type must be application/json',
     ],
     ['70 000 bytes', await post(server, 'demo', { cmd: 'note', id: 'A1', text: 'x'.repeat(70_000) }), 413, 'body too large'],
     ['invalid JSON', await post(server, 'demo', '{"cmd":'), 400, 'invalid JSON'],
     ['an empty body', await post(server, 'demo', ''), 400, 'invalid JSON'],
-    ['an unknown rollout', await post(server, 'nope', pause), 404, 'unknown rollout'],
-    ['a rollout outside the root', await post(server, '..%2fdemo', pause), 404, 'unknown rollout'],
+    ['an unknown rollout', await post(server, 'nope', holdAll), 404, 'unknown rollout'],
+    ['a rollout outside the root', await post(server, '..%2fdemo', holdAll), 404, 'unknown rollout'],
     [
       'approve',
       await post(server, 'demo', { cmd: 'approve', id: 'A1', sha: 'a1a1a1a', patchId: 'patch-a1' }),
       400,
       'unknown command approve',
     ],
-    ['an array', await post(server, 'demo', [pause]), 400, 'body must be a JSON object'],
+    ['an array', await post(server, 'demo', [holdAll]), 400, 'body must be a JSON object'],
+    ['pause', await post(server, 'demo', { cmd: 'pause' }), 400, 'unknown command pause'],
     ['an unknown PR', await post(server, 'demo', { cmd: 'hold', id: 'Z9' }), 400, 'unknown or missing PR id'],
+    ['an unknown PR among ids', await post(server, 'demo', { cmd: 'hold', ids: ['A1', 'Z9'] }), 400, 'unknown or missing PR id'],
+    ['a string all', await post(server, 'demo', { cmd: 'release', all: 'yes' }), 400, 'all must be a boolean'],
     ['a note without text', await post(server, 'demo', { cmd: 'note', id: 'A1', text: ' ' }), 400, 'note needs text'],
     ['a string dryRun', await post(server, 'demo', { cmd: 'start', dryRun: 'yes' }), 400, 'dryRun must be a boolean'],
   ]
@@ -1152,7 +1257,7 @@ test('commands: the error answers leave no inbox file', async (context) => {
   const put = await raw(server.port, '/api/rollouts/demo/commands', {
     method: 'PUT',
     headers: { ...bearer(server), origin: server.origin, 'content-type': 'application/json' },
-    body: JSON.stringify(pause),
+    body: JSON.stringify(holdAll),
   })
 
   assert.equal(put.status, 405)
@@ -1166,8 +1271,8 @@ test('commands: read-only refuses all eight and says so in every state', async (
   const { server, root } = await serve(context, { readOnly: true, driverCommand: refusedDriver(calls), pollMs: 60_000 })
   const dir = join(root, 'demo')
   const bodies = [
-    { cmd: 'pause' },
-    { cmd: 'resume' },
+    { cmd: 'hold', all: true },
+    { cmd: 'release', all: true },
     { cmd: 'retry', id: 'A2' },
     { cmd: 'note', id: 'A1', text: 'hi' },
     { cmd: 'hold', id: 'A3' },
@@ -1198,10 +1303,12 @@ test('commands: read-only refuses all eight and says so in every state', async (
   assert.equal(first.data.readOnly, true)
 
   await watcherLive(stream, dir)
-  replaceLedger(dir, readFileSync(join(dir, 'ledger.json'), 'utf8').replace('"paused": false', '"paused": true'))
+  const ledger = JSON.parse(readFileSync(join(dir, 'ledger.json'), 'utf8'))
+  replaceLedger(dir, JSON.stringify({ ...ledger, hold: { at: '2026-09-01T12:00:00.000Z', by: 'maintainer', reason: null } }, null, 2))
 
-  const pushed = await stream.next((message) => message.event === 'state' && message.data.view.driver.paused)
+  const pushed = await stream.next((message) => message.event === 'state' && message.data.view.driver.hold)
   assert.equal(pushed.data.readOnly, true)
+  assert.equal(pushed.data.view.driver.hold.by, 'maintainer')
 })
 
 test('commands: a default server sends readOnly false', async (context) => {
@@ -1264,7 +1371,7 @@ test('commands: the fixture lock names the test process, so stop signals nothing
 })
 
 // Never post stop here: the fixture lock names this test process.
-test('cli: ui --read-only says so, sends readOnly true and refuses a pause', async (context) => {
+test('cli: ui --read-only says so, sends readOnly true and refuses a hold of the rollout', async (context) => {
   const root = makeRolloutRoot()
   const child = spawn(process.execPath, [BIN, 'ui', '--root', root, '--port', '0', '--no-open', '--read-only'], {
     env: cliEnv(),
@@ -1283,8 +1390,8 @@ test('cli: ui --read-only says so, sends readOnly true and refuses a pause', asy
   const state = await fetch(`${origin}/api/rollouts/demo`, { headers: { authorization: `Bearer ${token}` } })
   assert.equal((await state.json()).readOnly, true)
 
-  const pause = await post({ origin, port: Number(port), token }, 'demo', { cmd: 'pause' })
-  assert.equal(pause.status, 403)
-  assert.deepEqual(pause.json, { error: 'read-only' })
+  const holdAll = await post({ origin, port: Number(port), token }, 'demo', { cmd: 'hold', all: true })
+  assert.equal(holdAll.status, 403)
+  assert.deepEqual(holdAll.json, { error: 'read-only' })
   assert.deepEqual(inboxFiles(join(root, 'demo')), [])
 })

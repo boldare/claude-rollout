@@ -5,6 +5,7 @@ import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutPr, rolloutSnapshot, transcriptPage } from '../lib/rollouts.mjs'
 import { renderBoard } from '../ui/board.js'
 import { renderDetail } from '../ui/detail.js'
+import { clock } from '../ui/format.js'
 import { renderHeader } from '../ui/header.js'
 import { renderTranscript } from '../ui/transcript.js'
 import { installDocument } from './fake-dom.mjs'
@@ -167,6 +168,29 @@ test('header: the rollout name, the running driver and the document title', () =
   assert.equal(fakeDocument.title, 'demo')
 })
 
+test('header: a held rollout shows the held badge, who held it, since when and why, and Release all', () => {
+  const header = (hold) => renderHeader(viewContext({ view: { ...state.view, driver: { ...state.view.driver, hold } }, readOnly: false }))
+  const byDriver = { at: new Date(NOW - 5 * 60_000).toISOString(), by: 'driver', reason: 'usage limit reached' }
+  const byMaintainer = { ...byDriver, by: 'maintainer', reason: null }
+  const driverHeld = header(byDriver)
+  const maintainerHeld = header(byMaintainer)
+
+  assert.equal(one(driverHeld, 'span.badge.driver.driver-held').textContent, 'held')
+  assert.ok(
+    texts(driverHeld, 'span').includes(`by driver since ${clock(byDriver.at)}: usage limit reached`),
+    texts(driverHeld, 'span').join(' | '),
+  )
+
+  assert.ok(
+    texts(maintainerHeld, 'span').includes(`by maintainer since ${clock(byMaintainer.at)}`),
+    texts(maintainerHeld, 'span').join(' | '),
+  )
+
+  assert.deepEqual(texts(driverHeld, 'button'), ['Release all', 'Stop'])
+  assert.deepEqual(texts(header(null), 'button'), ['Hold all', 'Stop'])
+  assert.equal(texts(header(null), 'span').filter((text) => text.startsWith('by ')).length, 0)
+})
+
 test('header: a measured tick shows its time and the requests left in place of the note, and any other note shows as it is', () => {
   const note = 'tick 4210 requests=7 cached=5 remaining=4870'
   const tick = { ms: 4210, requests: 7, cached: 5, remaining: 4870 }
@@ -199,7 +223,7 @@ test('detail overview: the gate action, its code when it has one, and its reason
   assert.equal(detail.tagName, 'SECTION')
   assert.equal(detail.className, 'detail')
   assert.ok(texts(detail, 'strong').includes('wait'), 'the gate shows wait')
-  assert.ok(texts(detail, 'li').includes('held (rollout release A1)'), 'the gate lists its reason')
+  assert.ok(texts(detail, 'li').includes('held by maintainer (rollout release A1)'), 'the gate lists its reason')
   assert.equal(texts(coded, 'span.muted').length, texts(detail, 'span.muted').length + 1)
   assert.equal(texts(coded, 'span.muted').filter((text) => text.trim() === 'held').length, 1)
   assert.equal(texts(detail, 'span.muted').filter((text) => text.trim() === 'held').length, 0)

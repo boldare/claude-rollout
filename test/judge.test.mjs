@@ -412,14 +412,22 @@ test('a PR in a repo without changesets needs none', () => {
 })
 
 test('a held PR waits: no merge, no rebase, no ready notice in manual mode', () => {
-  const held = { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z' } }
+  const held = { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z', by: 'maintainer', reason: null } }
   const verdict = judge(manifest, pr, held, facts())
 
   assertVerdict(verdict, 'wait', 'held')
-  assert.match(verdict.reasons.join(), /held/)
+  assert.deepEqual(verdict.reasons, ['held by maintainer (rollout release A1)'])
   assertVerdict(judge(manifest, pr, held, facts({ baseIsAncestor: false })), 'wait', 'held')
   assertVerdict(judge({ ...manifest, policy: { ...manifest.policy, merge: 'manual' } }, pr, held, facts()), 'wait', 'held')
   assertVerdict(judge(manifest, pr, { ...held, held: null }, facts()), 'merge', 'merge')
+})
+
+test('a held PR names who held it and why in its reason', () => {
+  const hold = { at: '2026-09-27T09:00:00Z', by: 'driver', reason: 'usage limit reached' }
+  const verdict = judge(manifest, pr, { ...verifiedAndApproved, held: hold }, facts())
+
+  assertVerdict(verdict, 'wait', 'held')
+  assert.deepEqual(verdict.reasons, ['held by driver: usage limit reached (rollout release A1)'])
 })
 
 const withMerge = (base, merge) => ({ ...base, policy: { ...base.policy, merge } })
@@ -670,7 +678,11 @@ test('judge: every gate code, each with its action', () => {
   const mergeState = (mergeStateStatus) => botFacts([APPROVAL], { pr: { ...facts().pr, author: 'bot', mergeStateStatus } })
 
   const rows = [
-    ['held', 'wait', judge(manifest, pr, { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z' } }, facts())],
+    [
+      'held',
+      'wait',
+      judge(manifest, pr, { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z', by: 'maintainer', reason: null } }, facts()),
+    ],
     ['no-pr', 'block', judge(manifest, pr, verifiedAndApproved, facts({ pr: null }))],
     ['merged-on-github', 'wait', judge(manifest, pr, verifiedAndApproved, withPr({ state: 'MERGED' }))],
     ['pr-not-open', 'block', judge(manifest, pr, verifiedAndApproved, withPr({ state: 'CLOSED' }))],

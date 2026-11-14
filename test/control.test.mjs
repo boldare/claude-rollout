@@ -41,15 +41,13 @@ function readyLine(stream) {
 }
 
 test('COMMANDS: the inbox commands, stop and start, without approve', () => {
-  assert.deepEqual(COMMANDS, ['pause', 'resume', 'retry', 'note', 'hold', 'release', 'stop', 'start'])
+  assert.deepEqual(COMMANDS, ['retry', 'note', 'hold', 'release', 'stop', 'start'])
 })
 
 test('parseCommand: every command keeps only its own fields', () => {
   const manifest = demo()
   const extra = { sha: 'a1a1a1a', patchId: 'patch-a1', at: 'then' }
   const cases = [
-    [{ cmd: 'pause', id: 'A1', ...extra }, { cmd: 'pause' }],
-    [{ cmd: 'resume', ...extra }, { cmd: 'resume' }],
     [
       { cmd: 'retry', id: 'A2', text: 'x', ...extra },
       { cmd: 'retry', id: 'A2' },
@@ -60,11 +58,27 @@ test('parseCommand: every command keeps only its own fields', () => {
     ],
     [
       { cmd: 'hold', id: 'A3', ...extra },
-      { cmd: 'hold', id: 'A3' },
+      { cmd: 'hold', ids: ['A3'] },
     ],
     [
       { cmd: 'release', id: 'A1', ...extra },
-      { cmd: 'release', id: 'A1' },
+      { cmd: 'release', ids: ['A1'] },
+    ],
+    [
+      { cmd: 'hold', ids: ['A3', 'A1', 'A3'], id: 'A2', ...extra },
+      { cmd: 'hold', ids: ['A3', 'A1'] },
+    ],
+    [
+      { cmd: 'release', ids: ['A2'], all: false, ...extra },
+      { cmd: 'release', ids: ['A2'] },
+    ],
+    [
+      { cmd: 'hold', all: true, ids: ['Z9'], id: 'A1', ...extra },
+      { cmd: 'hold', all: true },
+    ],
+    [
+      { cmd: 'release', all: true, ...extra },
+      { cmd: 'release', all: true },
     ],
     [{ cmd: 'stop', id: 'A1', pid: 42, ...extra }, { cmd: 'stop' }],
     [
@@ -89,8 +103,19 @@ test('parseCommand: the errors', () => {
     [{ cmd: 'approve', id: 'A1', sha: 'a1a1a1a', patchId: 'patch-a1' }, 'unknown command approve'],
     [{}, 'unknown command undefined'],
     [{ cmd: 'unhalt' }, 'unknown command unhalt'],
+    [{ cmd: 'pause' }, 'unknown command pause'],
+    [{ cmd: 'pause', id: 'A1' }, 'unknown command pause'],
+    [{ cmd: 'resume' }, 'unknown command resume'],
     [{ cmd: 'hold' }, 'unknown or missing PR id'],
+    [{ cmd: 'hold', ids: [] }, 'unknown or missing PR id'],
+    [{ cmd: 'hold', ids: ['A1', 'Z9'] }, 'unknown or missing PR id'],
+    [{ cmd: 'hold', ids: ['A1', 7] }, 'unknown or missing PR id'],
+    [{ cmd: 'hold', all: false }, 'unknown or missing PR id'],
+    [{ cmd: 'hold', all: 'yes', ids: ['A1'] }, 'all must be a boolean'],
+    [{ cmd: 'release', all: 1 }, 'all must be a boolean'],
+    [{ cmd: 'release', all: null }, 'all must be a boolean'],
     [{ cmd: 'retry', id: 'Z9' }, 'unknown or missing PR id'],
+    [{ cmd: 'retry', ids: ['A1'] }, 'unknown or missing PR id'],
     [{ cmd: 'release', id: ['A1'] }, 'unknown or missing PR id'],
     [{ cmd: 'note', id: 'Z9', text: 'hi' }, 'unknown or missing PR id'],
     [{ cmd: 'note', id: 'A1' }, 'note needs text'],

@@ -19,14 +19,216 @@ function sorted(events) {
   return events.map((event) => JSON.stringify(event)).sort()
 }
 
-test('hold parks a PR and release lifts it', () => {
+// A PR's hold as the maintainer sets it.
+function assertMaintainerHold(hold) {
+  assert.ok(Date.parse(hold?.at), JSON.stringify(hold))
+  assert.deepEqual(hold, { at: hold.at, by: 'maintainer', reason: null })
+}
+
+test('hold and release with a lone id, as an older CLI or page sends them, park a PR and lift it', () => {
   const { manifest, driver } = driverFor({ A1: { state: 'needs_fix' } })
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'hold', id: 'A1' }), [{ id: 'A1', kind: 'held', state: 'needs_fix', running: null }])
-  assert.ok(Date.parse(driver.ledger.prs.A1.held.at))
+  assertMaintainerHold(driver.ledger.prs.A1.held)
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'release', id: 'A1' }), [{ id: 'A1', kind: 'released', state: 'needs_fix' }])
   assert.equal(driver.ledger.prs.A1.held, null)
+})
+
+test('hold <ids>: a PR that is not held is held', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'needs_fix' }, A3: { state: 'pending' } })
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', ids: ['A1', 'A3'] }), [
+    { id: 'A1', kind: 'held', state: 'needs_fix', running: null },
+    { id: 'A3', kind: 'held', state: 'pending', running: null },
+  ])
+
+  assertMaintainerHold(driver.ledger.prs.A1.held)
+  assertMaintainerHold(driver.ledger.prs.A3.held)
+  assert.equal(driver.ledger.prs.A2.held, null)
+  assert.equal(driver.ledger.data.hold, null)
+})
+
+test('hold <ids>: a PR already held or merged is refused', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' }, A2: { state: 'merged' }, A3: { state: 'pending' } })
+  apply(manifest, driver, { cmd: 'hold', ids: ['A1'] })
+  const before = structuredClone(driver.ledger.prs.A1.held)
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', ids: ['A1', 'A2', 'A3'] }), [
+    { id: 'A1', kind: 'command-rejected', command: 'hold', reason: 'already held' },
+    { id: 'A2', kind: 'command-rejected', command: 'hold', reason: 'already merged' },
+    { id: 'A3', kind: 'held', state: 'pending', running: null },
+  ])
+
+  assert.deepEqual(driver.ledger.prs.A1.held, before)
+  assert.equal(driver.ledger.prs.A2.held, null)
+  assertMaintainerHold(driver.ledger.prs.A3.held)
+})
+
+test('hold --all: a rollout that is not held is held, with author and time', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' } })
+  const before = Date.now()
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', all: true }), [
+    { id: '-', kind: 'held', scope: 'rollout', by: 'maintainer', reason: null },
+  ])
+
+  const { hold } = driver.ledger.data
+
+  assert.deepEqual(hold, { at: hold.at, by: 'maintainer', reason: null })
+  assert.ok(Date.parse(hold.at) >= before - 1000, hold.at)
+  assert.ok(
+    manifest.all.every((pr) => driver.ledger.prs[pr.id].held === null),
+    'no PR is held on its own',
+  )
+})
+
+test('hold --all: a rollout already held is refused, with author and time', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' } })
+  apply(manifest, driver, { cmd: 'hold', all: true })
+  const hold = structuredClone(driver.ledger.data.hold)
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', all: true }), [
+    { id: '-', kind: 'command-rejected', command: 'hold', reason: `already held since ${hold.at} by maintainer` },
+  ])
+
+  assert.deepEqual(driver.ledger.data.hold, hold)
+
+  const byDriver = { at: at(5), by: 'driver', reason: 'usage limit reached' }
+  driver.ledger.data.hold = structuredClone(byDriver)
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', all: true }), [
+    { id: '-', kind: 'command-rejected', command: 'hold', reason: `already held since ${byDriver.at} by driver: usage limit reached` },
+  ])
+
+  assert.deepEqual(driver.ledger.data.hold, byDriver)
+})
+
+test('release <ids>: a held PR is released', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'needs_fix' }, A3: { state: 'pending' } })
+  apply(manifest, driver, { cmd: 'hold', ids: ['A1', 'A3'] })
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'release', ids: ['A1', 'A3'] }), [
+    { id: 'A1', kind: 'released', state: 'needs_fix' },
+    { id: 'A3', kind: 'released', state: 'pending' },
+  ])
+
+  assert.equal(driver.ledger.prs.A1.held, null)
+  assert.equal(driver.ledger.prs.A3.held, null)
+})
+
+test('release <ids>: a PR that is not held is refused, and the reason names a held rollout', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' } })
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'release', ids: ['A1'] }), [
+    { id: 'A1', kind: 'command-rejected', command: 'release', reason: 'not held' },
+  ])
+
+  apply(manifest, driver, { cmd: 'hold', all: true })
+  const hold = structuredClone(driver.ledger.data.hold)
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'release', ids: ['A1'] }), [
+    { id: 'A1', kind: 'command-rejected', command: 'release', reason: 'not held. The rollout is held: rollout release --all' },
+  ])
+
+  assert.deepEqual(driver.ledger.data.hold, hold, 'releasing a PR leaves the rollout held')
+})
+
+test('release --all: a held rollout is released, and the event names the PRs held on their own', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' }, A2: { state: 'merged', held: { at: at(1) } } })
+
+  apply(manifest, driver, { cmd: 'hold', id: 'A1' })
+  apply(manifest, driver, { cmd: 'hold', all: true })
+  const held = structuredClone(driver.ledger.prs.A1.held)
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'release', all: true }), [
+    { id: '-', kind: 'released', scope: 'rollout', stillHeld: ['A1'] },
+  ])
+
+  assert.equal(driver.ledger.data.hold, null)
+  assert.deepEqual(driver.ledger.prs.A1.held, held, 'A1 stays held on its own')
+})
+
+test('release --all: a rollout that is not held is refused', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' } })
+  apply(manifest, driver, { cmd: 'hold', ids: ['A1'] })
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'release', all: true }), [
+    { id: '-', kind: 'command-rejected', command: 'release', reason: 'not held' },
+  ])
+
+  assert.equal(driver.ledger.data.hold, null)
+  assertMaintainerHold(driver.ledger.prs.A1.held)
+})
+
+test('hold with ids applies each id on its own: a bad or failing one is rejected, a repeat applies once', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' }, A3: { state: 'pending' } })
+
+  Object.defineProperty(driver.ledger.prs.A3, 'state', {
+    get() {
+      throw new Error('boom')
+    },
+  })
+
+  writeBatch(manifest, [
+    { cmd: 'hold', ids: ['A1', 'Z9', 7, '__proto__', 'A1'] },
+    { cmd: 'hold', ids: ['A3', 'A2'] },
+    { cmd: 'hold', ids: [] },
+    { cmd: 'release', ids: 'A1' },
+  ])
+
+  assert.deepEqual(apply(manifest, driver), [
+    { id: 'A1', kind: 'held', state: 'pending', running: null },
+    { id: '-', kind: 'command-rejected', command: 'hold', reason: 'unknown PR Z9' },
+    { id: '-', kind: 'command-rejected', command: 'hold', reason: 'needs a PR id' },
+    { id: '-', kind: 'command-rejected', command: 'hold', reason: 'unknown PR __proto__' },
+    { id: 'A3', kind: 'command-rejected', command: 'hold', reason: 'boom' },
+    { id: 'A2', kind: 'held', state: 'pending', running: null },
+    { id: '-', kind: 'command-rejected', command: 'hold', reason: 'needs PR ids or all' },
+    { id: '-', kind: 'command-rejected', command: 'release', reason: 'needs PR ids or all' },
+  ])
+
+  assertMaintainerHold(driver.ledger.prs.A1.held)
+  assertMaintainerHold(driver.ledger.prs.A2.held)
+  assert.equal(Object.prototype.held, undefined)
+  assert.equal(driver.ledger.data.hold, null)
+})
+
+test('hold --all ignores any ids, and release --all never lifts a PR hold', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' } })
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', all: true, ids: ['A1'], id: 'Z9' }), [
+    { id: '-', kind: 'held', scope: 'rollout', by: 'maintainer', reason: null },
+  ])
+
+  assert.equal(driver.ledger.prs.A1.held, null)
+
+  apply(manifest, driver, { cmd: 'hold', ids: ['A1'] })
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'release', all: true, ids: ['A1'] }), [
+    { id: '-', kind: 'released', scope: 'rollout', stillHeld: ['A1'] },
+  ])
+
+  assertMaintainerHold(driver.ledger.prs.A1.held)
+})
+
+test('pause and resume are unknown commands and change no hold', () => {
+  const { manifest, driver } = driverFor({ A1: { state: 'pending' } })
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'pause' }), [
+    { id: '-', kind: 'command-rejected', command: 'pause', reason: 'unknown command' },
+  ])
+
+  assert.equal(driver.ledger.data.hold, null)
+
+  apply(manifest, driver, { cmd: 'hold', all: true })
+  const hold = structuredClone(driver.ledger.data.hold)
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'resume' }), [
+    { id: '-', kind: 'command-rejected', command: 'resume', reason: 'unknown command' },
+  ])
+
+  assert.deepEqual(driver.ledger.data.hold, hold)
 })
 
 test('hold records the agent that keeps running', () => {
@@ -54,8 +256,8 @@ test('hold and release reject what they cannot do, and the rest of the batch sti
   assert.deepEqual(
     sorted(events),
     sorted([
-      { id: '-', kind: 'command-rejected', command: 'hold', reason: 'needs a PR id' },
-      { id: '-', kind: 'command-rejected', command: 'release', reason: 'needs a PR id' },
+      { id: '-', kind: 'command-rejected', command: 'hold', reason: 'needs PR ids or all' },
+      { id: '-', kind: 'command-rejected', command: 'release', reason: 'needs PR ids or all' },
       { id: '-', kind: 'command-rejected', command: 'hold', reason: 'unknown PR Z9' },
       { id: 'A2', kind: 'command-rejected', command: 'hold', reason: 'already merged' },
       { id: 'A1', kind: 'command-rejected', command: 'hold', reason: 'already held' },
@@ -119,13 +321,13 @@ test('each bad command is rejected with its reason, and the rest of the batch st
   ])
 
   assert.ok(driver.ledger.prs.A1.held)
-  assert.equal(driver.ledger.data.paused, false)
+  assert.equal(driver.ledger.data.hold, null)
   assert.equal(Object.prototype.held, undefined)
   assert.equal(Object.prototype.state, undefined)
   assert.equal(Object.prototype.attempts, undefined)
 })
 
-test('a PR still in the ledger but gone from the manifest is unknown, and a pause naming one still pauses', () => {
+test('a PR still in the ledger but gone from the manifest is unknown, and a hold of the rollout that names one still holds it', () => {
   const { manifest, driver } = driverFor({ A1: { state: 'pending' }, B9: { state: 'needs_fix' } })
   const before = structuredClone(driver.ledger.prs.B9)
 
@@ -134,7 +336,8 @@ test('a PR still in the ledger but gone from the manifest is unknown, and a paus
     driver,
     { cmd: 'note', id: 'B9', text: 'x' },
     { cmd: 'approve', id: 'B9', sha: 'x', patchId: 'y' },
-    { cmd: 'pause', id: 'Z9' },
+    { cmd: 'hold', ids: ['B9'] },
+    { cmd: 'hold', all: true, id: 'Z9' },
   )
 
   assert.deepEqual(
@@ -142,12 +345,13 @@ test('a PR still in the ledger but gone from the manifest is unknown, and a paus
     sorted([
       { id: '-', kind: 'command-rejected', command: 'note', reason: 'unknown PR B9' },
       { id: '-', kind: 'command-rejected', command: 'approve', reason: 'unknown PR B9' },
-      { id: '-', kind: 'paused' },
+      { id: '-', kind: 'command-rejected', command: 'hold', reason: 'unknown PR B9' },
+      { id: '-', kind: 'held', scope: 'rollout', by: 'maintainer', reason: null },
     ]),
   )
 
   assert.deepEqual(driver.ledger.prs.B9, before)
-  assert.equal(driver.ledger.data.paused, true)
+  assert.equal(driver.ledger.data.hold.by, 'maintainer')
 })
 
 test('an unhalt from an older CLI is an unknown command and leaves the last merge as it was', () => {
@@ -371,7 +575,7 @@ test('approve is refused under manual and auto, and accepted under human', () =>
   ])
 
   assert.equal(driver.ledger.prs.A1.approved.channel, 'inbox')
-  assert.deepEqual(notices, ['A1: approved PR #11; merging in 120s unless you pause'])
+  assert.deepEqual(notices, ['A1: approved PR #11; merging in 120s unless you hold it (rollout hold A1)'])
 })
 
 test('an inbox approve without a valid at is rejected, and one posted before the verification is refused', () => {
@@ -467,7 +671,7 @@ test('a GitHub approval is noticed once, and the merge delay counts from when th
   const first = await pass()
   assert.deepEqual({ ...entry.approved, at: null }, { patchId, sha, at: null, by: 'maint', channel: 'github' })
   assert.ok(Date.now() - Date.parse(entry.approved.at) < 60_000, entry.approved.at)
-  assert.deepEqual(first.sent, ['A1: PR #11 approved on GitHub by maint; merging in 120s unless you pause'])
+  assert.deepEqual(first.sent, ['A1: PR #11 approved on GitHub by maint; merging in 120s unless you hold it (rollout hold A1)'])
   assert.ok(!first.kinds.includes('would-merge'), first.kinds)
 
   const second = await pass()
@@ -487,5 +691,5 @@ test('a GitHub approval is noticed once, and the merge delay counts from when th
 
   const again = await pass()
   assert.equal(entry.approved.channel, 'github')
-  assert.deepEqual(again.sent, ['A1: PR #11 approved on GitHub by maint; merging in 120s unless you pause'])
+  assert.deepEqual(again.sent, ['A1: PR #11 approved on GitHub by maint; merging in 120s unless you hold it (rollout hold A1)'])
 })

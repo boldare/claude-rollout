@@ -39,7 +39,14 @@ export function samplePrs() {
       claimedSha: SHA,
       verified: { sha: SHA, patchId: 'patch-a1', at: at(80) },
       approved: { sha: SHA, patchId: 'patch-a1', at: at(81) },
-      gate: { action: 'wait', code: 'held', reasons: ['held (rollout release A1)'], mergeState: 'CLEAN', sha: SHA, at: at(82) },
+      gate: {
+        action: 'wait',
+        code: 'held',
+        reasons: ['held by maintainer (rollout release A1)'],
+        mergeState: 'CLEAN',
+        sha: SHA,
+        at: at(82),
+      },
       verdict,
       verdicts: [verdict],
       held: { at: at(81) },
@@ -243,21 +250,19 @@ function sampleManifest(dir, policy) {
 // other records the runs of the events, as the driver that holds the lock
 // would, unless `runs` gives them.
 function ledgerOf(options, prs) {
-  const { paused } = options
-
   if (options.legacy) {
-    return { prs, paused }
+    return { prs, paused: false }
   }
 
   const events = (options.events ?? []).filter((event) => typeof event !== 'string')
 
-  return { version: 2, prs, runs: options.runs ?? runRecords(events, { driverRunning: true }), paused }
+  return { version: 2, prs, runs: options.runs ?? runRecords(events, { driverRunning: true }), hold: options.hold }
 }
 
 export function makeRollout(overrides = {}) {
   const options = {
     prs: samplePrs(),
-    paused: false,
+    hold: null,
     legacy: false,
     runs: null,
     events: sampleEvents(),

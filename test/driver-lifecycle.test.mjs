@@ -351,7 +351,7 @@ test('lifecycle: a head pushed after the verification is verified again, and an 
   assertNoTrouble(setup)
 })
 
-test('lifecycle: a pause holds an approved PR through five ticks, and the merge follows the resume', async (context) => {
+test('lifecycle: a hold of the rollout keeps an approved PR through five ticks, and the merge follows release --all', async (context) => {
   const setup = lifecycle(context)
 
   await setup.driver.start()
@@ -368,20 +368,21 @@ test('lifecycle: a pause holds an approved PR through five ticks, and the merge 
     ['approved'],
   )
 
-  postCommand(setup.manifest, { cmd: 'pause' })
+  postCommand(setup.manifest, { cmd: 'hold', all: true })
 
   for (let i = 0; i < 5; i += 1) {
     await tickAndWait(setup)
+
+    assert.equal(setup.driver.ledger.data.hold?.by, 'maintainer', `tick ${i + 1}`)
   }
 
-  assert.equal(setup.driver.ledger.data.paused, true)
   assert.equal(count(setup, 'merged'), 0)
   assert.deepEqual(setup.github.ghCalls(), [])
   assert.equal(setup.entry.state, 'verified')
   assert.equal(originMain(setup), before)
 
-  postCommand(setup.manifest, { cmd: 'resume' })
-  await tickUntil(setup, () => setup.entry.state === 'merged', 'merge after the resume')
+  postCommand(setup.manifest, { cmd: 'release', all: true })
+  await tickUntil(setup, () => setup.entry.state === 'merged', 'merge after release --all')
 
   assertSquashed(setup, { before, head })
   assertNoTrouble(setup)
