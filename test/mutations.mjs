@@ -81,8 +81,8 @@ const MUTATIONS = [
   {
     id: 'merge-not-recorded',
     file: 'lib/driver.mjs',
-    // The same statements in sync sit at 8 spaces and do not match.
-    find: "    entry.state = 'merged'\n    entry.mergeSha = mergeSha\n    ledger.data.lastMerge = { id: pr.id, sha: mergeSha, at: now() }\n",
+    // sync calls toMerged with no mergeSha and sets lastMerge at 8 spaces, so its lines do not match.
+    find: '    transitions.toMerged(entry, { mergeSha })\n    ledger.data.lastMerge = { id: pr.id, sha: mergeSha, at: now() }\n',
     replace: '',
     tests: ['test/driver-gate.test.mjs'],
   },
