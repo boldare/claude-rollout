@@ -175,7 +175,7 @@ test('docs: every CLI command and flag has its place on the commands page', () =
 
   commands.add('ui')
   commands.add('help')
-  assert.ok(commands.size >= 15 && flags.length >= 8)
+  assert.ok(commands.size >= 13 && flags.length >= 9)
 
   for (const command of commands) {
     assert.ok(pageIds.includes(`cmd-${command}`), `commands.html has no #cmd-${command}`)

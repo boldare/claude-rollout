@@ -121,13 +121,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
               </tr>
               <tr>
                 <td class="name"><a href="#cmd-hold">hold</a>, <a href="#cmd-release">release</a></td>
-                <td>Holds one PR, or lifts the hold.</td>
-                <td><span class="badge where-ui">PR page</span></td>
-              </tr>
-              <tr>
-                <td class="name"><a href="#cmd-pause">pause</a>, <a href="#cmd-resume">resume</a></td>
-                <td>Stops new work and merges for the whole rollout, or lets them go on.</td>
-                <td><span class="badge where-ui">Rollout header</span></td>
+                <td>Holds the PRs you name or the whole rollout, or lifts the hold.</td>
+                <td><span class="badge where-ui">PR page</span> <span class="badge where-ui">Rollout header</span></td>
               </tr>
               <tr>
                 <td class="name"><a href="#cmd-preflight">preflight</a></td>
@@ -246,7 +241,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             <code>runtime docker, image &lt;tag&gt;</code>. The image is <code>sandbox.image</code>, else the one the last
             <code>driver-start</code> event records, else <code>default</code>. It never runs <code>claude</code> to find it.
           </li>
-          <li>A <code>PAUSED</code> line when it applies.</li>
+          <li>
+            A <code>HELD</code> line when the rollout is held: since when, by whom (<code>maintainer</code> or <code>driver</code>) and the
+            reason when the hold has one.
+          </li>
           <li>One row per PR: id, state, PR number, head, CI or gate info, attempts as implement/fix/verify, and cost.</li>
           <li>The last 8 events.</li>
         </ul>
@@ -260,7 +258,7 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <p>Everything you need before you approve one PR:</p>
 
         <ul>
-          <li>Title, branch, state, PR link and cost, and since when it is held.</li>
+          <li>Title, branch, state, PR link and cost, and since when and by whom it is held.</li>
           <li>The verified head and patch id, the approved head, the author and how approval works for it.</li>
           <li>The gate's last action and its reasons.</li>
           <li>The brief's path, and the reviewer's notes when the driver wrote it.</li>
@@ -342,8 +340,8 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <div class="callout">
           <p>
             <strong>The approval counts under <code>merge: human</code> only.</strong> The driver merges
-            <code>policy.mergeDelaySeconds</code> (120 s) after it accepts the approval, unless you <a href="#cmd-pause">pause</a> in that
-            window. It notifies you when it accepts, and the CLI's reply names the delay.
+            <code>policy.mergeDelaySeconds</code> (120 s) after it accepts the approval, unless you <a href="#cmd-hold">hold</a> the PR in
+            that window (<code>rollout hold P1</code>). It notifies you when it accepts, and the CLI's reply names the delay.
           </p>
         </div>
 
@@ -477,37 +475,57 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <h3 id="cmd-hold">hold <a class="anchor" href="#cmd-hold" aria-label="Link to this command">#</a></h3>
 
-        <pre><code>node $R hold P1 --dir D</code></pre>
+        <pre><code>node $R hold P1 P2 --dir D
+node $R hold --all --dir D</code></pre>
 
         <p>
-          Holds one PR: no new runs, rebases, ready notices or merges for it. A running agent finishes its step. The driver still syncs the
-          PR with GitHub and collects review comments. It rejects a merged PR and one already held. A PR that depends on the held one gets
-          no brief until <code>release</code> or the merge, and a brief already running finishes. In the UI:
-          <a href="ui.html#control-hold">Hold</a>.
+          Holds the PRs you name, or the whole rollout with <a href="#flag-all"><code>--all</code></a
+          >. One command holds several PRs. Each hold records who set it and since when, and <code>status</code> and <code>card</code> print
+          both.
+        </p>
+
+        <ul>
+          <li>
+            A held PR gets no new runs, rebases, ready notices or merges. A running agent finishes its step. The driver still syncs the PR
+            with GitHub and collects review comments. A PR that depends on the held one gets no brief until <code>release</code> or the
+            merge, and a brief already running finishes. This also stops a merge that waits out <code>mergeDelaySeconds</code>.
+          </li>
+          <li>
+            A held rollout starts no new runs and merges nothing. Running agents finish their step, and the driver keeps syncing with
+            GitHub.
+          </li>
+          <li>
+            The driver rejects a merged PR and one already held. It rejects <code>hold --all</code> on a rollout already held, and the
+            reason names who held it and since when. The other PRs of the same command still apply.
+          </li>
+          <li>
+            The driver holds the rollout itself when an agent run fails on an account problem, such as a spend limit, the credit balance or
+            billing. That hold names <code>driver</code> and the run's error. A hold already in place stays as it is, and you get the notice
+            anyway.
+          </li>
+        </ul>
+
+        <p>
+          In the UI: <a href="ui.html#control-hold">Hold</a> on a PR page and <a href="ui.html#control-hold-all">Hold all</a> in the rollout
+          header.
         </p>
 
         <h3 id="cmd-release">release <a class="anchor" href="#cmd-release" aria-label="Link to this command">#</a></h3>
 
-        <pre><code>node $R release P1 --dir D</code></pre>
-
-        <p>Lifts the hold. It rejects a PR that is not held. In the UI: <a href="ui.html#control-release">Release</a>.</p>
-
-        <h3 id="cmd-pause">pause <a class="anchor" href="#cmd-pause" aria-label="Link to this command">#</a></h3>
-
-        <pre><code>node $R pause --dir D</code></pre>
+        <pre><code>node $R release P1 P2 --dir D
+node $R release --all --dir D</code></pre>
 
         <p>
-          Stops new runs and merges for the whole rollout. Running agents finish their step, and the driver keeps syncing with GitHub. It
-          also stops a merge that waits out <code>mergeDelaySeconds</code>. In the UI: <a href="ui.html#control-pause">Pause</a>.
+          Lifts the hold of the PRs you name, or the rollout's hold with <code>--all</code>. The two holds stay apart.
+          <code>release --all</code> never lifts the hold of a PR, and <code>release P1</code> never lifts the rollout's. The
+          <code>released</code> event of <code>release --all</code> lists the PRs still held on their own in <code>stillHeld</code>.
         </p>
 
-        <h3 id="cmd-resume">resume <a class="anchor" href="#cmd-resume" aria-label="Link to this command">#</a></h3>
-
-        <pre><code>node $R resume --dir D</code></pre>
-
         <p>
-          Lifts the pause. The driver pauses itself when an agent run fails on an account problem, such as a spend limit, the credit balance
-          or billing, and waits for this command. In the UI: <a href="ui.html#control-resume">Resume</a>.
+          The driver rejects a PR that is not held, and <code>release --all</code> on a rollout that is not held. While the rollout is held,
+          the rejection of a PR says so and names <code>release --all</code>. <code>release --all</code> also lifts the driver's own hold
+          after an account limit. In the UI: <a href="ui.html#control-release">Release</a> and
+          <a href="ui.html#control-release-all">Release all</a>.
         </p>
 
         <h2 id="setting-up">Set up <a class="anchor" href="#setting-up" aria-label="Link to this section">#</a></h2>
@@ -777,6 +795,12 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td>ui</td>
                 <td>Disables every control. The server refuses every command.</td>
               </tr>
+              <tr id="flag-all">
+                <td>--all</td>
+                <td>off</td>
+                <td>hold, release</td>
+                <td>The whole rollout in place of PR ids. With ids too, the CLI refuses the command and posts nothing.</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -859,19 +883,20 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <h2 id="inbox">How commands reach the driver <a class="anchor" href="#inbox" aria-label="Link to this section">#</a></h2>
 
         <p>
-          <code>approve</code>, <code>note</code>, <code>retry</code>, <code>hold</code>, <code>release</code>, <code>pause</code> and
-          <code>resume</code> never write the ledger. Each writes one small JSON file into <code>inbox/</code>, first under a dot-prefixed
-          name and then renamed, so the driver never reads half a command. The CLI prints a short confirmation and returns.
+          <code>approve</code>, <code>note</code>, <code>retry</code>, <code>hold</code> and <code>release</code> never write the ledger.
+          Each writes one small JSON file into <code>inbox/</code>, first under a dot-prefixed name and then renamed, so the driver never
+          reads half a command. A <code>hold</code> or <code>release</code> of several PRs is one file. The CLI prints a short confirmation
+          and returns.
         </p>
 
         <ul>
           <li>A running driver watches the inbox and applies a command within about a second. A burst of commands becomes one tick.</li>
           <li>Without a driver, the files wait and apply when the next <code>run</code> starts.</li>
           <li>
-            Each command applies on its own. One that is not a JSON object, names no PR or a PR the manifest no longer has, is an
-            <code>approve</code> without a valid <code>at</code> time, or fails while it applies shows up as
-            <code>command-rejected</code> in <code>events.jsonl</code>, with the reason. A refused approval shows up as
-            <code>approval-rejected</code>. The rest of the batch still applies.
+            Each command applies on its own, and so does each PR of a <code>hold</code> or <code>release</code>. One that is not a JSON
+            object, names no PR or a PR the manifest no longer has, is an <code>approve</code> without a valid <code>at</code> time, or
+            fails while it applies shows up as <code>command-rejected</code> in <code>events.jsonl</code>, with the reason. A refused
+            approval shows up as <code>approval-rejected</code>. The rest of the batch still applies.
           </li>
           <li>
             Entries that are not files are skipped. A file the driver cannot delete is rejected instead of applied, on every tick until

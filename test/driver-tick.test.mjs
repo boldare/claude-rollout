@@ -241,29 +241,29 @@ test('tick: a red base after a merge notifies once, and for five ticks merges, r
   assert.equal(mergeCalls(tools).length, 1)
 })
 
-test('tick: a pause stops the merge of an approved PR, and a resume lets it merge', async () => {
+test('tick: a held rollout stops the merge of an approved PR, and release --all lets it merge', async () => {
   const { manifest, driver, tools, gate } = tickDriver(
     { A1: { ...samplePrs().A1, held: null }, A3: { state: 'merged', pr: 13 } },
     { rules: [FETCH, MERGE_RULE], routes: [prRoute()] },
   )
 
-  apply(manifest, driver, { cmd: 'pause' })
+  apply(manifest, driver, { cmd: 'hold', all: true })
   await driver.tick()
 
   assert.deepEqual(mergeCalls(tools), [])
   assert.equal(gate.calls, 0)
 
-  apply(manifest, driver, { cmd: 'resume' })
+  apply(manifest, driver, { cmd: 'release', all: true })
   await driver.tick()
 
   assert.equal(mergeCalls(tools).length, 1)
 })
 
-test('tick: a pause starts no agent, and a resume starts the implementer', async () => {
+test('tick: a held rollout starts no agent, and release --all starts the implementer', async () => {
   const setup = modelDriver({ A1: { state: 'pending' }, A3: { state: 'merged', pr: 13 } })
   const { manifest, driver, entry, calls } = setup
 
-  apply(manifest, driver, { cmd: 'pause' })
+  apply(manifest, driver, { cmd: 'hold', all: true })
   await driver.tick()
 
   assert.ok(!kindsSince(manifest).includes('implement-start'))
@@ -272,7 +272,7 @@ test('tick: a pause starts no agent, and a resume starts the implementer', async
 
   const before = eventsSince(manifest).length
 
-  apply(manifest, driver, { cmd: 'resume' })
+  apply(manifest, driver, { cmd: 'release', all: true })
   await driver.tick()
 
   assert.ok(kindsSince(manifest, before).includes('implement-start'))

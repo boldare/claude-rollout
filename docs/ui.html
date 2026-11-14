@@ -74,8 +74,8 @@
             <code>rollout status</code> (<code>lib/view.mjs</code>), so the CLI and the UI never disagree.
           </li>
           <li>
-            <strong>A remote control.</strong> Pause, resume, retry, note, hold and release become files in the rollout's
-            <code>inbox/</code>, exactly the files the CLI writes. Stop and start act on the driver process itself.
+            <strong>A remote control.</strong> Retry, note, hold and release, for chosen PRs or the whole rollout, become files in the
+            rollout's <code>inbox/</code>, exactly the files the CLI writes. Stop and start act on the driver process itself.
           </li>
         </ul>
 
@@ -306,17 +306,18 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h3 id="sending">Commands</h3>
 
         <p>
-          A control posts JSON to <code>POST /api/rollouts/&lt;name&gt;/commands</code>, for example <code>{"cmd":"hold","id":"P2"}</code>.
-          The server checks it before it acts: a known command, a PR id from the manifest, a note with text, a JSON body of at most
-          64&nbsp;KiB.
+          A control posts JSON to <code>POST /api/rollouts/&lt;name&gt;/commands</code>, for example
+          <code>{"cmd":"hold","ids":["P2"]}</code> for one PR or <code>{"cmd":"hold","all":true}</code> for the whole rollout. The server
+          checks it before it acts: a known command, PR ids from the manifest or <code>all</code> as a boolean, a note with text, a JSON
+          body of at most 64&nbsp;KiB.
         </p>
 
         <ul>
           <li>
-            <strong>Inbox commands.</strong> Pause, resume, retry, note, hold and release are written to <code>inbox/</code> through a
-            temporary file and a rename, so the driver never reads half a command. A running driver watches the inbox and applies the
-            command at the start of its next tick. When it sleeps between ticks, that is about half a second later. With no driver running,
-            the file waits for the next start.
+            <strong>Inbox commands.</strong> Retry, note, hold and release are written to <code>inbox/</code> through a temporary file and a
+            rename, so the driver never reads half a command. A running driver watches the inbox and applies the command at the start of its
+            next tick. When it sleeps between ticks, that is about half a second later. With no driver running, the file waits for the next
+            start.
           </li>
           <li>
             <strong>Stop.</strong> The server sends SIGTERM to the pid in <code>driver.lock</code>. The driver stops its agents, saves and
@@ -436,7 +437,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <span><span class="label">Merged</span><span>1/4</span></span>
               <a class="error" href="#view-events">1 error</a>
             </div>
-            <div class="controls"><span class="fake-button">Pause</span> <span class="fake-button danger">Stop</span></div>
+            <div class="controls"><span class="fake-button">Hold all</span> <span class="fake-button danger">Stop</span></div>
           </div>
           <nav class="views" aria-label="Views">
             <span class="tab active">board</span><span class="tab">timeline</span><span class="tab">events</span
@@ -448,8 +449,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
           <li>
             <strong>Driver badge.</strong> <span class="badge driver driver-running">running</span> while a process holds
             <code>driver.lock</code>, with its pid, the age of the heartbeat and the facts of the last tick. Otherwise
-            <span class="badge driver driver-stopped">stopped</span>. <span class="badge driver driver-paused">paused</span> wins over both,
-            because it is recorded in the ledger whether or not a driver runs.
+            <span class="badge driver driver-stopped">stopped</span>. <span class="badge driver driver-held">held</span> wins over both,
+            because the hold is recorded in the ledger whether or not a driver runs. Beside it the header says who held the rollout and
+            since when, as in <q>by maintainer since 14:02</q>, and the reason when the hold has one, as the driver's hold after an account
+            limit does.
           </li>
           <li><strong>Heartbeat.</strong> Turns amber after 5 minutes without a beat. A healthy driver beats at least once a tick.</li>
           <li>
@@ -1200,22 +1203,22 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               </tr>
             </thead>
             <tbody>
-              <tr id="control-pause">
-                <td>Pause</td>
-                <td>Header, while not paused.</td>
+              <tr id="control-hold-all">
+                <td>Hold all</td>
+                <td>Header, while the rollout is not held.</td>
                 <td>no</td>
                 <td>
-                  Queues <a href="commands.html#cmd-pause"><code>pause</code></a
+                  Queues <a href="commands.html#cmd-hold"><code>hold --all</code></a
                   >. The driver starts no runs and merges nothing. Running agents finish their step.
                 </td>
               </tr>
-              <tr id="control-resume">
-                <td>Resume</td>
-                <td>Header, in place of Pause while paused.</td>
+              <tr id="control-release-all">
+                <td>Release all</td>
+                <td>Header, in place of Hold all while the rollout is held.</td>
                 <td>no</td>
                 <td>
-                  Queues <a href="commands.html#cmd-resume"><code>resume</code></a
-                  >. Also the way out of a pause the driver made itself after an account limit.
+                  Queues <a href="commands.html#cmd-release"><code>release --all</code></a
+                  >. It lifts the rollout's hold, the driver's own after an account limit too. A PR held on its own stays held.
                 </td>
               </tr>
               <tr id="control-stop">

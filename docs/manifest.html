@@ -744,7 +744,7 @@ prs:
                 <td><code>120</code></td>
                 <td>
                   Under <code>merge: human</code>, the wait before a merge. It runs from when the driver first sees an approval, and gives
-                  you time to notice an approval you did not expect and <a href="commands.html#cmd-pause">pause</a>.
+                  you time to notice an approval you did not expect and <a href="commands.html#cmd-hold">hold</a> the PR.
                 </td>
               </tr>
               <tr id="policy-feedbackQuietMinutes">
@@ -1551,7 +1551,7 @@ prs:
                 <td>ledger.json</td>
                 <td>driver</td>
                 <td>
-                  The state of every PR, every agent run and the rollout (paused, last merge), with the <code>version</code> of its shape.
+                  The state of every PR, every agent run and the rollout (its hold, last merge), with the <code>version</code> of its shape.
                   Written to a temp file and renamed, so it is never half written.
                 </td>
               </tr>

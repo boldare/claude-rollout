@@ -75,7 +75,8 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
   assert.equal(demo.driver.running, true)
   assert.equal(demo.driver.pid, process.pid)
   assert.equal(demo.driver.heartbeatNote, 'tick')
-  assert.equal(demo.driver.paused, false)
+  assert.equal(demo.driver.hold, null)
+  assert.equal(Object.hasOwn(demo.driver, 'paused'), false)
   assert.equal(Object.hasOwn(demo.driver, 'halted'), false)
   assert.equal(fresh.started, false)
   assert.equal(fresh.total, 3)
@@ -86,7 +87,7 @@ test('listRollouts: sorted, broken with its error, worktrees skipped', () => {
     heartbeatAgeSeconds: null,
     heartbeatNote: '',
     tick: null,
-    paused: false,
+    hold: null,
   })
 })
 
@@ -113,13 +114,20 @@ test('listRollouts counts merged PRs, and an unreadable ledger is an error that 
   const root = makeRolloutRoot()
   const ledger = join(root, 'demo', 'ledger.json')
 
-  writeFileSync(ledger, JSON.stringify({ prs: { A1: { state: 'merged', costUsd: 2 } }, paused: true, halted: 'base is red' }))
+  const hold = { at: at(5), by: 'driver', reason: 'usage limit reached' }
+
+  writeFileSync(ledger, JSON.stringify({ prs: { A1: { state: 'merged', costUsd: 2 } }, hold, halted: 'base is red' }))
 
   const [, demo] = listRollouts(root)
   assert.equal(demo.merged, 1)
   assert.equal(demo.costUsd, 2)
-  assert.equal(demo.driver.paused, true)
+  assert.deepEqual(demo.driver.hold, hold)
   assert.equal(Object.hasOwn(demo.driver, 'halted'), false)
+
+  // Only a driver turns the paused of an older one into a hold, when it opens the ledger.
+  writeFileSync(ledger, JSON.stringify({ prs: {}, paused: true }))
+
+  assert.equal(listRollouts(root)[1].driver.hold, null)
 
   writeFileSync(ledger, '{"prs":')
 

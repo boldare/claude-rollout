@@ -282,11 +282,14 @@ test('errorCount: counts only error kinds', () => {
   assert.equal(errorCount([]), 0)
 })
 
-test('driverStatus: paused, running, stopped and unknown', () => {
-  assert.equal(driverStatus({ running: true, paused: true }), 'paused')
-  assert.equal(driverStatus({ running: true, paused: false }), 'running')
-  assert.equal(driverStatus({ running: true, paused: false, halted: 'x' }), 'running')
-  assert.equal(driverStatus({ running: false, paused: false }), 'stopped')
+test('driverStatus: held, running, stopped and unknown', () => {
+  const hold = { at: at(5), by: 'maintainer', reason: null }
+
+  assert.equal(driverStatus({ running: true, hold }), 'held')
+  assert.equal(driverStatus({ running: false, hold }), 'held')
+  assert.equal(driverStatus({ running: true, hold: null }), 'running')
+  assert.equal(driverStatus({ running: true, hold: null, halted: 'x' }), 'running')
+  assert.equal(driverStatus({ running: false, hold: null }), 'stopped')
   assert.equal(driverStatus(null), 'unknown')
 })
 
@@ -785,11 +788,12 @@ test('tookText and resultTone: a finished run in one line, and the tone of its r
   }
 })
 
-test('rolloutControls: pause or resume, stop or start', () => {
+test('rolloutControls: hold all or release all, stop or start', () => {
   const { view } = demo()
+  const hold = { at: at(5), by: 'driver', reason: 'usage limit reached' }
 
-  assert.deepEqual(rolloutControls(view, false), ['pause', 'stop'])
-  assert.deepEqual(rolloutControls(viewWith({ paused: true, halted: 'main is red', running: false }), false), ['resume', 'start'])
+  assert.deepEqual(rolloutControls(view, false), ['hold-all', 'stop'])
+  assert.deepEqual(rolloutControls(viewWith({ hold, halted: 'main is red', running: false }), false), ['release-all', 'start'])
   assert.deepEqual(rolloutControls(null, false), ['start'])
   assert.deepEqual(rolloutControls(view, true), [])
   assert.deepEqual(rolloutControls(null, true), [])
@@ -919,7 +923,7 @@ test('dialogFor: confirmations for stop, start and retry, a text for note, nothi
     })
   }
 
-  for (const command of ['pause', 'resume', 'hold', 'release']) {
+  for (const command of ['hold-all', 'release-all', 'hold', 'release']) {
     assert.equal(dialogFor(command, context), null, command)
   }
 })
@@ -927,13 +931,15 @@ test('dialogFor: confirmations for stop, start and retry, a text for note, nothi
 test('commandBody: the fields each command needs, and no pid for stop', () => {
   const pr = { id: 'A1', state: 'verified' }
 
-  for (const command of ['pause', 'resume', 'stop']) {
-    assert.deepEqual(commandBody(command, null, command === 'stop' ? { text: '', dryRun: false } : null), { cmd: command })
+  assert.deepEqual(commandBody('stop', null, { text: '', dryRun: false }), { cmd: 'stop' })
+  assert.deepEqual(commandBody('hold-all', null, null), { cmd: 'hold', all: true })
+  assert.deepEqual(commandBody('release-all', null, null), { cmd: 'release', all: true })
+
+  for (const command of ['hold', 'release']) {
+    assert.deepEqual(commandBody(command, pr, null), { cmd: command, ids: ['A1'] })
   }
 
-  for (const command of ['hold', 'release', 'retry']) {
-    assert.deepEqual(commandBody(command, pr, null), { cmd: command, id: 'A1' })
-  }
+  assert.deepEqual(commandBody('retry', pr, null), { cmd: 'retry', id: 'A1' })
 
   assert.deepEqual(commandBody('note', pr, { text: 'use the old API', dryRun: false }), { cmd: 'note', id: 'A1', text: 'use the old API' })
   assert.deepEqual(commandBody('answer', pr, { text: 'use the old API', dryRun: false }), {
@@ -949,14 +955,17 @@ test('commandBody: the fields each command needs, and no pid for stop', () => {
 test('commandNotice: queued, stopping, starting and the errors', () => {
   const running = { running: true, pid: 4242 }
   const stopped = { running: false, pid: null }
-  const queued = { status: 202, body: { cmd: 'pause', queued: '1-abc.json' } }
+  const queued = { status: 202, body: { cmd: 'hold', queued: '1-abc.json' } }
   const later = ' It applies when the driver starts.'
 
-  assert.deepEqual(commandNotice({ cmd: 'pause' }, queued, running), { text: 'Pause queued.', error: false })
-  assert.deepEqual(commandNotice({ cmd: 'hold', id: 'A1' }, queued, running), { text: 'Hold A1 queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'hold', all: true }, queued, running), { text: 'Hold all queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'release', all: true }, queued, running), { text: 'Release all queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'hold', ids: ['A1'] }, queued, running), { text: 'Hold A1 queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'release', ids: ['A1', 'A2'] }, queued, running), { text: 'Release A1 A2 queued.', error: false })
+  assert.deepEqual(commandNotice({ cmd: 'retry', id: 'A1' }, queued, running), { text: 'Retry A1 queued.', error: false })
   assert.deepEqual(commandNotice({ cmd: 'note', id: 'A1', text: 'hi' }, queued, running), { text: 'Note A1 queued.', error: false })
-  assert.deepEqual(commandNotice({ cmd: 'pause' }, queued, stopped), { text: `Pause queued.${later}`, error: false })
-  assert.deepEqual(commandNotice({ cmd: 'hold', id: 'A1' }, queued, undefined), { text: `Hold A1 queued.${later}`, error: false })
+  assert.deepEqual(commandNotice({ cmd: 'hold', all: true }, queued, stopped), { text: `Hold all queued.${later}`, error: false })
+  assert.deepEqual(commandNotice({ cmd: 'hold', ids: ['A1'] }, queued, undefined), { text: `Hold A1 queued.${later}`, error: false })
   assert.deepEqual(commandNotice({ cmd: 'stop' }, { status: 202, body: { cmd: 'stop', pid: 4242 } }, running), {
     text: 'Stopping the driver (PID 4242).',
     error: false,
@@ -990,7 +999,10 @@ test('commandNotice: queued, stopping, starting and the errors', () => {
     error: true,
   })
 
-  assert.deepEqual(commandNotice({ cmd: 'pause' }, { status: 502, body: null }, running), { text: 'The server answered 502.', error: true })
+  assert.deepEqual(commandNotice({ cmd: 'hold', all: true }, { status: 502, body: null }, running), {
+    text: 'The server answered 502.',
+    error: true,
+  })
 })
 
 test('ui scripts: no HTML sinks, eval, style attributes, browser storage or the SSE client', () => {

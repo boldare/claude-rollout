@@ -29,7 +29,7 @@ import {
 } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { runRecords, runsFromEvents, runsFromLedger } from '../lib/runs.mjs'
-import { liveness, readEvents } from '../lib/view.mjs'
+import { liveness, prDetail, readEvents } from '../lib/view.mjs'
 import { at, makeRollout } from './fixtures.mjs'
 
 function scratch() {
@@ -352,7 +352,57 @@ test('openLedger: a version 1 ledger without events migrates to no runs, and one
   assert.equal(data.version, 2)
   assert.deepEqual(data.runs, {})
   assert.deepEqual(Object.keys(data.prs), ['A1', 'A2', 'A3'])
+  assert.equal(data.hold, null)
+  assert.equal(Object.hasOwn(data, 'paused'), false)
   assert.equal(existsSync(join(fresh.dir, 'ledger.json')), false)
+})
+
+test('openLedger turns a stored paused true into a hold by the maintainer, removes the key and saves both', () => {
+  const manifest = withLedger({ version: 2, prs: {}, runs: {}, paused: true })
+  const before = Date.now()
+  const { data } = openLedger(manifest)
+
+  assert.equal(Object.hasOwn(data, 'paused'), false)
+  assert.deepEqual(data.hold, { at: data.hold.at, by: 'maintainer', reason: null })
+  assert.ok(Date.parse(data.hold.at) >= before - 1000, data.hold.at)
+  assert.equal(Object.hasOwn(stored(manifest), 'paused'), false)
+  assert.deepEqual(stored(manifest).hold, data.hold)
+})
+
+test('openLedger: a stored paused false becomes no hold and no key, also from before versions, and a stored hold stays', () => {
+  for (const manifest of [withLedger({ version: 2, prs: {}, runs: {}, paused: false }), loadManifest(makeRollout({ legacy: true }))]) {
+    const { data } = openLedger(manifest)
+
+    assert.equal(data.hold, null)
+    assert.equal(Object.hasOwn(data, 'paused'), false)
+    assert.equal(stored(manifest).hold, null)
+    assert.equal(Object.hasOwn(stored(manifest), 'paused'), false)
+  }
+
+  const hold = { at: at(5), by: 'driver', reason: 'usage limit reached' }
+  const held = withLedger({ version: 2, prs: {}, runs: {}, hold, paused: true })
+
+  assert.deepEqual(openLedger(held).data.hold, hold)
+  assert.deepEqual(stored(held).hold, hold)
+  assert.equal(Object.hasOwn(stored(held), 'paused'), false)
+})
+
+test('openLedger and the view read a PR hold from before authors as one the maintainer set', () => {
+  const manifest = loadManifest(makeRollout())
+
+  assert.deepEqual(readLedger(manifest).prs.A1.held, { at: at(81) })
+  assert.deepEqual(prDetail(manifest, readLedger(manifest), [], [], 'A1').held, { at: at(81), by: 'maintainer', reason: null })
+
+  const { prs } = openLedger(manifest)
+
+  assert.deepEqual(prs.A1.held, { at: at(81), by: 'maintainer', reason: null })
+  assert.equal(prs.A2.held, null)
+
+  const byDriver = { at: at(5), by: 'driver', reason: 'usage limit reached' }
+
+  assert.deepEqual(withDefaults({ held: byDriver }).held, byDriver)
+  assert.equal(withDefaults({ held: null }).held, null)
+  assert.equal(withDefaults({}).held, null)
 })
 
 test('MIGRATIONS: the step from 1 to 2 is pure, fills the defaults of every entry and stamps nothing', () => {
@@ -539,11 +589,11 @@ test('save replaces ledger.json, so a reader that opened the old file still read
   const reader = openSync(path, 'r')
 
   try {
-    ledger.data.paused = true
+    ledger.data.hold = { at: at(5), by: 'maintainer', reason: null }
     ledger.save()
 
     assert.equal(readFileSync(reader, 'utf8'), before)
-    assert.equal(JSON.parse(readFileSync(path, 'utf8')).paused, true)
+    assert.equal(JSON.parse(readFileSync(path, 'utf8')).hold.by, 'maintainer')
   } finally {
     closeSync(reader)
   }

@@ -1,6 +1,6 @@
 import { renderRolloutControls } from './controls.js'
 import { badge, element, link, secondsSince, withClass, wrap } from './dom.js'
-import { ago, money, plural } from './format.js'
+import { ago, clock, money, plural } from './format.js'
 import { driverStatus, errorCount } from './model.js'
 
 const STALE_HEARTBEAT_SECONDS = 300
@@ -38,11 +38,21 @@ function tickFacts(tick) {
   return parts
 }
 
+function holdText(hold) {
+  const reason = hold.reason ? `: ${hold.reason}` : ''
+
+  return `by ${hold.by} since ${clock(hold.at)}${reason}`
+}
+
 function driverPart(driver, age) {
   const status = driverStatus(driver)
   const part = element('span', undefined, 'fact')
 
   part.append(badge(status, `driver driver-${status}`))
+
+  if (driver?.hold) {
+    part.append(element('span', holdText(driver.hold)))
+  }
 
   if (driver?.running) {
     part.append(element('span', `PID ${driver.pid ?? '-'}`), heartbeat(driver, age), ...tickFacts(driver.tick))

@@ -51,16 +51,16 @@ const CI_RED_BLOCK = [
 
 const MUTATIONS = [
   {
-    id: 'merge-ignores-pause',
+    id: 'merge-ignores-rollout-hold',
     file: 'lib/driver.mjs',
-    find: 'if (ledger.data.paused || stopping) {',
+    find: 'if (ledger.data.hold || stopping) {',
     replace: 'if (stopping) {',
     tests: ['test/driver-tick.test.mjs'],
   },
   {
-    id: 'advance-ignores-pause',
+    id: 'advance-ignores-rollout-hold',
     file: 'lib/driver.mjs',
-    find: 'if (!ledger.data.paused && !stopping) {',
+    find: 'if (!ledger.data.hold && !stopping) {',
     replace: 'if (!stopping) {',
     tests: ['test/driver-tick.test.mjs'],
   },

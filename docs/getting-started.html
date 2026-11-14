@@ -365,7 +365,7 @@ node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             </p>
             <p>
               The driver merges <code>policy.mergeDelaySeconds</code> (120 s) after it first sees the approval, and
-              <code>rollout pause</code> in that window stops it. In this dry run you get a "would merge" notification instead.
+              <code>rollout hold P1</code> in that window stops it. In this dry run you get a "would merge" notification instead.
             </p>
           </li>
           <li>
@@ -436,7 +436,7 @@ node $R approve P1 --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         </p>
 
         <ul>
-          <li>It can queue commands for you, such as a note, a retry, a hold or a pause.</li>
+          <li>It can queue commands for you, such as a note, a retry, or a hold of some PRs or the whole rollout.</li>
           <li>It never approves on your behalf. It shows the card, and you review on GitHub or run <code>approve</code>.</li>
           <li>
             It does not start <code>run</code> or <code>ui</code> in its own Bash, because both run until you stop them. You start them in

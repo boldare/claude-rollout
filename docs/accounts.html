@@ -428,7 +428,7 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           Under <code>merge: human</code> the driver waits
           <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a>
           (120 s) before it merges, counted from when the driver first sees the approval. That leaves room to notice an approval you did not
-          expect and stop it with <code>rollout pause</code>.
+          expect and stop it with <code>rollout hold P1</code>.
         </p>
 
         <ul>
@@ -440,8 +440,8 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           <li>Both send a notification when the window starts.</li>
           <li>A change request or a dismissal clears a GitHub approval the driver has seen, so the next approval starts a new window.</li>
           <li>
-            The driver does not look for GitHub approvals while a PR is held or the rollout is paused. An approval it first sees after the
-            release or the resume starts its window then.
+            The driver does not look for GitHub approvals while a PR or the rollout is held. An approval it first sees after the release
+            starts its window then.
           </li>
         </ul>
 
@@ -588,7 +588,8 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           <li>
             <strong>Account trouble</strong>: a message about a spend limit, a credit balance, billing or an exceeded budget, or claude's
             own <code>billing_error</code>, <code>account_on_hold</code> and <code>authentication_failed</code> errors. The budget here is
-            the account's, not the run's cap. The whole rollout pauses and notifies you. <code>rollout resume</code> continues it.
+            the account's, not the run's cap. The driver holds the whole rollout, with the error as the reason, and notifies you.
+            <code>rollout release --all</code> continues it.
           </li>
           <li>
             <strong>The run's budget cap</strong>: a run that reaches its own <code>--max-budget-usd</code> fails with "hit its budget cap

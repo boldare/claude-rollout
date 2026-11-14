@@ -996,6 +996,55 @@ test('log-failed: a run whose transcript could not be written says so once, righ
   assert.deepEqual(eventsSince(setup.manifest).at(-1), { id: 'A1', kind: 'log-failed', run, error: result.logError })
 })
 
+const ACCOUNT_ERROR = 'synthetic usage limit reached, it resets in five hours'
+const ACCOUNT_NOTICE = '-: account limit reached, the rollout is held (rollout release --all)'
+
+// An implement run of A1 that ends on the account limit. `hold` is the rollout's hold before it.
+async function accountFailure({ error = ACCOUNT_ERROR, hold = null } = {}) {
+  const result = agentResult({ ok: false, account: true, error })
+  const setup = modelDriver({ A1: { state: 'pending' } }, { result: () => Promise.resolve(result) })
+
+  setup.driver.ledger.data.hold = structuredClone(hold)
+  await launched(setup, 'implement')
+  await waitFor(() => setup.driver.running.size === 0, 'the run to end')
+
+  return { ...setup, held: eventsSince(setup.manifest).filter((event) => event.kind === 'held') }
+}
+
+test('account limit: a run that hits it holds the rollout by the driver, with its error as the reason, and notifies', async () => {
+  const { driver, held, notices } = await accountFailure()
+  const { hold } = driver.ledger.data
+
+  assert.ok(Date.parse(hold?.at), JSON.stringify(hold))
+  assert.deepEqual(hold, { at: hold.at, by: 'driver', reason: ACCOUNT_ERROR })
+  assert.deepEqual(held, [{ id: '-', kind: 'held', scope: 'rollout', by: 'driver', reason: ACCOUNT_ERROR }])
+  assert.deepEqual(notices, [ACCOUNT_NOTICE])
+})
+
+test('account limit: the reason is the error cut to 200 characters, or account limit when the run gave none', async () => {
+  const long = await accountFailure({ error: 'x'.repeat(300) })
+  const none = await accountFailure({ error: null })
+
+  assert.equal(long.driver.ledger.data.hold.reason, 'x'.repeat(200))
+  assert.equal(none.driver.ledger.data.hold.reason, 'account limit')
+})
+
+test('account limit: a maintainer hold already in place stays, no held is logged, and the notice still goes out', async () => {
+  const hold = { at: at(5), by: 'maintainer', reason: null }
+  const { driver, held, notices } = await accountFailure({ hold })
+
+  assert.deepEqual(driver.ledger.data.hold, hold)
+  assert.deepEqual(held, [])
+  assert.deepEqual(notices, [ACCOUNT_NOTICE])
+})
+
+test('account limit: release --all lifts the hold of the driver', async () => {
+  const { manifest, driver } = await accountFailure()
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'release', all: true }), [{ id: '-', kind: 'released', scope: 'rollout', stillHeld: [] }])
+  assert.equal(driver.ledger.data.hold, null)
+})
+
 // What reaches process.on(name) until the test ends.
 function recorded(context, name) {
   const seen = []
@@ -1026,7 +1075,7 @@ async function endWithSaveBlocked(context, start) {
   assert.equal(driver.running.size, 0)
 
   // The fixture has other PRs and free slots.
-  driver.ledger.data.paused = true
+  driver.ledger.data.hold = { at: at(1), by: 'maintainer', reason: null }
 
   const before = readEvents(manifest).length
   await driver.runTick()

@@ -1,8 +1,15 @@
 import { sentence, serverAnswered } from './format.js'
 
 const RETRY_STATES = ['escalated', 'blocked', 'interrupted']
-const PR_COMMANDS = ['hold', 'release', 'retry']
 const LOSES_VERIFICATION = ['verified', 'ready_claimed']
+
+const BODIES = {
+  'hold-all': () => ({ cmd: 'hold', all: true }),
+  'release-all': () => ({ cmd: 'release', all: true }),
+  hold: (pr) => ({ cmd: 'hold', ids: [pr.id] }),
+  release: (pr) => ({ cmd: 'release', ids: [pr.id] }),
+  retry: (pr) => ({ cmd: 'retry', id: pr.id }),
+}
 
 export function rolloutControls(view, readOnly) {
   if (readOnly) {
@@ -15,7 +22,7 @@ export function rolloutControls(view, readOnly) {
 
   const { driver } = view
 
-  return [driver.paused ? 'resume' : 'pause', driver.running ? 'stop' : 'start']
+  return [driver.hold ? 'release-all' : 'hold-all', driver.running ? 'stop' : 'start']
 }
 
 export function prControls(pr, readOnly) {
@@ -113,8 +120,8 @@ export function commandBody(command, pr, answer) {
     return { cmd: command, dryRun: Boolean(answer?.dryRun) }
   }
 
-  if (PR_COMMANDS.includes(command)) {
-    return { cmd: command, id: pr.id }
+  if (Object.hasOwn(BODIES, command)) {
+    return BODIES[command](pr)
   }
 
   return { cmd: command }
@@ -134,8 +141,17 @@ function startNotice(body) {
   return parts.join(' ')
 }
 
+// What the command applies to: all, its PR ids or its one id.
+function scopeOf(command) {
+  if (command.all) {
+    return 'all'
+  }
+
+  return command.ids?.join(' ') ?? command.id
+}
+
 function queuedNotice(command, driver) {
-  const text = `${sentence([command.cmd, command.id].filter(Boolean).join(' '))} queued.`
+  const text = `${sentence([command.cmd, scopeOf(command)].filter(Boolean).join(' '))} queued.`
 
   return driver?.running ? text : `${text} It applies when the driver starts.`
 }
