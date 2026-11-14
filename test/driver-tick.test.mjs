@@ -4,7 +4,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createDriver } from '../lib/driver.mjs'
 import { GitHubError } from '../lib/gh.mjs'
-import { setFetch } from '../lib/github.mjs'
+import { baseChecks, setFetch } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { stageLabels } from '../lib/stage.mjs'
 import { readEvents } from '../lib/view.mjs'
@@ -238,6 +238,31 @@ test('tick: a red base after a merge notifies once, and for five ticks merges, r
   gate.facts = {}
   await driver.tick()
 
+  assert.equal(mergeCalls(tools).length, 1)
+})
+
+test('tick: a failed ignored run on the merge commit next to a green required run leaves the base green, and the gate merges', async () => {
+  const runs = [
+    { id: 1, name: 'test', status: 'completed', conclusion: 'success' },
+    { id: 2, name: 'Dependabot', status: 'completed', conclusion: 'failure' },
+  ]
+
+  const { manifest, driver, tools, gate, notices } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null }, A3: { state: 'merged', pr: 13, mergeSha: MERGE_SHA } },
+    { rules: [FETCH, MERGE_RULE], routes: [prRoute(), runsRoute(MERGE_SHA, { check_runs: runs })] },
+  )
+
+  manifest.repo.ignoredChecks = ['Dependabot']
+  driver.ledger.data.lastMerge = { id: 'A3', sha: MERGE_SHA, at: at(90) }
+  // tickDriver stubs collectFacts, so the gate gets the base as the driver reads it.
+  gate.facts = { mainChecks: await baseChecks(manifest, MERGE_SHA) }
+
+  await driver.tick()
+
+  assert.ok(!kindsSince(manifest).includes('base-red'))
+  assert.deepEqual(notices, [])
+  // The fake PR stays open after the merge, so lastMerge stays A3's.
+  assert.equal(driver.ledger.data.lastMerge.checked, 'green')
   assert.equal(mergeCalls(tools).length, 1)
 })
 

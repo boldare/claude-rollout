@@ -1446,6 +1446,49 @@ test("baseChecks reads a tip once per tick's reads, and a commit shape once at a
   assert.equal(historyCalls(), 2)
 })
 
+const DEPENDABOT_FAILED = { id: 3, name: 'Dependabot', status: 'completed', conclusion: 'failure' }
+
+test('baseChecks reads a tip with a green required run and a failed ignored run as green at its own sha', async () => {
+  const { manifest } = quietRollout([], [runsRoute('quiet00', [GREEN_RUN, DEPENDABOT_FAILED])], [])
+
+  manifest.repo.ignoredChecks = ['Dependabot']
+
+  const ignored = await baseChecks(manifest, 'quiet00')
+
+  assert.equal(ignored.state, 'green')
+  assert.equal(ignored.sha, 'quiet00')
+  assert.equal(ignored.skipped, 0)
+
+  manifest.repo.ignoredChecks = []
+
+  const counted = await baseChecks(manifest, 'quiet00')
+
+  assert.equal(counted.state, 'red')
+  assert.equal(counted.sha, 'quiet00')
+  assert.equal(counted.skipped, 0)
+})
+
+test('baseChecks skips a quiet tip whose only run is an ignored failure, and stays on it without the list', async () => {
+  const rules = historyRules('quiet00', 'quiet01', ['docs/journal/2026-10.md'])
+  const routes = [runsRoute('quiet00', [DEPENDABOT_FAILED]), runsRoute('quiet01', [GREEN_RUN])]
+  const ignoring = quietRollout(rules, routes)
+
+  ignoring.manifest.repo.ignoredChecks = ['Dependabot']
+
+  const skipped = await baseChecks(ignoring.manifest, 'quiet00')
+
+  assert.equal(skipped.state, 'green')
+  assert.equal(skipped.sha, 'quiet01')
+  assert.equal(skipped.skipped, 1)
+
+  const counting = quietRollout(rules, routes)
+  const own = await baseChecks(counting.manifest, 'quiet00')
+
+  assert.equal(own.state, 'red')
+  assert.equal(own.sha, 'quiet00')
+  assert.equal(own.skipped, 0)
+})
+
 const RUNS = `repos/example/widgets/commits/${HEAD}/check-runs`
 const REVIEWS = `${PR_11}/reviews`
 const CONVERSATION = 'repos/example/widgets/issues/11/comments'
