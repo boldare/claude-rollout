@@ -293,6 +293,35 @@ test('validateManifest: repo.baseQuietPaths, when set, is a list of strings', ()
   }
 })
 
+test('loadManifest: repo.ignoredChecks defaults to an empty list and keeps a given one', () => {
+  assert.deepEqual(loadManifest(makeRollout()).repo.ignoredChecks, [])
+  assert.deepEqual(loadManifest(withRepo({ ignoredChecks: ['Dependabot'] })).repo.ignoredChecks, ['Dependabot'])
+})
+
+test('validateManifest: repo.ignoredChecks, when set, is a list of non-empty strings that repo.requiredChecks does not have', () => {
+  const list = 'repo.ignoredChecks must be a list of check run names (globs), e.g. [Dependabot]'
+  const overlap = 'repo.ignoredChecks: check is also in repo.requiredChecks, and a check cannot be both required and ignored'
+  const cases = [
+    [null, [list]],
+    ['Dependabot', [list]],
+    [['Dependabot', 7], [list]],
+    [[''], [list]],
+    [['  '], [list]],
+    [['check'], [overlap]],
+    [undefined, []],
+    [[], []],
+    [['Dependabot'], []],
+    [['check*'], []],
+  ]
+
+  for (const [ignoredChecks, errors] of cases) {
+    const raw = structuredClone(base)
+
+    raw.repo.ignoredChecks = ignoredChecks
+    assert.deepEqual(validateManifest(raw), errors, JSON.stringify(ignoredChecks ?? null))
+  }
+})
+
 test('validateManifest: repo.codeScanning, when set, is a mapping of a known action and severity', () => {
   const cases = [
     [{ action: 'warn' }, ['repo.codeScanning.action must be fix, block or ignore']],

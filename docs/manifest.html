@@ -85,6 +85,7 @@ repo:
   install: pnpm install --frozen-lockfile
   <span class="dim"># check run names, as globs</span>
   requiredChecks: ['test*', 'lint']
+  ignoredChecks: [Dependabot]    <span class="dim"># runs that say nothing about the code</span>
   <span class="dim"># the bot account's token</span>
   agentToken: ~/.config/rollout/agent-gh-token
   maintainers: [my-github-login]
@@ -412,9 +413,21 @@ prs:
                 <td>–</td>
                 <td>yes, not empty</td>
                 <td>
-                  Check run names a PR needs. Every glob must match a run that succeeded, and every run on the commit must finish as
-                  success, skipped or neutral. Only the latest run of each name counts, and a cancelled run only when the name has no other
-                  run.
+                  Check run names a PR needs. Every glob must match a run that succeeded, and every run on the commit, apart from those
+                  <a href="#repo-ignoredChecks"><code>ignoredChecks</code></a> names, must finish as success, skipped or neutral. Only the
+                  latest run of each name counts, and a cancelled run only when the name has no other run.
+                </td>
+              </tr>
+              <tr id="repo-ignoredChecks">
+                <td>ignoredChecks</td>
+                <td>list of globs</td>
+                <td><code>[]</code></td>
+                <td>no</td>
+                <td>
+                  A run these globs match counts for no commit's state: on a PR head, on the base or after a merge. It cannot fail a commit,
+                  keep it pending or satisfy a <code>requiredChecks</code> glob. List runs that say nothing about the code, such as
+                  <code>Dependabot</code>, the update job GitHub puts on the head of the base branch. A name may not be in both lists. An
+                  edit applies on the next tick.
                 </td>
               </tr>
               <tr id="repo-baseQuietPaths">
@@ -1442,6 +1455,10 @@ prs:
           </li>
           <li><code>repo.public</code>, when set, is a boolean.</li>
           <li><code>repo.baseQuietPaths</code>, when set, is a list of path globs.</li>
+          <li>
+            <code>repo.ignoredChecks</code>, when set, is a list of non-empty strings, and no entry is also in
+            <code>repo.requiredChecks</code>.
+          </li>
           <li>
             <code>gates</code>, when set, is a mapping whose only keys are <code>brief</code>, <code>ready</code>,
             <code>preVerify</code> and <code>verify</code>. <code>gates.brief</code>, when set, is a mapping with at most these keys:

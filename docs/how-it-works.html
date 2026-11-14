@@ -637,13 +637,14 @@
                   the item (<code>ci</code>, <code>policy</code>, <code>code-scanning</code>, <code>scope</code>, or the command itself),
                   its level (<code>required</code>, or <code>recommended</code> for a recommended command), the result, the short SHA and
                   short evidence. The result is pass, fail, or skip for code scanning that is off or unavailable. A <code>ci</code> pass
-                  lists every run on the SHA with its conclusion. A command's evidence is its summary, such as <code>exit 1</code>, then as
-                  much of the end of its output as fits. A pass or skip is logged once per claim and head, and a READY report or any new
-                  head starts a new list. A fail is always logged, a required one right before the send-back or block it causes. Only a
-                  required fail starts the list over, so the next round of checks logs every result again. Before the ready and pre-verify
-                  commands and before the verifier, the driver deletes untracked <code>.claude/settings.json</code>,
-                  <code>.claude/settings.local.json</code> and <code>CLAUDE.local.md</code> at the root of the worktree and logs
-                  <code>local-config-removed</code> with their paths. A global gitignore can hide them from the clean-tree check.
+                  lists every run on the SHA that <code>repo.ignoredChecks</code> does not name, with its conclusion. A command's evidence
+                  is its summary, such as <code>exit 1</code>, then as much of the end of its output as fits. A pass or skip is logged once
+                  per claim and head, and a READY report or any new head starts a new list. A fail is always logged, a required one right
+                  before the send-back or block it causes. Only a required fail starts the list over, so the next round of checks logs every
+                  result again. Before the ready and pre-verify commands and before the verifier, the driver deletes untracked
+                  <code>.claude/settings.json</code>, <code>.claude/settings.local.json</code> and <code>CLAUDE.local.md</code> at the root
+                  of the worktree and logs <code>local-config-removed</code> with their paths. A global gitignore can hide them from the
+                  clean-tree check.
                 </td>
                 <td>
                   A note that still waits for the implementer: <code>needs_fix</code>, before any check. CI green, no policy violation, no
@@ -1380,7 +1381,12 @@
               <tr id="gate-base-red">
                 <td class="nowrap"><code>base-red</code></td>
                 <td>wait</td>
-                <td>The base branch is red. Merges, rebases and fixes from the gate wait until it is green.</td>
+                <td>
+                  The base branch is red. Merges, rebases and fixes from the gate wait until it is green. A check run that says nothing
+                  about the code, such as Dependabot's update job, goes on
+                  <a href="manifest.html#repo-ignoredChecks"><code>repo.ignoredChecks</code></a> in the manifest. The edit applies on the
+                  next tick, with no restart.
+                </td>
               </tr>
               <tr id="gate-behind-base">
                 <td class="nowrap"><code>behind-base</code></td>
