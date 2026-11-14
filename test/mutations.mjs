@@ -205,6 +205,13 @@ const MUTATIONS = [
     replace: '} catch (saveError) {\n      throw saveError',
     tests: ['test/driver-runs.test.mjs'],
   },
+  {
+    id: 'ignored-checks-drop-unmatched',
+    file: 'lib/checks.mjs',
+    find: 'checkRuns.filter((run) => !matchesAny(run.name, ignoredGlobs))',
+    replace: 'checkRuns.filter(() => ignoredGlobs.length === 0)',
+    tests: ['test/checks.test.mjs'],
+  },
 ]
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))

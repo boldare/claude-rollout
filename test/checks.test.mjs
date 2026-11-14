@@ -62,6 +62,56 @@ test('a required check that was only skipped is red', () => {
   assert.match(summary.failing.join(), /required check check did not run/)
 })
 
+test('a failed ignored run leaves the commit green, and the same runs are red with no ignored globs', () => {
+  const runs = [
+    run(1, 'check', 'completed', 'success'),
+    run(2, 'smoke', 'completed', 'success'),
+    run(3, 'Dependabot', 'completed', 'failure'),
+  ]
+
+  const summary = summarizeChecks(runs, ['check', 'smoke*'], ['Dependabot'])
+
+  assert.equal(summary.state, 'green')
+  assert.deepEqual(summary.failing, [])
+  assert.deepEqual(
+    summary.runs.map((counted) => counted.name),
+    ['check', 'smoke'],
+  )
+
+  assert.equal(summarizeChecks(runs, ['check', 'smoke*'], []).state, 'red')
+})
+
+test('an ignored run in progress does not keep the commit pending', () => {
+  const runs = [run(1, 'check', 'completed', 'success'), run(2, 'Dependabot', 'in_progress')]
+  const summary = summarizeChecks(runs, ['check'], ['Dependabot'])
+
+  assert.equal(summary.state, 'green')
+  assert.deepEqual(summary.pending, [])
+})
+
+test('a required glob that only an ignored run matches is missing', () => {
+  const runs = [run(1, 'check', 'completed', 'success'), run(2, 'Dependabot', 'completed', 'success')]
+  const summary = summarizeChecks(runs, ['check', 'Depend*'], ['Dependabot'])
+
+  assert.equal(summary.state, 'pending')
+  assert.deepEqual(summary.missing, ['Depend*'])
+})
+
+test('a commit whose only runs are ignored has no runs and is pending', () => {
+  const summary = summarizeChecks([run(1, 'Dependabot', 'completed', 'failure')], ['check'], ['Dependabot'])
+
+  assert.equal(summary.state, 'pending')
+  assert.deepEqual(summary.runs, [])
+})
+
+test('a failed run that no ignored glob matches still makes the commit red', () => {
+  const runs = [run(1, 'check', 'completed', 'success'), run(2, 'CodeQL', 'completed', 'failure')]
+  const summary = summarizeChecks(runs, ['check'], ['Dependabot'])
+
+  assert.equal(summary.state, 'red')
+  assert.deepEqual(summary.failing, ['CodeQL: failure'])
+})
+
 const quiet = (overrides = {}) => ({
   runs: [],
   requiredGlobs: ['test*'],
