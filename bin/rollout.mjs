@@ -7,8 +7,7 @@
 //   rollout.mjs approve   <id> [--dir D]
 //   rollout.mjs note      <id> "<answer>" [--dir D]
 //   rollout.mjs retry     <id> [--dir D]
-//   rollout.mjs hold | release <id> [--dir D]
-//   rollout.mjs pause | resume [--dir D]
+//   rollout.mjs hold | release <id>... | --all [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
 //   rollout.mjs preflight [--dir D] [--live]
 //   rollout.mjs sandbox   build [--dir D]   (builds the agents' image for sandbox.runtime docker)
@@ -63,6 +62,7 @@ const CLI_OPTIONS = {
     port: { type: 'string' },
     open: { type: 'boolean', default: true },
     'read-only': { type: 'boolean', default: false },
+    all: { type: 'boolean', default: false },
   },
 }
 
@@ -87,15 +87,34 @@ function currentManifest() {
   })
 }
 
-function requireId(manifest) {
-  const id = rest[0]
-
+function checkId(manifest, id) {
   if (!id || !manifest.all.some((pr) => pr.id === id)) {
     console.error(`unknown or missing PR id: ${id ?? '(none)'}; known: ${manifest.all.map((pr) => pr.id).join(', ')}`)
     process.exit(1)
   }
 
   return id
+}
+
+function requireId(manifest) {
+  return checkId(manifest, rest[0])
+}
+
+// The command of hold or release: the PR ids given, or the whole rollout with --all.
+function scopedCommand(manifest, cmd) {
+  if (values.all && rest.length > 0) {
+    console.error(`${cmd} takes PR ids or --all, not both`)
+    process.exit(1)
+  }
+
+  if (values.all) {
+    return { cmd, all: true }
+  }
+
+  // No id at all gets the same error as an unknown one.
+  const named = rest.length > 0 ? rest : [undefined]
+
+  return { cmd, ids: [...new Set(named.map((id) => checkId(manifest, id)))] }
 }
 
 function age(iso) {
@@ -106,6 +125,10 @@ function age(iso) {
   const minutes = Math.round((Date.now() - Date.parse(iso)) / 60_000)
 
   return minutes < 90 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
+}
+
+function holdText(hold) {
+  return `since ${hold.at} by ${hold.by}${hold.reason ? `: ${hold.reason}` : ''}`
 }
 
 // status never runs claude, so a default image is the one the last driver start resolved.
@@ -135,8 +158,8 @@ function status(manifest) {
   console.log(`rollout ${manifest.rollout}  driver: ${driverText}`)
   console.log(runtimeLine(statusRuntime(manifest, view.events)))
 
-  if (driver.paused) {
-    console.log('PAUSED (rollout.mjs resume)')
+  if (driver.hold) {
+    console.log(`HELD ${holdText(driver.hold)} (rollout.mjs release --all)`)
   }
 
   console.log('')
@@ -243,7 +266,7 @@ function card(manifest, id) {
   console.log(`state: ${entry.state}   PR: ${entry.url ?? '-'}   cost: $${entry.costUsd.toFixed(2)}`)
 
   if (entry.held) {
-    console.log(`held since ${entry.held.at} (rollout.mjs release ${id})`)
+    console.log(`held ${holdText(entry.held)} (rollout.mjs release ${id})`)
   }
 
   console.log(
@@ -673,9 +696,13 @@ async function main() {
     }
 
     case 'retry':
+      postCommand(manifest, { cmd: command, id: requireId(manifest) })
+      console.log('queued')
+      break
+
     case 'hold':
     case 'release':
-      postCommand(manifest, { cmd: command, id: requireId(manifest) })
+      postCommand(manifest, scopedCommand(manifest, command))
       console.log('queued')
       break
 
@@ -701,12 +728,6 @@ async function main() {
       console.log(lockHolder(manifest) ? `driver ${pid} is still stopping` : `driver ${pid} stopped; agents resume on the next run`)
       break
     }
-
-    case 'pause':
-    case 'resume':
-      postCommand(manifest, { cmd: command })
-      console.log('queued')
-      break
 
     case 'preflight':
       await preflight(manifest)

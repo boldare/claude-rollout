@@ -3,8 +3,8 @@ import { ask } from './dialog.js'
 import { element } from './dom.js'
 
 const LABELS = {
-  pause: 'Pause',
-  resume: 'Resume',
+  'hold-all': 'Hold all',
+  'release-all': 'Release all',
   stop: 'Stop',
   start: 'Start',
   hold: 'Hold',

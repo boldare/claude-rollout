@@ -686,7 +686,7 @@ td > .badge {
 
 .state-interrupted,
 .held,
-.driver-paused,
+.driver-held,
 .verdict-warn {
   --tone: var(--warn);
 }
