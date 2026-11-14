@@ -338,7 +338,7 @@ test('transitions: escalateDispute escalates an upheld dispute and keeps the fin
 })
 
 test('transitions: escalateErrors escalates a PR after repeated errors', () => {
-  const entry = entryWith({ state: 'ready_claimed', pr: 7, lastError: 'boom' })
+  const entry = entryWith({ state: 'ready_claimed', pr: 7, lastError: 'GitHub answered 502 Bad Gateway for PR #7' })
   const before = structuredClone(entry)
 
   escalateErrors(entry, { at: AT, run: 'P1-02-implement' })

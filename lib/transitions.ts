@@ -1,7 +1,8 @@
-import type { BudgetRole, IsoTime } from './state.ts'
+import type { BudgetRole, CommitStamp, Head, IsoTime, QuestionKind } from './state.ts'
 
-// The values of STATES in kinds.mjs. tsc reads no .mjs file (no allowJs), so
-// they are spelled again here until ledger version 3 removes both lists.
+// The values of STATES in kinds.mjs. tsc reads no .mjs file (no allowJs), and
+// state.ts types ledger version 3, which has stage and status in place of a
+// state. So they are spelled again here until version 3 removes both lists.
 type State =
   | 'pending'
   | 'briefing'
@@ -16,28 +17,21 @@ type State =
   | 'interrupted'
   | 'merged'
 
+// QuestionKind has no closed or gate, because version 3 makes them statuses.
 interface Blocked {
-  kind: string
+  kind: QuestionKind | 'closed' | 'gate'
   question: string
   evidence: string
   run: string | null
 }
 
-interface Verification {
-  sha: string
+interface Verification extends CommitStamp {
   patchId?: string | null
-  at: IsoTime
 }
 
 interface BriefAnswer {
   question: string | null
   answer: string
-}
-
-interface DependencyHead {
-  id: string
-  sha: string
-  patchId: string | null
 }
 
 // The version 2 fields this module reads or writes. The optional ones are
@@ -63,7 +57,7 @@ interface PrEntry {
   ciPendingSince?: IsoTime | null
   briefAnswers: BriefAnswer[]
   briefScope?: string[]
-  briefHeads: DependencyHead[]
+  briefHeads: Head[]
   briefAt?: IsoTime
   previewConflict: string | null
   failStreak?: number
@@ -109,9 +103,9 @@ export function joinFix(entry: PrEntry, note: string): void {
 }
 
 export function answerBrief(entry: PrEntry, question: string | null, text: string): void {
+  entry.state = 'pending'
   entry.briefAnswers = [...(entry.briefAnswers ?? []), { question, answer: text }]
   entry.attempts.brief = Math.max(0, entry.attempts.brief - 1)
-  entry.state = 'pending'
   entry.blocked = null
 }
 
@@ -120,19 +114,19 @@ export function toPending(entry: PrEntry): void {
 }
 
 export function briefWaits(entry: PrEntry, key: string): void {
+  entry.state = 'pending'
   entry.attempts.brief = Math.max(0, entry.attempts.brief - 1)
   entry.previewConflict = key
-  entry.state = 'pending'
 }
 
-export function briefWritten(entry: PrEntry, { scope, heads, at }: { scope: string[]; heads: DependencyHead[]; at: IsoTime }): void {
+export function briefWritten(entry: PrEntry, { scope, heads, at }: { scope: string[]; heads: Head[]; at: IsoTime }): void {
+  entry.state = 'pending'
   entry.briefScope = scope
   entry.briefHeads = heads
   entry.previewConflict = null
   entry.briefAt = at
   entry.briefAnswers = []
   entry.failStreak = 0
-  entry.state = 'pending'
 }
 
 export function runStarted(entry: PrEntry, role: BudgetRole): void {
@@ -153,18 +147,18 @@ export function reportUsed(entry: PrEntry): void {
   entry.interruptedRole = null
 }
 
-export function toClaimed(entry: PrEntry, { pr, sha, at }: { pr: number; sha: string; at: IsoTime }): void {
+export function toClaimed(entry: PrEntry, { pr, sha, at }: CommitStamp & { pr: number }): void {
+  entry.state = 'ready_claimed'
   entry.pr = pr
   entry.claimedSha = sha
   entry.claimedAt = at
   entry.ciPendingSince = null
   entry.verified = null
-  entry.state = 'ready_claimed'
 }
 
-export function claimNewHead(entry: PrEntry, { sha, at }: { sha: string; at: IsoTime }): void {
-  entry.verified = null
+export function claimNewHead(entry: PrEntry, { sha, at }: CommitStamp): void {
   entry.state = 'ready_claimed'
+  entry.verified = null
   entry.claimedSha = sha
   entry.claimedAt = at
   entry.ciPendingSince = null
@@ -174,10 +168,10 @@ export function verifyAgain(entry: PrEntry): void {
   entry.state = 'ready_claimed'
 }
 
-export function toVerified(entry: PrEntry, { sha, at }: { sha: string; at: IsoTime }): void {
+export function toVerified(entry: PrEntry, { sha, at }: CommitStamp): void {
+  entry.state = 'verified'
   entry.verified = { sha, patchId: entry.claimPatchId, at }
   entry.attempts.verify = 0
-  entry.state = 'verified'
   entry.findings = null
 }
 
@@ -241,8 +235,8 @@ export function recoverRun(entry: PrEntry, { refund }: { refund: boolean }): Bud
   if (role === 'brief') {
     entry.state = 'pending'
   } else {
-    entry.interruptedRole = role
     entry.state = 'interrupted'
+    entry.interruptedRole = role
   }
 
   if (refund) {
