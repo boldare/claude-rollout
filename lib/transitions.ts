@@ -1,7 +1,9 @@
-import { GATE_BLOCK_CODES, QUESTION_KINDS } from './state.ts'
+import { GATE_BLOCK_CODES, QUESTION_KINDS, ROLES } from './state.ts'
 import type {
+  BriefEntry,
   BudgetRole,
   CommitStamp,
+  EntryBase,
   Fix,
   FixReason,
   GateBlockCode,
@@ -10,13 +12,18 @@ import type {
   IsoTime,
   MergeStatus,
   NeedsYouCode,
+  NeedsYouDetails,
   OpenStage,
   Question,
   QuestionKind,
+  Role,
+  RunRecord,
   RunningCode,
   Stage,
   Status,
   StatusAt,
+  Verification,
+  WaitingDetails,
   WaitingOf,
 } from './state.ts'
 
@@ -37,24 +44,21 @@ type State =
   | 'interrupted'
   | 'merged'
 
-// QuestionKind has no closed or gate, because version 3 makes them statuses.
-interface Blocked {
-  kind: QuestionKind | 'closed' | 'gate'
-  question: string
-  evidence: string
-  run: string | null
-}
+// Version 2 names the text `question`. QuestionKind has no closed or gate,
+// because version 3 makes them statuses.
+type Blocked = Pick<Question, 'evidence' | 'run'> & { kind: QuestionKind | 'closed' | 'gate'; question: string }
 
-interface Verification extends CommitStamp {
-  patchId?: string | null
-}
+// Version 2 records no run, and no patch id until pre-verify computed one.
+type StoredVerification = Pick<Verification, 'sha' | 'at'> & { patchId?: string | null }
 
-interface BriefAnswer {
-  question: string | null
-  answer: string
-}
+// A version 2 run record, as far as the fill reads it. Version 3 has no
+// step: the brief's two steps are running codes there. A record that endRun
+// made with no start has no start time.
+type StoredRun = Pick<RunRecord, 'id' | 'role'> & { step?: 'write' | 'review' | null; startedAt?: RunRecord['startedAt'] | null }
 
-// The gate's verdict as mergeCandidate stores it in `gate`. A queued one names the PR it waits for in `after`.
+// The gate's verdict as mergeCandidate stores it in `gate`. A queued one
+// names the PR it waits for in `after`. The codes live in judge.mjs, which
+// tsc does not read.
 interface StoredVerdict {
   action: string
   code: string
@@ -65,20 +69,12 @@ interface StoredVerdict {
   after?: number
 }
 
-// What the gate read, as collectFacts returns it.
+// What the gate read, as collectFacts in github.mjs returns it.
 interface GateFacts {
   pr: { headRefOid: string } | null
   depsPending: string[]
   checks: { missing: string[]; pending: string[] }
   mainChecks: { sha?: string | null; failing: string[] }
-}
-
-// A run record of the ledger, as far as the fill reads it.
-interface RunRecord {
-  id: string
-  role: string
-  step?: string | null
-  startedAt?: IsoTime | null
 }
 
 // The version 2 fields this module reads or writes, beside stage, status,
@@ -91,7 +87,7 @@ interface PrEntry {
   fix: Fix | null
   hold: Hold | null
   held: Hold | null
-  attempts: Record<BudgetRole, number>
+  attempts: EntryBase['attempts']
   interruptedRole: BudgetRole | 'report' | null
   blocked?: Blocked | null
   escalation: string | null
@@ -99,7 +95,7 @@ interface PrEntry {
   escalationRun: string | null
   fixReason?: string
   fixNote?: string
-  verified: Verification | null
+  verified: StoredVerification | null
   findings: unknown
   ready: unknown
   pr: number | null
@@ -108,7 +104,7 @@ interface PrEntry {
   claimedAt: IsoTime | null
   claimPatchId?: string | null
   ciPendingSince?: IsoTime | null
-  briefAnswers: BriefAnswer[]
+  briefAnswers: BriefEntry['answers']
   briefScope?: string[]
   briefHeads: Head[]
   briefAt?: IsoTime
@@ -117,7 +113,7 @@ interface PrEntry {
   failStreak?: number
   tickErrors?: number
   gate?: StoredVerdict | null
-  lastError: string | null
+  lastError: EntryBase['lastError']
   mergeSha?: string
 }
 
@@ -128,7 +124,7 @@ type UnfilledEntry = Omit<PrEntry, 'stage' | 'status' | 'fix' | 'hold'> & Partia
 type Unstamped<Union> = Union extends unknown ? Omit<Union, 'since'> : never
 
 type Resting = Unstamped<WaitingOf<'backoff' | 'slot'>>
-type RestingStage = 'brief' | 'implement' | 'verify'
+type RestingStage = (typeof RESTING_STAGES)[number]
 
 // PR states:
 //   pending → implementing → ready_claimed → verifying → verified → merged
@@ -146,14 +142,26 @@ export const RUNNING: Partial<Record<State, BudgetRole>> = {
 
 export const DISPUTE = 'disputed finding'
 
-const RESTING_STAGES: readonly OpenStage[] = ['brief', 'implement', 'verify']
-const ROLE_STAGES = { brief: 'brief', implement: 'implement', fix: 'implement', verify: 'verify' } as const
-const SLOT = { kind: 'waiting', code: 'slot' } as const
-const GITHUB = { kind: 'waiting', code: 'github' } as const
-const HELD_PR = { kind: 'waiting', code: 'held', scope: 'pr' } as const
-const GATE_PENDING = { kind: 'waiting', code: 'gate-pending' } as const
-const OBSTACLE_KINDS: readonly string[] = ['environment', 'ci', 'stuck', 'code-scanning']
-const EXHAUSTED = /^(brief|implement|fix|verify) attempts exhausted$/
+// `satisfies` checks each against state.ts and keeps its literal types, where a cast would hide a mismatch.
+const ROLE_STAGES = {
+  brief: 'brief',
+  implement: 'implement',
+  fix: 'implement',
+  verify: 'verify',
+} as const satisfies Record<BudgetRole, OpenStage>
+
+const BUDGET_ROLES = ROLES.filter((role): role is BudgetRole => role !== 'delegate')
+const RESTING_STAGES = ['brief', 'implement', 'verify'] as const satisfies readonly OpenStage[]
+const SLOT = { kind: 'waiting', code: 'slot' } as const satisfies Unstamped<WaitingOf<'slot'>>
+const GITHUB = { kind: 'waiting', code: 'github' } as const satisfies Unstamped<WaitingOf<'github'>>
+const HELD_PR = { kind: 'waiting', code: 'held', scope: 'pr' } as const satisfies Unstamped<WaitingOf<'held'>>
+const GATE_PENDING = { kind: 'waiting', code: 'gate-pending' } as const satisfies Unstamped<WaitingOf<'gate-pending'>>
+const OBSTACLE_KINDS = ['environment', 'ci', 'stuck', 'code-scanning'] as const satisfies readonly QuestionKind[]
+
+// includes() on an `as const` list refuses a value outside the list, which is the value it is asked about.
+function listed(list: readonly string[], value: string | null | undefined): boolean {
+  return list.includes(value ?? '')
+}
 
 // The roles of the agents whose run a restart cuts off.
 const RECOVERED: Partial<Record<RunningCode, BudgetRole>> = {
@@ -319,7 +327,7 @@ function noReport(at: IsoTime): Fix {
 }
 
 function restsOn(stage: Stage): stage is RestingStage {
-  return RESTING_STAGES.includes(stage as OpenStage)
+  return listed(RESTING_STAGES, stage)
 }
 
 // A merged entry has no status. A change on one, which no path makes, lands on merge.
@@ -451,7 +459,7 @@ export function toVerified(entry: PrEntry, { sha, at }: CommitStamp): void {
 }
 
 function questionOf(blocked: Blocked): Question {
-  const known = (QUESTION_KINDS as readonly string[]).includes(blocked.kind)
+  const known = listed(QUESTION_KINDS, blocked.kind)
 
   return {
     kind: known ? (blocked.kind as QuestionKind) : 'unknown',
@@ -463,28 +471,28 @@ function questionOf(blocked: Blocked): Question {
 }
 
 function gateBlockCode(code: string | null | undefined): GateBlockCode | null {
-  return (GATE_BLOCK_CODES as readonly string[]).includes(code ?? '') ? (code as GateBlockCode) : null
+  return listed(GATE_BLOCK_CODES, code) ? (code as GateBlockCode) : null
 }
 
 interface Block {
   since: IsoTime
   fix: Fix | null
   closedOn: Exclude<OpenStage, 'brief'>
-  gate: { code: GateBlockCode; reasons: string[] }
+  gateBlock: Omit<NeedsYouDetails['gate-blocked'], 'code'>
 }
 
-function placeBlock(entry: PrEntry, blocked: Blocked, { since, fix, closedOn, gate }: Block): void {
+function placeBlock(entry: PrEntry, blocked: Blocked, { since, fix, closedOn, gateBlock }: Block): void {
   if (blocked.kind === 'brief-questions') {
     place(entry, 'brief', { kind: 'needs-you', code: 'brief-questions', question: questionOf(blocked) }, { since })
   } else if (blocked.kind === 'closed') {
     place(entry, closedOn, { kind: 'needs-you', code: 'closed' }, { since, fix })
   } else if (blocked.kind === 'gate') {
-    place(entry, 'merge', { kind: 'needs-you', code: 'gate-blocked', gate: gate.code, reasons: gate.reasons }, { since })
+    place(entry, 'merge', { kind: 'needs-you', code: 'gate-blocked', ...gateBlock }, { since })
   } else if (blocked.kind === 'code-scanning' && !blocked.run) {
     const alerts = (blocked.evidence ?? '').split('\n').filter(Boolean)
 
     place(entry, entry.verified ? 'merge' : 'pre-verify', { kind: 'needs-you', code: 'code-scanning-alerts', alerts }, { since })
-  } else if (OBSTACLE_KINDS.includes(blocked.kind)) {
+  } else if (listed(OBSTACLE_KINDS, blocked.kind)) {
     place(entry, 'implement', { kind: 'needs-you', code: 'obstacle', question: questionOf(blocked) }, { since, fix })
   } else {
     place(entry, 'implement', { kind: 'needs-you', code: 'decision', question: questionOf(blocked) }, { since, fix })
@@ -496,7 +504,7 @@ function placeBlock(entry: PrEntry, blocked: Blocked, { since, fix, closedOn, ga
 export function toBlocked(
   entry: PrEntry,
   blocked: Blocked,
-  { at, gate = null }: { at: IsoTime; gate?: { code: string; reasons: string[] } | null },
+  { at, gate = null }: { at: IsoTime; gate?: Pick<StoredVerdict, 'code' | 'reasons'> | null },
 ): void {
   const stage = openStage(entry)
 
@@ -505,7 +513,7 @@ export function toBlocked(
     since: at,
     fix: entry.fix,
     closedOn: stage === 'brief' ? 'implement' : stage,
-    gate: { code: gateBlockCode(gate?.code) ?? 'no-pr', reasons: gate?.reasons ?? [blocked.question] },
+    gateBlock: { gate: gateBlockCode(gate?.code) ?? 'no-pr', reasons: gate?.reasons ?? [blocked.question] },
   })
 
   settle(entry)
@@ -776,7 +784,7 @@ export function backOffStatus(entry: PrEntry, at: IsoTime): void {
 }
 
 // A hold turns a waiting status into held. A running or needs-you status stays as it is.
-export function heldStatus(entry: PrEntry, scope: 'pr' | 'rollout', at: IsoTime): void {
+export function heldStatus(entry: PrEntry, scope: WaitingDetails['held']['scope'], at: IsoTime): void {
   if (entry.status?.kind === 'waiting') {
     write(entry, openStage(entry), { kind: 'waiting', code: 'held', scope }, at)
   }
@@ -813,7 +821,7 @@ export function unheld(entry: PrEntry, at: IsoTime): void {
 interface FillContext {
   id: string
   briefWritten: boolean
-  runs: Record<string, RunRecord> | null | undefined
+  runs: Record<string, StoredRun> | null | undefined
   at: IsoTime
 }
 
@@ -837,8 +845,8 @@ function sameHold(hold: Hold | null | undefined, held: Hold | null | undefined):
 }
 
 // The PR's last run of a role, by start.
-function lastRun(context: FillContext, role: string): { name: string; record: RunRecord } | null {
-  let last: { name: string; record: RunRecord } | null = null
+function lastRun(context: FillContext, role: Role): { name: string; record: StoredRun } | null {
+  let last: { name: string; record: StoredRun } | null = null
 
   for (const [name, record] of Object.entries(context.runs ?? {})) {
     const later = !last || (record.startedAt ?? '') >= (last.record.startedAt ?? '')
@@ -851,7 +859,7 @@ function lastRun(context: FillContext, role: string): { name: string; record: Ru
   return last
 }
 
-function lastRunName(context: FillContext, role: string): string {
+function lastRunName(context: FillContext, role: Role): string {
   return lastRun(context, role)?.name ?? ''
 }
 
@@ -899,7 +907,7 @@ function fillBlocked(entry: PrEntry, { at }: FillContext): void {
     since: at,
     fix: null,
     closedOn: closedStage(entry),
-    gate: { code: gateBlockCode(stored?.code) ?? 'no-pr', reasons: stored?.reasons ?? [blocked.question] },
+    gateBlock: { gate: gateBlockCode(stored?.code) ?? 'no-pr', reasons: stored?.reasons ?? [blocked.question] },
   })
 }
 
@@ -922,7 +930,8 @@ function errorStage(entry: PrEntry, written: boolean): OpenStage {
 
 function fillEscalated(entry: PrEntry, context: FillContext): void {
   const { at } = context
-  const role = EXHAUSTED.exec(entry.escalation ?? '')?.[1] as BudgetRole | undefined
+  // As escalateExhausted spells it.
+  const role = BUDGET_ROLES.find((name) => entry.escalation === `${name} attempts exhausted`)
 
   if (role) {
     const limit = entry.attempts?.[role] ?? 0
