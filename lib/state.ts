@@ -123,6 +123,7 @@ export interface WaitingDetails {
   'code-scanning-pending': { code: 'code-scanning-pending'; sha: string }
   'base-red': { code: 'base-red'; sha: string; failing: string[] }
   'base-pending': { code: 'base-pending'; sha: string }
+  'gate-pending': { code: 'gate-pending' }
   'mergeable-unknown': { code: 'mergeable-unknown' }
   'github-merge-state': { code: 'github-merge-state'; mergeState: string }
   'merge-delay': { code: 'merge-delay'; until: IsoTime }
@@ -158,7 +159,12 @@ export interface StatusBase<Kind extends StatusKind> {
   since: IsoTime
 }
 
-export type RunningOf<Code extends RunningCode> = RunningDetails[Code] & StatusBase<'running'> & { run: string }
+// The driver's own work. No agent runs under these codes, so they name no run.
+export type OwnWorkCode = Subset<RunningCode, 'commands' | 'merge'>
+
+export type RunningOf<Code extends RunningCode> = Code extends OwnWorkCode
+  ? RunningDetails[Code] & StatusBase<'running'>
+  : RunningDetails[Code] & StatusBase<'running'> & { run: string }
 export type WaitingOf<Code extends WaitingCode> = WaitingDetails[Code] & StatusBase<'waiting'>
 export type NeedsYouOf<Code extends NeedsYouCode> = NeedsYouDetails[Code] & StatusBase<'needs-you'>
 
@@ -214,6 +220,7 @@ export const STAGE_STATUSES = {
       'ci',
       'base-red',
       'base-pending',
+      'gate-pending',
       'mergeable-unknown',
       'github-merge-state',
       'code-scanning-pending',

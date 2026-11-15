@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import { freshPr } from '../lib/ledger.mjs'
 import { runRecords } from '../lib/runs.mjs'
+import { fillFromState } from '../lib/transitions.ts'
 
 // A synthetic rollout directory, in a fresh temp dir unless `dir` names one.
 // Every part can be overridden, and null leaves the file out.
@@ -248,15 +249,22 @@ function sampleManifest(dir, policy) {
 
 // A legacy ledger is one a driver from before ledger versions wrote. Any
 // other records the runs of the events, as the driver that holds the lock
-// would, unless `runs` gives them.
+// would, unless `runs` gives them, and fills each entry's stage and status
+// from its state. Fixtures name a state, the fill does the rest.
 function ledgerOf(options, prs) {
   if (options.legacy) {
     return { prs, paused: false }
   }
 
   const events = (options.events ?? []).filter((event) => typeof event !== 'string')
+  const runs = options.runs ?? runRecords(events, { driverRunning: true })
+  const filledAt = new Date().toISOString()
 
-  return { version: 2, prs, runs: options.runs ?? runRecords(events, { driverRunning: true }), hold: options.hold }
+  for (const [id, entry] of Object.entries(prs)) {
+    fillFromState(entry, { id, briefWritten: false, runs, at: filledAt })
+  }
+
+  return { version: 2, prs, runs, hold: options.hold }
 }
 
 export function makeRollout(overrides = {}) {

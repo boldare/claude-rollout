@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { doneDetail } from '../lib/driver.mjs'
 import {
   acquireLock,
@@ -29,6 +29,7 @@ import {
 } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { runRecords, runsFromEvents, runsFromLedger } from '../lib/runs.mjs'
+import { stateOf } from '../lib/transitions.ts'
 import { liveness, prDetail, readEvents } from '../lib/view.mjs'
 import { at, makeRollout } from './fixtures.mjs'
 
@@ -662,4 +663,370 @@ test('beat: a save keeps the note of the last beat, and a new ledger starts with
   openLedger(manifest).save()
 
   assert.match(heartbeat(), /^\S+$/)
+})
+
+const HEAD = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+const CLAIM = { pr: 11, claimedSha: HEAD }
+const VERIFICATION = { sha: HEAD, patchId: 'patch-a1', at: at(80) }
+const SLOT = { kind: 'waiting', code: 'slot' }
+
+function brief(kind, run = 'A1-02-fix') {
+  return { kind, question: 'Which API?', evidence: 'one\ntwo', run }
+}
+
+function asked(kind, run = 'A1-02-fix') {
+  return { kind, text: 'Which API?', evidence: 'one\ntwo', run, delegate: null }
+}
+
+function runOf(role, startedAt, step = null) {
+  return { id: 'A1', role, step, startedAt }
+}
+
+const RUNS = {
+  'A1-01-brief-write': runOf('brief', at(1), 'write'),
+  'A1-01-brief-review': runOf('brief', at(10), 'review'),
+  'A1-02-implement': runOf('implement', at(30)),
+  'A1-01-implement': runOf('implement', at(20)),
+  'A1-03-fix': runOf('fix', at(40)),
+  'A1-04-verify': runOf('verify', at(50)),
+  'A2-01-implement': { ...runOf('implement', at(60)), id: 'A2' },
+}
+
+// One row per row of the fill's table: the version 2 entry, how the rollout
+// looks, and the stage, status (without its time) and fix the open fills in.
+const FILL_ROWS = [
+  ['pending with no brief file', { state: 'pending' }, {}, ['brief', SLOT, null]],
+  ['pending with a brief written', { state: 'pending' }, { brief: true }, ['implement', SLOT, null]],
+  [
+    'briefing, by the step of the last brief run',
+    { state: 'briefing' },
+    {},
+    ['brief', { kind: 'running', code: 'brief-review', run: 'A1-01-brief-review' }, null],
+  ],
+  ['implementing', { state: 'implementing' }, {}, ['implement', { kind: 'running', code: 'implement', run: 'A1-02-implement' }, null]],
+  [
+    'fixing',
+    { state: 'fixing', pr: 11, fixReason: 'CI is red', fixNote: 'test fails' },
+    {},
+    ['implement', { kind: 'running', code: 'fix', reason: 'ci-red', run: 'A1-03-fix' }, { reason: 'ci-red', note: 'test fails' }],
+  ],
+  [
+    'needs_fix',
+    { state: 'needs_fix', pr: 11, fixReason: 'out of scope', fixNote: 'revert' },
+    {},
+    ['implement', SLOT, { reason: 'scope', note: 'revert' }],
+  ],
+  [
+    'ready_claimed',
+    { state: 'ready_claimed', ...CLAIM },
+    {},
+    ['pre-verify', { kind: 'waiting', code: 'ci', sha: HEAD, missing: [], pending: [] }, null],
+  ],
+  [
+    'verifying',
+    { state: 'verifying', ...CLAIM },
+    {},
+    ['verify', { kind: 'running', code: 'verify', sha: HEAD, run: 'A1-04-verify' }, null],
+  ],
+  [
+    'verified, with no verdict of the gate since the verification, from its time',
+    { state: 'verified', ...CLAIM, verified: VERIFICATION },
+    { since: VERIFICATION.at },
+    ['merge', { kind: 'waiting', code: 'gate-pending' }, null],
+  ],
+  [
+    'blocked on brief questions',
+    { state: 'blocked', blocked: brief('brief-questions', 'A1-01-brief-review') },
+    {},
+    ['brief', { kind: 'needs-you', code: 'brief-questions', question: asked('brief-questions', 'A1-01-brief-review') }, null],
+  ],
+  [
+    'blocked on a decision',
+    { state: 'blocked', pr: 11, blocked: brief('brief-contradiction') },
+    {},
+    ['implement', { kind: 'needs-you', code: 'decision', question: asked('brief-contradiction') }, null],
+  ],
+  [
+    'blocked on an obstacle',
+    { state: 'blocked', pr: 11, blocked: brief('code-scanning') },
+    {},
+    ['implement', { kind: 'needs-you', code: 'obstacle', question: asked('code-scanning') }, null],
+  ],
+  [
+    'blocked by the gate',
+    {
+      state: 'blocked',
+      ...CLAIM,
+      blocked: { kind: 'gate', question: 'PR is a draft', evidence: '', run: null },
+      gate: { action: 'block', code: 'draft', reasons: ['PR is a draft'], at: at(85) },
+    },
+    {},
+    ['merge', { kind: 'needs-you', code: 'gate-blocked', gate: 'draft', reasons: ['PR is a draft'] }, null],
+  ],
+  [
+    'blocked on the driver code scanning alerts',
+    { state: 'blocked', ...CLAIM, blocked: brief('code-scanning', null) },
+    {},
+    ['pre-verify', { kind: 'needs-you', code: 'code-scanning-alerts', alerts: ['one', 'two'] }, null],
+  ],
+  [
+    'blocked on a closed PR',
+    { state: 'blocked', ...CLAIM, blocked: { kind: 'closed', question: 'PR #11 was closed.', evidence: '', run: null } },
+    {},
+    ['pre-verify', { kind: 'needs-you', code: 'closed' }, null],
+  ],
+  [
+    'escalated out of attempts',
+    {
+      state: 'escalated',
+      pr: 11,
+      escalation: 'fix attempts exhausted',
+      attempts: { implement: 1, fix: 4, verify: 0, brief: 0 },
+      fixReason: 'CI is red',
+      fixNote: 'still red',
+    },
+    {},
+    ['implement', { kind: 'needs-you', code: 'attempts-exhausted', role: 'fix', limit: 4 }, { reason: 'ci-red', note: 'still red' }],
+  ],
+  [
+    'escalated over a dispute',
+    { state: 'escalated', ...CLAIM, escalation: 'disputed finding', lastError: 'F1 still open' },
+    {},
+    ['verify', { kind: 'needs-you', code: 'dispute', findings: [], text: 'F1 still open' }, null],
+  ],
+  [
+    'escalated for errors',
+    { state: 'escalated', ...CLAIM, escalation: 'repeated errors', lastError: 'boom', tickErrors: 5 },
+    {},
+    ['pre-verify', { kind: 'needs-you', code: 'errors', error: 'boom', count: 5 }, null],
+  ],
+  ['interrupted verifier', { state: 'interrupted', ...CLAIM, interruptedRole: 'verify' }, {}, ['verify', SLOT, null]],
+  [
+    'interrupted with a parked READY report',
+    { state: 'interrupted', interruptedRole: 'report', ready: { status: 'READY', pr: 11, headSha: HEAD } },
+    {},
+    ['pre-verify', { kind: 'waiting', code: 'github' }, null],
+  ],
+  [
+    'interrupted implementer',
+    { state: 'interrupted', pr: 11, interruptedRole: 'fix' },
+    {},
+    ['implement', SLOT, { reason: 'no-report', note: '' }],
+  ],
+  ['merged', { state: 'merged', pr: 11 }, {}, ['merged', null, null]],
+]
+
+// A raw version 2 ledger with A1 as an older driver wrote it, opened as the driver opens it.
+function openedA1(fields, { brief: written = false, runs = RUNS } = {}) {
+  const manifest = withLedger({ version: 2, prs: { A1: fields }, runs, hold: null })
+
+  if (written) {
+    const path = manifest.all.find((pr) => pr.id === 'A1').brief
+
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, '# A1\n')
+  }
+
+  return { manifest, entry: openLedger(manifest).prs.A1 }
+}
+
+function untimed(value) {
+  if (!value) {
+    return value
+  }
+
+  const { since: _, ...rest } = value
+
+  return rest
+}
+
+// A row's `since` names the time the fill takes in place of the time of the open.
+for (const [name, fields, rollout, [stage, status, fix]] of FILL_ROWS) {
+  test(`openLedger fills stage and status from the state: ${name}`, () => {
+    const before = Date.now()
+    const { entry } = openedA1(fields, rollout)
+
+    assert.deepEqual([entry.stage, untimed(entry.status), untimed(entry.fix)], [stage, status, fix])
+
+    for (const stamped of [entry.status, entry.fix].filter(Boolean)) {
+      if (rollout.since) {
+        assert.equal(stamped.since, rollout.since)
+      } else {
+        assert.ok(Date.parse(stamped.since) >= before - 1000, stamped.since)
+      }
+    }
+  })
+}
+
+test('openLedger: stateOf of every filled row gives back the stored state', () => {
+  for (const [name, fields, rollout] of FILL_ROWS) {
+    const { entry } = openedA1(fields, rollout)
+
+    assert.equal(stateOf(entry), fields.state, name)
+    assert.equal(entry.state, fields.state, name)
+  }
+})
+
+test('openLedger fills the other cases of a run, a block, an escalation and an interruption', () => {
+  const errors = { kind: 'needs-you', code: 'errors', error: '', count: 0 }
+  const rows = [
+    [{ state: 'fixing', pr: 11 }, 'implement', { kind: 'running', code: 'fix', reason: 'no-report', run: 'A1-03-fix' }],
+    [{ state: 'blocked', pr: 11, blocked: brief('stuck') }, 'implement', { kind: 'needs-you', code: 'obstacle', question: asked('stuck') }],
+    [
+      { state: 'blocked', blocked: brief('a kind no schema has') },
+      'implement',
+      { kind: 'needs-you', code: 'decision', question: asked('unknown') },
+    ],
+    [
+      { state: 'blocked' },
+      'implement',
+      { kind: 'needs-you', code: 'decision', question: { ...asked('unknown', null), text: '', evidence: '' } },
+    ],
+    [
+      { state: 'blocked', ...CLAIM, blocked: { kind: 'gate', question: 'no PR found', evidence: '', run: null } },
+      'merge',
+      { kind: 'needs-you', code: 'gate-blocked', gate: 'no-pr', reasons: ['no PR found'] },
+    ],
+    [
+      { state: 'blocked', ...CLAIM, verified: VERIFICATION, blocked: brief('code-scanning', null) },
+      'merge',
+      { kind: 'needs-you', code: 'code-scanning-alerts', alerts: ['one', 'two'] },
+    ],
+    [
+      { state: 'blocked', pr: 11, blocked: { kind: 'closed', question: 'closed', evidence: '', run: null } },
+      'implement',
+      { kind: 'needs-you', code: 'closed' },
+    ],
+    [
+      { state: 'escalated', escalation: 'brief attempts exhausted', attempts: { brief: 2 } },
+      'brief',
+      { kind: 'needs-you', code: 'attempts-exhausted', role: 'brief', limit: 2 },
+    ],
+    [{ state: 'escalated', ...CLAIM, verified: VERIFICATION, escalation: 'repeated errors' }, 'merge', errors],
+    [{ state: 'escalated', sessionId: 'session-1' }, 'implement', errors],
+    [{ state: 'escalated' }, 'brief', errors],
+    [{ state: 'interrupted', interruptedRole: 'verify' }, 'implement', SLOT],
+  ]
+
+  for (const [fields, stage, status] of rows) {
+    const { entry } = openedA1(fields)
+
+    assert.deepEqual([entry.stage, untimed(entry.status)], [stage, status], JSON.stringify(fields))
+    assert.equal(stateOf(entry), fields.state, JSON.stringify(fields))
+  }
+
+  const { entry: writer } = openedA1({ state: 'briefing' }, { runs: {} })
+
+  assert.deepEqual(writer.status, { kind: 'running', code: 'brief-write', run: '', since: writer.status.since })
+})
+
+test('openLedger: a held PR waits as held, one in back-off waits it out, and a hold gets its author', () => {
+  const later = new Date(Date.now() + 10 * 60_000).toISOString()
+  const held = openedA1({ state: 'ready_claimed', ...CLAIM, held: { at: at(5) } }).entry
+
+  assert.deepEqual(untimed(held.status), { kind: 'waiting', code: 'held', scope: 'pr' })
+  assert.deepEqual(held.hold, { at: at(5), by: 'maintainer', reason: null })
+  assert.equal(stateOf(held), 'ready_claimed')
+
+  const resting = openedA1({ state: 'needs_fix', pr: 11, retryAfter: later, failStreak: 3 }).entry
+
+  assert.deepEqual(untimed(resting.status), { kind: 'waiting', code: 'backoff', until: later, failures: 3 })
+
+  const running = openedA1({ state: 'implementing', held: { at: at(5), by: 'driver', reason: 'limit' } }).entry
+
+  assert.equal(running.status.kind, 'running')
+  assert.deepEqual(running.hold, { at: at(5), by: 'driver', reason: 'limit' })
+})
+
+test('openLedger: on merge a current verdict of the gate decides the status from its time, an older one leaves gate-pending', () => {
+  const verdict = { action: 'wait', code: 'ci-pending', reasons: ['CI pending'], mergeState: 'CLEAN', sha: HEAD }
+  const current = openedA1({ state: 'verified', ...CLAIM, verified: VERIFICATION, gate: { ...verdict, at: at(85) } }).entry
+  const older = openedA1({ state: 'verified', ...CLAIM, verified: VERIFICATION, gate: { ...verdict, at: at(70) } }).entry
+
+  assert.deepEqual(current.status, { kind: 'waiting', code: 'ci', sha: HEAD, missing: [], pending: [], since: at(85) })
+  assert.deepEqual(older.status, { kind: 'waiting', code: 'gate-pending', since: at(80) })
+})
+
+test('openLedger: on merge only the verdicts with a status of their own count, a stored held only while held', () => {
+  const statusOn = (gate, fields = {}) =>
+    openedA1({
+      state: 'verified',
+      ...CLAIM,
+      verified: VERIFICATION,
+      gate: { mergeState: 'BLOCKED', sha: HEAD, at: at(85), ...gate },
+      ...fields,
+    }).entry.status
+
+  const heldPr = { kind: 'waiting', code: 'held', scope: 'pr' }
+  const cases = [
+    [
+      { action: 'ready', code: 'ready', reasons: [] },
+      { kind: 'needs-you', code: 'merge-by-hand', mergeState: 'BLOCKED' },
+    ],
+    [
+      { action: 'wait', code: 'merge-refused', reasons: ['GitHub refused the merge (ruleset)'] },
+      { kind: 'needs-you', code: 'merge-refused', error: 'GitHub refused the merge (ruleset)' },
+    ],
+    [
+      { action: 'wait', code: 'queued', reasons: [], after: 12 },
+      { kind: 'waiting', code: 'queued', after: 12 },
+    ],
+    [
+      { action: 'wait', code: 'base-red', reasons: [] },
+      { kind: 'waiting', code: 'base-red', sha: '', failing: [] },
+    ],
+    [
+      { action: 'wait', code: 'stale-github-review', reasons: [] },
+      { kind: 'needs-you', code: 'review', stale: true },
+    ],
+    [
+      { action: 'merge', code: 'merge', reasons: [] },
+      { kind: 'waiting', code: 'gate-pending' },
+    ],
+    [
+      { action: 'wait', code: 'merged-on-github', reasons: [] },
+      { kind: 'waiting', code: 'gate-pending' },
+    ],
+    [
+      { action: 'wait', code: 'held', reasons: [] },
+      { kind: 'waiting', code: 'gate-pending' },
+    ],
+  ]
+
+  for (const [gate, status] of cases) {
+    assert.deepEqual(untimed(statusOn(gate)), status, gate.code)
+  }
+
+  for (const code of ['held', 'ci-pending']) {
+    assert.deepEqual(untimed(statusOn({ action: 'wait', code, reasons: [] }, { held: { at: at(83) } })), heldPr, code)
+  }
+})
+
+test('openLedger fills an entry again when its stage disagrees with its state or its hold with held, and leaves a filled one alone', () => {
+  const manifest = loadManifest(makeRollout({ prs: { A1: { state: 'ready_claimed', ...CLAIM }, A2: { state: 'needs_fix', pr: 12 } } }))
+  const ledger = openLedger(manifest)
+
+  ledger.prs.A1.state = 'verifying'
+  ledger.prs.A2.held = { at: at(5), by: 'maintainer', reason: null }
+
+  const kept = structuredClone(ledger.prs.A3)
+
+  ledger.save()
+
+  const reopened = openLedger(manifest).prs
+
+  assert.deepEqual([reopened.A1.stage, reopened.A1.status.code], ['verify', 'verify'])
+  assert.deepEqual([reopened.A2.status.code, reopened.A2.hold], ['held', { at: at(5), by: 'maintainer', reason: null }])
+  assert.deepEqual(reopened.A3, kept)
+})
+
+test('openLedger: a ledger it filled and saved still says version 2', () => {
+  const manifest = withLedger({ version: 2, prs: { A1: { state: 'needs_fix', pr: 11 } }, runs: {}, hold: null })
+  const ledger = openLedger(manifest)
+
+  ledger.save()
+
+  assert.equal(stored(manifest).version, 2)
+  assert.equal(stored(manifest).prs.A1.stage, 'implement')
+  assert.match(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8'), /^\{\n {2}"version": 2,/)
 })

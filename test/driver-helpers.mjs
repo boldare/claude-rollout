@@ -175,9 +175,11 @@ export function tickDriver(
   return { manifest, driver, tools, github, gate, notices, cleaned }
 }
 
+// The step suites pin the events of a step, test/status.test.mjs pins the status events.
 export function eventsSince(manifest, from = 0) {
   return readEvents(manifest)
     .slice(from)
+    .filter((event) => event.kind !== 'status')
     .map(({ at: _, ...event }) => event)
 }
 
