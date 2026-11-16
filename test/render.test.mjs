@@ -9,7 +9,7 @@ import { clock } from '../ui/format.js'
 import { renderHeader } from '../ui/header.js'
 import { renderTranscript } from '../ui/transcript.js'
 import { installDocument } from './fake-dom.mjs'
-import { START, makeRollout } from './fixtures.mjs'
+import { START, at, makeRollout, samplePrs } from './fixtures.mjs'
 
 const fakeDocument = installDocument()
 const NOW = START + 100 * 60_000
@@ -25,15 +25,19 @@ const manifest = loadManifest(dir)
 const { state, events } = overJson(rolloutSnapshot(manifest, 'demo', NOW))
 const prBody = overJson(rolloutPr(manifest, 'A1'))
 const page = overJson(transcriptPage(manifest, 'A1-01-implement'))
+// A2 runs under its own hold, so its row carries the held marker.
+const heldDir = makeRollout({ prs: { ...samplePrs(), A2: { ...samplePrs().A2, held: { at: at(90), reason: 'checking' } } } })
+const heldView = overJson(rolloutSnapshot(loadManifest(heldDir), 'demo', NOW)).state.view
 
 state.readOnly = true
 rmSync(dir, { recursive: true, force: true })
+rmSync(heldDir, { recursive: true, force: true })
 
 function viewContext(overrides = {}) {
   const { route, ...rest } = overrides
 
   return {
-    route: { r: 'demo', view: 'board', pr: null, tab: 'overview', state: null, id: null, kind: null, run: null, from: null, ...route },
+    route: { r: 'demo', view: 'board', pr: null, tab: 'overview', filter: null, id: null, kind: null, run: null, from: null, ...route },
     now: NOW,
     state,
     view: state.view,
@@ -131,31 +135,92 @@ function repeatedRules(css) {
   return repeats
 }
 
-test('board: one clickable row per PR with its state badges', () => {
+test('board: one clickable row per PR with its stage and status badges, and the info in the CLI order', () => {
   const board = renderBoard(viewContext())
 
   assert.equal(board.tagName, 'SECTION')
   assert.equal(board.className, 'board')
+  assert.equal(board.querySelectorAll('th')[3].textContent, 'stage · status')
 
   const rows = board.querySelectorAll('tr.clickable')
-  const states = rows.map((row) => row.children[3])
-  const firstBadges = states.map((cell) => one(cell, '.badge'))
+  const cells = rows.map((row) => row.children[3])
+  const badges = (selector) => cells.map((cell) => one(cell, selector)).map((badge) => [badge.className, badge.textContent])
 
   assert.deepEqual(
     rows.map((row) => row.children[1].textContent),
     ['A1', 'A2', 'A3'],
   )
 
+  assert.deepEqual(badges('span.badge.stage'), [
+    ['badge stage stage-merge', 'merge'],
+    ['badge stage stage-implement', 'implement'],
+    ['badge stage stage-brief', 'brief'],
+  ])
+
+  assert.deepEqual(badges('span.badge.status'), [
+    ['badge status kind-waiting', 'waiting: held'],
+    ['badge status kind-running', 'running: implement'],
+    ['badge status kind-waiting', 'waiting: slot'],
+  ])
+
+  assert.equal(cells[0].querySelectorAll('span.badge.held').length, 0, 'a waiting status says held itself')
+
+  const info = one(rows[0], 'td.info')
+
   assert.deepEqual(
-    firstBadges.map((badge) => [badge.className, badge.textContent]),
-    [
-      ['badge state state-verified', 'verified'],
-      ['badge state state-implementing', 'implementing'],
-      ['badge state state-pending', 'pending'],
-    ],
+    info.children.map((child) => `${child.tagName.toLowerCase()}.${child.className}`),
+    ['span.sentence', 'span.since', 'code.way-out'],
   )
 
-  assert.equal(one(states[0], 'span.badge.held').textContent, 'held')
+  assert.equal(one(info, 'span.sentence').textContent, 'held since 2026-09-01 11:21 UTC by maintainer')
+  assert.equal(one(info, 'code.way-out').textContent, 'rollout release A1')
+})
+
+test('board: a held running PR shows the held marker next to its status', () => {
+  const board = renderBoard(viewContext({ view: heldView }))
+  const cell = board.querySelectorAll('tr.clickable')[1].children[3]
+
+  assert.equal(one(cell, 'span.badge.status').textContent, 'running: implement')
+  assert.equal(one(cell, 'span.badge.held').textContent, 'held')
+})
+
+test('board: the chips filter by needs you and by stage, and say so when nothing is left', () => {
+  const chips = (filter) => texts(renderBoard(viewContext({ route: { filter } })), 'a.chip')
+  const empty = (filter) => texts(renderBoard(viewContext({ route: { filter } })), 'p.muted')
+
+  assert.deepEqual(chips(null), ['all 3', 'needs you 0', 'brief 1', 'implement 1', 'merge 1'])
+  assert.deepEqual(texts(renderBoard(viewContext({ route: { filter: 'merge' } })), 'a.chip.active'), ['merge 1'])
+  assert.equal(renderBoard(viewContext({ route: { filter: 'merge' } })).querySelectorAll('tr.clickable').length, 1)
+  assert.deepEqual(empty('needs-you'), ['No PR needs you.'])
+  assert.deepEqual(empty('verify'), ['No PR is on verify.'])
+})
+
+test('header: a stopped driver says since when, and that the statuses are from its last tick', () => {
+  const stoppedAt = new Date(NOW - 30 * 60_000).toISOString()
+  const header = (driver) =>
+    renderHeader(viewContext({ view: { ...state.view, driver: { ...state.view.driver, running: false, ...driver } } }))
+
+  assert.equal(
+    one(header({ stoppedAt }), 'p.stopped-since').textContent,
+    `Not running since ${clock(stoppedAt)}. Statuses are from its last tick.`,
+  )
+
+  assert.equal(one(header({ stoppedAt: null }), 'p.stopped-since').textContent, 'Not running.')
+  assert.equal(renderHeader(viewContext()).querySelectorAll('p.stopped-since').length, 0)
+})
+
+test('detail: the header shows the stage and status badges, and the overview the sentence, since when and the way out', () => {
+  const detail = renderDetail(viewContext({ route: { pr: 'A1', tab: 'overview' }, detail: { status: 200, body: prBody } }))
+  const header = one(detail, 'div.detail-header')
+  const terms = texts(detail, 'dt')
+  const status = detail.querySelectorAll('dd')[terms.indexOf('status')]
+
+  assert.equal(one(header, 'span.badge.stage').textContent, 'merge')
+  assert.equal(one(header, 'span.badge.status').textContent, 'waiting: held')
+  assert.equal(terms[0], 'status')
+  assert.equal(one(status, 'span.sentence').textContent, 'held since 2026-09-01 11:21 UTC by maintainer')
+  assert.equal(texts(status, 'span.muted')[0], ` since ${clock(prBody.status.since)}`)
+  assert.equal(one(status, 'code.way-out').textContent, 'rollout release A1')
 })
 
 test('header: the rollout name, the running driver and the document title', () => {

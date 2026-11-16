@@ -2,7 +2,7 @@
 // rollout: drives a multi-PR plan. See ../SKILL.md.
 //
 //   rollout.mjs run       [--dir D] [--only A1,A6] [--dry-run]
-//   rollout.mjs status    [--dir D]
+//   rollout.mjs status    [--dir D] [--stage S] [--needs-you]
 //   rollout.mjs card      <id> [--dir D]
 //   rollout.mjs approve   <id> [--dir D]
 //   rollout.mjs note      <id> "<answer>" [--dir D]
@@ -24,7 +24,9 @@ import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
 import { stopDriver } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { batteryWarning } from '../lib/machine.mjs'
-import { liveness, prDetail, readEvents, rolloutView, runsOf } from '../lib/view.mjs'
+import { prDetail, readEvents, rolloutView, rowDriver, rowsMatching, runsOf } from '../lib/view.mjs'
+import { timeText } from '../lib/sentences.ts'
+import { STAGES } from '../lib/state.ts'
 import { prsWithoutPlan } from '../lib/plan.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { clientFor, ghEnv, ghError } from '../lib/github.mjs'
@@ -63,8 +65,15 @@ const CLI_OPTIONS = {
     open: { type: 'boolean', default: true },
     'read-only': { type: 'boolean', default: false },
     all: { type: 'boolean', default: false },
+    stage: { type: 'string' },
+    'needs-you': { type: 'boolean', default: false },
   },
 }
+
+// The info column keeps this many columns whatever the width.
+const MIN_INFO = 20
+// Below this, a cut sentence says too little, so the whole info is cut.
+const MIN_SENTENCE = 12
 
 function parseCli() {
   try {
@@ -142,7 +151,94 @@ function statusRuntime(manifest, events) {
   return { runtime: 'docker', image: manifest.sandbox.image ?? started?.image ?? 'default' }
 }
 
+function driverText(driver) {
+  if (driver.running) {
+    return `running (pid ${driver.pid}, last heartbeat ${driver.heartbeatAgeSeconds}s ago${driver.heartbeatNote ? `: ${driver.heartbeatNote}` : ''})`
+  }
+
+  if (driver.stoppedAt) {
+    return `NOT RUNNING since ${timeText(driver.stoppedAt)}. Statuses are from its last tick. Start it with rollout.mjs run`
+  }
+
+  return 'NOT RUNNING (last heartbeat never)'
+}
+
+function stageFilter() {
+  const stage = values.stage ?? null
+
+  if (stage !== null && !STAGES.includes(stage)) {
+    console.error(`unknown stage ${stage}, known: ${STAGES.join(', ')}`)
+    process.exit(1)
+  }
+
+  return stage
+}
+
+// COLUMNS first, then the terminal's width. Output to a pipe keeps its lines whole.
+function terminalWidth() {
+  const columns = Number(process.env.COLUMNS)
+
+  if (Number.isInteger(columns) && columns > 0) {
+    return columns
+  }
+
+  return process.stdout.isTTY ? process.stdout.columns : null
+}
+
+function stageStatus(shown) {
+  if (!shown.kind) {
+    return shown.stage
+  }
+
+  return `${shown.stage} · ${shown.kind}: ${shown.code}${shown.marker ? ' [held]' : ''}`
+}
+
+// At the last space that fits, or inside the word when no space does.
+function cutText(text, width) {
+  if (text.length <= width) {
+    return text
+  }
+
+  const space = text.lastIndexOf(' ', width - 1)
+  const end = space > 0 ? space : width - 1
+
+  return `${text.slice(0, end).trimEnd()}…`
+}
+
+// The sentence, how long the status has held, and the way out. Only the
+// sentence is cut, unless the age and the way out leave it too little room.
+function infoText(shown, width) {
+  const tail = `${shown.since ? ` · ${age(shown.since)}` : ''}${shown.wayOut ? ` (${shown.wayOut.text})` : ''}`
+  const whole = `${shown.sentence}${tail}`
+
+  if (width === null || whole.length <= width) {
+    return whole
+  }
+
+  if (width - tail.length >= MIN_SENTENCE) {
+    return `${cutText(shown.sentence, width - tail.length)}${tail}`
+  }
+
+  return cutText(whole, width)
+}
+
+function printRows(rows) {
+  const heading = 'stage · status'
+  const shown = rows.map((row) => stageStatus(row.status))
+  const idWidth = Math.max('id'.length, ...rows.map((row) => row.id.length))
+  const statusWidth = Math.max(heading.length, ...shown.map((text) => text.length))
+  const width = terminalWidth()
+  const infoWidth = width ? Math.max(MIN_INFO, width - idWidth - statusWidth - 4) : null
+
+  console.log(`${'id'.padEnd(idWidth)}  ${heading.padEnd(statusWidth)}  info`)
+
+  rows.forEach((row, index) => {
+    console.log(`${row.id.padEnd(idWidth)}  ${shown[index].padEnd(statusWidth)}  ${infoText(row.status, infoWidth)}`)
+  })
+}
+
 function status(manifest) {
+  const stage = stageFilter()
   const view = rolloutView(manifest)
 
   if (!view) {
@@ -151,11 +247,8 @@ function status(manifest) {
   }
 
   const { driver } = view
-  const driverText = driver.running
-    ? `running (pid ${driver.pid}, last heartbeat ${driver.heartbeatAgeSeconds}s ago${driver.heartbeatNote ? `: ${driver.heartbeatNote}` : ''})`
-    : `NOT RUNNING (last heartbeat ${driver.heartbeatAgeSeconds === null ? 'never' : `${Math.round(driver.heartbeatAgeSeconds / 60)} min ago`})`
 
-  console.log(`rollout ${manifest.rollout}  driver: ${driverText}`)
+  console.log(`rollout ${manifest.rollout}  driver: ${driverText(driver)}`)
   console.log(runtimeLine(statusRuntime(manifest, view.events)))
 
   if (driver.hold) {
@@ -163,14 +256,13 @@ function status(manifest) {
   }
 
   console.log('')
-  console.log('id    state          PR     head     CI/gate                                   attempts  cost')
 
-  for (const row of view.rows) {
-    const attempts = `${row.attempts.implement}/${row.attempts.fix}/${row.attempts.verify}`
+  const rows = rowsMatching(view.rows, { stage, needsYou: values['needs-you'] })
 
-    console.log(
-      `${row.id.padEnd(5)} ${row.state.padEnd(14)} ${(row.pr ? `#${row.pr}` : '-').padEnd(6)} ${row.head.padEnd(8)} ${row.info.slice(0, 41).padEnd(41)} ${attempts.padEnd(9)} $${row.costUsd.toFixed(2)}`,
-    )
+  if (rows.length === 0) {
+    console.log('no PR matches')
+  } else {
+    printRows(rows)
   }
 
   const recent = view.events.slice(-8)
@@ -259,11 +351,22 @@ function card(manifest, id) {
   }
 
   const events = readEvents(manifest)
-  const runs = runsOf(ledger, events, { driverRunning: liveness(manifest).running })
-  const entry = prDetail(manifest, ledger, events, runs, id)
+  const driver = rowDriver(manifest)
+  const runs = runsOf(ledger, events, { driverRunning: driver.running })
+  const entry = prDetail(manifest, ledger, events, runs, id, driver)
+  const { status: shown } = entry
 
   console.log(`# ${id} ${entry.title}  (${entry.branch})`)
-  console.log(`state: ${entry.state}   PR: ${entry.url ?? '-'}   cost: $${entry.costUsd.toFixed(2)}`)
+  console.log(`${stageStatus(shown)}   PR: ${entry.url ?? '-'}   cost: $${entry.costUsd.toFixed(2)}`)
+  console.log(shown.sentence)
+
+  if (shown.since) {
+    console.log(`since ${timeText(shown.since)}`)
+  }
+
+  if (shown.wayOut) {
+    console.log(`way out: ${shown.wayOut.text}`)
+  }
 
   if (entry.held) {
     console.log(`held ${holdText(entry.held)} (rollout.mjs release ${id})`)
@@ -282,8 +385,12 @@ function card(manifest, id) {
   const { brief } = entry
   console.log(`brief: ${brief.exists ? brief.path : 'not written yet'}${brief.notesExist ? `   reviewer notes: ${brief.notesPath}` : ''}`)
 
-  if (entry.blocked && entry.state === 'blocked') {
-    console.log(`\nBLOCKED (${entry.blocked.kind}): ${entry.blocked.question}\n${entry.blocked.evidence ?? ''}`)
+  if (shown.question) {
+    console.log(`\nquestion (${shown.question.kind}): ${shown.question.text}`)
+
+    if (shown.question.evidence) {
+      console.log(shown.question.evidence)
+    }
   }
 
   printDelegate(entry.delegate)

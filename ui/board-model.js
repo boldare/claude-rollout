@@ -1,5 +1,5 @@
 import { duration, money, plural } from './format.js'
-import { isWaiting } from './model.js'
+import { needsYou } from './model.js'
 import { resultPreview } from './transcript-model.js'
 
 // The open part of a board row: the run in progress, or else the PR's last
@@ -30,14 +30,14 @@ export function panelRun(row, runs) {
   return own.findLast((run) => run.status === 'running') ?? own.at(-1) ?? null
 }
 
-// A waiting row opens by itself, any other row when the maintainer opens it,
+// A row that needs you opens by itself, any other row when the maintainer opens it,
 // and their choice sticks either way. A row with nothing to show stays shut.
 export function rowOpen(row, run, choices) {
-  if (!run && !isWaiting(row)) {
+  if (!run && !needsYou(row)) {
     return false
   }
 
-  return choices.get(row.id) ?? isWaiting(row)
+  return choices.get(row.id) ?? needsYou(row)
 }
 
 export function delegateText(delegate, kind) {
@@ -46,8 +46,9 @@ export function delegateText(delegate, kind) {
   return text ? text(delegate, kind) : delegate.state
 }
 
+// Decision 17: while there is no brief, a note goes to the brief writer.
 function answerer(row) {
-  return row.blocked?.kind === 'brief-questions' ? 'brief writer' : 'implementer'
+  return row.status?.stage === 'brief' ? 'brief writer' : 'implementer'
 }
 
 export function answerPlaceholder(row) {

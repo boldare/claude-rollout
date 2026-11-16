@@ -54,16 +54,21 @@ export function panelControls(row, readOnly) {
   return controls
 }
 
+// A sentence that ends in a question mark keeps it.
+function closed(text) {
+  return /[.?!…]$/.test(text) ? text : `${text}.`
+}
+
 function answerDialog(pr) {
-  const { kind, question, evidence } = pr.blocked ?? {}
+  const { question } = pr.status
   const sections = [
-    { heading: 'question', text: question },
-    { heading: 'evidence', text: evidence },
+    { heading: 'question', text: question?.text },
+    { heading: 'evidence', text: question?.evidence },
   ].filter((section) => section.text)
 
   return {
     title: `Answer ${pr.id}`,
-    text: `Blocked (${kind ?? 'unknown'}). The answer goes to the agent as a note.`,
+    text: `${closed(sentence(pr.status.sentence))} The answer goes to the agent as a note.`,
     sections,
     confirmLabel: 'Send',
     withText: true,

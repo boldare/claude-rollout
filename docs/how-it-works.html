@@ -435,7 +435,10 @@
 
         <h2 id="lifecycle">The PR lifecycle <a class="anchor" href="#lifecycle" aria-label="Link to this section">#</a></h2>
 
-        <p>Every PR in the manifest has one state in the ledger. The colours are the state badges of the UI board.</p>
+        <p>
+          Every PR in the manifest has one state in the ledger. This state flow is the driver's own. The CLI and the UI show a
+          <a href="#status">stage and a status</a> instead.
+        </p>
 
         <figure class="diagram">
           <svg viewBox="-2 -2 704 478" role="img" aria-labelledby="hiw-life-title">
@@ -784,6 +787,391 @@
         <p>
           The two stay apart. <code>release --all</code> lifts only the rollout's hold, and its <code>released</code> event names the PRs
           still held on their own. <code>release P1</code> never lifts the rollout's hold.
+        </p>
+
+        <h2 id="status">Stage and status <a class="anchor" href="#status" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          What <a href="commands.html#cmd-status"><code>rollout status</code></a
+          >, <a href="commands.html#cmd-card"><code>rollout card</code></a
+          >, the board and the PR page show is a stage and a status. The driver writes both into the ledger. For a ledger an older driver
+          wrote, the CLI and the UI derive them from the state as they read it, and never write the file. The stage says where the PR is.
+          The status says what happens there, in one of three kinds: <code>running</code> (an agent or the driver works on it),
+          <code>waiting</code> (it waits for something that needs nobody) and <code>needs-you</code> (it waits for you).
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th>What happens there</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="stage-brief">
+                <td class="nowrap"><span class="badge stage stage-brief">brief</span></td>
+                <td>No brief file yet. The brief writer drafts the brief and the reviewer checks it.</td>
+              </tr>
+              <tr id="stage-implement">
+                <td class="nowrap"><span class="badge stage stage-implement">implement</span></td>
+                <td>The implementer works on the PR, or fixes it. A fix names its reason.</td>
+              </tr>
+              <tr id="stage-pre-verify">
+                <td class="nowrap"><span class="badge stage stage-pre-verify">pre-verify</span></td>
+                <td>
+                  The driver checks the READY report against GitHub, waits for CI and code scanning on the claimed head, and runs the
+                  pre-verify commands.
+                </td>
+              </tr>
+              <tr id="stage-verify">
+                <td class="nowrap"><span class="badge stage stage-verify">verify</span></td>
+                <td>The verifier checks the claimed head.</td>
+              </tr>
+              <tr id="stage-merge">
+                <td class="nowrap"><span class="badge stage stage-merge">merge</span></td>
+                <td>The merge gate decides on the verified head: the PR waits, asks for your approval, or merges.</td>
+              </tr>
+              <tr id="stage-merged">
+                <td class="nowrap"><span class="badge stage stage-merged">merged</span></td>
+                <td>Merged by the driver or on GitHub. Final. A merged PR has no status.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Each status has one sentence, the same in the CLI and the UI, from <code>lib/sentences.ts</code>. A part with no value drops out,
+          and times read <code>YYYY-MM-DD HH:MM UTC</code>. A question shows its first line in the sentence and in full on the card and the
+          PR page. Every <code>needs-you</code> status names its way out: what takes it away. A <code>waiting: held</code> status names the
+          release.
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Kind</th>
+                <th>Stages</th>
+                <th>Sentence</th>
+                <th>Way out</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr id="status-brief-write">
+                <td class="nowrap"><code>brief-write</code></td>
+                <td class="nowrap"><span class="badge status kind-running">running</span></td>
+                <td>brief</td>
+                <td>the brief writer is working</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-brief-review">
+                <td class="nowrap"><code>brief-review</code></td>
+                <td class="nowrap"><span class="badge status kind-running">running</span></td>
+                <td>brief</td>
+                <td>the brief reviewer is checking the draft</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-delegate">
+                <td class="nowrap"><code>delegate</code></td>
+                <td class="nowrap"><span class="badge status kind-running">running</span></td>
+                <td>brief, implement</td>
+                <td>the delegate is answering the question (<var>kind</var>)</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-implement">
+                <td class="nowrap"><code>implement</code></td>
+                <td class="nowrap"><span class="badge status kind-running">running</span></td>
+                <td>implement</td>
+                <td>the implementer is working</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-fix">
+                <td class="nowrap"><code>fix</code></td>
+                <td class="nowrap"><span class="badge status kind-running">running</span></td>
+                <td>implement</td>
+                <td>the implementer is fixing: <var>reason</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-commands">
+                <td class="nowrap"><code>commands</code></td>
+                <td class="nowrap"><span class="badge status kind-running">running</span></td>
+                <td>pre-verify</td>
+                <td>the driver runs the pre-verify commands on <var>sha</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-verify">
+                <td class="nowrap"><code>verify</code></td>
+                <td class="nowrap"><span class="badge status kind-running">running</span></td>
+                <td>verify</td>
+                <td>the verifier is checking <var>sha</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-merge">
+                <td class="nowrap"><code>merge</code></td>
+                <td class="nowrap"><span class="badge status kind-running">running</span></td>
+                <td>merge</td>
+                <td>merging <var>sha</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-dependencies">
+                <td class="nowrap"><code>dependencies</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>brief, implement, merge</td>
+                <td>waits for <var>ids</var> to merge</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-dependencies-merge">
+                <td class="nowrap"><code>dependencies-merge</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>brief</td>
+                <td>waits: the verified heads of <var>ids</var> do not merge cleanly together</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-outside-dependency">
+                <td class="nowrap"><code>outside-dependency</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>brief, implement</td>
+                <td>waits for <var>ids</var>, which are not in this run</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-slot">
+                <td class="nowrap"><code>slot</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>brief, implement, pre-verify, verify</td>
+                <td>waits for a free slot</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-backoff">
+                <td class="nowrap"><code>backoff</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>brief, implement, verify</td>
+                <td>waits until <var>time</var> after <var>n</var> failed runs</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-held">
+                <td class="nowrap"><code>held</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>brief, implement, pre-verify, verify, merge</td>
+                <td>
+                  held since <var>time</var> by <var>who</var>: <var>reason</var>. On the rollout: the whole rollout is held since
+                  <var>time</var> by <var>who</var>: <var>reason</var>
+                </td>
+                <td><code>rollout release &lt;id&gt;</code>, or <code>rollout release --all</code> on the rollout</td>
+              </tr>
+              <tr id="status-github">
+                <td class="nowrap"><code>github</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>pre-verify</td>
+                <td>the READY report waits: GitHub does not answer</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-ci">
+                <td class="nowrap"><code>ci</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>pre-verify, merge</td>
+                <td>CI runs on <var>sha</var>: <var>pending checks</var>, no run yet for <var>missing checks</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-code-scanning-pending">
+                <td class="nowrap"><code>code-scanning-pending</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>pre-verify, merge</td>
+                <td>code scanning has not analysed <var>sha</var> yet</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-base-red">
+                <td class="nowrap"><code>base-red</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>merge</td>
+                <td><var>base</var> is red at <var>sha</var>: <var>failing checks</var>. Merges wait until it is green</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-base-pending">
+                <td class="nowrap"><code>base-pending</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>merge</td>
+                <td><var>base</var> is not green yet at <var>sha</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-gate-pending">
+                <td class="nowrap"><code>gate-pending</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>merge</td>
+                <td>verified, the merge gate has not checked it yet</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-mergeable-unknown">
+                <td class="nowrap"><code>mergeable-unknown</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>merge</td>
+                <td>GitHub has not computed whether the PR merges</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-github-merge-state">
+                <td class="nowrap"><code>github-merge-state</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>merge</td>
+                <td>GitHub's merge state is <var>state</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-merge-delay">
+                <td class="nowrap"><code>merge-delay</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>merge</td>
+                <td>approved, merges at <var>time</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-queued">
+                <td class="nowrap"><code>queued</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>merge</td>
+                <td>ready after PR #<var>n</var>: one PR is ready at a time</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-review-in-progress">
+                <td class="nowrap"><code>review-in-progress</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>merge</td>
+                <td>the maintainer is reviewing, last comment at <var>time</var></td>
+                <td>-</td>
+              </tr>
+              <tr id="status-driver-stopped">
+                <td class="nowrap"><code>driver-stopped</code></td>
+                <td class="nowrap"><span class="badge status kind-waiting">waiting</span></td>
+                <td>any stage with a running status. View only</td>
+                <td>the driver is not running</td>
+                <td>-</td>
+              </tr>
+              <tr id="status-brief-questions">
+                <td class="nowrap"><code>brief-questions</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>brief</td>
+                <td>the brief needs your answer: <var>question</var></td>
+                <td><code>rollout note &lt;id&gt; "..."</code></td>
+              </tr>
+              <tr id="status-attempts-exhausted">
+                <td class="nowrap"><code>attempts-exhausted</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>brief, implement, verify</td>
+                <td><var>role</var> attempts exhausted (<var>limit</var>)</td>
+                <td>remove the cause, then <code>rollout retry &lt;id&gt;</code>, or <code>rollout note &lt;id&gt; "..."</code></td>
+              </tr>
+              <tr id="status-errors">
+                <td class="nowrap"><code>errors</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>brief, implement, pre-verify, verify, merge</td>
+                <td><var>n</var> ticks in a row failed: <var>error</var></td>
+                <td><code>rollout retry &lt;id&gt;</code></td>
+              </tr>
+              <tr id="status-decision">
+                <td class="nowrap"><code>decision</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>implement</td>
+                <td>the implementer asks: <var>question</var></td>
+                <td><code>rollout note &lt;id&gt; "..."</code></td>
+              </tr>
+              <tr id="status-obstacle">
+                <td class="nowrap"><code>obstacle</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>implement</td>
+                <td>the implementer is blocked (<var>kind</var>): <var>question</var></td>
+                <td>remove the cause, then <code>rollout retry &lt;id&gt;</code>, or <code>rollout note &lt;id&gt; "..."</code></td>
+              </tr>
+              <tr id="status-closed">
+                <td class="nowrap"><code>closed</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>implement, pre-verify, verify, merge</td>
+                <td>the PR was closed on GitHub</td>
+                <td>act on GitHub. The driver reads it again every tick</td>
+              </tr>
+              <tr id="status-code-scanning-alerts">
+                <td class="nowrap"><code>code-scanning-alerts</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>pre-verify, merge</td>
+                <td>new code scanning alerts: <var>alerts</var></td>
+                <td>act on GitHub. The driver reads it again every tick</td>
+              </tr>
+              <tr id="status-dispute">
+                <td class="nowrap"><code>dispute</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>verify</td>
+                <td>the verifier upholds <var>findings</var>, which the implementer disputes</td>
+                <td><code>rollout note &lt;id&gt; "..."</code></td>
+              </tr>
+              <tr id="status-approve">
+                <td class="nowrap"><code>approve</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>merge</td>
+                <td>verified, waits for your approval</td>
+                <td><code>rollout approve &lt;id&gt;</code></td>
+              </tr>
+              <tr id="status-review">
+                <td class="nowrap"><code>review</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>merge</td>
+                <td>
+                  verified, waits for a maintainer's review on GitHub. A stale approval adds: the approval is older than the current patch
+                </td>
+                <td>act on GitHub. The driver reads it again every tick</td>
+              </tr>
+              <tr id="status-changes-requested">
+                <td class="nowrap"><code>changes-requested</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>merge</td>
+                <td>a maintainer requested changes on GitHub</td>
+                <td>act on GitHub. The driver reads it again every tick</td>
+              </tr>
+              <tr id="status-merge-by-hand">
+                <td class="nowrap"><code>merge-by-hand</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>merge</td>
+                <td>ready: merge it on GitHub (<var>merge state</var>)</td>
+                <td>act on GitHub. The driver reads it again every tick</td>
+              </tr>
+              <tr id="status-github-blocked">
+                <td class="nowrap"><code>github-blocked</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>merge</td>
+                <td>the rollout gate passes, GitHub's ruleset still blocks the merge</td>
+                <td>act on GitHub. The driver reads it again every tick</td>
+              </tr>
+              <tr id="status-merge-refused">
+                <td class="nowrap"><code>merge-refused</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>merge</td>
+                <td>GitHub refused the merge: <var>error</var></td>
+                <td><code>rollout retry &lt;id&gt;</code></td>
+              </tr>
+              <tr id="status-gate-blocked">
+                <td class="nowrap"><code>gate-blocked</code></td>
+                <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
+                <td>merge</td>
+                <td>the gate blocks the merge (<var>block code</var>): <var>reasons</var></td>
+                <td>act on GitHub. The driver reads it again every tick</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          <code>driver-stopped</code> is the one status the driver never writes. With no driver running, a stored
+          <code>running</code> status shows as <code>waiting: driver-stopped</code> on the same stage, since the last heartbeat, because a
+          stopped driver runs nothing. The headers of <code>rollout status</code> and the UI say since when the driver is down.
+        </p>
+
+        <p>
+          A hold turns a <code>waiting</code> status into <code>waiting: held</code>. A <code>running</code> or
+          <code>needs-you</code> status stays as it is and carries a held marker: <code>[held]</code> after the status in the CLI, a held
+          badge in the UI. The rollout's hold wins over the PR's own, as in the driver's tick.
+        </p>
+
+        <p>
+          On GitHub, the driver labels each open PR <code>rollout-stage:&lt;stage&gt;</code> and <code>rollout-status:&lt;code&gt;</code>,
+          from the stored status. A PR with no number yet gets no label, and a merged PR loses them on the next sync. On its next sync the
+          driver also removes the labels of older versions, <code>rollout-stage:&lt;state&gt;</code> and
+          <code>rollout-reason:&lt;why&gt;</code>, from each open PR.
         </p>
 
         <h2 id="roles">Roles <a class="anchor" href="#roles" aria-label="Link to this section">#</a></h2>

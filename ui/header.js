@@ -97,11 +97,16 @@ function facts(ctx) {
     heartbeatAgeSeconds: heartbeatAge(view.driver, state, now),
     merge: view.merge,
     costUsd: view.costs.totalUsd,
-    merged: view.rows.filter((row) => row.state === 'merged').length,
+    merged: view.rows.filter((row) => row.status?.stage === 'merged').length,
     total: view.rows.length,
     errors: errorCount(ctx.events),
     errorsHref: ctx.linkWith({ view: 'events', kind: 'errors', id: null, pr: null, tab: null }),
   })
+}
+
+// The statuses a stopped driver left are as old as its last tick.
+function stoppedText(driver) {
+  return driver.stoppedAt ? `Not running since ${clock(driver.stoppedAt)}. Statuses are from its last tick.` : 'Not running.'
 }
 
 function streamLine(ctx) {
@@ -148,6 +153,10 @@ export function renderHeader(ctx) {
 
   if (ctx.view) {
     header.append(facts(ctx))
+  }
+
+  if (ctx.view && !ctx.view.driver.running) {
+    header.append(element('p', stoppedText(ctx.view.driver), 'stopped-since warning'))
   }
 
   const controls = ctx.state ? renderRolloutControls(ctx) : null

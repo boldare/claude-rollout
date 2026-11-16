@@ -328,7 +328,7 @@ function twoReady(states = {}) {
   return rollout
 }
 
-test('mergeNext: under manual merge one PR is ready at a time, the next waits for it with a reason label', async () => {
+test('mergeNext: under manual merge one PR is ready at a time, the next waits for it with a status label', async () => {
   const { manifest, driver } = twoReady()
 
   await driver.mergeNext()
@@ -346,8 +346,8 @@ test('mergeNext: under manual merge one PR is ready at a time, the next waits fo
     ['A1'],
   )
 
-  assert.deepEqual(stageLabels(driver.ledger.prs.A3), ['rollout-stage:verified', 'rollout-reason:queued'])
-  assert.deepEqual(stageLabels(driver.ledger.prs.A1), ['rollout-stage:verified', 'rollout-reason:ready-to-merge'])
+  assert.deepEqual(stageLabels(driver.ledger.prs.A3), ['rollout-stage:merge', 'rollout-status:queued'])
+  assert.deepEqual(stageLabels(driver.ledger.prs.A1), ['rollout-stage:merge', 'rollout-status:merge-by-hand'])
 })
 
 test('mergeNext: the PR already announced ready keeps the slot when an earlier one in the manifest becomes verified', async () => {
@@ -427,7 +427,7 @@ test('mergeNext: once the ready PR is merged, the one that waited is rebased and
 
   assert.equal(driver.ledger.prs.A3.gate.action, 'ready')
   assert.equal(driver.ledger.prs.A3.gate.after, undefined)
-  assert.deepEqual(stageLabels(driver.ledger.prs.A3), ['rollout-stage:verified', 'rollout-reason:ready-to-merge'])
+  assert.deepEqual(stageLabels(driver.ledger.prs.A3), ['rollout-stage:merge', 'rollout-status:merge-by-hand'])
   assert.deepEqual(readyNotices(before), ['A3'])
 })
 
@@ -513,7 +513,7 @@ test('verified: a disputed finding the next verifier still finds open escalates 
   assert.equal(entry.escalation, 'disputed finding')
   assert.equal(entry.escalationRun, 'A1-04-verify')
   assert.ok(Date.parse(entry.escalatedAt) >= Date.parse(setup.driver.ledger.data.runs['A1-04-verify'].endedAt), entry.escalatedAt)
-  assert.deepEqual(stageLabels(entry), ['rollout-stage:escalated', 'rollout-reason:disputed-finding'])
+  assert.deepEqual(stageLabels(entry), ['rollout-stage:verify', 'rollout-status:dispute'])
   assert.equal(
     entry.lastError,
     'the verifier still finds F2 open, which the implementer disputed: The retry flag is not documented. The implementer: The brief keeps the flag internal.',

@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { ERROR_KINDS, EVENT_KINDS, STATES, errorCount } from '../lib/kinds.mjs'
-import { ERROR_KINDS as UI_ERROR_KINDS, STATES as UI_STATES } from '../ui/model.js'
+import { STAGES } from '../lib/state.ts'
+import { ERROR_KINDS as UI_ERROR_KINDS, STAGES as UI_STAGES } from '../ui/model.js'
 
 const LIB = new URL('../lib/', import.meta.url)
 // say( and ledger.event( take the kind second, a bare log( takes it first. A call can span lines.
@@ -88,8 +89,8 @@ test('kinds: the states and error kinds', () => {
   ])
 })
 
-test('kinds: ui/model.js mirrors the states and error kinds of lib', () => {
-  assert.deepEqual(UI_STATES, STATES)
+test('kinds: ui/model.js mirrors the stages and error kinds of lib', () => {
+  assert.deepEqual(UI_STAGES, [...STAGES])
   assert.deepEqual(UI_ERROR_KINDS, ERROR_KINDS)
 })
 

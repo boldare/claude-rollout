@@ -18,6 +18,67 @@ export function at(minutes) {
 }
 
 const SHA = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+const BASE_SHA = 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0'
+const QUESTION = {
+  kind: 'needs-decision',
+  text: 'Keep the old flag?\nThe plan names both.',
+  evidence: 'cli.mjs:12 still reads it.',
+  run: 'A1-01-implement',
+  delegate: null,
+}
+
+// The data each status code needs, as lib/state.ts types it, for every code of STAGE_STATUSES.
+export const STATUS_SAMPLES = {
+  'brief-write': { run: 'A1-01-brief-write' },
+  'brief-review': { run: 'A1-01-brief-review' },
+  implement: { run: 'A1-02-implement' },
+  fix: { reason: 'ci-red', run: 'A1-03-fix' },
+  delegate: { question: 'needs-decision', run: 'A1-04-delegate' },
+  commands: { sha: SHA },
+  verify: { sha: SHA, run: 'A1-05-verify' },
+  merge: { sha: SHA },
+  slot: {},
+  backoff: { until: at(30), failures: 2 },
+  held: { scope: 'pr' },
+  dependencies: { on: ['A2', 'A3'] },
+  'dependencies-merge': {
+    heads: [
+      { id: 'A2', sha: SHA, patchId: null },
+      { id: 'A3', sha: SHA, patchId: 'patch-a3' },
+    ],
+  },
+  'outside-dependency': { on: ['B7'] },
+  github: {},
+  ci: { sha: SHA, missing: ['lint'], pending: ['test'] },
+  'code-scanning-pending': { sha: SHA },
+  'base-red': { sha: BASE_SHA, failing: ['test', 'lint'] },
+  'base-pending': { sha: BASE_SHA },
+  'gate-pending': {},
+  'mergeable-unknown': {},
+  'github-merge-state': { mergeState: 'BEHIND' },
+  'merge-delay': { until: at(95) },
+  queued: { after: 12 },
+  'review-in-progress': { lastCommentAt: at(70) },
+  'brief-questions': { question: { ...QUESTION, kind: 'brief-questions', run: 'A1-01-brief-write' } },
+  decision: { question: QUESTION },
+  obstacle: { question: { ...QUESTION, kind: 'environment' } },
+  dispute: { findings: ['F1', 'F2'], text: 'F2 is still open: the flag is not documented.' },
+  'attempts-exhausted': { role: 'fix', limit: 3 },
+  errors: { error: 'gh pr view failed: HTTP 502', count: 5 },
+  closed: {},
+  'code-scanning-alerts': { alerts: ['js/sql-injection at lib/db.mjs:12'] },
+  approve: {},
+  review: { stale: false },
+  'changes-requested': {},
+  'merge-by-hand': { mergeState: 'CLEAN' },
+  'github-blocked': {},
+  'merge-refused': { error: 'Base branch was modified' },
+  'gate-blocked': { gate: 'missing-label', reasons: ['the PR lacks the label rollout:demo'] },
+}
+
+export function sampleStatus(kind, code, since = at(60)) {
+  return { kind, code, ...structuredClone(STATUS_SAMPLES[code]), since }
+}
 
 export function samplePrs() {
   const verdict = {

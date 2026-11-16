@@ -1,5 +1,3 @@
-import { stateLabel } from './format.js'
-
 // Titles, bodies, verdicts, briefs and events are untrusted agent output, so
 // the page is built from elements, textContent and attributes only.
 const SVG_NS = 'http://www.w3.org/2000/svg'
@@ -91,8 +89,13 @@ export function badge(text, className) {
   return withClass(wrap('span', element('span', text)), `badge ${className}`)
 }
 
-export function stateBadge(state) {
-  return badge(stateLabel(state), `state state-${state}`)
+export function stageBadge(stage) {
+  return badge(stage, `stage stage-${stage}`)
+}
+
+// The text is the CLI's, so the two read the same.
+export function statusBadge(status) {
+  return badge(`${status.kind}: ${status.code}`, `status kind-${status.kind}`)
 }
 
 export function secondsSince(iso, now) {
