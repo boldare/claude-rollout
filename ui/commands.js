@@ -1,8 +1,5 @@
 import { sentence, serverAnswered } from './format.js'
 
-const RETRY_STATES = ['escalated', 'blocked', 'interrupted']
-const LOSES_VERIFICATION = ['verified', 'ready_claimed']
-
 const BODIES = {
   'hold-all': () => ({ cmd: 'hold', all: true }),
   'release-all': () => ({ cmd: 'release', all: true }),
@@ -25,14 +22,19 @@ export function rolloutControls(view, readOnly) {
   return [driver.hold ? 'release-all' : 'hold-all', driver.running ? 'stop' : 'start']
 }
 
+// Retry shows where the view says it applies, from the same rows the driver follows.
+function retries(row) {
+  return row.effects?.retry?.applies === true
+}
+
 export function prControls(pr, readOnly) {
-  if (readOnly || pr.state === 'merged') {
+  if (readOnly || pr.status.stage === 'merged') {
     return []
   }
 
   const controls = [pr.held ? 'release' : 'hold', pr.state === 'blocked' ? 'answer' : 'note']
 
-  if (RETRY_STATES.includes(pr.state)) {
+  if (retries(pr)) {
     controls.push('retry')
   }
 
@@ -41,13 +43,13 @@ export function prControls(pr, readOnly) {
 
 // The buttons in a board row's panel. A waiting row answers in its own box, so Answer and Note are not among them.
 export function panelControls(row, readOnly) {
-  if (readOnly || row.state === 'merged') {
+  if (readOnly || row.status.stage === 'merged') {
     return []
   }
 
   const controls = row.held ? ['release'] : []
 
-  if (RETRY_STATES.includes(row.state)) {
+  if (retries(row)) {
     controls.push('retry')
   }
 
@@ -70,19 +72,10 @@ function answerDialog(pr) {
     title: `Answer ${pr.id}`,
     text: `${closed(sentence(pr.status.sentence))} The answer goes to the agent as a note.`,
     sections,
+    effect: pr.effects.note.lines,
     confirmLabel: 'Send',
     withText: true,
   }
-}
-
-function noteDialog(pr) {
-  const dialog = { title: `Note for ${pr.id}`, confirmLabel: 'Send', withText: true }
-
-  if (LOSES_VERIFICATION.includes(pr.state)) {
-    dialog.text = 'The PR goes back to the implementer and loses its verification.'
-  }
-
-  return dialog
 }
 
 export function dialogFor(command, { rollout, driver, pr }) {
@@ -103,10 +96,10 @@ export function dialogFor(command, { rollout, driver, pr }) {
       }
 
     case 'retry':
-      return { title: `Retry ${pr.id}?`, text: 'Its attempts start from zero.', confirmLabel: 'Retry' }
+      return { title: `Retry ${pr.id}?`, text: 'Its attempts start from zero.', effect: pr.effects.retry.lines, confirmLabel: 'Retry' }
 
     case 'note':
-      return noteDialog(pr)
+      return { title: `Note for ${pr.id}`, effect: pr.effects.note.lines, confirmLabel: 'Send', withText: true }
 
     case 'answer':
       return answerDialog(pr)

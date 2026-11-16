@@ -12,7 +12,7 @@ import { loadManifest } from '../lib/manifest.mjs'
 import { BATTERY_WARNING } from '../lib/machine.mjs'
 import { startServer } from '../lib/server.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { alive, makeRollout, makeRolloutRoot, waitFor } from './fixtures.mjs'
+import { alive, makeRollout, makeRolloutRoot, samplePrs, waitFor } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
 const UI = fileURLToPath(new URL('../ui/', import.meta.url))
@@ -878,7 +878,8 @@ test('cli: card and approve follow policy.merge', () => {
     const approve = cli('approve', 'A1', '--dir', dir)
 
     assert.equal(approve.status, 1, approve.stdout)
-    assert.equal(approve.stderr, `A1: ${refusal}\n`)
+    assert.equal(approve.stderr, `A1  merge · waiting: held\n    refused: ${refusal}\n`)
+    assert.equal(approve.stdout, '')
     assert.deepEqual(inboxFiles(dir), [])
   }
 
@@ -887,6 +888,51 @@ test('cli: card and approve follow policy.merge', () => {
 
   assert.equal(card.status, 0, card.stderr)
   assert.ok(card.stdout.includes('Approve with: rollout.mjs approve A1'), card.stdout)
+})
+
+test('cli: approve prints its effect and posts the verified head, and a second approve is refused', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+  const { A1 } = samplePrs()
+  const dir = makeRollout({ prs: { A1: { ...A1, approved: null, held: null, gate: null } }, events: [] })
+  const approve = cli('approve', 'A1', '--dir', dir)
+
+  assert.equal(approve.status, 0, approve.stderr)
+  assert.equal(approve.stdout, 'A1  merge · waiting: gate-pending\n    after approve: merge · waiting: merge-delay\nqueued\n')
+  assert.deepEqual(onlyCommand(dir), { cmd: 'approve', id: 'A1', sha: A1.verified.sha, patchId: A1.verified.patchId })
+
+  const twice = makeRollout({ prs: { A1: { ...A1, held: null, approved: { ...A1.approved, channel: 'inbox' } } }, events: [] })
+  const again = cli('approve', 'A1', '--dir', twice)
+
+  assert.equal(again.status, 1, again.stdout)
+  assert.match(
+    again.stderr,
+    /^A1 {2}merge · waiting: \S+\n {4}refused: already approved at 2026-09-01 11:21 UTC\. The merge delay counts from then\n$/,
+  )
+
+  assert.deepEqual(inboxFiles(twice), [])
+})
+
+test('cli: with no ledger yet, retry and note post as before, and approve has nothing to approve', () => {
+  const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: cliEnv(), timeout: 10_000 })
+
+  for (const [args, command] of [
+    [['retry', 'A1'], { cmd: 'retry', id: 'A1' }],
+    [['note', 'A1', 'use', 'the', 'old', 'API'], { cmd: 'note', id: 'A1', text: 'use the old API' }],
+  ]) {
+    const dir = makeRollout({ prs: null, events: null })
+    const result = cli(...args, '--dir', dir)
+
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout, 'queued\n')
+    assert.deepEqual(onlyCommand(dir), command)
+  }
+
+  const dir = makeRollout({ prs: null, events: null })
+  const approve = cli('approve', 'A1', '--dir', dir)
+
+  assert.equal(approve.status, 1, approve.stdout)
+  assert.equal(approve.stderr, 'nothing to approve: no ledger yet\n')
+  assert.deepEqual(inboxFiles(dir), [])
 })
 
 test('cli: unhalt is an unknown command, writes no inbox file, and status prints no halt', () => {
@@ -1136,8 +1182,8 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
       { cmd: 'release', all: true },
     ],
     [
-      { cmd: 'retry', id: 'A2', patchId: 'patch-a1' },
-      { cmd: 'retry', id: 'A2' },
+      { cmd: 'retry', id: 'A3', patchId: 'patch-a1' },
+      { cmd: 'retry', id: 'A3' },
     ],
     [
       { cmd: 'note', id: 'A1', text: '  use the old API \n' },
@@ -1181,6 +1227,40 @@ test('commands: each inbox command becomes one inbox file with only its own fiel
 
   const mixedCase = await post(server, 'demo', { cmd: 'hold', all: true }, { contentType: 'Application/JSON; charset=utf-8' })
   assert.equal(mixedCase.status, 202)
+})
+
+test('commands: a refused retry or note answers 409 with the reason and writes no inbox file', async (context) => {
+  const root = mkdtempSync(join(tmpdir(), 'rollout-root-'))
+  const dir = join(root, 'demo')
+  const decision = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: '' }
+
+  makeRollout({
+    dir,
+    events: [],
+    prs: { A1: { state: 'merged', pr: 7 }, A2: samplePrs().A2, A3: { state: 'blocked', pr: 13, blocked: decision } },
+  })
+
+  const { server } = await serve(context, { root, driverCommand: refusedDriver([]) })
+  const cases = [
+    [{ cmd: 'retry', id: 'A1' }, 'already merged'],
+    [{ cmd: 'note', id: 'A1', text: 'too late' }, 'already merged'],
+    [{ cmd: 'retry', id: 'A2' }, 'an agent is working on this PR'],
+    [{ cmd: 'retry', id: 'A3' }, 'this PR waits for your answer: rollout note A3 "..."'],
+  ]
+
+  for (const [body, error] of cases) {
+    const response = await post(server, 'demo', body)
+
+    assert.equal(response.status, 409, JSON.stringify(body))
+    assert.deepEqual(response.json, { error }, JSON.stringify(body))
+    assert.deepEqual(inboxFiles(dir), [], JSON.stringify(body))
+  }
+
+  // A note waits for the agent at work, so it applies.
+  const queued = await post(server, 'demo', { cmd: 'note', id: 'A2', text: 'use the old API' })
+
+  assert.equal(queued.status, 202)
+  assert.equal(inboxFiles(dir).length, 1)
 })
 
 test('commands: a hold posted through the API becomes a held event in the driver', async (context) => {

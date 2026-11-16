@@ -657,9 +657,12 @@ test('delegate: a stopped run gives its run back, and a PR merged meanwhile is c
   assert.deepEqual(merged.driver.ledger.prs.A1.delegate.answers, [])
 })
 
+// Retry is refused on needs-decision, which waits for the maintainer's words, so the PR meets an obstacle here.
 test('retry resets the delegate run count and keeps its answers, and waits while the delegate runs', () => {
   const answers = [{ decision: 'escalate', question: 'Keep the old flag?' }]
-  const { manifest, driver, entry } = delegateDriver({ pr: 11, delegate: { runs: 2, lastQuestion: 'abc', limitNotified: true, answers } })
+  const obstacle = { kind: 'environment', question: 'The runner has no Docker.', evidence: '' }
+  const delegate = { runs: 2, lastQuestion: 'abc', limitNotified: true, answers }
+  const { manifest, driver, entry } = delegateDriver({ pr: 11, blocked: obstacle, delegate })
 
   driver.running.set('A1', 'delegate')
   assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [
@@ -667,8 +670,8 @@ test('retry resets the delegate run count and keeps its answers, and waits while
   ])
 
   driver.running.delete('A1')
-  apply(manifest, driver, { cmd: 'retry', id: 'A1' })
 
+  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'needs_fix' }])
   assert.deepEqual(entry.delegate, { runs: 0, lastQuestion: 'abc', limitNotified: false, answers })
 })
 

@@ -81,6 +81,19 @@ class FakeElement extends FakeNode {
     this.listeners.push({ type, listener })
   }
 
+  // A dialog only opens and closes here. No event fires.
+  showModal() {
+    this.open = true
+  }
+
+  close() {
+    this.open = false
+  }
+
+  focus() {
+    this.focused = true
+  }
+
   descendants() {
     return this.children.flatMap((child) => [child, ...child.descendants()])
   }
@@ -99,6 +112,7 @@ class FakeElement extends FakeNode {
 export function installDocument() {
   const document = {
     title: '',
+    body: new FakeElement('body'),
     createElement: (tag) => new FakeElement(tag),
     createTextNode: (text) => new FakeText(text),
   }

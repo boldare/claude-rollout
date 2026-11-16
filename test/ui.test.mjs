@@ -20,6 +20,7 @@ import {
   tookText,
 } from '../ui/board-model.js'
 import { commandBody, commandNotice, dialogFor, panelControls, prControls, rolloutControls } from '../ui/commands.js'
+import { ask } from '../ui/dialog.js'
 import { rememberOpen, rowClick } from '../ui/dom.js'
 import { duration, money, plural, roleLabel, sentence, serverAnswered } from '../ui/format.js'
 import {
@@ -49,6 +50,7 @@ import {
   shouldFollow,
   transcriptRoute,
 } from '../ui/transcript-model.js'
+import { installDocument } from './fake-dom.mjs'
 import { START, at, makeRollout } from './fixtures.mjs'
 
 const UI = fileURLToPath(new URL('../ui/', import.meta.url))
@@ -831,30 +833,36 @@ test('rolloutControls: hold all or release all, stop or start', () => {
   assert.deepEqual(rolloutControls(null, true), [])
 })
 
-test('prControls: hold or release, note or answer, and retry for a stuck PR', () => {
-  const { view } = demo()
-  const a1 = view.rows.find((row) => row.id === 'A1')
+// A row as the view builds it, as far as the controls read it.
+function controlRow({ stage = 'implement', state = 'pending', held = null, retry = false } = {}) {
+  const effect = (applies) => ({ applies, lines: [`${stage} · waiting: slot`] })
 
-  assert.equal(a1.state, 'verified')
+  return { id: 'A2', state, held, status: { stage }, effects: { retry: effect(retry), note: effect(true) } }
+}
+
+test('prControls: hold or release, note or answer, and retry where the view says it applies', () => {
+  const { view } = demo()
+  const [a1, a2] = view.rows
+
   assert.ok(a1.held)
-  assert.deepEqual(prControls(a1, false), ['release', 'note'])
-  assert.deepEqual(prControls({ id: 'A2', state: 'escalated', held: null }, false), ['hold', 'note', 'retry'])
-  assert.deepEqual(prControls({ id: 'A2', state: 'blocked', held: { at: at(1) } }, false), ['release', 'answer', 'retry'])
-  assert.deepEqual(prControls({ id: 'A2', state: 'blocked', held: null }, false), ['hold', 'answer', 'retry'])
-  assert.deepEqual(prControls({ id: 'A2', state: 'interrupted', held: null }, false), ['hold', 'note', 'retry'])
-  assert.deepEqual(prControls({ id: 'A2', state: 'implementing', held: null }, false), ['hold', 'note'])
-  assert.deepEqual(prControls({ id: 'A2', state: 'merged', held: null }, false), [])
+  assert.equal(a1.effects.retry.applies, true)
+  assert.deepEqual(prControls(a1, false), ['release', 'note', 'retry'])
+  assert.equal(a2.effects.retry.applies, false)
+  assert.deepEqual(prControls(a2, false), ['hold', 'note'])
+  assert.deepEqual(prControls(controlRow({ state: 'blocked', held: { at: at(1) }, retry: true }), false), ['release', 'answer', 'retry'])
+  assert.deepEqual(prControls(controlRow({ state: 'blocked' }), false), ['hold', 'answer'])
+  assert.deepEqual(prControls(controlRow({ state: 'escalated', retry: true }), false), ['hold', 'note', 'retry'])
+  assert.deepEqual(prControls(controlRow({ stage: 'merged', state: 'merged' }), false), [])
   assert.deepEqual(prControls(a1, true), [])
 })
 
-test('panelControls: release for a held row, retry for a stuck one, nothing read-only or merged', () => {
-  assert.deepEqual(panelControls({ id: 'A2', state: 'blocked', held: null }, false), ['retry'])
-  assert.deepEqual(panelControls({ id: 'A2', state: 'escalated', held: { at: at(1) } }, false), ['release', 'retry'])
-  assert.deepEqual(panelControls({ id: 'A2', state: 'interrupted', held: null }, false), ['retry'])
-  assert.deepEqual(panelControls({ id: 'A2', state: 'verified', held: { at: at(1) } }, false), ['release'])
-  assert.deepEqual(panelControls({ id: 'A2', state: 'implementing', held: null }, false), [])
-  assert.deepEqual(panelControls({ id: 'A2', state: 'merged', held: { at: at(1) } }, false), [])
-  assert.deepEqual(panelControls({ id: 'A2', state: 'blocked', held: null }, true), [])
+test('panelControls: release for a held row, retry where it applies, nothing read-only or merged', () => {
+  assert.deepEqual(panelControls(controlRow({ state: 'blocked', retry: true }), false), ['retry'])
+  assert.deepEqual(panelControls(controlRow({ state: 'escalated', held: { at: at(1) }, retry: true }), false), ['release', 'retry'])
+  assert.deepEqual(panelControls(controlRow({ state: 'blocked' }), false), [])
+  assert.deepEqual(panelControls(controlRow({ stage: 'merge', state: 'verified', held: { at: at(1) } }), false), ['release'])
+  assert.deepEqual(panelControls(controlRow({ stage: 'merged', state: 'merged', held: { at: at(1) }, retry: true }), false), [])
+  assert.deepEqual(panelControls(controlRow({ state: 'blocked', retry: true }), true), [])
 })
 
 test('rowOpen: a row that needs you opens by itself, an approval too, any other on a click, and a choice sticks', () => {
@@ -916,8 +924,10 @@ test('dialogFor: answer shows the sentence, then the question and the evidence, 
     question,
   }
 
+  const effect = ['implement · needs-you: decision', 'after note: implement · waiting: slot (maintainer-note)']
+  const effects = { retry: { applies: false, lines: [] }, note: { applies: true, lines: effect } }
   const answer = (changes) =>
-    dialogFor('answer', { rollout: 'demo', driver: null, pr: { id: 'A2', state: 'blocked', status: { ...status, ...changes } } })
+    dialogFor('answer', { rollout: 'demo', driver: null, pr: { id: 'A2', state: 'blocked', status: { ...status, ...changes }, effects } })
 
   assert.deepEqual(answer({}), {
     title: 'Answer A2',
@@ -926,6 +936,7 @@ test('dialogFor: answer shows the sentence, then the question and the evidence, 
       { heading: 'question', text: 'Which API?\nThe old one is deprecated.' },
       { heading: 'evidence', text: 'Both exist in src/api.' },
     ],
+    effect,
     confirmLabel: 'Send',
     withText: true,
   })
@@ -938,6 +949,7 @@ test('dialogFor: answer shows the sentence, then the question and the evidence, 
     title: 'Answer A2',
     text: 'The verifier upholds F1, which the implementer disputes. The answer goes to the agent as a note.',
     sections: [],
+    effect,
     confirmLabel: 'Send',
     withText: true,
   })
@@ -945,7 +957,9 @@ test('dialogFor: answer shows the sentence, then the question and the evidence, 
 
 test('dialogFor: confirmations for stop, start and retry, a text for note, nothing for the rest', () => {
   const driver = { pid: 4242 }
-  const pr = { id: 'A2', state: 'escalated' }
+  const retry = ['implement · needs-you: obstacle', 'after retry: implement · waiting: slot (retry)']
+  const note = ['implement · needs-you: obstacle', 'after note: implement · waiting: slot (maintainer-note)']
+  const pr = { id: 'A2', state: 'blocked', effects: { retry: { applies: true, lines: retry }, note: { applies: true, lines: note } } }
   const context = { rollout: 'demo', driver, pr }
 
   assert.deepEqual(dialogFor('stop', context), {
@@ -961,23 +975,59 @@ test('dialogFor: confirmations for stop, start and retry, a text for note, nothi
     withDryRun: true,
   })
 
-  assert.deepEqual(dialogFor('retry', context), { title: 'Retry A2?', text: 'Its attempts start from zero.', confirmLabel: 'Retry' })
+  assert.deepEqual(dialogFor('retry', context), {
+    title: 'Retry A2?',
+    text: 'Its attempts start from zero.',
+    effect: retry,
+    confirmLabel: 'Retry',
+  })
+
   assert.equal(dialogFor('unhalt', context), null)
-
-  assert.deepEqual(dialogFor('note', context), { title: 'Note for A2', confirmLabel: 'Send', withText: true })
-
-  for (const state of ['verified', 'ready_claimed']) {
-    assert.deepEqual(dialogFor('note', { ...context, pr: { id: 'A1', state } }), {
-      title: 'Note for A1',
-      text: 'The PR goes back to the implementer and loses its verification.',
-      confirmLabel: 'Send',
-      withText: true,
-    })
-  }
+  assert.deepEqual(dialogFor('note', context), { title: 'Note for A2', effect: note, confirmLabel: 'Send', withText: true })
 
   for (const command of ['hold-all', 'release-all', 'hold', 'release']) {
     assert.equal(dialogFor(command, context), null, command)
   }
+})
+
+test('ask: the effect lines come after the text and the sections, and before the text box, as the view gives them', async () => {
+  const document = installDocument()
+  const effect = [
+    'merge · needs-you: approve',
+    'after note: implement · waiting: slot (maintainer-note)',
+    'verification and approval are dropped',
+  ]
+
+  const answer = ask({
+    title: 'Note for A1',
+    text: 'The answer goes to the agent as a note.',
+    sections: [{ heading: 'question', text: 'Which API?' }],
+    effect,
+    confirmLabel: 'Send',
+    withText: true,
+  })
+
+  const [dialog] = document.body.children
+  const parts = dialog.children.map((node) => [node.tagName, node.className, node.textContent])
+
+  assert.deepEqual(parts, [
+    ['H2', '', 'Note for A1'],
+    ['P', '', 'The answer goes to the agent as a note.'],
+    ['H3', '', 'question'],
+    ['DIV', 'text dialog-section', 'Which API?'],
+    ...effect.map((line) => ['P', 'effect', line]),
+    ['TEXTAREA', '', ''],
+    ['DIV', 'dialog-buttons', 'CancelSend'],
+  ])
+
+  assert.equal(dialog.open, true)
+
+  const [cancel] = dialog.querySelector('div.dialog-buttons').children
+
+  cancel.listeners.find((item) => item.type === 'click').listener()
+
+  assert.equal(await answer, null)
+  assert.equal(dialog.open, false)
 })
 
 test('commandBody: the fields each command needs, and no pid for stop', () => {

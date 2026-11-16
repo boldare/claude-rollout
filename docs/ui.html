@@ -315,9 +315,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <ul>
           <li>
             <strong>Inbox commands.</strong> Retry, note, hold and release are written to <code>inbox/</code> through a temporary file and a
-            rename, so the driver never reads half a command. A running driver watches the inbox and applies the command at the start of its
-            next tick. When it sleeps between ticks, that is about half a second later. With no driver running, the file waits for the next
-            start.
+            rename, so the driver never reads half a command. A retry or a note that the <a href="commands.html#deciding">rows</a> refuse
+            answers 409 with the reason, and no file is written. With no ledger yet, both are written as they are. A running driver watches
+            the inbox and applies the command at the start of its next tick. When it sleeps between ticks, that is about half a second
+            later. With no driver running, the file waits for the next start.
           </li>
           <li>
             <strong>Stop.</strong> The server sends SIGTERM to the pid in <code>driver.lock</code>. The driver stops its agents, saves and
@@ -723,9 +724,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             asked, or the driver when the driver raised it, what the delegate did about the question, and how long the PR has waited. The
             status sentence follows, then the question and the agent's evidence when there is one, and the last error when the sentence does
             not hold it already. A status whose way out is a note gets a box for your <a href="#control-answer">answer</a> with Send, and
-            Retry. Any other shows its way out: the command to run, or a link to the PR on GitHub. The box keeps what you type while the
-            page updates. <kbd>⌘</kbd> or <kbd>Ctrl</kbd> with <kbd>Enter</kbd> sends too. Once the server took the note the box empties and
-            says it was sent, until the driver applies it. A row you close stays closed.
+            Retry where retry applies. Any other shows its way out: the command to run, or a link to the PR on GitHub. The box keeps what
+            you type while the page updates. <kbd>⌘</kbd> or <kbd>Ctrl</kbd> with <kbd>Enter</kbd> sends too. Once the server took the note
+            the box empties and says it was sent, until the driver applies it. A row you close stays closed.
           </li>
           <li>
             An <span class="badge answered">answered</span> badge appears once the driver has applied your answer, not when you press Send.
@@ -1227,9 +1228,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <p>
           The rollout controls sit on the right of the header and the PR controls on the PR page. A waiting row of the board answers and
-          retries in its panel, and an open row releases a held PR or retries an interrupted one. Each one shows only when it makes sense,
-          and the ones that are hard to undo ask first. In every confirmation Cancel has the focus, so <kbd>Enter</kbd> never confirms by
-          accident. The Note and Answer dialogs put the focus in their text box.
+          retries in its panel, and an open row releases a held PR or retries one. Each one shows only when it makes sense, and the ones
+          that are hard to undo ask first. In every confirmation Cancel has the focus, so <kbd>Enter</kbd> never confirms by accident. The
+          Note and Answer dialogs put the focus in their text box.
         </p>
 
         <div class="scroll">
@@ -1304,8 +1305,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                   <code>retry-or-note</code> in <a href="how-it-works.html#status">the status table</a>.
                 </td>
                 <td>
-                  a text box under the status sentence, the question and the evidence, Send stays off until you type. On the board the box
-                  sits in the row's panel
+                  a text box under the status sentence, the question, the evidence and the note's effect, Send stays off until you type. On
+                  the board the box sits in the row's panel, with no dialog
                 </td>
                 <td>
                   Queues <a href="commands.html#cmd-note"><code>note</code></a> with your text, like <a href="#control-note">Note</a>.
@@ -1314,16 +1315,17 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <tr id="control-note">
                 <td>Note</td>
                 <td>PR page, until the PR is merged. A blocked PR gets <a href="#control-answer">Answer</a> instead.</td>
-                <td>a text box, Send stays off until you type</td>
+                <td>a text box under the note's effect, Send stays off until you type</td>
                 <td>
-                  Queues <a href="commands.html#cmd-note"><code>note</code></a> with your text. What it does depends on the PR's state. For
-                  a verified or ready_claimed PR the dialog warns that the PR goes back to the implementer and loses its verification.
+                  Queues <a href="commands.html#cmd-note"><code>note</code></a> with your text. What it does depends on the PR's stage and
+                  status. The dialog shows it in the lines <a href="commands.html#deciding">the CLI prints</a>: the stage and status after
+                  the note with its fix reason, and whether the verification or the approval is dropped.
                 </td>
               </tr>
               <tr id="control-retry">
                 <td>Retry</td>
-                <td>PR page and the panel of the board row, for an escalated, blocked or interrupted PR.</td>
-                <td>yes: <q>Its attempts start from zero.</q></td>
+                <td>PR page and the panel of the board row, wherever <a href="commands.html#cmd-retry">retry</a> applies.</td>
+                <td>yes: <q>Its attempts start from zero.</q>, then its effect</td>
                 <td>
                   Queues <a href="commands.html#cmd-retry"><code>retry</code></a
                   >, which resets the attempt counters and lets the PR run again.

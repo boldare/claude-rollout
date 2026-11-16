@@ -24,7 +24,7 @@ import { lockHolder, postCommand, readLedger } from '../lib/ledger.mjs'
 import { stopDriver } from '../lib/control.mjs'
 import { runDriver } from '../lib/driver.mjs'
 import { batteryWarning } from '../lib/machine.mjs'
-import { prDetail, readEvents, rolloutView, rowDriver, rowsMatching, runsOf } from '../lib/view.mjs'
+import { commandPreview, prDetail, readEvents, rolloutView, rowDriver, rowsMatching, runsOf } from '../lib/view.mjs'
 import { timeText } from '../lib/sentences.ts'
 import { STAGES } from '../lib/state.ts'
 import { prsWithoutPlan } from '../lib/plan.mjs'
@@ -715,6 +715,28 @@ async function ui() {
   process.once('SIGTERM', shutdown)
 }
 
+// What the command does, printed before it is sent. A refused one goes to
+// stderr and is never posted. False with no ledger yet, where nothing can be told.
+function previewed(manifest, request) {
+  const preview = commandPreview(manifest, request)
+
+  if (!preview) {
+    return false
+  }
+
+  const [first, ...more] = preview.lines
+  const text = [`${request.id}  ${first}`, ...more.map((line) => `    ${line}`)].join('\n')
+
+  if (!preview.applies) {
+    console.error(text)
+    process.exit(1)
+  }
+
+  console.log(text)
+
+  return true
+}
+
 // The comment block right after the shebang.
 function usage() {
   const lines = readFileSync(new URL(import.meta.url), 'utf8').split('\n')
@@ -767,24 +789,16 @@ async function main() {
 
     case 'approve': {
       const id = requireId(manifest)
-      const entry = readLedger(manifest)?.prs[id]
-      const refusal = approveRefusal(manifest, entry ?? {})
+      const verified = readLedger(manifest)?.prs?.[id]?.verified
+      const approval = verified ? { cmd: 'approve', id, sha: verified.sha, patchId: verified.patchId } : { cmd: 'approve', id }
 
-      if (refusal) {
-        console.error(`${id}: ${refusal}`)
+      if (!previewed(manifest, approval)) {
+        console.error('nothing to approve: no ledger yet')
         process.exit(1)
       }
 
-      if (entry?.state !== 'verified' || !entry.verified) {
-        console.error(`${id} is ${entry?.state ?? 'unknown'}, not verified; nothing to approve`)
-        process.exit(1)
-      }
-
-      postCommand(manifest, { cmd: 'approve', id, sha: entry.verified.sha, patchId: entry.verified.patchId })
-      console.log(
-        `approving ${id} PR #${entry.pr} at ${entry.verified.sha} (patch ${entry.verified.patchId.slice(0, 12)}); the driver merges ${manifest.policy.mergeDelaySeconds}s after it accepts`,
-      )
-
+      postCommand(manifest, approval)
+      console.log('queued')
       break
     }
 
@@ -797,15 +811,20 @@ async function main() {
         process.exit(1)
       }
 
+      previewed(manifest, { cmd: 'note', id, text })
       postCommand(manifest, { cmd: 'note', id, text })
-      console.log('queued for the implementer')
+      console.log('queued')
       break
     }
 
-    case 'retry':
-      postCommand(manifest, { cmd: command, id: requireId(manifest) })
+    case 'retry': {
+      const retry = { cmd: 'retry', id: requireId(manifest) }
+
+      previewed(manifest, retry)
+      postCommand(manifest, retry)
       console.log('queued')
       break
+    }
 
     case 'hold':
     case 'release':

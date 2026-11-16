@@ -3,23 +3,27 @@ import assert from 'node:assert/strict'
 import { freshPr } from '../lib/ledger.mjs'
 import {
   answerBrief,
+  approveInbox,
   briefWaits,
   briefWritten,
   claimNewHead,
   DISPUTE,
+  dropVerification,
   escalateDispute,
   escalatedOverDispute,
   escalateErrors,
   escalateExhausted,
   fillFromState,
   fixReasonCode,
+  freshAttempt,
   holdPr,
   joinFix,
   recoverRun,
   releasePr,
   reportUsed,
   reportWaits,
-  resumeAfterRetry,
+  resetBudgets,
+  retryFix,
   runFailed,
   runName,
   runStarted,
@@ -28,11 +32,14 @@ import {
   toBlocked,
   toClaimed,
   toFix,
+  toMergeStatus,
   toMerged,
   toPending,
   toVerified,
   unheld,
   verifyAgain,
+  waitOnStage,
+  wake,
 } from '../lib/transitions.ts'
 
 const SHA = 'a'.repeat(40)
@@ -685,122 +692,172 @@ test('recoverRun: the driver own merge keeps its status', () => {
   assert.deepEqual(entry, before)
 })
 
-test('transitions: resumeAfterRetry sends an upheld dispute to a fix', () => {
-  const entry = entryWith({ state: 'escalated', escalation: DISPUTE, pr: 7, claimedSha: SHA, interruptedRole: 'verify', fixNote: 'F1' })
-  const before = structuredClone(entry)
-
-  resumeAfterRetry(entry, { at: AT, briefWritten: true })
-
-  assert.deepEqual(entry, {
-    ...before,
-    state: 'needs_fix',
-    interruptedRole: null,
-    stage: 'implement',
-    status: slot(),
-    fix: { reason: 'verifier-findings', note: 'F1', since: AT },
-  })
-})
-
-test('transitions: resumeAfterRetry sends a verification at the claimed head back to the gate', () => {
+test('resetBudgets: the attempts, the refunds, the failure streak, the errors, the backoff and the delegate runs go back', () => {
   const entry = entryWith({
     state: 'escalated',
-    escalation: 'repeated errors',
-    pr: 7,
-    claimedSha: SHA,
-    verified: verification(SHA),
-    interruptedRole: 'fix',
+    attempts: { implement: 2, fix: 4, verify: 3, brief: 2 },
+    refunds: 5,
+    failStreak: 3,
+    tickErrors: 5,
+    retryAfter: LATER,
+    delegate: { runs: 2, lastQuestion: 'abc', limitNotified: true, answers: [] },
   })
 
   const before = structuredClone(entry)
 
-  resumeAfterRetry(entry, { at: AT, briefWritten: true })
+  resetBudgets(entry)
 
   assert.deepEqual(entry, {
     ...before,
-    state: 'verified',
-    interruptedRole: null,
-    status: { kind: 'waiting', code: 'gate-pending', since: EARLIER },
+    attempts: { implement: 0, fix: 0, verify: 0, brief: 0 },
+    refunds: 0,
+    failStreak: 0,
+    tickErrors: 0,
+    retryAfter: null,
+    delegate: { runs: 0, lastQuestion: 'abc', limitNotified: false, answers: [] },
   })
 })
 
-test('transitions: resumeAfterRetry checks a verification at an older head again from the claim', () => {
+test('freshAttempt: a role at its limit gets one attempt back, and a role below it keeps its count', () => {
+  const entry = entryWith({ state: 'escalated', attempts: { implement: 2, fix: 1, verify: 0, brief: 0 } })
+
+  freshAttempt(entry, 'implement', 2)
+  freshAttempt(entry, 'fix', 4)
+
+  assert.deepEqual(entry.attempts, { implement: 1, fix: 1, verify: 0, brief: 0 })
+})
+
+test('wake: a PR waits on its stage with its fix, and on verify with its role', () => {
+  const fix = { reason: 'verifier-findings', note: 'F1', since: EARLIER }
+  const implement = entryWith({ state: 'escalated', escalation: 'fix attempts exhausted', fixReason: 'verifier findings', fixNote: 'F1' })
+
+  implement.fix = fix
+  wake(implement, 'implement', AT)
+
+  assert.deepEqual([implement.state, implement.stage, implement.status, implement.fix], ['needs_fix', 'implement', slot(), fix])
+
+  const verify = entryWith({ state: 'escalated', escalation: 'verify attempts exhausted', pr: 7, claimedSha: SHA })
+
+  wake(verify, 'verify', AT)
+
+  assert.deepEqual([verify.state, verify.stage, verify.status, verify.interruptedRole], ['interrupted', 'verify', slot(), 'verify'])
+})
+
+test('wake: a back-off still ahead stays', () => {
+  const entry = entryWith({ state: 'escalated', retryAfter: LATER, failStreak: 2 })
+
+  wake(entry, 'brief', AT)
+
+  assert.deepEqual(entry.status, { kind: 'waiting', code: 'backoff', until: LATER, failures: 2, since: AT })
+})
+
+test('waitOnStage: each stage waits for what it waits for once nothing stops it', () => {
+  const brief = entryWith({ state: 'escalated' })
+
+  waitOnStage(brief, 'brief', AT)
+  assert.deepEqual([brief.state, brief.stage, brief.status], ['pending', 'brief', slot()])
+
+  const claimed = entryWith({ state: 'escalated', pr: 7, claimedSha: SHA })
+
+  waitOnStage(claimed, 'pre-verify', AT)
+  assert.deepEqual([claimed.state, claimed.stage, claimed.status], ['ready_claimed', 'pre-verify', ciAt(SHA)])
+
+  const parked = entryWith({ state: 'escalated', sessionId: 'session-1', interruptedRole: 'report', ready: { status: 'READY' } })
+
+  waitOnStage(parked, 'pre-verify', AT)
+  assert.deepEqual([parked.state, parked.status], ['interrupted', { kind: 'waiting', code: 'github', since: AT }])
+
+  const verified = entryWith({ state: 'escalated', pr: 7, claimedSha: SHA, verified: verification() })
+
+  waitOnStage(verified, 'merge', AT)
+  assert.deepEqual(
+    [verified.state, verified.stage, verified.status],
+    ['verified', 'merge', { kind: 'waiting', code: 'gate-pending', since: EARLIER }],
+  )
+})
+
+test('waitOnStage: work on implement with no fix owed resumes as a cut-off fix run, and an owed fix stays', () => {
+  const session = entryWith({ state: 'escalated', sessionId: 'session-1', interruptedRole: 'verify' })
+
+  waitOnStage(session, 'implement', AT)
+  assert.deepEqual([session.state, session.status, session.fix, session.interruptedRole], ['interrupted', slot(), noReport(), 'fix'])
+
+  const owed = entryWith({ state: 'needs_fix', pr: 7, fixReason: 'CI is red', fixNote: 'red' })
+  const fix = owed.fix
+
+  waitOnStage(owed, 'implement', AT)
+  assert.deepEqual([owed.state, owed.fix], ['needs_fix', fix])
+
+  const fresh = entryWith({ state: 'escalated' })
+
+  waitOnStage(fresh, 'implement', AT)
+  assert.deepEqual([fresh.state, fresh.stage, fresh.fix], ['pending', 'implement', null])
+})
+
+test('retryFix: the obstacle, its evidence and the note of an owed fix make the fix retry', () => {
+  const blocked = { kind: 'environment', question: 'The runner has no Docker.', evidence: 'docker: not found', run: 'P1-02-fix' }
+  const entry = entryWith({ state: 'blocked', blocked, pr: 7, fixReason: 'CI is red', fixNote: 'red' })
+
+  entry.fix = { reason: 'ci-red', note: 'red', since: EARLIER }
+  retryFix(entry, AT)
+
+  const note = 'The runner has no Docker.\n\nEvidence: docker: not found\n\nred'
+
+  assert.deepEqual([entry.state, entry.stage, entry.status], ['needs_fix', 'implement', slot()])
+  assert.deepEqual(entry.fix, { reason: 'retry', note, since: AT })
+  assert.deepEqual([entry.fixReason, entry.fixNote], ['retry', note])
+  assert.equal(fixReasonCode(entry.fixReason), 'retry')
+
+  const bare = entryWith({ state: 'blocked', blocked: { ...blocked, evidence: '' } })
+
+  retryFix(bare, AT)
+  assert.equal(bare.fix.note, 'The runner has no Docker.')
+})
+
+test('dropVerification: the verification and the approval go', () => {
+  const entry = entryWith({
+    state: 'verified',
+    pr: 7,
+    claimedSha: SHA,
+    verified: verification(),
+    approved: { ...verification(), channel: 'inbox' },
+  })
+
+  dropVerification(entry)
+
+  assert.deepEqual([entry.verified, entry.approved], [null, null])
+})
+
+test('approveInbox: the approval, and the merge delay from it', () => {
+  const entry = entryWith({ state: 'escalated', tickErrors: 5, pr: 7, claimedSha: SHA, verified: verification() })
+  const approval = { sha: SHA, patchId: 'patch-1', at: AT, channel: 'inbox' }
+
+  approveInbox(entry, approval, { until: LATER, at: AT })
+
+  assert.deepEqual(entry.approved, approval)
+  assert.deepEqual(
+    [entry.state, entry.stage, entry.status],
+    ['verified', 'merge', { kind: 'waiting', code: 'merge-delay', until: LATER, since: AT }],
+  )
+})
+
+test('toMergeStatus: a PR out of a needs-you status follows the stored rule, and its state follows', () => {
   const entry = entryWith({
     state: 'blocked',
+    blocked: { kind: 'gate', question: 'draft', evidence: '' },
     pr: 7,
     claimedSha: SHA,
-    ciPendingSince: EARLIER,
-    verified: verification(OLD_SHA),
-    interruptedRole: 'verify',
+    verified: verification(),
   })
 
-  const before = structuredClone(entry)
+  assert.equal(entry.state, 'blocked')
 
-  resumeAfterRetry(entry, { at: AT, briefWritten: true })
+  toMergeStatus(entry, AT)
 
-  assert.deepEqual(entry, {
-    ...before,
-    verified: null,
-    ciPendingSince: null,
-    state: 'ready_claimed',
-    interruptedRole: null,
-    stage: 'pre-verify',
-    status: ciAt(SHA),
-  })
-})
-
-test('transitions: resumeAfterRetry keeps a parked READY report for its claim', () => {
-  const entry = entryWith({
-    state: 'escalated',
-    escalation: 'repeated errors',
-    sessionId: 'session-1',
-    interruptedRole: 'report',
-    ready: { status: 'READY', pr: 7, headSha: SHA },
-  })
-
-  const before = structuredClone(entry)
-
-  resumeAfterRetry(entry, { at: AT, briefWritten: true })
-
-  assert.deepEqual(entry, { ...before, state: 'interrupted', status: { kind: 'waiting', code: 'github', since: AT } })
-})
-
-test('transitions: resumeAfterRetry verifies a claim with no verification', () => {
-  const entry = entryWith({ state: 'escalated', escalation: 'verify attempts exhausted', pr: 7, claimedSha: SHA, sessionId: 'session-1' })
-  const before = structuredClone(entry)
-
-  resumeAfterRetry(entry, { at: AT, briefWritten: true })
-
-  assert.deepEqual(entry, { ...before, state: 'interrupted', interruptedRole: 'verify', status: slot() })
-})
-
-test('transitions: resumeAfterRetry sends a PR or a session with no claim to a fix', () => {
-  for (const fields of [{ pr: 7 }, { sessionId: 'session-1' }]) {
-    const entry = entryWith({ state: 'escalated', escalation: 'implement attempts exhausted', ...fields })
-    const before = structuredClone(entry)
-
-    resumeAfterRetry(entry, { at: AT, briefWritten: true })
-
-    assert.deepEqual(
-      entry,
-      { ...before, state: 'interrupted', interruptedRole: 'fix', status: slot(), fix: noReport() },
-      JSON.stringify(fields),
-    )
-  }
-})
-
-test('transitions: resumeAfterRetry sends an entry with no PR and no session back to pending', () => {
-  const entry = entryWith({ state: 'escalated', escalation: 'repeated errors' })
-  const before = structuredClone(entry)
-
-  resumeAfterRetry(entry, { at: AT, briefWritten: false })
-
-  assert.deepEqual(entry, { ...before, state: 'pending', interruptedRole: 'fix', stage: 'brief', status: slot() })
-
-  const written = entryWith({ state: 'escalated', escalation: 'repeated errors' }, { briefWritten: true })
-
-  resumeAfterRetry(written, { at: AT, briefWritten: true })
-
-  assert.deepEqual([written.state, written.stage, written.status, written.fix], ['pending', 'implement', slot(), null])
+  assert.deepEqual(
+    [entry.state, entry.stage, entry.status],
+    ['verified', 'merge', { kind: 'waiting', code: 'gate-pending', since: EARLIER }],
+  )
 })
 
 // stateOf reads only the stage, the status, the fix and a parked report's role.

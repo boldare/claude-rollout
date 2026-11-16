@@ -1,5 +1,6 @@
 import { GATE_BLOCK_CODES, QUESTION_KINDS, ROLES } from './state.ts'
 import type {
+  Approval,
   BriefEntry,
   BudgetRole,
   CommitStamp,
@@ -11,6 +12,7 @@ import type {
   Hold,
   IsoTime,
   MergeStatus,
+  NoteRecord,
   NeedsYouCode,
   NeedsYouDetails,
   OpenStage,
@@ -69,6 +71,19 @@ interface StoredVerdict {
   after?: number
 }
 
+// Version 2 keeps no channel on an approval from before channels, and no login on one from the inbox.
+type StoredApproval = Pick<Approval, 'sha' | 'at'> & { patchId?: string | null; channel?: Approval['channel']; by?: Approval['by'] }
+
+// A note as version 2 records it: what it answered is the question's kind and text.
+export interface StoredNote {
+  at: IsoTime
+  by: NoteRecord['by']
+  kind: string | null
+  question: string | null
+  text: string
+  run: string | null
+}
+
 // What the gate read, as collectFacts in github.mjs returns it.
 interface GateFacts {
   pr: { headRefOid: string } | null
@@ -77,10 +92,10 @@ interface GateFacts {
   mainChecks: { sha?: string | null; failing: string[] }
 }
 
-// The version 2 fields this module reads or writes, beside stage, status,
-// fix and hold, from which the state is derived. The optional ones are
-// missing from an entry until the driver first sets them.
-interface PrEntry {
+// The version 2 fields this module and the commands read or write, beside
+// stage, status, fix and hold, from which the state is derived. The optional
+// ones are missing from an entry until the driver first sets them.
+export interface PrEntry {
   state: State
   stage: Stage
   status: Status | null
@@ -96,6 +111,11 @@ interface PrEntry {
   fixReason?: string
   fixNote?: string
   verified: StoredVerification | null
+  approved: StoredApproval | null
+  pendingNote: string | null
+  noteHistory?: StoredNote[]
+  delegate: { runs: number; lastQuestion: string | null; limitNotified: boolean; answers: unknown[] }
+  refunds?: number
   findings: unknown
   ready: unknown
   pr: number | null
@@ -124,7 +144,8 @@ type UnfilledEntry = Omit<PrEntry, 'stage' | 'status' | 'fix' | 'hold'> & Partia
 type Unstamped<Union> = Union extends unknown ? Omit<Union, 'since'> : never
 
 type Resting = Unstamped<WaitingOf<'backoff' | 'slot'>>
-type RestingStage = (typeof RESTING_STAGES)[number]
+
+export type RestingStage = (typeof RESTING_STAGES)[number]
 
 // PR states:
 //   pending → implementing → ready_claimed → verifying → verified → merged
@@ -190,6 +211,7 @@ export const FIX_REASON_CODES: ReadonlyMap<string, FixReason> = new Map([
   ['maintainer review', 'maintainer-review'],
   ['answer from the delegate', 'delegate-answer'],
   ['request from the delegate', 'delegate-answer'],
+  ['retry', 'retry'],
 ])
 
 // A fix the merge gate sends names its cause by the verdict's code.
@@ -326,7 +348,7 @@ function noReport(at: IsoTime): Fix {
   return { reason: 'no-report', note: '', since: at }
 }
 
-function restsOn(stage: Stage): stage is RestingStage {
+export function restsOn(stage: Stage): stage is RestingStage {
   return listed(RESTING_STAGES, stage)
 }
 
@@ -335,8 +357,8 @@ function openStage(entry: PrEntry): OpenStage {
   return entry.stage === 'merged' ? 'merge' : entry.stage
 }
 
-// The verifier still finds open what the implementer disputed. A note or a
-// retry sends the PR to a fix run with the findings.
+// The verifier still finds open what the implementer disputed. A note sends
+// the PR to a fix run with the findings.
 export function escalatedOverDispute(entry: PrEntry): boolean {
   return entry.status?.kind === 'needs-you' && entry.status.code === 'dispute'
 }
@@ -603,47 +625,6 @@ export function recoverRun(entry: PrEntry, { refund, at }: { refund: boolean; at
   return role
 }
 
-// Where a retried PR picks up. A dispute the verifier upheld goes to a fix
-// run with the findings. A verification that still holds goes back to the
-// gate: sync compares the head with GitHub's first, and the gate refuses a
-// stale patch anyway. One for an older head is checked again from the
-// claim. A parked READY report needs no agent.
-export function resumeAfterRetry(entry: PrEntry, { at, briefWritten: written }: { at: IsoTime; briefWritten: boolean }): void {
-  if (escalatedOverDispute(entry)) {
-    entry.interruptedRole = null
-    moveTo(entry, 'implement', resting(entry, at), {
-      since: at,
-      fix: { reason: 'verifier-findings', note: entry.fixNote ?? '', since: at },
-    })
-  } else if (entry.pr && entry.verified && entry.verified.sha === entry.claimedSha) {
-    entry.interruptedRole = null
-    toMergeStatus(entry, at)
-  } else if (entry.pr && entry.verified) {
-    entry.verified = null
-    entry.ciPendingSince = null
-    entry.interruptedRole = null
-    moveTo(entry, 'pre-verify', claimWait(entry.claimedSha), { since: at })
-  } else if (entry.interruptedRole === 'report' && entry.ready) {
-    moveTo(entry, 'pre-verify', GITHUB, { since: at })
-  } else {
-    resumeFromScratch(entry, at, written)
-  }
-}
-
-function resumeFromScratch(entry: PrEntry, at: IsoTime, written: boolean): void {
-  const role = entry.claimedSha && !entry.verified ? 'verify' : 'fix'
-
-  entry.interruptedRole = role
-
-  if (entry.pr || entry.sessionId) {
-    rest(entry, role, at)
-  } else if (written) {
-    moveTo(entry, 'implement', resting(entry, at), { since: at })
-  } else {
-    moveTo(entry, 'brief', resting(entry, at), { since: at })
-  }
-}
-
 // What a verdict's status reads beside the verdict: the gate's facts when it
 // runs, else only what the stored verdict kept.
 interface VerdictFacts {
@@ -717,10 +698,76 @@ function storedRule(entry: PrEntry, at: IsoTime): { status: Unstamped<MergeStatu
   return result
 }
 
-function toMergeStatus(entry: PrEntry, at: IsoTime): void {
+// Unlike mergeStatus, it settles: a PR that leaves a needs-you status this way reaches the gate.
+export function toMergeStatus(entry: PrEntry, at: IsoTime): void {
   const { status, since } = storedRule(entry, at)
 
   moveTo(entry, 'merge', status, { since })
+}
+
+// The counts that stop a PR, as rollout retry gives them back.
+export function resetBudgets(entry: PrEntry): void {
+  entry.attempts = { implement: 0, fix: 0, verify: 0, brief: 0 }
+  entry.refunds = 0
+  entry.failStreak = 0
+  entry.tickErrors = 0
+  entry.retryAfter = null
+  entry.delegate = { ...entry.delegate, runs: 0, limitNotified: false }
+}
+
+// One more attempt of a role whose attempts ran out, never more.
+export function freshAttempt(entry: PrEntry, role: BudgetRole, limit: number): void {
+  entry.attempts[role] = Math.min(entry.attempts[role], limit - 1)
+}
+
+// A verify that waits needs its role, or the next advance would not verify again.
+export function wake(entry: PrEntry, stage: RestingStage, at: IsoTime): void {
+  if (stage === 'verify') {
+    entry.interruptedRole = 'verify'
+  }
+
+  moveTo(entry, stage, resting(entry, at), { since: at, fix: entry.fix })
+}
+
+// What a stage waits for once nothing stops it. A PR with a GitHub PR or a
+// session and no fix owed resumes as a cut-off fix run would, so no fresh
+// implement run replaces that work.
+export function waitOnStage(entry: PrEntry, stage: OpenStage, at: IsoTime): void {
+  if (stage === 'merge') {
+    toMergeStatus(entry, at)
+  } else if (stage === 'pre-verify') {
+    moveTo(entry, 'pre-verify', parkedReport(entry) ? GITHUB : claimWait(entry.claimedSha), { since: at })
+  } else {
+    if (stage === 'implement' && !entry.fix && (entry.pr || entry.sessionId)) {
+      entry.interruptedRole = 'fix'
+      entry.fix = noReport(at)
+    }
+
+    wake(entry, stage, at)
+  }
+}
+
+// rollout retry on an obstacle: the maintainer removed its cause. The fix
+// carries the obstacle and any fix the PR owed, so a lost session still has both.
+export function retryFix(entry: PrEntry, at: IsoTime): void {
+  const status = entry.status
+  const question = status?.kind === 'needs-you' && status.code === 'obstacle' ? status.question : null
+  const evidence = question?.evidence ? `Evidence: ${question.evidence}` : ''
+  const note = [question?.text, evidence, entry.fix?.note].filter(Boolean).join('\n\n')
+
+  toFix(entry, 'retry', note, { code: 'retry', at })
+}
+
+// A PR sent back to implement is no longer verified or approved.
+export function dropVerification(entry: PrEntry): void {
+  entry.verified = null
+  entry.approved = null
+}
+
+// The merge delay counts from the approval.
+export function approveInbox(entry: PrEntry, approval: StoredApproval, { until, at }: { until: IsoTime; at: IsoTime }): void {
+  entry.approved = approval
+  moveTo(entry, 'merge', { kind: 'waiting', code: 'merge-delay', until }, { since: at })
 }
 
 // The status setters below keep the derived state as it is. They write the

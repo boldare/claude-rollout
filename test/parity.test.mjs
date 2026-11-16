@@ -1,13 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { dirname } from 'node:path'
+import { existsSync, readdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutSnapshot } from '../lib/rollouts.mjs'
 import { STAGE_STATUSES } from '../lib/state.ts'
 import { stateOf } from '../lib/transitions.ts'
 import { renderBoard } from '../ui/board.js'
+import { dialogFor, prControls } from '../ui/commands.js'
 import { renderHeader } from '../ui/header.js'
 import { installDocument } from './fake-dom.mjs'
 import { at, makeRollout, sampleStatus } from './fixtures.mjs'
@@ -224,6 +226,118 @@ test('parity: status --needs-you and --stage merge list the ids the board shows 
     assert.ok(listed.length > 0, filter)
     assert.deepEqual(listed, shown, filter)
   }
+})
+
+// The agent's variables would make the CLI refuse every command.
+function commandEnv() {
+  const env = { ...process.env }
+
+  delete env.ROLLOUT_ROLE
+  delete env.ROLLOUT_ROOT
+  delete env.ROLLOUT_DIR
+
+  return env
+}
+
+function command(...args) {
+  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', cwd: dirname(BIN), env: commandEnv() })
+}
+
+function inboxCount(dir) {
+  const inbox = join(dir, 'inbox')
+
+  return existsSync(inbox) ? readdirSync(inbox).filter((name) => !name.startsWith('.')).length : 0
+}
+
+// The effect lines as the CLI prints them: the id before the first, four spaces before the rest.
+function printedLines(output, id) {
+  const [first, ...rest] = output.trimEnd().split('\n')
+
+  assert.ok(first.startsWith(`${id}  `), first)
+  assert.ok(
+    rest.every((line) => line.startsWith('    ')),
+    output,
+  )
+
+  return [first.slice(id.length + 2), ...rest.map((line) => line.slice(4))]
+}
+
+function commandRollout() {
+  const fix = { reason: 'verifier-findings', note: '<findings>', since: at(50) }
+  const verified = { sha: 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1', patchId: 'patch-c6', at: at(80) }
+
+  return rolloutWith({
+    C1: written({ stage: 'implement', status: sampleStatus('needs-you', 'decision'), pr: 101, sessionId: 'session-1' }),
+    C2: written({ stage: 'implement', status: sampleStatus('needs-you', 'obstacle'), pr: 102, sessionId: 'session-2' }),
+    C3: written({
+      stage: 'implement',
+      status: sampleStatus('waiting', 'slot'),
+      pr: 103,
+      fix,
+      fixReason: 'verifier findings',
+      fixNote: '<findings>',
+    }),
+    C4: written({ stage: 'implement', status: sampleStatus('running', 'implement'), pr: 104 }),
+    C5: written({ stage: 'verify', status: sampleStatus('needs-you', 'dispute'), pr: 105, claimedSha: verified.sha }),
+    C6: written({
+      stage: 'merge',
+      status: sampleStatus('needs-you', 'approve'),
+      pr: 106,
+      claimedSha: verified.sha,
+      verified,
+      approved: { ...verified, at: at(81), channel: 'inbox' },
+    }),
+    C7: written({ stage: 'merged', status: null, pr: 107, mergeSha: 'feedface00' }),
+  })
+}
+
+test('parity: retry and note print the lines of the board row and its dialog, and a refused one exits 1 and posts nothing', () => {
+  const dir = commandRollout()
+  const rows = new Map(viewOf(dir).rows.map((row) => [row.id, row]))
+  const outcomes = []
+
+  for (const [id, row] of rows) {
+    for (const cmd of ['retry', 'note']) {
+      const before = inboxCount(dir)
+      const result = cmd === 'retry' ? command('retry', id, '--dir', dir) : command('note', id, 'Rename the field.', '--dir', dir)
+      const effect = row.effects[cmd]
+
+      outcomes.push(`${id} ${cmd} ${effect.applies}`)
+
+      if (effect.applies) {
+        assert.equal(result.status, 0, result.stderr)
+        assert.deepEqual(printedLines(result.stdout.replace(/queued\n$/, ''), id), effect.lines, `${id} ${cmd}`)
+        assert.deepEqual(dialogFor(cmd, { pr: row }).effect, effect.lines, `${id} ${cmd}`)
+        assert.equal(inboxCount(dir), before + 1, `${id} ${cmd}`)
+      } else {
+        assert.equal(result.status, 1, `${id} ${cmd}: ${result.stdout}`)
+        assert.equal(result.stdout, '', `${id} ${cmd}`)
+        assert.deepEqual(printedLines(result.stderr, id), effect.lines, `${id} ${cmd}`)
+        assert.equal(inboxCount(dir), before, `${id} ${cmd}`)
+      }
+
+      if (cmd === 'retry') {
+        assert.equal(prControls(row, false).includes('retry'), effect.applies, `${id} retry`)
+      }
+    }
+  }
+
+  assert.deepEqual(outcomes, [
+    'C1 retry false',
+    'C1 note true',
+    'C2 retry true',
+    'C2 note true',
+    'C3 retry true',
+    'C3 note true',
+    'C4 retry false',
+    'C4 note true',
+    'C5 retry false',
+    'C5 note true',
+    'C6 retry true',
+    'C6 note true',
+    'C7 retry false',
+    'C7 note false',
+  ])
 })
 
 test('parity: with no driver, a running status reads waiting: driver-stopped in both, and both headers say the driver is down', () => {

@@ -669,6 +669,25 @@ test('prompts: the ready commands are the first item of step 7, required ones fi
   assertFilled({ both, required, recommended })
 })
 
+test('prompts: the reason retry tells the fix run why it runs, and every other reason reads as it is', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const sentence = 'retry: the maintainer removed the cause of the obstacle your last report named, and asks you to try again'
+  const prompts = {
+    fix: fixPrompt(manifest, pr, STATE, { reason: 'retry', note: 'The runner has Docker now.', head: 'abc' }),
+    resumeFresh: resumeFreshPrompt(manifest, pr, STATE, { reason: 'retry', note: 'The runner has Docker now.' }),
+  }
+
+  assert.ok(prompts.fix.includes(`reason: **${sentence}**.`), prompts.fix)
+  assert.ok(prompts.resumeFresh.includes(`Reason you were started: **${sentence}**.`), prompts.resumeFresh)
+  assert.ok(fixPrompt(manifest, pr, STATE, { reason: 'CI is red', note: 'n', head: 'abc' }).includes('reason: **CI is red**.'))
+  assert.ok(
+    resumeFreshPrompt(manifest, pr, STATE, { reason: 'constructor', note: 'n' }).includes('Reason you were started: **constructor**.'),
+  )
+
+  assertFilled(prompts)
+})
+
 test('prompts: a fresh implementer gets the ready commands in its step 7, and a fix run goes back to step 7', () => {
   const manifest = withReady(loadManifest(makeRollout()), ['npm test'], ['npm run lint'])
   const pr = manifest.all[0]

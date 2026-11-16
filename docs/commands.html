@@ -350,38 +350,90 @@ P3   implement · running: implement  the implementer is working · 34m</code></
 
         <h2 id="deciding">Decide <a class="anchor" href="#deciding" aria-label="Link to this section">#</a></h2>
 
+        <p>
+          <code>approve</code>, <code>note</code> and <code>retry</code> each follow one table, keyed by the PR's
+          <a href="how-it-works.html#status">stage and status</a>. In each table the first row that matches wins. The driver applies a
+          command through its rows, and the CLI reads the same rows from the ledger to print what the command does before it sends it:
+        </p>
+
+        <ol>
+          <li>The PR's stage and status, as <code>status</code> shows them, after the id.</li>
+          <li>
+            <code>after &lt;command&gt;:</code> and the stage and status after it, with the fix reason in brackets when a fix is owed. A
+            note that only waits in the queue reads <code>after note: queued, the next writing agent reads it</code>.
+          </li>
+          <li>What the command drops: the verification, the approval or both.</li>
+          <li>
+            With the driver stopped, <code>the driver is not running: the command waits in the inbox until it starts</code>. The effect then
+            starts from the runs the next start resumes.
+          </li>
+        </ol>
+
+        <p>
+          A command the rows refuse prints <code>refused: &lt;reason&gt;</code> in place of the lines after the first, on stderr. Nothing is
+          posted and the CLI exits 1. A command that applies is posted, and the CLI prints <code>queued</code>. With no ledger yet,
+          <code>retry</code> and <code>note</code> post as they are. The UI's <a href="ui.html#control-retry">Retry</a>,
+          <a href="ui.html#control-note">Note</a> and <a href="ui.html#control-answer">Answer</a> dialogs show the same lines.
+        </p>
+
+        <pre><code>$ rollout note A1 "rename the field to partnerId"
+A1  merge · needs-you: approve
+    after note: implement · waiting: slot (maintainer-note)
+    verification and approval are dropped
+queued
+
+$ rollout retry A2
+A2  verify · needs-you: dispute
+    refused: this PR waits for your answer: rollout note A2 "..."</code></pre>
+
         <h3 id="cmd-approve">approve <a class="anchor" href="#cmd-approve" aria-label="Link to this command">#</a></h3>
 
         <pre><code>node $R approve P1 --dir D</code></pre>
 
-        <p>Approves the verified patch of a PR. The CLI refuses it before it posts anything when this command does not count for the PR:</p>
+        <p>
+          Approves the verified patch of a PR. The CLI posts the head and patch id of the ledger's verification, after its effect. These
+          refuse the approval, the first that holds wins:
+        </p>
 
         <ul>
           <li>Under <code>merge: manual</code>. You merge on GitHub once the driver says the PR is ready.</li>
           <li>Under <code>merge: auto</code>. The driver merges once the gate passes, and <a href="#cmd-hold">hold</a> stops it.</li>
           <li>For a PR the bot opened under <code>approval: github</code>. A maintainer approves it with a normal review on GitHub.</li>
+          <li>
+            The PR is not on <code>merge</code>, has no verification, or its status is neither waiting nor <code>needs-you: approve</code>:
+            <code>nothing to approve: P1 is &lt;stage&gt; · &lt;kind&gt;: &lt;code&gt;</code>, or <code>P1 is merged</code>. A PR that needs
+            you for anything else is refused too.
+          </li>
+          <li>An agent is working on the PR.</li>
+          <li>
+            It names another head or patch than the verification:
+            <code>it names a different head than the one verified now; look at the card again</code>.
+          </li>
+          <li>It was posted before the verification finished.</li>
+          <li>
+            The PR is already approved through the inbox for the verified patch:
+            <code>already approved at &lt;time&gt;. The merge delay counts from then</code>. The approval keeps its time.
+          </li>
         </ul>
 
         <p>
-          The refusal says what to do instead. The CLI also refuses a PR that is not
-          <a href="how-it-works.html#state-verified">verified</a>, and otherwise posts the exact head and patch id from the ledger. The
-          driver accepts the approval only when all of this still holds:
+          The first three refusals say what to do instead. The CLI reads the same rows from the ledger and refuses before it posts anything.
+          The driver checks them again when the command arrives, because the PR may have moved since. A rejected approval shows up as
+          <code>approval-rejected</code> in the events, with a notification. With no ledger yet the CLI exits 1 with
+          <code>nothing to approve: no ledger yet</code>.
         </p>
 
-        <ul>
-          <li>The policy and the PR's author still let this command count.</li>
-          <li>The PR is still verified, with that same head and patch id.</li>
-          <li>The approval was posted after the verification finished.</li>
-          <li>No agent is working on the PR.</li>
-        </ul>
-
-        <p>A rejected approval shows up as <code>approval-rejected</code> in the events, with a notification.</p>
+        <p>
+          An approval that applies moves the PR to <code>merge · waiting: merge-delay</code> until the approval time plus
+          <code>policy.mergeDelaySeconds</code>, or to <code>merge · waiting: held</code> under a hold. From the next tick on the gate
+          writes its own verdict again.
+        </p>
 
         <div class="callout">
           <p>
             <strong>The approval counts under <code>merge: human</code> only.</strong> The driver merges
             <code>policy.mergeDelaySeconds</code> (120 s) after it accepts the approval, unless you <a href="#cmd-hold">hold</a> the PR in
-            that window (<code>rollout hold P1</code>). It notifies you when it accepts, and the CLI's reply names the delay.
+            that window (<code>rollout hold P1</code>). It notifies you when it accepts.
           </p>
         </div>
 
@@ -392,81 +444,112 @@ P3   implement · running: implement  the implementer is working · 34m</code></
         <pre><code>node $R note P1 "Keep the old flag as an alias." --dir D</code></pre>
 
         <p>
-          Sends a message from you to the PR's agents. The words after the id are joined, so the quotes are optional. What happens depends
-          on the PR's state:
+          Sends a message from you to the PR's agents. The words after the id are joined, so the quotes are optional. Queued means the note
+          waits for the next brief, implement or fix run, which reads it. What happens depends on the PR's stage and status:
         </p>
 
         <div class="scroll">
           <table>
             <thead>
               <tr>
-                <th>state</th>
+                <th>stage · status</th>
                 <th>what the note does</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td class="nowrap"><span class="badge state state-blocked">blocked</span> by brief questions</td>
+                <td class="nowrap"><code>merged</code></td>
+                <td>Refused: <code>already merged</code>.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>brief · needs-you: brief-questions</code></td>
                 <td>
-                  Your answer is kept with its questions until the brief is written. The PR returns to pending with its brief attempt back,
-                  and the brief writer runs again with every answer so far.
+                  Your answer is kept with its questions until the brief is written. The PR goes to <code>brief · waiting</code> with its
+                  brief attempt back, and the brief writer runs again with every answer so far.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">any <code>needs-you: closed</code></td>
+                <td>Kept and queued. The status stays until the PR is reopened and <a href="#cmd-retry">retried</a>.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">an agent at work</td>
+                <td>
+                  A brief, implement, fix or verify run, or the ready and pre-verify commands. Queued, on any stage. A note queued while a
+                  verifier runs sends the PR to a fix run before the next verification.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>brief · waiting</code></td>
+                <td>Queued for the brief writer.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>brief · needs-you: attempts-exhausted</code> or <code>errors</code></td>
+                <td>The note becomes a hint for the brief writer, with one fresh attempt. The PR goes to <code>brief · waiting</code>.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>implement · waiting</code>, never ran</td>
+                <td>Queued. The implementer's prompt lists it.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>implement · waiting</code>, a fix owed</td>
+                <td>Queued for the fix run. The fix keeps its reason and its details.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>implement · needs-you: decision</code> or <code>obstacle</code></td>
+                <td>
+                  The PR goes to <code>implement · waiting</code> with the fix reason <code>maintainer-note</code>. This is how you answer
+                  an agent that reported BLOCKED.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>implement · needs-you: attempts-exhausted</code> or <code>errors</code></td>
+                <td>
+                  The PR goes to <code>implement · waiting</code>. A fix it owed keeps its reason, and the note is queued for it. With no
+                  fix owed, it gets one with the reason <code>maintainer-note</code>. Exhausted attempts get one fresh attempt.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>pre-verify</code>, any status</td>
+                <td>The PR goes to <code>implement · waiting</code> with the fix reason <code>maintainer-note</code>.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>verify · needs-you: dispute</code></td>
+                <td>
+                  The PR goes to <code>implement · waiting</code> with the fix reason <code>verifier-findings</code> and the findings, and
+                  the note is queued for that fix run. It is recorded as your decision on the dispute, so the next verifier sees it.
                 </td>
               </tr>
               <tr>
                 <td class="nowrap">
-                  <span class="badge state state-pending">pending</span>, or an agent other than the delegate is running
+                  <code>verify · needs-you: attempts-exhausted</code> or <code>errors</code>, or <code>verify · waiting</code>
                 </td>
                 <td>
-                  Queued. The next brief, implement or fix prompt gets it. A note queued while a verifier runs sends the PR to a fix run
-                  before the next verification.
+                  The PR goes to <code>implement · waiting</code> with the fix reason <code>maintainer-note</code>. Exhausted verify
+                  attempts get one fresh attempt.
                 </td>
               </tr>
               <tr>
-                <td class="nowrap"><span class="badge state state-merged">merged</span></td>
-                <td>Rejected.</td>
-              </tr>
-              <tr>
-                <td class="nowrap">no brief file and no GitHub PR</td>
-                <td>
-                  For example a PR that escalated because no brief could be written. The note becomes an answer for the brief writer, as for
-                  brief questions.
-                </td>
-              </tr>
-              <tr>
-                <td class="nowrap">
-                  <span class="badge state state-verified">verified</span>
-                  <span class="badge state state-ready_claimed">ready_claimed</span>
-                </td>
-                <td>The verification is dropped and the PR goes to needs_fix, with the reason "request from the maintainer".</td>
-              </tr>
-              <tr>
-                <td class="nowrap"><span class="badge state state-needs_fix">needs_fix</span></td>
-                <td>Queued for the fix run. The reason the PR waits with, and its details, stay.</td>
-              </tr>
-              <tr>
-                <td class="nowrap"><span class="badge state state-escalated">escalated</span> over a disputed finding</td>
-                <td>
-                  The PR goes to needs_fix with the reason "verifier findings" and the findings, and the note is queued for that fix run. It
-                  is recorded as your decision on the dispute, so the next verifier sees it.
-                </td>
-              </tr>
-              <tr>
-                <td class="nowrap">any other state</td>
-                <td>
-                  The PR goes to needs_fix, with the reason "answer from the maintainer", and loses any verification it still had. This is
-                  how you answer an agent that reported BLOCKED.
-                </td>
+                <td class="nowrap"><code>merge</code>, any status</td>
+                <td>The PR goes to <code>implement · waiting</code> with the fix reason <code>maintainer-note</code>.</td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <p>
-          For a verified or ready_claimed PR, a needs_fix PR, a PR escalated over a disputed finding and any other state, the fix attempts
-          are capped at one below the limit, so at least one more fix run is allowed. The fix run resumes the implementer's own session when
-          there is one. In the UI:
-          <a href="ui.html#control-note">Note</a>, or <a href="ui.html#control-answer">Answer</a> for a blocked PR.
-        </p>
+        <ul>
+          <li>The first row that matches wins. A PR on brief whose brief file exists follows the implement rows, brief questions aside.</li>
+          <li>A note that sends a PR to implement drops its verification and its approval.</li>
+          <li>
+            A row that sends the PR to a fix or joins one caps the fix attempts at one below the limit, so at least one more fix run is
+            allowed. The fix run resumes the implementer's own session when there is one.
+          </li>
+          <li>A note never shortens a backoff: the PR waits in <code>backoff</code> while it lasts.</li>
+          <li>
+            In the UI: <a href="ui.html#control-note">Note</a>, or <a href="ui.html#control-answer">Answer</a> for a blocked PR. Both
+            dialogs show the effect.
+          </li>
+        </ul>
 
         <p>
           A note always wins over <a href="how-it-works.html#delegate">the delegate</a>. Sent while the delegate runs, it applies at once,
@@ -483,33 +566,112 @@ P3   implement · running: implement  the implementer is working · 34m</code></
 
         <pre><code>node $R retry P1 --dir D</code></pre>
 
+        <p>
+          Gives a PR its budgets back where the driver stopped it. A retry that applies resets all four attempt counters (implement, fix,
+          verify and brief), the error count, the backoff, the refund count, the failure streak and the delegate's run count. A refused one
+          changes nothing. What else it does depends on the PR's stage and status:
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>stage · status</th>
+                <th>after retry</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap"><code>merged</code></td>
+                <td>Refused: <code>already merged</code>.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">any running status, or an agent or the delegate at work</td>
+                <td>Refused: <code>an agent is working on this PR</code>.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">
+                  <code>brief · needs-you: brief-questions</code>, <code>implement · needs-you: decision</code>,
+                  <code>verify · needs-you: dispute</code>
+                </td>
+                <td>
+                  Refused: <code>this PR waits for your answer</code>, with <code>rollout note P1 "..."</code> to use instead. Only your
+                  words answer these.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>brief · needs-you: attempts-exhausted</code></td>
+                <td><code>brief · waiting: slot</code>. The answers to brief questions stay.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>implement · needs-you: obstacle</code></td>
+                <td>
+                  <code>implement · waiting: slot</code> with the fix reason <code>retry</code>. The fix carries the obstacle's question and
+                  evidence, and the note of a fix the PR owed. Its prompt tells the agent you removed the cause and asks it to try again.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>implement · needs-you: attempts-exhausted</code></td>
+                <td><code>implement · waiting: slot</code>. A fix the PR owed stays, with its reason and its note.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>verify · needs-you: attempts-exhausted</code></td>
+                <td><code>verify · waiting: slot</code>. The next tick checks the claim and verifies the same head.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">any <code>needs-you: errors</code></td>
+                <td>The stage's waiting status.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>closed</code>, <code>gate-blocked</code>, <code>code-scanning-alerts</code></td>
+                <td>The stage's waiting status, and the same tick's sync, claim check or gate reads the cause again. See below.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">
+                  <code>approve</code>, <code>review</code>, <code>changes-requested</code>, <code>merge-by-hand</code>,
+                  <code>github-blocked</code>, <code>merge-refused</code>
+                </td>
+                <td>No change. The gate reads the cause every tick.</td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>waiting: backoff</code> on brief, implement or verify</td>
+                <td><code>waiting: slot</code> on the same stage.</td>
+              </tr>
+              <tr>
+                <td class="nowrap">any other waiting status</td>
+                <td>No change. A fix the PR owes keeps its reason and its note.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>The stage's waiting status keeps the stage, the fix and every step input:</p>
+
         <ul>
           <li>
-            Resets all four attempt counters (implement, fix, verify and brief), the error count, the backoff, the refund count, the failure
-            streak and the delegate's run count.
+            <code>brief</code> and <code>implement</code>: <code>waiting: slot</code>. An implement PR with a GitHub PR or a session and no
+            fix owed resumes them as after a cut-off run, so no fresh implement run replaces that work.
+          </li>
+          <li><code>verify</code>: <code>waiting: slot</code>, and the next tick verifies again.</li>
+          <li>
+            <code>pre-verify</code>: <code>waiting: github</code> for a READY report that waits to be checked, else
+            <code>waiting: ci</code> on the claimed head.
           </li>
           <li>
-            A PR <a href="how-it-works.html#state-escalated">escalated</a> over a disputed finding goes to needs_fix, and a fix run gets the
-            findings again.
+            <code>merge</code>: what the gate's last verdict for the current verification says, else <code>waiting: gate-pending</code>.
           </li>
-          <li>
-            A PR whose verification still holds goes back to <a href="how-it-works.html#state-verified">verified</a>. The next tick syncs
-            its head with GitHub, then the gate looks again.
-          </li>
-          <li>
-            A verification for an older head is dropped, and the PR goes to
-            <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>. The driver checks the claim again, then verifies it.
-          </li>
-          <li>A READY report that waits to be checked is claimed again on the next tick, with no agent run.</li>
-          <li>
-            Otherwise a PR with a GitHub PR or an agent session becomes <a href="how-it-works.html#state-interrupted">interrupted</a>, and
-            the next tick resumes it. That is a new verification when a claim waits for one, else a fix run.
-          </li>
-          <li>Any other PR goes back to pending.</li>
-          <li>It is rejected for a merged PR and while an agent works on the PR. It does not clear a hold.</li>
         </ul>
 
-        <p>The UI offers <a href="ui.html#control-retry">Retry</a> for escalated, blocked and interrupted PRs.</p>
+        <ul>
+          <li>The first row that matches wins. A PR on brief whose brief file exists follows the implement rows, brief questions aside.</li>
+          <li>
+            For now the driver reads a closed PR, a gate block and code scanning alerts again only after a retry, so a retry is how a
+            reopened or unblocked PR moves on. A note kept while a verified PR was closed sends it to a fix run instead, without its
+            verification and approval, because the gate does not read notes.
+          </li>
+          <li>It does not clear a hold. Under a hold, a waiting status after it shows <code>held</code>.</li>
+          <li>The UI offers <a href="ui.html#control-retry">Retry</a> wherever retry applies.</li>
+        </ul>
 
         <h2 id="controlling">Control <a class="anchor" href="#controlling" aria-label="Link to this section">#</a></h2>
 

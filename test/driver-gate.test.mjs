@@ -523,7 +523,7 @@ test('verified: a disputed finding the next verifier still finds open escalates 
   assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'escalated', reason: 'disputed finding', findings: ['F2'] })
   assert.equal(notices.length, 1)
   assert.match(notices[0], /^A1: the verifier still finds F2 open, which the implementer disputed\. /)
-  assert.ok(notices[0].includes('rollout note A1') && notices[0].includes('rollout retry A1'), notices[0])
+  assert.ok(notices[0].includes('rollout note A1') && !notices[0].includes('rollout retry'), notices[0])
 
   assert.equal(entry.attempts.fix, 4)
   assert.equal(entry.verified, null)
@@ -1142,18 +1142,18 @@ test('note: on a PR escalated over a dispute, the findings go to a fix run with 
   )
 })
 
-test('retry: a PR escalated over a dispute goes to a fix run with the findings', async () => {
+test('retry: a PR escalated over a dispute is refused, and the reason names rollout note', async () => {
   const setup = recheckDriver({ interruptedRole: 'verify' })
   const { manifest, driver, entry } = setup
 
   await rechecked(setup, recheckVerdict({ F1: 'resolved', F2: 'open' }))
 
-  const findings = entry.fixNote
+  const before = structuredClone(entry)
 
-  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'needs_fix' }])
-  assert.equal(entry.state, 'needs_fix')
-  assert.equal(entry.fixReason, 'verifier findings')
-  assert.equal(entry.fixNote, findings)
-  assert.equal(entry.interruptedRole, null)
-  assert.deepEqual(entry.attempts, { implement: 0, fix: 0, verify: 0, brief: 0 })
+  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [
+    { id: 'A1', kind: 'command-rejected', command: 'retry', reason: 'this PR waits for your answer: rollout note A1 "..."' },
+  ])
+
+  assert.deepEqual(entry, before)
+  assert.equal(entry.state, 'escalated')
 })
