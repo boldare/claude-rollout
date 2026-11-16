@@ -454,6 +454,13 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             since when, as in <q>by maintainer since 14:02</q>, and the reason when the hold has one, as the driver's hold after an account
             limit does.
           </li>
+          <li>
+            <strong>A driver that is down.</strong> With no driver running, a line under the facts reads
+            <q>Not running since 14:02. Statuses are from its last tick.</q>, with the time of the last heartbeat, or
+            <q>Not running.</q> without one. A status that was running then shows as
+            <a href="how-it-works.html#status-driver-stopped"><code>waiting: driver-stopped</code></a
+            >.
+          </li>
           <li><strong>Heartbeat.</strong> Turns amber after 5 minutes without a beat. A healthy driver beats at least once a tick.</li>
           <li>
             <strong>Tick and requests left.</strong> How long the last tick took, and the GitHub rate limit left on the maintainer's token,
@@ -477,17 +484,17 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h3 id="view-board">Board</h3>
 
         <p>
-          The default view. Chips on top filter by state and count the PRs in each. One row per PR, in manifest order. Click a row to open
-          the PR page. A click on a link or a button in the row does not. The arrow in front of a row opens it into a panel with the PR's
-          run in progress, or its last run.
+          The default view. Chips on top filter the rows and count them: <q>all</q>, <q>needs you</q>, always shown, then one chip per stage
+          that has a PR, in lifecycle order. The filter is in the URL as <code>filter=</code>. One row per PR, in manifest order. Click a
+          row to open the PR page. A click on a link or a button in the row does not. The arrow in front of a row opens it into a panel with
+          the PR's run in progress, or its last run.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of the board">
           <div class="mock-body">
-            <nav class="chips" aria-label="State filter">
-              <span class="chip active">all 6</span><span class="chip">pending 1</span><span class="chip">implementing 1</span
-              ><span class="chip">verified 1</span><span class="chip">fixing 1</span><span class="chip">blocked 1</span
-              ><span class="chip">merged 1</span>
+            <nav class="chips" aria-label="Filter">
+              <span class="chip active">all 6</span><span class="chip">needs you 2</span><span class="chip">brief 1</span
+              ><span class="chip">implement 3</span><span class="chip">merge 1</span><span class="chip">merged 1</span>
             </nav>
             <div class="scroll">
               <table>
@@ -496,7 +503,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <th></th>
                     <th>PR</th>
                     <th>title</th>
-                    <th>state</th>
+                    <th>stage · status</th>
                     <th>GitHub</th>
                     <th>deps</th>
                     <th>attempts b/i/f/v</th>
@@ -510,43 +517,47 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="toggle"><span class="row-toggle"></span></td>
                     <td class="id">P1</td>
                     <td class="small wrap">feat: config loader</td>
-                    <td><span class="badge state state-merged">Merged</span></td>
+                    <td><span class="badge stage stage-merged">Merged</span></td>
                     <td class="small">#41</td>
                     <td class="small">-</td>
                     <td class="small num">1/1/0/0</td>
                     <td class="small num">$9.80</td>
                     <td class="small">2h 36m ago</td>
-                    <td class="small wrap info">merged as 3f2a9c1</td>
+                    <td class="small wrap info"><span class="sentence">merged as 3f2a9c1</span></td>
                   </tr>
-                  <tr class="open">
+                  <tr class="needs-you open">
                     <td class="toggle"><span class="row-toggle open"></span></td>
                     <td class="id">P2</td>
                     <td class="small wrap">feat: cli flags</td>
-                    <td><span class="badge state state-verified">Verified</span></td>
+                    <td>
+                      <span class="badge stage stage-merge">Merge</span><span class="badge status kind-needs-you">Needs-you: approve</span>
+                    </td>
                     <td class="small">#42</td>
-                    <td class="small">P1 <span class="badge state state-merged">Merged</span></td>
+                    <td class="small">P1 <span class="badge stage stage-merged">Merged</span></td>
                     <td class="small num">1/0/1/0</td>
                     <td class="small num">$9.69</td>
                     <td class="small">19m ago</td>
-                    <td class="small wrap info">wait: awaiting a maintainer review on GitHub (approve PR #42)</td>
+                    <td class="small wrap info">
+                      <span class="sentence">verified, waits for your approval</span> <span class="since">19m</span>
+                      <code class="way-out">rollout approve P2</code>
+                    </td>
                   </tr>
-                  <tr class="panel-row">
+                  <tr class="panel-row needs-you">
                     <td colspan="10">
-                      <div class="run-panel">
+                      <div class="run-panel needs-you">
                         <div class="facts">
-                          <span class="run-name">P2-02-verify</span><span class="badge verdict-pass">PASS</span>
-                          <span><span class="label">Role</span><span>verify</span></span>
-                          <span><span class="label">Effort</span><span>xhigh</span></span>
-                          <span><span class="label">Model</span><span>claude-opus-5-5</span></span>
-                          <span><span class="label">Took</span><span>21m · $1.84 · 0 denials</span></span>
+                          <span class="badge status kind-needs-you">Needs-you: approve</span>
+                          <span><span class="label">Asked by</span><span>the driver</span></span>
+                          <span><span class="label">Waiting</span><span>19m</span></span>
                         </div>
-                        <p class="commands-head"><span class="label">Last commands</span><span>96 items in the log</span></p>
-                        <ul class="commands">
-                          <li><strong>Bash</strong><code>npm test</code><span class="outcome">214 lines</span></li>
-                          <li><strong>Bash</strong><code>node bin/rollout.mjs --help</code><span class="outcome">38 lines</span></li>
-                          <li class="message">PASS: all 14 flags parse, win over the file and show in --help.</li>
-                        </ul>
-                        <p class="panel-footer"><a href="#transcripts">Open the transcript</a></p>
+                        <div class="panel-section">
+                          <p class="label">Status</p>
+                          <p>verified, waits for your approval</p>
+                        </div>
+                        <p><span class="label">Way out</span> <code>rollout approve P2</code></p>
+                        <div class="panel-footer">
+                          <span class="end"><a href="#transcripts">Open the transcript</a></span>
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -555,14 +566,16 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="id">P3</td>
                     <td class="small wrap">docs: config reference</td>
                     <td>
-                      <span class="badge state state-implementing">Implementing</span><span class="badge active-run">P3-01-implement</span>
+                      <span class="badge stage stage-implement">Implement</span
+                      ><span class="badge status kind-running">Running: implement</span
+                      ><span class="badge active-run">P3-01-implement</span>
                     </td>
                     <td class="small">-</td>
                     <td class="small">-</td>
                     <td class="small num">1/1/0/0</td>
                     <td class="small num">$1.95</td>
                     <td class="small">34m ago</td>
-                    <td class="small"></td>
+                    <td class="small wrap info"><span class="sentence">the implementer is working</span> <span class="since">34m</span></td>
                   </tr>
                   <tr class="panel-row">
                     <td colspan="10">
@@ -601,38 +614,51 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="toggle"></td>
                     <td class="id">P4</td>
                     <td class="small wrap">feat: watch mode</td>
-                    <td><span class="badge state state-pending">Pending</span></td>
+                    <td>
+                      <span class="badge stage stage-brief">Brief</span><span class="badge status kind-waiting">Waiting: dependencies</span>
+                    </td>
                     <td class="small">-</td>
                     <td class="small">
-                      P2 <span class="badge state state-verified">Verified</span> P3
-                      <span class="badge state state-implementing">Implementing</span>
+                      P2 <span class="badge stage stage-merge">Merge</span> P3
+                      <span class="badge stage stage-implement">Implement</span>
                     </td>
                     <td class="small num">0/0/0/0</td>
                     <td class="small num">$0.00</td>
                     <td class="small">-</td>
-                    <td class="small"></td>
+                    <td class="small wrap info">
+                      <span class="sentence">waits for P2, P3 to merge</span> <span class="since">2h 10m</span>
+                    </td>
                   </tr>
-                  <tr class="waiting open">
+                  <tr class="needs-you open">
                     <td class="toggle"><span class="row-toggle open"></span></td>
                     <td class="id">P5</td>
                     <td class="small wrap">feat: plugin hooks</td>
-                    <td><span class="badge state state-blocked">Blocked</span><span class="badge waiting">Needs you</span></td>
+                    <td>
+                      <span class="badge stage stage-implement">Implement</span
+                      ><span class="badge status kind-needs-you">Needs-you: decision</span>
+                    </td>
                     <td class="small">#45</td>
-                    <td class="small">P1 <span class="badge state state-merged">Merged</span></td>
+                    <td class="small">P1 <span class="badge stage stage-merged">Merged</span></td>
                     <td class="small num">0/1/0/0</td>
                     <td class="small num">$3.10</td>
                     <td class="small">8m ago</td>
-                    <td class="small wrap info">needs-decision: Should a hook that throws stop the run?</td>
+                    <td class="small wrap info">
+                      <span class="sentence">the implementer asks: Should a hook that throws stop the run?</span>
+                      <span class="since">8m</span> <code class="way-out">rollout note P5 "..."</code>
+                    </td>
                   </tr>
-                  <tr class="panel-row waiting">
+                  <tr class="panel-row needs-you">
                     <td colspan="10">
                       <div class="run-panel needs-you">
                         <div class="facts">
-                          <span class="badge waiting">Needs you</span>
-                          <span><span class="label">Blocked</span><span>needs-decision</span></span>
+                          <span class="badge status kind-needs-you">Needs-you: decision</span>
                           <span><span class="label">Asked by</span><span>P5-01-implement</span></span>
                           <span><span class="label">Delegate</span><span>escalated, the plan does not decide</span></span>
                           <span><span class="label">Waiting</span><span>8m</span></span>
+                        </div>
+                        <div class="panel-section">
+                          <p class="label">Status</p>
+                          <p>the implementer asks: Should a hook that throws stop the run?</p>
                         </div>
                         <div class="panel-section">
                           <p class="label">Question</p>
@@ -662,7 +688,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="id">P6</td>
                     <td class="small wrap">fix: retry on timeout</td>
                     <td>
-                      <span class="badge state state-fixing">Fixing</span><span class="badge active-run">P6-02-fix</span
+                      <span class="badge stage stage-implement">Implement</span><span class="badge status kind-running">Running: fix</span
+                      ><span class="badge held">Held</span><span class="badge active-run">P6-02-fix</span
                       ><span class="badge answered">Answered, implementer resumed</span>
                     </td>
                     <td class="small">#44</td>
@@ -670,7 +697,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                     <td class="small num">0/1/1/0</td>
                     <td class="small num">$4.40</td>
                     <td class="small">2m ago</td>
-                    <td class="small wrap info">answer from the maintainer</td>
+                    <td class="small wrap info">
+                      <span class="sentence">the implementer is fixing: maintainer-note</span> <span class="since">2m</span>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -680,20 +709,23 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <ul>
           <li>
-            <strong>state</strong> is the ledger state, in the colours of <a href="how-it-works.html#state-pending">the PR lifecycle</a>. A
-            <span class="badge held">held</span> badge marks a held PR, and a mono badge names the agent run in progress.
+            <strong>stage · status</strong> shows the PR's <a href="how-it-works.html#status">stage and status</a>, as
+            <code>rollout status</code> prints them: a stage badge, then a status badge that reads <q>kind: code</q>. A merged PR has only
+            its stage. A <span class="badge held">held</span> badge marks a held PR whose status is running or needs you. A held PR that
+            waits says <q>waiting: held</q> itself. A mono badge names the agent run in progress.
           </li>
           <li>
-            A tinted row with a <span class="badge waiting">needs you</span> badge waits for you: a blocked PR, brief questions included, or
-            an escalated one.
+            A tinted row waits for you: every <code>needs-you</code> status, approvals and merges by hand included. The
+            <q>needs you</q> chip shows only those rows.
           </li>
           <li>
-            A waiting row opens by itself, into a panel that asks you instead of showing the run. It names what blocked the PR, the run that
-            asked, or the driver when the driver blocked it, what the delegate did about the question, and how long the PR has waited. An
-            escalated PR names its escalation and the last run. The question and the agent's evidence follow, then a box for your
-            <a href="#control-answer">answer</a> with Send, and Retry. The box keeps what you type while the page updates. <kbd>⌘</kbd> or
-            <kbd>Ctrl</kbd> with <kbd>Enter</kbd> sends too. Once the server took the note the box empties and says it was sent, until the
-            driver applies it. A row you close stays closed.
+            A row that needs you opens by itself, into a panel that asks you instead of showing the run. It names the status, the run that
+            asked, or the driver when the driver raised it, what the delegate did about the question, and how long the PR has waited. The
+            status sentence follows, then the question and the agent's evidence when there is one, and the last error when the sentence does
+            not hold it already. A status whose way out is a note gets a box for your <a href="#control-answer">answer</a> with Send, and
+            Retry. Any other shows its way out: the command to run, or a link to the PR on GitHub. The box keeps what you type while the
+            page updates. <kbd>⌘</kbd> or <kbd>Ctrl</kbd> with <kbd>Enter</kbd> sends too. Once the server took the note the box empties and
+            says it was sent, until the driver applies it. A row you close stays closed.
           </li>
           <li>
             An <span class="badge answered">answered</span> badge appears once the driver has applied your answer, not when you press Send.
@@ -715,14 +747,14 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             the PR page. Which rows are open lasts until you reload the page.
           </li>
           <li><strong>GitHub</strong> links to the PR once the implementer opened it.</li>
-          <li><strong>deps</strong> lists the dependencies with their own state.</li>
+          <li><strong>deps</strong> lists the dependencies with their own stage.</li>
           <li>
             <strong>attempts b/i/f/v</strong> counts brief, implement, fix and verify attempts, against the caps in
             <code>policy.attempts</code>. A PASS sets the verify count back to zero, and a run that did no work gives its attempt back.
           </li>
           <li>
-            <strong>info</strong> is the most useful line the ledger has: the gate's action and reasons, the question of a blocked PR, the
-            reason of a fix, the last error, or the merge commit. It starts with <q>approved;</q> or <q>held;</q> when that applies.
+            <strong>info</strong> reads in the order of <code>rollout status</code>: the status sentence, how long the status has held, and
+            its way out when it has one. A merged PR shows its merge commit.
           </li>
         </ul>
 
@@ -921,8 +953,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h3 id="view-plan">Plan</h3>
 
         <p>
-          What the agents work from. It opens with how many PRs have a section in the plan, then a table of the PRs with their state and the
-          headings of their sections, one line per source. Click a row to open that PR's plan tab. Below it, every source in
+          What the agents work from. It opens with how many PRs have a section in the plan, then a table of the PRs with their stage badge
+          and the headings of their sections, one line per source. Click a row to open that PR's plan tab. Below it, every source in
           <a href="manifest.html#briefing">briefing.sources</a> in full, formatted, with its kind, tag and path. A source that cannot be
           read shows the error instead.
         </p>
@@ -952,7 +984,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             the first one, the PR's plan tab shows them all.
           </li>
           <li>
-            <strong>Before the first run</strong> the page shows only this view, without the other tabs. The table has no state and no links
+            <strong>Before the first run</strong> the page shows only this view, without the other tabs. The table has no stage and no links
             yet, because there is no PR page to open.
           </li>
           <li>
@@ -964,8 +996,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
         <h3 id="view-pr">PR page</h3>
 
         <p>
-          Click a PR anywhere to open its page: a back link, the id and title with the PR controls at the end of the line, the state and the
-          PR's facts, and six tabs. A blocked PR shows <a href="#control-answer">Answer</a> in place of Note.
+          Click a PR anywhere to open its page: a back link, the id and title with the PR controls at the end of the line, the stage and
+          status badges with the held marker, the PR's facts, and six tabs. A blocked PR shows <a href="#control-answer">Answer</a> in place
+          of Note.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of a PR page">
@@ -976,7 +1009,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <p class="controls"><span class="fake-button">Hold</span> <span class="fake-button">Note</span></p>
             </div>
             <div class="facts pr-facts">
-              <span class="badge state state-verified">Verified</span>
+              <span class="badge stage stage-merge">Merge</span><span class="badge status kind-needs-you">Needs-you: review</span>
               <a href="#view-pr">#42</a>
               <span>Branch feat/cli-flags</span>
               <span>Head 9c4e1b2</span>
@@ -986,6 +1019,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               ><span class="tab">review</span><span class="tab">plan</span><span class="tab">brief</span>
             </nav>
             <dl class="kv">
+              <dt>status</dt>
+              <dd>
+                verified, waits for a maintainer's review on GitHub <span class="muted">since 12:41</span>
+                <div><span class="muted">Way out:</span> <code>act on GitHub. The driver reads it again every tick</code></div>
+              </dd>
               <dt>gate</dt>
               <dd><strong>wait</strong> <span class="muted">awaiting-github-review</span> <span class="muted">at 12:41</span></dd>
               <dt>reasons</dt>
@@ -1001,7 +1039,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <dt>approved</dt>
               <dd class="muted">no</dd>
               <dt>deps</dt>
-              <dd>P1 <span class="badge state state-merged">Merged</span></dd>
+              <dd>P1 <span class="badge stage stage-merged">Merged</span></dd>
               <dt>out of scope</dt>
               <dd class="muted">none</dd>
               <dt>workflow files</dt>
@@ -1022,10 +1060,12 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               <tr>
                 <td class="name">overview</td>
                 <td>
-                  The merge commit, the reason of a fix or the last error, the gate's last decision with its code and reasons, GitHub's
-                  merge state and the sha it judged, the question and evidence of a blocked PR, the delegate's runs and answers with their
-                  plan references, the hold, how this PR is approved, the verified and approved stamps, the dependencies, files outside the
-                  PR's scope and changed workflow files. With the verifier and brief tabs it covers most of
+                  The status: its sentence, since when it has held and its way out, then the whole question and its evidence when the status
+                  asks one. The fix with its reason code and note while one is owed, and the last error for
+                  <code>errors</code>, <code>attempts-exhausted</code>, <code>dispute</code> and <code>backoff</code>. Then the gate's last
+                  decision with its code and reasons, GitHub's merge state and the sha it judged, the delegate's runs and answers with their
+                  plan references, the hold, how this PR is approved, the verified and approved stamps, the dependencies with their stage,
+                  files outside the PR's scope and changed workflow files. With the verifier and brief tabs it covers most of
                   <a href="commands.html#cmd-card"><code>rollout card</code></a
                   >. The implementer's summary, deviations and expected results are only on the card.
                 </td>
@@ -1259,10 +1299,13 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
               </tr>
               <tr id="control-answer">
                 <td>Answer</td>
-                <td>Board row and PR page, for a blocked PR. On the board also for an escalated one.</td>
                 <td>
-                  a text box under the question and the evidence, Send stays off until you type. On the board the box sits in the row's
-                  panel
+                  PR page, for a blocked PR. On the board, in the panel of a row whose way out takes a note: <code>note</code> or
+                  <code>retry-or-note</code> in <a href="how-it-works.html#status">the status table</a>.
+                </td>
+                <td>
+                  a text box under the status sentence, the question and the evidence, Send stays off until you type. On the board the box
+                  sits in the row's panel
                 </td>
                 <td>
                   Queues <a href="commands.html#cmd-note"><code>note</code></a> with your text, like <a href="#control-note">Note</a>.

@@ -1,68 +1,67 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { labelChanges, slug, stageLabels } from '../lib/stage.mjs'
+import { STAGE_PREFIX, STATUS_PREFIX, labelChanges, ourLabel, stageLabels } from '../lib/stage.mjs'
+import { at } from './fixtures.mjs'
 
-test('stageLabels: nothing before the PR exists or after it merged', () => {
-  assert.deepEqual(stageLabels({ state: 'briefing', pr: null }), [])
-  assert.deepEqual(stageLabels({ state: 'implementing', pr: null }), [])
-  assert.deepEqual(stageLabels({ state: 'merged', pr: 11 }), [])
-})
+function entry(stage, status, pr = 11) {
+  return { pr, stage, status: status && { since: at(0), ...status } }
+}
 
-test('stageLabels: the stage alone while the PR moves on its own', () => {
-  assert.deepEqual(stageLabels({ state: 'verifying', pr: 11 }), ['rollout-stage:verifying'])
-  assert.deepEqual(stageLabels({ state: 'ready_claimed', pr: 11 }), ['rollout-stage:ready-claimed'])
-  assert.deepEqual(stageLabels({ state: 'verified', pr: 11, fixReason: 'CI is red' }), ['rollout-stage:verified'])
-})
-
-test('stageLabels: a PR sent back says why, for the fix run too', () => {
-  const rejected = { state: 'needs_fix', pr: 11, fixReason: 'verifier findings' }
-
-  assert.deepEqual(stageLabels(rejected), ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings'])
-  assert.deepEqual(stageLabels({ ...rejected, state: 'fixing' }), ['rollout-stage:fixing', 'rollout-reason:verifier-findings'])
-  assert.deepEqual(stageLabels({ state: 'needs_fix', pr: 11, fixReason: 'CI is red' })[1], 'rollout-reason:ci-is-red')
-})
-
-test('stageLabels: a blocked PR names the kind of block', () => {
-  assert.deepEqual(stageLabels({ state: 'blocked', pr: 11, blocked: { kind: 'brief-questions' } }), [
-    'rollout-stage:blocked',
-    'rollout-reason:brief-questions',
-  ])
-})
-
-test('stageLabels: an escalated PR says what escalated it, never a block answered earlier', () => {
-  const escalated = { state: 'escalated', pr: 11, blocked: { kind: 'needs-decision' } }
-
-  assert.deepEqual(stageLabels({ ...escalated, escalation: 'fix attempts exhausted' }), [
-    'rollout-stage:escalated',
-    'rollout-reason:fix-attempts-exhausted',
+test('stageLabels: the stage and the status code of an open PR', () => {
+  assert.deepEqual(stageLabels(entry('verify', { kind: 'needs-you', code: 'dispute', findings: ['F1'], text: '' })), [
+    'rollout-stage:verify',
+    'rollout-status:dispute',
   ])
 
-  assert.deepEqual(stageLabels({ ...escalated, escalation: 'repeated errors' })[1], 'rollout-reason:repeated-errors')
-  assert.deepEqual(stageLabels(escalated), ['rollout-stage:escalated'])
+  assert.deepEqual(stageLabels(entry('merge', { kind: 'waiting', code: 'queued', after: 12 })), [
+    'rollout-stage:merge',
+    'rollout-status:queued',
+  ])
+
+  assert.deepEqual(stageLabels(entry('pre-verify', { kind: 'running', code: 'commands', sha: 'abc' })), [
+    'rollout-stage:pre-verify',
+    'rollout-status:commands',
+  ])
+
+  assert.deepEqual([STAGE_PREFIX, STATUS_PREFIX], ['rollout-stage:', 'rollout-status:'])
 })
 
-test('stageLabels: under merge: manual the PR to merge and the ones that wait for it say so, while the gate still holds', () => {
-  const verified = { state: 'verified', pr: 11, verified: { at: '2026-01-01T10:00:00.000Z' } }
-  const ready = { action: 'ready', reasons: ['ready'], at: '2026-01-01T10:05:00.000Z' }
-
-  assert.deepEqual(stageLabels({ ...verified, gate: ready }), ['rollout-stage:verified', 'rollout-reason:ready-to-merge'])
-  assert.deepEqual(stageLabels({ ...verified, gate: { ...ready, action: 'wait', after: 12 } })[1], 'rollout-reason:queued')
-  assert.deepEqual(stageLabels({ ...verified, gate: { ...ready, at: '2026-01-01T09:00:00.000Z' } }), ['rollout-stage:verified'])
+test('stageLabels: the stage alone when the status has no code', () => {
+  assert.deepEqual(stageLabels(entry('implement', null)), ['rollout-stage:implement'])
 })
 
-test('slug: lower case, dashes, at most 40 characters and no trailing dash', () => {
-  assert.equal(slug('Report does not match GitHub'), 'report-does-not-match-github')
-  assert.equal(slug('a'.repeat(39) + ' b'), 'a'.repeat(39))
-  assert.equal(slug(undefined), '')
+test('stageLabels: nothing for a PR with no number, a merged PR or an entry with no stage', () => {
+  assert.deepEqual(stageLabels(entry('implement', { kind: 'running', code: 'implement', run: 'A1-01-implement' }, null)), [])
+  assert.deepEqual(stageLabels(entry('brief', { kind: 'waiting', code: 'slot' }, null)), [])
+  assert.deepEqual(stageLabels({ pr: 11, stage: 'merged', status: null }), [])
+  assert.deepEqual(stageLabels({ pr: 11, state: 'verified' }), [])
 })
 
-test('labelChanges: adds the missing, removes only our stale labels', () => {
-  const current = ['rollout:demo', 'rollout-stage:needs-fix', 'rollout-reason:ci-is-red', 'bug']
+test('ourLabel: the stage and status prefixes, and the reason prefix of older drivers', () => {
+  for (const label of ['rollout-stage:merge', 'rollout-status:approve', 'rollout-stage:needs-fix', 'rollout-reason:ci-is-red']) {
+    assert.ok(ourLabel(label), label)
+  }
 
-  assert.deepEqual(labelChanges(current, ['rollout-stage:verifying']), {
-    add: ['rollout-stage:verifying'],
-    remove: ['rollout-stage:needs-fix', 'rollout-reason:ci-is-red'],
+  for (const label of ['rollout:demo', 'bug', 'rollout-statuses', 'stage:merge']) {
+    assert.ok(!ourLabel(label), label)
+  }
+})
+
+test('labelChanges: adds the missing, removes our stale labels, the old stage and reason ones included', () => {
+  const current = ['rollout:demo', 'rollout-stage:needs-fix', 'rollout-reason:verifier-findings', 'rollout-status:slot', 'bug']
+
+  assert.deepEqual(labelChanges(current, ['rollout-stage:verify', 'rollout-status:verify']), {
+    add: ['rollout-stage:verify', 'rollout-status:verify'],
+    remove: ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings', 'rollout-status:slot'],
   })
 
-  assert.deepEqual(labelChanges(['rollout-stage:verified'], ['rollout-stage:verified']), { add: [], remove: [] })
+  assert.deepEqual(labelChanges(['rollout-stage:merge', 'rollout-status:approve'], ['rollout-stage:merge', 'rollout-status:approve']), {
+    add: [],
+    remove: [],
+  })
+
+  assert.deepEqual(labelChanges(['rollout-stage:merge', 'rollout-status:approve', 'bug'], []), {
+    add: [],
+    remove: ['rollout-stage:merge', 'rollout-status:approve'],
+  })
 })

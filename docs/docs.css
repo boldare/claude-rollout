@@ -762,6 +762,7 @@ ol.steps > li > strong:first-child {
 }
 
 .badge.state::before,
+.badge.stage::before,
 .badge.driver::before {
   align-self: center;
   content: '';
@@ -784,45 +785,60 @@ ol.steps > li > strong:first-child {
   box-shadow: inset 0 0 0 1.5px var(--skip);
 }
 
+/* A status that needs nobody stays quiet too: no fill. */
+.badge.kind-waiting {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-3);
+}
+
 .badge.driver-running::before {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--pass) 22%, transparent);
 }
 
 .state-pending,
+.kind-waiting,
 .driver-stopped,
 .read-only,
 .where-cli {
   --tone: var(--skip);
 }
 
-.state-briefing {
+.state-briefing,
+.stage-brief {
   --tone: var(--brief);
 }
 
 .state-implementing,
 .state-verifying,
 .state-fixing,
+.stage-implement,
+.kind-running,
 .active-run,
 .where-ui {
   --tone: var(--implement);
 }
 
-.state-ready_claimed {
+.state-ready_claimed,
+.stage-pre-verify {
   --tone: var(--fix);
 }
 
 .state-verified,
+.stage-merge,
 .driver-running,
 .verdict-pass {
   --tone: var(--pass);
 }
 
-.state-needs_fix {
+.state-needs_fix,
+.stage-verify {
   --tone: var(--verify);
 }
 
 .state-blocked,
 .state-escalated,
+.kind-needs-you,
 .verdict-fail,
 .result-error {
   --tone: var(--fail);
@@ -836,12 +852,9 @@ ol.steps > li > strong:first-child {
   --tone: var(--warn);
 }
 
-.state-merged {
+.state-merged,
+.stage-merged {
   --tone: var(--merged);
-}
-
-.badge.waiting {
-  --tone: var(--fail);
 }
 
 .badge.answered {
@@ -1477,15 +1490,25 @@ dt::first-letter {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.mock tr.waiting td {
+.mock tr.needs-you td {
   background: color-mix(in srgb, var(--fail) 10%, transparent);
 }
 
-.mock tr.waiting td:first-child {
+.mock tr.needs-you td:first-child {
   box-shadow: inset 2px 0 0 var(--fail);
 }
 
-/* A waiting row's panel: the question, the evidence and the answer box. */
+/* The info reads in the CLI's order: the sentence · how long it has held, then the way out. */
+.mock td.info > .since::before {
+  content: '· ';
+}
+
+.mock td.info > .way-out {
+  display: inline-block;
+  margin-top: 2px;
+}
+
+/* The panel of a row that needs you: the status, the question, the evidence and the answer box. */
 
 .mock .run-panel.needs-you {
   gap: 14px;

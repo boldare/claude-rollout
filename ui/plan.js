@@ -1,8 +1,8 @@
-import { cell, element, link, rowClick, stateBadge, table, wrap } from './dom.js'
+import { cell, element, link, rowClick, stageBadge, table, wrap } from './dom.js'
 import { serverAnswered } from './format.js'
 import { markdownDocument } from './markdown.js'
 
-const HEADINGS = ['PR', 'state', 'section in the plan', 'source']
+const HEADINGS = ['PR', 'stage', 'section in the plan', 'source']
 
 // One line per slice, in the order the PR page shows them.
 function sliceLines(slices, field) {
@@ -21,7 +21,7 @@ function sectionRow(pr, ctx) {
   }
 
   const target = ctx.linkWith({ pr: pr.id, tab: 'plan' })
-  const node = wrap('tr', cell(link(target, pr.id)), cell(stateBadge(row.state)), heading, source)
+  const node = wrap('tr', cell(link(target, pr.id)), cell(stageBadge(row.status.stage)), heading, source)
 
   node.className = 'clickable'
 

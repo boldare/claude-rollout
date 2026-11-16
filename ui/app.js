@@ -8,7 +8,7 @@ import { element, link, rowClick, wrap } from './dom.js'
 import { renderEvents } from './events.js'
 import { sentence, serverAnswered } from './format.js'
 import { renderFooter, renderHeader, renderListHeader, renderTop, renderViewTabs, rolloutFacts } from './header.js'
-import { isWaiting, mergeEvents, rowChanged } from './model.js'
+import { STAGES, mergeEvents, needsYou, rowChanged, shownRows } from './model.js'
 import { renderPlan } from './plan.js'
 import { renderTimeline } from './timeline.js'
 import { FOLLOW_MS, PAGE_SIZE, shouldFollow, transcriptRoute } from './transcript-model.js'
@@ -20,8 +20,9 @@ const TICK_MS = 30_000
 const NOTICE_MS = 15_000
 const STICK_PX = 40
 const OPEN_THE_URL = 'Open the URL that rollout ui printed in its terminal. It carries the access token.'
-const ROUTE_KEYS = ['r', 'view', 'pr', 'tab', 'state', 'id', 'kind', 'run', 'from']
+const ROUTE_KEYS = ['r', 'view', 'pr', 'tab', 'filter', 'id', 'kind', 'run', 'from']
 const VIEWS = ['board', 'timeline', 'events', 'costs', 'plan']
+const FILTERS = ['needs-you', ...STAGES]
 const TABS = ['overview', 'runs', 'verifier', 'review', 'plan', 'brief']
 const DEFAULTS = { view: 'board', tab: 'overview' }
 const VIEW_RENDERERS = { board: renderBoard, timeline: renderTimeline, events: renderEvents, costs: renderCosts, plan: renderPlan }
@@ -92,7 +93,7 @@ function parseRoute(hash) {
     view: oneOf(value('view'), VIEWS),
     pr: value('pr'),
     tab: oneOf(value('tab'), TABS),
-    state: value('state'),
+    filter: FILTERS.includes(value('filter')) ? value('filter') : null,
     id: value('id'),
     kind: value('kind'),
     run: value('run'),
@@ -527,8 +528,8 @@ function panelRuns() {
     return []
   }
 
-  return view.rows
-    .filter((row) => !isWaiting(row) && session.rowChoices.get(row.id) && (!route.state || row.state === route.state))
+  return shownRows(view.rows, route.filter)
+    .filter((row) => !needsYou(row) && session.rowChoices.get(row.id))
     .map((row) => panelRun(row, view.runs))
     .filter(Boolean)
 }
@@ -603,7 +604,7 @@ function syncPanels() {
   schedulePanelPoll()
 }
 
-// The toggle flips what the row shows now, whether that came from a click or from the default of a waiting row.
+// The toggle flips what the row shows now, whether that came from a click or from the default of a row that needs you.
 function toggleRow(id) {
   const view = session.state?.view
   const row = view?.rows.find((item) => item.id === id)
@@ -617,9 +618,9 @@ function toggleRow(id) {
   scheduleRender()
 }
 
-// A row that stopped waiting no longer says its note was sent.
+// A row that no longer needs you no longer says its note was sent.
 function forgetSent() {
-  const waiting = new Set((session.state?.view?.rows ?? []).filter(isWaiting).map((row) => row.id))
+  const waiting = new Set((session.state?.view?.rows ?? []).filter(needsYou).map((row) => row.id))
 
   for (const id of session.sent) {
     if (!waiting.has(id)) {

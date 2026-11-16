@@ -1,41 +1,43 @@
-import { badge, cell, element, externalLink, link, rowClick, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
-import { ago, duration, money, roleLabel, serverAnswered, stateLabel } from './format.js'
+import { badge, cell, element, externalLink, link, rowClick, secondsSince, stageBadge, statusBadge, table, withClass, wrap } from './dom.js'
+import { ago, duration, money, roleLabel, serverAnswered } from './format.js'
 import { renderPanelControls } from './controls.js'
 import { answerHint, answerPlaceholder, commandLines, delegateText, panelRun, resultTone, rowOpen, tookText } from './board-model.js'
-import { answeredText, isWaiting, stateCounts } from './model.js'
+import { answeredText, filterChips, needsYou, shownRows } from './model.js'
 
-const HEADINGS = ['', 'PR', 'title', 'state', 'GitHub', 'deps', 'attempts b/i/f/v', 'cost', 'last event', 'info']
+const HEADINGS = ['', 'PR', 'title', 'stage · status', 'GitHub', 'deps', 'attempts b/i/f/v', 'cost', 'last event', 'info']
+// The way outs a maintainer takes with a note, which the panel's answer box sends.
+const ANSWERED_WAYS = ['note', 'retry-or-note']
 
 function chip(href, text, active) {
   return link(href, text, active ? 'chip active' : 'chip')
 }
 
-function stateChips(rows, ctx) {
-  const selected = ctx.route.state
+function chipsNav(rows, ctx) {
+  const selected = ctx.route.filter ?? null
   const chips = element('nav', undefined, 'chips')
 
-  chips.append(chip(ctx.linkWith({ state: null }), `all ${rows.length}`, selected === null))
-
-  for (const { state, count } of stateCounts(rows)) {
-    chips.append(chip(ctx.linkWith({ state }), `${stateLabel(state)} ${count}`, selected === state))
+  for (const { filter, label, count } of filterChips(rows)) {
+    chips.append(chip(ctx.linkWith({ filter }), `${label} ${count}`, selected === filter))
   }
 
   return chips
 }
 
-function stateCell(row) {
-  const node = wrap('td', stateBadge(row.state))
+// The stage and the status read as the CLI prints them. A merged PR has no status.
+function statusCell(row) {
+  const { status } = row
+  const node = wrap('td', stageBadge(status.stage))
 
-  if (row.held) {
+  if (status.kind) {
+    node.append(statusBadge(status))
+  }
+
+  if (status.marker) {
     node.append(badge('held', 'held'))
   }
 
   if (row.activeRun) {
     node.append(badge(row.activeRun, 'active-run'))
-  }
-
-  if (isWaiting(row)) {
-    node.append(badge('needs you', 'waiting'))
   }
 
   const answered = answeredText(row.answered)
@@ -47,11 +49,27 @@ function stateCell(row) {
   return node
 }
 
+// In the CLI's order: the sentence, how long it has held, the way out.
+function infoCell(row, ctx) {
+  const { status } = row
+  const node = wrap('td', element('span', status.sentence, 'sentence'))
+
+  if (status.since) {
+    node.append(' ', element('span', duration(secondsSince(status.since, ctx.now)), 'since'))
+  }
+
+  if (status.wayOut) {
+    node.append(' ', element('code', status.wayOut.text, 'way-out'))
+  }
+
+  return withClass(node, 'info')
+}
+
 function depsCell(row, ctx) {
   const node = element('td', row.deps.length === 0 ? '-' : undefined, 'deps')
 
   for (const dep of row.deps) {
-    node.append(wrap('span', link(ctx.linkWith({ pr: dep.id, tab: null }), dep.id), ' ', stateBadge(dep.state)), ' ')
+    node.append(wrap('span', link(ctx.linkWith({ pr: dep.id, tab: null }), dep.id), ' ', stageBadge(dep.stage)), ' ')
   }
 
   return node
@@ -83,16 +101,16 @@ function titleCell(row) {
 function toggleCell(row, run, open, ctx) {
   const node = element('td', undefined, 'toggle')
 
-  if (!run && !isWaiting(row)) {
+  if (!run && !needsYou(row)) {
     return node
   }
 
   const button = element('button', undefined, 'row-toggle')
-  const what = isWaiting(row) ? 'the question' : 'the last run'
+  const what = needsYou(row) ? `what ${row.id} needs` : `the last run of ${row.id}`
 
   button.type = 'button'
   button.setAttribute('aria-expanded', String(open))
-  button.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} ${what} of ${row.id}`)
+  button.setAttribute('aria-label', `${open ? 'Hide' : 'Show'} ${what}`)
   button.addEventListener('click', () => ctx.toggleRow(row.id))
   node.append(button)
 
@@ -105,16 +123,16 @@ function boardRow(row, run, open, ctx) {
     toggleCell(row, run, open, ctx),
     cell(link(ctx.linkWith({ pr: row.id, tab: null }), row.id), 'id'),
     titleCell(row),
-    stateCell(row),
+    statusCell(row),
     cell(row.pr ? externalLink(row.url, `#${row.pr}`) : '-', 'github'),
     depsCell(row, ctx),
     cell(attempts(row), 'number'),
     cell(money(row.costUsd), 'number'),
     cell(ago(secondsSince(row.lastEventAt, ctx.now)), 'age'),
-    cell(row.info, 'info'),
+    infoCell(row, ctx),
   )
 
-  node.className = ['clickable', isWaiting(row) ? 'waiting' : '', open ? 'open' : ''].filter(Boolean).join(' ')
+  node.className = ['clickable', needsYou(row) ? 'needs-you' : '', open ? 'open' : ''].filter(Boolean).join(' ')
 
   return rowClick(node, ctx.linkWith({ pr: row.id, tab: null }), ctx.go)
 }
@@ -227,22 +245,16 @@ function runPanel(row, run, ctx) {
 }
 
 function waitingFacts(row, ctx) {
-  const { waiting } = row
-  const facts = wrap('div', badge('needs you', 'waiting'))
+  const { waiting, status } = row
+  const facts = wrap('div', statusBadge(status))
   const asker = waiting.byDriver ? 'the driver' : waiting.run
 
-  if (row.state === 'blocked') {
-    facts.append(runFact('blocked', row.blocked?.kind ?? '-'))
-  } else {
-    facts.append(runFact('escalated', waiting.escalation ?? '-'))
-  }
-
   if (asker) {
-    facts.append(runFact(row.state === 'blocked' ? 'asked by' : 'last run', asker))
+    facts.append(runFact('asked by', asker))
   }
 
   if (waiting.delegate) {
-    facts.append(runFact('delegate', delegateText(waiting.delegate, row.blocked?.kind)))
+    facts.append(runFact('delegate', delegateText(waiting.delegate, status.question?.kind ?? status.code)))
   }
 
   if (waiting.since) {
@@ -256,22 +268,22 @@ function panelSection(label, text, className = 'text') {
   return withClass(wrap('div', element('p', label, 'label'), element('p', text, className)), 'panel-section')
 }
 
-// What the maintainer is asked, in the agent's own words.
+// The status, then what the maintainer is asked, in the agent's own words.
+// "fix attempts exhausted (3)" is in the sentence already, a dispute's text is not.
 function waitingSections(row) {
-  const { waiting, blocked } = row
+  const { waiting, status } = row
+  const sections = [panelSection('status', status.sentence)]
 
-  // "fix attempts exhausted (3)" only repeats the escalation, a dispute or a repeated error says more.
-  if (row.state !== 'blocked') {
-    const { escalation, lastError } = waiting
-    const repeated = !lastError || Boolean(escalation && lastError.startsWith(escalation))
-
-    return repeated ? [] : [panelSection('last error', lastError, 'text quiet')]
+  if (status.question) {
+    sections.push(panelSection('question', status.question.text || '-', 'text question'))
   }
 
-  const sections = [panelSection('question', blocked?.question || '-', 'text question')]
+  if (status.question?.evidence) {
+    sections.push(panelSection('evidence', status.question.evidence, 'text quiet'))
+  }
 
-  if (blocked?.evidence) {
-    sections.push(panelSection('evidence', blocked.evidence, 'text quiet'))
+  if (waiting.lastError && !status.sentence.includes(waiting.lastError)) {
+    sections.push(panelSection('last error', waiting.lastError, 'text quiet'))
   }
 
   return sections
@@ -325,8 +337,25 @@ function answerBox(row, ctx) {
   return [withClass(wrap('div', label, box), 'answer'), wrap('div', send, element('span', hint, 'muted'))]
 }
 
+// A way out on GitHub links to the PR there. Any other is a command to run.
+function wayOutLine(row) {
+  const { wayOut } = row.status
+  const text = wayOut.kind === 'github' ? externalLink(row.url, wayOut.text) : element('code', wayOut.text)
+
+  return withClass(wrap('p', element('span', 'way out', 'label'), ' ', text), 'way-out-line')
+}
+
+// A note answers only the statuses whose way out is one. The others show their way out.
+function answerPart(row, ctx) {
+  if (!ANSWERED_WAYS.includes(row.status.wayOut?.kind)) {
+    return [wayOutLine(row), element('div')]
+  }
+
+  return ctx.readOnly ? [readOnlyAnswer(row), element('div')] : answerBox(row, ctx)
+}
+
 function waitingActions(row, run, ctx) {
-  const [answer, actions] = ctx.readOnly ? [readOnlyAnswer(row), element('div')] : answerBox(row, ctx)
+  const [answer, actions] = answerPart(row, ctx)
   const end = element('span', undefined, 'end')
   const controls = renderPanelControls(row, ctx)
 
@@ -350,12 +379,13 @@ function needsYouPanel(row, run, ctx) {
 }
 
 function panelRow(row, run, ctx) {
-  const panel = isWaiting(row) && row.waiting ? needsYouPanel(row, run, ctx) : runPanel(row, run, ctx)
-  const content = wrap('td', withClass(panel, isWaiting(row) && row.waiting ? 'run-panel needs-you' : 'run-panel'))
+  const asks = needsYou(row) && row.waiting
+  const panel = asks ? needsYouPanel(row, run, ctx) : runPanel(row, run, ctx)
+  const content = wrap('td', withClass(panel, asks ? 'run-panel needs-you' : 'run-panel'))
 
   content.colSpan = HEADINGS.length
 
-  return withClass(wrap('tr', content), isWaiting(row) ? 'panel-row waiting' : 'panel-row')
+  return withClass(wrap('tr', content), needsYou(row) ? 'panel-row needs-you' : 'panel-row')
 }
 
 function boardRows(row, ctx) {
@@ -370,14 +400,22 @@ function boardRows(row, ctx) {
   return rows
 }
 
+function emptyText(filter) {
+  if (!filter) {
+    return 'No PRs.'
+  }
+
+  return filter === 'needs-you' ? 'No PR needs you.' : `No PR is on ${filter}.`
+}
+
 export function renderBoard(ctx) {
   const { rows } = ctx.view
-  const selected = ctx.route.state
-  const shown = selected ? rows.filter((row) => row.state === selected) : rows
+  const selected = ctx.route.filter ?? null
+  const shown = shownRows(rows, selected)
   const section = element('section', undefined, 'board')
 
   section.append(
-    stateChips(rows, ctx),
+    chipsNav(rows, ctx),
     table(
       HEADINGS,
       shown.flatMap((row) => boardRows(row, ctx)),
@@ -385,7 +423,7 @@ export function renderBoard(ctx) {
   )
 
   if (shown.length === 0) {
-    section.append(element('p', selected ? `No PR is ${stateLabel(selected)}.` : 'No PRs.', 'muted'))
+    section.append(element('p', emptyText(selected), 'muted'))
   }
 
   return section

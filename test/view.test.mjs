@@ -6,9 +6,11 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readLedger } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { timeText } from '../lib/sentences.ts'
 import { isRunName, parseTranscript, readTranscript, succeeded, transcriptParser } from '../lib/transcript.mjs'
 import { runRecords, runsFromEvents, runsFromLedger } from '../lib/runs.mjs'
-import { costs, liveness, parseEvents, prDetail, prRows, readEvents, rolloutView, runsOf } from '../lib/view.mjs'
+import { stateOf } from '../lib/transitions.ts'
+import { costs, liveness, parseEvents, prDetail, prRows, readEvents, rolloutView, rowsMatching, runsOf } from '../lib/view.mjs'
 import { START, at, interruptedTranscript, jsonLines, makeRollout, sampleEvents, samplePrs, sampleTranscript } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
@@ -331,41 +333,168 @@ test('delegate runs: start and done pair into one run, its cost goes to the dele
   assert.deepEqual(prDetail(loadManifest(makeRollout()), { prs: {} }, [], [], 'A1').delegate, { maxPerPr: null, runs: 0, answers: [] })
 })
 
-test('prRows: held goes outside approved, and a PR missing from the ledger is fresh', () => {
-  const view = rolloutView(loadManifest(makeRollout()))
+test('prRows: a held PR waits for its release, and a PR missing from the ledger is fresh', () => {
+  const now = START + 100 * 60_000
+  const view = rolloutView(loadManifest(makeRollout()), now)
   const [first, second, third] = view.rows
 
-  assert.equal(first.info, 'held; approved; wait: held by maintainer (rollout release A1)')
+  assert.deepEqual(first.status, {
+    stage: 'merge',
+    kind: 'waiting',
+    code: 'held',
+    sentence: 'held since 2026-09-01 11:21 UTC by maintainer',
+    since: at(82),
+    wayOut: { kind: 'release', text: 'rollout release A1' },
+    marker: null,
+    question: null,
+  })
+
   assert.equal(first.head, 'a1a1a1a')
   assert.equal(first.url, 'https://github.com/example/widgets/pull/11')
   assert.equal(first.lastEventAt, at(81))
   assert.equal(first.gate.mergeState, 'CLEAN')
   assert.equal(second.activeRun, 'A2-01-implement')
-  assert.deepEqual(second.deps, [{ id: 'A1', state: 'verified' }])
+  assert.deepEqual(second.deps, [{ id: 'A1', stage: 'merge' }])
   assert.deepEqual(third, {
     id: 'A3',
     title: 'feat: A3',
     branch: 'feat/a3',
     state: 'pending',
+    status: {
+      stage: 'brief',
+      kind: 'waiting',
+      code: 'slot',
+      sentence: 'waits for a free slot',
+      since: new Date(now).toISOString(),
+      wayOut: null,
+      marker: null,
+      question: null,
+    },
     held: null,
     pr: null,
     url: null,
     head: '-',
-    info: '',
     deps: [],
     attempts: { implement: 0, fix: 0, verify: 0, brief: 0 },
     costUsd: 0,
     lastEventAt: null,
     activeRun: null,
     gate: null,
-    blocked: null,
     waiting: null,
     answered: null,
   })
 })
 
-test('prRows: a waiting PR says since when, which run asked and what the delegate did', () => {
+test('prRows: a legacy, a filled and a raw ledger give the same stage and status on read, and none of them is written', () => {
+  const prs = {
+    A1: { state: 'verified', pr: 11, verified: { sha: 'a1a1a1a', at: at(80) }, approved: null, gate: null },
+    A2: { state: 'blocked', blocked: { kind: 'needs-decision', question: 'Which API?', evidence: 'Both exist.' } },
+    A3: { state: 'escalated', escalation: 'repeated errors', lastError: 'gh failed' },
+  }
+
+  const now = START + 100 * 60_000
+
+  for (const legacy of [true, false]) {
+    const manifest = loadManifest(makeRollout({ legacy, prs, events: [] }))
+    const file = join(manifest.dir, 'ledger.json')
+    const before = readFileSync(file, 'utf8')
+    const ledger = readLedger(manifest)
+    const stored = structuredClone(ledger)
+    const rows = prRows(manifest, ledger, [], [], { running: true, stoppedAt: null, now })
+
+    assert.deepEqual(
+      rows.map((row) => [row.status.stage, row.status.kind, row.status.code, row.status.sentence]),
+      [
+        ['merge', 'waiting', 'gate-pending', 'verified, the merge gate has not checked it yet'],
+        ['implement', 'needs-you', 'decision', 'the implementer asks: Which API?'],
+        ['brief', 'needs-you', 'errors', 'repeated errors: gh failed'],
+      ],
+      `legacy: ${legacy}`,
+    )
+
+    assert.deepEqual(ledger, stored, 'the ledger object stays as read')
+    assert.equal(readFileSync(file, 'utf8'), before, 'the file stays as written')
+  }
+
+  const raw = prRows(loadManifest(makeRollout()), { prs }, [], [])
+
+  assert.equal(raw[1].status.code, 'decision')
+  assert.equal(prs.A2.stage, undefined, 'a raw ledger passed in stays as it is')
+})
+
+test('prRows: the marker shows the hold of a running or needs-you PR, the rollout hold before its own', () => {
+  const own = { at: at(7), by: 'maintainer', reason: 'checking' }
+  const rollout = { at: at(8), by: 'driver', reason: 'usage limit reached' }
+  const entry = (stage, status) => ({ stage, status: { since: at(5), ...status }, hold: own, held: own })
+  const ledger = {
+    prs: {
+      A1: entry('implement', { kind: 'running', code: 'implement', run: 'A1-01-implement' }),
+      A2: entry('merge', { kind: 'needs-you', code: 'approve' }),
+      A3: entry('brief', { kind: 'waiting', code: 'held', scope: 'pr' }),
+    },
+  }
+
+  for (const id of Object.keys(ledger.prs)) {
+    ledger.prs[id].state = stateOf(ledger.prs[id])
+  }
+
+  const manifest = loadManifest(makeRollout())
+  const markers = (hold) => prRows(manifest, { ...ledger, hold }, [], []).map((row) => row.status.marker)
+
+  assert.deepEqual(markers(null), [{ scope: 'pr', ...own }, { scope: 'pr', ...own }, null])
+  assert.deepEqual(markers(rollout), [{ scope: 'rollout', ...rollout }, { scope: 'rollout', ...rollout }, null])
+  assert.equal(prRows(manifest, ledger, [], [])[2].status.sentence, 'held since 2026-09-01 10:07 UTC by maintainer: checking')
+})
+
+test('prRows: an approval waits for you, from the time of its status, asked by the driver', () => {
+  const manifest = loadManifest(makeRollout())
+  const a1 = { stage: 'merge', status: { kind: 'needs-you', code: 'approve', since: at(40) }, pr: 11, hold: null, held: null }
+  const [row] = prRows(manifest, { prs: { A1: { ...a1, state: stateOf(a1) } } }, [], [])
+
+  assert.deepEqual(row.waiting, { since: at(40), run: null, byDriver: true, escalation: null, lastError: null, delegate: null })
+  assert.deepEqual(row.status.wayOut, { kind: 'approve', text: 'rollout approve A1' })
+})
+
+test('prRows: with no driver running, a running status shows as driver-stopped since the last heartbeat', () => {
+  const manifest = loadManifest(makeRollout())
+  const stoppedAt = at(90)
+  const rows = prRows(manifest, readLedger(manifest), [], [], { running: false, stoppedAt, now: START })
+  const [, a2] = rows
+
+  assert.deepEqual(
+    [a2.status.stage, a2.status.kind, a2.status.code, a2.status.since],
+    ['implement', 'waiting', 'driver-stopped', stoppedAt],
+  )
+
+  assert.equal(a2.status.sentence, 'the driver is not running')
+  assert.equal(rows[0].status.code, 'held', 'a waiting status stays')
+
+  const never = prRows(manifest, readLedger(manifest), [], [], { running: false, stoppedAt: null, now: START })[1]
+
+  assert.equal(never.status.since, readLedger(manifest).prs.A2.status.since, 'no heartbeat keeps the stored time')
+})
+
+test('rowsMatching: by stage, by needs you, and by both', () => {
+  const row = (id, stage, kind) => ({ id, status: { stage, kind } })
+  const rows = [
+    row('A1', 'merge', 'needs-you'),
+    row('A2', 'merge', 'waiting'),
+    row('A3', 'implement', 'needs-you'),
+    row('A4', 'merged', null),
+  ]
+
+  const ids = (filters) => rowsMatching(rows, filters).map((item) => item.id)
+
+  assert.deepEqual(ids({}), ['A1', 'A2', 'A3', 'A4'])
+  assert.deepEqual(ids({ stage: 'merge' }), ['A1', 'A2'])
+  assert.deepEqual(ids({ needsYou: true }), ['A1', 'A3'])
+  assert.deepEqual(ids({ stage: 'merge', needsYou: true }), ['A1'])
+  assert.deepEqual(ids({ stage: 'merged' }), ['A4'])
+})
+
+test('prRows: a PR that needs you says since when, which run asked and what the delegate did', () => {
   const manifest = loadManifest(makeRollout({ policy: { delegate: { kinds: ['needs-decision'], maxPerPr: 2 } } }))
+  const now = START + 100 * 60_000
   const question = 'Should a hook that throws stop the run?'
   const events = [
     start('A1', 'implement', 'A1-01-implement', 0),
@@ -398,7 +527,7 @@ test('prRows: a waiting PR says since when, which run asked and what the delegat
   })
 
   const waiting = (ledgerPrs, id, eventList = events, runList = runs) =>
-    prRows(manifest, { prs: ledgerPrs }, eventList, runList).find((row) => row.id === id).waiting
+    prRows(manifest, { prs: ledgerPrs }, eventList, runList, { running: true, stoppedAt: null, now }).find((row) => row.id === id).waiting
 
   assert.deepEqual(waiting(prs({ delegate: { runs: 1, answers: [escalate] } }), 'A1'), {
     since: at(30),
@@ -423,8 +552,9 @@ test('prRows: a waiting PR says since when, which run asked and what the delegat
     reason: '',
   })
 
+  // The gate's block is the driver's own: it waits since its status began, which the fill of a raw ledger sets to now.
   assert.deepEqual(waiting(prs({}), 'A2'), {
-    since: at(12),
+    since: new Date(now).toISOString(),
     run: null,
     byDriver: true,
     escalation: null,
@@ -459,7 +589,7 @@ test('prRows: the delegate does not run next while a note is pending', () => {
   assert.deepEqual(delegateOf(a1), { state: 'next', reason: '' })
 })
 
-test('prRows follows the manifest order and the CLI info rules', () => {
+test('prRows follows the manifest order, and a merged PR has a stage and a sentence only', () => {
   const manifest = loadManifest(makeRollout())
   const ledger = {
     prs: {
@@ -469,17 +599,33 @@ test('prRows follows the manifest order and the CLI info rules', () => {
     },
   }
 
+  const rows = prRows(manifest, ledger, [], [])
+
   assert.deepEqual(
-    prRows(manifest, ledger, [], []).map((row) => [row.id, row.info]),
+    rows.map((row) => [row.id, row.status.stage, row.status.code, row.status.sentence]),
     [
-      ['A1', 'merged as feedfac'],
-      ['A2', 'brief-questions: Which API?'],
-      ['A3', 'CI is red'],
+      ['A1', 'merged', null, 'merged as feedfac'],
+      ['A2', 'brief', 'brief-questions', 'the brief needs your answer: Which API?'],
+      ['A3', 'implement', 'slot', 'waits for a free slot'],
     ],
   )
+
+  assert.deepEqual(rows[0].status, {
+    stage: 'merged',
+    kind: null,
+    code: null,
+    sentence: 'merged as feedfac',
+    since: null,
+    wayOut: null,
+    marker: null,
+    question: null,
+  })
+
+  assert.equal(prRows(manifest, { prs: { A1: { state: 'merged' } } }, [], [])[0].status.sentence, 'merged')
+  assert.deepEqual(prDetail(manifest, ledger, [], [], 'A3').fix.reason, 'ci-red')
 })
 
-test('prRows: blocked only while the PR is blocked, and prDetail keeps the stale one', () => {
+test('prRows: the question only while the status asks one, and prDetail keeps the stale block', () => {
   const manifest = loadManifest(makeRollout())
   const blocked = { kind: 'needs-decision', question: 'Which API?', evidence: 'Both exist.' }
   const ledger = {
@@ -491,8 +637,8 @@ test('prRows: blocked only while the PR is blocked, and prDetail keeps the stale
   }
 
   assert.deepEqual(
-    prRows(manifest, ledger, [], []).map((row) => row.blocked),
-    [blocked, null, { kind: 'brief-questions', question: '', evidence: '' }],
+    prRows(manifest, ledger, [], []).map((row) => row.status.question),
+    [{ kind: 'needs-decision', text: 'Which API?', evidence: 'Both exist.' }, null, { kind: 'brief-questions', text: '', evidence: '' }],
   )
 
   assert.deepEqual(prDetail(manifest, ledger, [], [], 'A2').blocked, blocked)
@@ -940,15 +1086,58 @@ test('rolloutView: reads the events through the reader it is given, and only wit
   assert.equal(calls.length, 1)
 })
 
-function cli(...args) {
-  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', cwd: dirname(BIN) })
+// An empty COLUMNS counts as unset, and the output is a pipe, so lines stay whole unless a test sets a width.
+function cliWith(env, ...args) {
+  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', cwd: dirname(BIN), env: { ...process.env, COLUMNS: '', ...env } })
 }
 
-test('help lists hold, release and preflight', () => {
+function cli(...args) {
+  return cliWith({}, ...args)
+}
+
+// The lines of the status list that start with a PR id.
+function prLines(stdout) {
+  return stdout.split('\n').filter((line) => /^A\d /.test(line))
+}
+
+// An entry as a driver of this version writes it, so the view keeps it as it is.
+function written(entry) {
+  const full = { hold: null, held: null, ...entry }
+
+  return { ...full, state: stateOf(full) }
+}
+
+function minutesAgo(minutes) {
+  return new Date(Date.now() - minutes * 60_000).toISOString()
+}
+
+const OBSTACLE = {
+  kind: 'environment',
+  text: 'The sandbox cannot reach the registry\nIt answers 403 for every package.',
+  evidence: 'npm ci: 403 Forbidden',
+  run: 'A2-01-implement',
+  delegate: null,
+}
+
+// Three PRs that need you, with sentences and way outs long enough to cut at 80 columns.
+function needyRollout(hold = null) {
+  const status = (kind, code, extra = {}) => ({ kind, code, since: minutesAgo(5), ...extra })
+
+  return makeRollout({
+    prs: {
+      A1: written({ stage: 'merge', status: status('needs-you', 'approve'), pr: 11, hold, held: hold }),
+      A2: written({ stage: 'implement', status: status('needs-you', 'obstacle', { question: OBSTACLE }), pr: 12 }),
+      A3: written({ stage: 'verify', status: status('needs-you', 'dispute', { findings: ['F1', 'F2'], text: '' }), pr: 13 }),
+    },
+  })
+}
+
+test('help lists hold, release and preflight, and the filters of status', () => {
   const result = cli('help')
 
   assert.equal(result.status, 0, result.stderr)
   assert.ok(result.stdout.includes('rollout.mjs hold | release <id>... | --all [--dir D]'), result.stdout)
+  assert.ok(result.stdout.includes('rollout.mjs status    [--dir D] [--stage S] [--needs-you]'), result.stdout)
   assert.match(result.stdout, /rollout\.mjs preflight/)
 })
 
@@ -958,17 +1147,166 @@ test('status and card read the fixture, partial events line included', () => {
   const card = cli('card', 'A1', '--dir', dir)
 
   assert.equal(status.status, 0, status.stderr)
-  assert.match(status.stdout, /A1 {4}verified {7}#11 {4}a1a1a1a {2}held; approved; wait/)
-  assert.match(status.stdout, /A3 {4}pending/)
+  assert.match(status.stdout, /^id {2}stage · status {18}info$/m)
+  assert.match(
+    status.stdout,
+    /^A1 {2}merge · waiting: held {11}held since 2026-09-01 11:21 UTC by maintainer · \d+h \(rollout release A1\)$/m,
+  )
+
+  assert.match(status.stdout, /^A2 {2}implement · running: implement {2}the implementer is working · \d+m$/m)
+  assert.match(status.stdout, /^A3 {2}brief · waiting: slot {11}waits for a free slot · \d+m$/m)
   assert.match(status.stdout, /recent events:\n[\s\S]*A2 {3}implement-start/)
   assert.doesNotMatch(status.stdout, /HELD|PAUSED/)
   assert.equal(card.status, 0, card.stderr)
-  assert.match(
+  assert.ok(
+    card.stdout.includes(
+      [
+        'merge · waiting: held   PR: https://github.com/example/widgets/pull/11   cost: $6.25',
+        'held since 2026-09-01 11:21 UTC by maintainer',
+        'since 2026-09-01 11:22 UTC',
+        'way out: rollout release A1',
+        'held since 2026-09-01T11:21:00.000Z by maintainer (rollout.mjs release A1)',
+      ].join('\n'),
+    ),
     card.stdout,
-    /^state: verified {3}PR: https:\/\/github\.com\/example\/widgets\/pull\/11 {3}cost: \$6\.25\nheld since 2026-09-01T11:21:00\.000Z by maintainer \(rollout\.mjs release A1\)$/m,
   )
 
   assert.match(card.stdout, /verifier: PASS on a1a1a1a/)
+})
+
+test('status --stage and --needs-you choose the rows, both together those that match both, and an unknown stage exits 1', () => {
+  const dir = makeRollout({
+    prs: {
+      A1: written({ stage: 'merge', status: { kind: 'needs-you', code: 'approve', since: at(85) }, pr: 11 }),
+      A2: { state: 'implementing' },
+      A3: { state: 'blocked', blocked: { kind: 'needs-decision', question: 'Which API?', evidence: '' } },
+    },
+  })
+
+  const ids = (...args) => prLines(cli('status', '--dir', dir, ...args).stdout).map((line) => line.split(' ')[0])
+
+  assert.deepEqual(ids(), ['A1', 'A2', 'A3'])
+  assert.deepEqual(ids('--needs-you'), ['A1', 'A3'])
+  assert.deepEqual(ids('--stage', 'merge'), ['A1'])
+  assert.deepEqual(ids('--stage', 'implement'), ['A2', 'A3'])
+  assert.deepEqual(ids('--stage', 'implement', '--needs-you'), ['A3'])
+
+  const none = cli('status', '--dir', dir, '--stage', 'verify')
+
+  assert.equal(none.status, 0, none.stderr)
+  assert.match(none.stdout, /\n\nno PR matches\n/)
+  assert.match(none.stdout, /^rollout demo {2}driver: running/)
+  assert.match(none.stdout, /recent events:/)
+
+  const unknown = cli('status', '--dir', dir, '--stage', 'nope')
+
+  assert.equal(unknown.status, 1)
+  assert.equal(unknown.stderr, 'unknown stage nope, known: brief, implement, pre-verify, verify, merge, merged\n')
+})
+
+test('status with COLUMNS=200 prints every sentence and way out whole', () => {
+  const dir = needyRollout()
+  const { rows } = rolloutView(loadManifest(dir))
+  const lines = prLines(cliWith({ COLUMNS: '200' }, 'status', '--dir', dir).stdout)
+
+  assert.equal(lines.length, 3)
+
+  rows.forEach((row, index) => {
+    const line = lines[index]
+
+    assert.ok(line.length > 80, line)
+    assert.ok(line.includes(`${row.status.sentence} · 5m (${row.status.wayOut.text})`), line)
+  })
+})
+
+test('status with COLUMNS=80 keeps every PR line within 80, and cuts a sentence after a whole word', () => {
+  const dir = needyRollout()
+  const { rows } = rolloutView(loadManifest(dir))
+  const stdout = cliWith({ COLUMNS: '80' }, 'status', '--dir', dir).stdout
+  const lines = prLines(stdout)
+  const infoAt = stdout
+    .split('\n')
+    .find((line) => line.startsWith('id '))
+    .indexOf('info')
+
+  const cut = lines.filter((line) => line.includes('…'))
+
+  assert.equal(lines.length, 3)
+  assert.ok(
+    lines.every((line) => line.length <= 80),
+    lines.join('\n'),
+  )
+
+  assert.ok(cut.length >= 2, stdout)
+
+  for (const line of cut) {
+    const { sentence } = rows.find((row) => line.startsWith(`${row.id} `)).status
+    const shown = line.slice(infoAt, line.indexOf('…'))
+
+    assert.ok(sentence.startsWith(shown), `${shown} | ${sentence}`)
+    assert.equal(sentence[shown.length], ' ', `${shown} | ${sentence}`)
+  }
+
+  assert.match(lines[2], /the verifier… · 5m \(rollout note A3 "\.\.\."\)$/)
+  assert.equal(lines[0].slice(infoAt), 'verified, waits… · 5m (rollout approve A1)')
+  // A way out too long to keep whole leaves too little room, so the whole info is cut.
+  assert.equal(lines[1].slice(infoAt), 'the implementer is blocked (environment):…')
+})
+
+test('card: the stage and status, the whole sentence, since when, the way out and the whole question', () => {
+  const hold = { at: at(7), by: 'maintainer', reason: 'checking' }
+  const dir = needyRollout(hold)
+  const obstacle = cli('card', 'A2', '--dir', dir)
+  const approve = cli('card', 'A1', '--dir', dir)
+  const since = timeText(readLedger(loadManifest(dir)).prs.A2.status.since)
+
+  assert.equal(obstacle.status, 0, obstacle.stderr)
+  assert.ok(
+    obstacle.stdout.startsWith(
+      [
+        '# A2 feat: A2  (feat/a2)',
+        'implement · needs-you: obstacle   PR: https://github.com/example/widgets/pull/12   cost: $0.00',
+        'the implementer is blocked (environment): The sandbox cannot reach the registry',
+        `since ${since}`,
+        'way out: remove the cause, then rollout retry A2, or rollout note A2 "..."',
+      ].join('\n'),
+    ),
+    obstacle.stdout,
+  )
+
+  assert.ok(
+    obstacle.stdout.includes(
+      '\nquestion (environment): The sandbox cannot reach the registry\nIt answers 403 for every package.\nnpm ci: 403 Forbidden\n',
+    ),
+    obstacle.stdout,
+  )
+
+  assert.doesNotMatch(obstacle.stdout, /BLOCKED/)
+  assert.match(approve.stdout, /^merge · needs-you: approve \[held\] {3}PR: /m)
+  assert.match(approve.stdout, /^way out: rollout approve A1$/m)
+  assert.match(approve.stdout, /^held since 2026-09-01T10:07:00\.000Z by maintainer: checking \(rollout\.mjs release A1\)$/m)
+  assert.match(cli('status', '--dir', dir).stdout, /^A1 {2}merge · needs-you: approve \[held\] {2}verified, waits for your approval/m)
+})
+
+test('status: with no driver, the header says since when it is down, and a running status shows as driver-stopped', () => {
+  const dir = makeRollout({ lock: false })
+  const beat = new Date(START + 95 * 60_000)
+
+  utimesSync(join(dir, 'heartbeat'), beat, beat)
+
+  const stopped = cli('status', '--dir', dir)
+  const never = cli('status', '--dir', makeRollout({ lock: false, heartbeat: null }))
+
+  assert.equal(stopped.status, 0, stopped.stderr)
+  assert.match(
+    stopped.stdout,
+    /^rollout demo {2}driver: NOT RUNNING since 2026-09-01 11:35 UTC\. Statuses are from its last tick\. Start it with rollout\.mjs run$/m,
+  )
+
+  assert.match(stopped.stdout, /^A2 {2}implement · waiting: driver-stopped {2}the driver is not running · \d+h$/m)
+  assert.match(stopped.stdout, /^A1 {2}merge · waiting: held /m)
+  assert.match(never.stdout, /^rollout demo {2}driver: NOT RUNNING \(last heartbeat never\)$/m)
+  assert.match(cli('card', 'A2', '--dir', dir).stdout, /^implement · waiting: driver-stopped {3}PR: -/m)
 })
 
 test('status prints the hold of the rollout with who set it, since when and why, and card prints a PR hold the same way', () => {

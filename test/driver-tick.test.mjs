@@ -6,7 +6,6 @@ import { createDriver } from '../lib/driver.mjs'
 import { GitHubError } from '../lib/gh.mjs'
 import { baseChecks, setFetch } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
-import { stageLabels } from '../lib/stage.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
 import {
@@ -712,8 +711,8 @@ const LIMITED = { 'x-ratelimit-remaining': '4870' }
 
 // A1 verified, unheld and waiting for rollout approve under merge: human,
 // with maintainers set and the real collectFacts. The fake git prints no
-// diff, so the patch is 'empty'. The PR carries the labels it should, so no
-// label is written.
+// diff, so the patch is 'empty'. The PR carries the labels it ends the tick
+// with, so no label is written.
 function countedDriver() {
   const { A1 } = samplePrs()
   const dir = makeRollout({
@@ -729,7 +728,7 @@ function countedDriver() {
   manifest.repo.maintainers = ['maintainer']
 
   const driver = createDriver(manifest, { notify: () => {}, cleanup: async () => {} })
-  const labels = [manifest.label, ...stageLabels(driver.ledger.prs.A1)].map((name) => ({ name }))
+  const labels = [manifest.label, 'rollout-stage:merge', 'rollout-status:approve'].map((name) => ({ name }))
   const routes = [
     prRoute({ labels }),
     runsRoute(SHA),
@@ -817,7 +816,9 @@ test('tick: a tick longer than policy.tickSeconds logs tick-slow with its number
 })
 
 const REJECTED = { ...samplePrs().A1, state: 'needs_fix', fixReason: 'verifier findings', verified: null, approved: null }
-const REJECTED_LABELS = ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings']
+// The sample PR is held, so the rejected one waits on implement under its hold.
+const REJECTED_LABELS = ['rollout-stage:implement', 'rollout-status:held']
+const OLD_LABELS = ['rollout-stage:needs-fix', 'rollout-reason:verifier-findings']
 const PR_LABELS = 'repos/example/widgets/issues/11/labels'
 
 // GitHub creating any label, adding labels to PR 11 and removing `removed` from it.
@@ -848,43 +849,62 @@ function labelWrites(github) {
     })
 }
 
-test('tick: a PR sent back by the verifier gets its stage and reason as labels, once', async () => {
+test('tick: a PR gets its stage and status as labels, once', async () => {
   const { driver, github } = tickDriver({ A1: REJECTED }, { rules: [FETCH], routes: [prRoute(), ...labelRoutes()] })
 
   await driver.tick()
   github.answer([prWithLabels(REJECTED_LABELS), ...labelRoutes()])
   await driver.tick()
 
-  assert.deepEqual(labelWrites(github), [['add', 'rollout-stage:needs-fix', 'rollout-reason:verifier-findings']])
+  assert.deepEqual(labelWrites(github), [['add', 'rollout-stage:implement', 'rollout-status:held']])
   assert.deepEqual(
     github
       .requests()
       .filter((request) => request.path === 'repos/example/widgets/labels')
       .map((request) => request.body),
     [
-      { name: 'rollout-stage:needs-fix', color: '1d76db', description: 'Rollout stage, set by the driver' },
-      { name: 'rollout-reason:verifier-findings', color: 'd93f0b', description: 'Rollout stage, set by the driver' },
+      { name: 'rollout-stage:implement', color: '1d76db', description: 'Rollout stage, set by the driver' },
+      { name: 'rollout-status:held', color: 'd93f0b', description: 'Rollout stage, set by the driver' },
     ],
   )
 
   assert.deepEqual(driver.ledger.prs.A1.stageLabels, REJECTED_LABELS)
 })
 
-test('tick: when the PR moves on, the old stage and reason come off', async () => {
+test('tick: when the PR moves on, the old stage and status come off', async () => {
   const { driver, github } = tickDriver({ A1: REJECTED }, { rules: [FETCH], routes: [prRoute(), ...labelRoutes()] })
 
   await driver.tick()
   github.answer([prWithLabels(REJECTED_LABELS), ...labelRoutes(REJECTED_LABELS)])
   driver.ledger.prs.A1.state = 'verifying'
+  driver.ledger.prs.A1.stage = 'verify'
+  driver.ledger.prs.A1.status = { kind: 'running', code: 'verify', sha: SHA, run: 'A1-02-verify', since: at(90) }
   await driver.tick()
 
   assert.deepEqual(labelWrites(github).slice(1), [
-    ['add', 'rollout-stage:verifying'],
+    ['add', 'rollout-stage:verify', 'rollout-status:verify'],
+    ['delete', 'rollout-stage:implement'],
+    ['delete', 'rollout-status:held'],
+  ])
+
+  assert.equal(github.requests().at(-1).path, `${PR_LABELS}/rollout-status%3Aheld`)
+})
+
+test('tick: the labels of a driver from before stages come off on the next tick', async () => {
+  const { driver, github } = tickDriver(
+    { A1: REJECTED },
+    { rules: [FETCH], routes: [prWithLabels(OLD_LABELS), ...labelRoutes(OLD_LABELS)] },
+  )
+
+  await driver.tick()
+
+  assert.deepEqual(labelWrites(github), [
+    ['add', 'rollout-stage:implement', 'rollout-status:held'],
     ['delete', 'rollout-stage:needs-fix'],
     ['delete', 'rollout-reason:verifier-findings'],
   ])
 
-  assert.equal(github.requests().at(-1).path, `${PR_LABELS}/rollout-reason%3Averifier-findings`)
+  assert.deepEqual(driver.ledger.prs.A1.stageLabels, REJECTED_LABELS)
 })
 
 test('tick: the labels the PR really carries count, so one removed or added by hand is put right', async () => {
@@ -892,17 +912,14 @@ test('tick: the labels the PR really carries count, so one removed or added by h
     { A1: REJECTED },
     {
       rules: [FETCH],
-      routes: [
-        prWithLabels(['rollout-reason:verifier-findings', 'rollout-stage:verified', 'bug']),
-        ...labelRoutes(['rollout-stage:verified']),
-      ],
+      routes: [prWithLabels(['rollout-status:held', 'rollout-stage:verified', 'bug']), ...labelRoutes(['rollout-stage:verified'])],
     },
   )
 
   await driver.tick()
 
   assert.deepEqual(labelWrites(github), [
-    ['add', 'rollout-stage:needs-fix'],
+    ['add', 'rollout-stage:implement'],
     ['delete', 'rollout-stage:verified'],
   ])
 })
@@ -911,7 +928,7 @@ test('tick: a label that is off already counts as removed', async () => {
   const gone = { method: 'DELETE', path: `${PR_LABELS}/rollout-stage%3Averified`, status: 404, body: { message: 'Label does not exist' } }
   const { driver } = tickDriver(
     { A1: REJECTED },
-    { rules: [FETCH], routes: [prWithLabels(['rollout-reason:verifier-findings', 'rollout-stage:verified']), gone, ...labelRoutes()] },
+    { rules: [FETCH], routes: [prWithLabels(['rollout-status:held', 'rollout-stage:verified']), gone, ...labelRoutes()] },
   )
 
   await driver.tick()
@@ -936,11 +953,8 @@ test('tick: a label that exists already is updated, as gh label create --force d
       .filter((request) => request.method === 'PATCH')
       .map((request) => [request.path, request.body]),
     [
-      ['repos/example/widgets/labels/rollout-stage%3Aneeds-fix', { color: '1d76db', description: 'Rollout stage, set by the driver' }],
-      [
-        'repos/example/widgets/labels/rollout-reason%3Averifier-findings',
-        { color: 'd93f0b', description: 'Rollout stage, set by the driver' },
-      ],
+      ['repos/example/widgets/labels/rollout-stage%3Aimplement', { color: '1d76db', description: 'Rollout stage, set by the driver' }],
+      ['repos/example/widgets/labels/rollout-status%3Aheld', { color: 'd93f0b', description: 'Rollout stage, set by the driver' }],
     ],
   )
 

@@ -1,5 +1,19 @@
 import { renderPrControls } from './controls.js'
-import { badge, cell, element, externalLink, link, list, rememberOpen, secondsSince, stateBadge, table, withClass, wrap } from './dom.js'
+import {
+  badge,
+  cell,
+  element,
+  externalLink,
+  link,
+  list,
+  rememberOpen,
+  secondsSince,
+  stageBadge,
+  statusBadge,
+  table,
+  withClass,
+  wrap,
+} from './dom.js'
 import { clock, duration, money, roleLabel, serverAnswered } from './format.js'
 import { markdownDocument } from './markdown.js'
 import { renderTranscript } from './transcript.js'
@@ -12,6 +26,8 @@ const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
 const RECHECK_CLASSES = { resolved: 'check-pass', open: 'check-fail', wrong: 'check-unverifiable' }
 const PRE_VERIFY_HEADINGS = ['command', 'stage', 'level', 'result', 'evidence']
 const CRITERIA_HEADINGS = ['criterion', 'level', 'result', 'evidence']
+// The codes the last error belongs to. Under any other, the ledger may still hold an older one.
+const LAST_ERROR_CODES = ['errors', 'attempts-exhausted', 'dispute', 'backoff']
 
 function short(sha) {
   return typeof sha === 'string' && sha ? sha.slice(0, 7) : '-'
@@ -48,9 +64,13 @@ function prLink(pr, text) {
 function detailHeader(pr, ctx) {
   const header = element('div', undefined, 'detail-header')
   const title = wrap('h2', `${pr.id} `, element('span', pr.title, 'muted'))
-  const facts = wrap('div', stateBadge(pr.state))
+  const facts = wrap('div', stageBadge(pr.status.stage))
 
-  if (pr.held) {
+  if (pr.status.kind) {
+    facts.append(statusBadge(pr.status))
+  }
+
+  if (pr.status.marker) {
     facts.append(badge('held', 'held'))
   }
 
@@ -96,16 +116,36 @@ function gateFields(gate) {
   ]
 }
 
-function blockedFields(blocked) {
-  if (!blocked) {
-    return []
+function wayOutText(wayOut) {
+  return wrap('div', element('span', 'Way out: ', 'muted'), element('code', wayOut.text, 'way-out'))
+}
+
+// The sentence with since when and the way out, then the whole question, which the sentence cuts to its first line.
+function statusFields(pr) {
+  const { status } = pr
+  const since = status.since ? [element('span', ` since ${clock(status.since)}`, 'muted')] : []
+  const way = status.wayOut ? [wayOutText(status.wayOut)] : []
+  const result = [field('status', element('span', status.sentence, 'text sentence'), ...since, ...way)]
+
+  if (status.question) {
+    result.push(field('question', element('span', status.question.text, 'text')))
   }
 
-  return [
-    field('blocked', element('strong', blocked.kind ?? '-')),
-    field('question', element('span', blocked.question ?? '', 'text')),
-    field('evidence', element('span', blocked.evidence ?? '', 'text')),
-  ]
+  if (status.question?.evidence) {
+    result.push(field('evidence', element('span', status.question.evidence, 'text')))
+  }
+
+  if (pr.fix) {
+    const note = pr.fix.note ? [element('span', ` ${pr.fix.note}`, 'text')] : []
+
+    result.push(field('fix', element('strong', pr.fix.reason), ...note))
+  }
+
+  if (LAST_ERROR_CODES.includes(status.code) && pr.lastError) {
+    result.push(field('last error', element('span', pr.lastError, 'text')))
+  }
+
+  return result
 }
 
 function delegateRuns(delegate) {
@@ -152,36 +192,17 @@ function approvalField(pr) {
 }
 
 function depsField(pr, ctx) {
-  const deps = pr.deps.map((dep) => wrap('span', link(ctx.linkWith({ pr: dep.id, tab: null }), dep.id), ' ', stateBadge(dep.state)))
+  const deps = pr.deps.map((dep) => wrap('span', link(ctx.linkWith({ pr: dep.id, tab: null }), dep.id), ' ', stageBadge(dep.stage)))
 
   return field('deps', namedList(deps, 'inline'))
-}
-
-// The board's info line repeats the gate, the question and the stamps below, so the page shows only the part of it
-// that has no field of its own.
-function stateFields(pr) {
-  if (pr.state === 'merged' && pr.mergeSha) {
-    return [field('merged as', short(pr.mergeSha))]
-  }
-
-  if (['needs_fix', 'fixing'].includes(pr.state) && pr.fixReason) {
-    return [field('fix reason', element('span', pr.fixReason, 'text'))]
-  }
-
-  if (['escalated', 'interrupted'].includes(pr.state) && pr.lastError) {
-    return [field('last error', element('span', pr.lastError, 'text'))]
-  }
-
-  return []
 }
 
 function renderOverview(pr, ctx) {
   const heldField = pr.held ? [field('held', `since ${clock(pr.held.at)}`)] : []
 
   return fields(
-    stateFields(pr),
+    statusFields(pr),
     gateFields(pr.gate),
-    blockedFields(pr.blocked),
     delegateFields(pr),
     heldField,
     approvalField(pr),

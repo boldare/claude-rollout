@@ -26,11 +26,6 @@ export function roleLabel(run) {
   return run.role === 'brief' && run.step ? `brief ${run.step}` : run.role
 }
 
-// A state id as a label: needs_fix reads as needs fix.
-export function stateLabel(state) {
-  return String(state).replaceAll('_', ' ')
-}
-
 export function money(usd) {
   if (missing(usd)) {
     return '-'

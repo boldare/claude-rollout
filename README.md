@@ -17,6 +17,8 @@ cd ~/.claude/skills/rollout && npm ci
 
 The repository is also a Claude Code skill (`SKILL.md`), so this makes `/rollout` available too. Requirements: Node 24+, git, gh, the repo's package manager and `claude` on PATH, plus Docker to run agents in containers (`sandbox.runtime: docker`). [Getting started](https://boldare.github.io/claude-rollout/getting-started.html) explains the other ways to install and why the installed copy stays apart from a checkout you develop in.
 
+Upgrading from a version that labelled PRs by state: the driver labels PRs `rollout-stage:<stage>` and `rollout-status:<code>`. On its next sync it removes the old `rollout-stage:<state>` and `rollout-reason:<why>` labels from each open PR. The old label definitions stay in the repository until someone deletes them.
+
 ## Quick start
 
 ```sh
@@ -46,4 +48,4 @@ npm run lint           # eslint with the STYLE.md rules
 npm run typecheck      # tsc on the .ts modules in lib/
 ```
 
-Read `CLAUDE.md` and `STYLE.md` before changing code. New modules in `lib/` are TypeScript that Node runs as it is, with no build step, and `npm run typecheck` checks them. The docs are plain HTML and CSS in `docs/` with no build step. `test/docs.test.mjs` keeps them in step with the code: one sidebar on every page, links that resolve, the UI's tokens, and a place for every command, manifest field and PR state.
+Read `CLAUDE.md` and `STYLE.md` before changing code. New modules in `lib/` are TypeScript that Node runs as it is, with no build step, and `npm run typecheck` checks them. The docs are plain HTML and CSS in `docs/` with no build step. `test/docs.test.mjs` keeps them in step with the code: one sidebar on every page, links that resolve, the UI's tokens, and a place for every command, manifest field, stage and status code.

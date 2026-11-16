@@ -228,13 +228,17 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
 
         <h3 id="cmd-status">status <a class="anchor" href="#cmd-status" aria-label="Link to this command">#</a></h3>
 
-        <pre><code>node $R status --dir D</code></pre>
+        <pre><code>node $R status --dir D [--stage S] [--needs-you]</code></pre>
 
         <p>Prints, from top to bottom:</p>
 
         <ul>
           <li>
-            The driver: running with its pid, heartbeat age and note, or <code>NOT RUNNING</code> with the time of its last heartbeat.
+            The driver: running with its pid, heartbeat age and note. Or
+            <code>NOT RUNNING since &lt;time&gt;. Statuses are from its last tick. Start it with rollout.mjs run</code>, with the time of
+            its last heartbeat, or <code>NOT RUNNING (last heartbeat never)</code> without one. While it is down, a status that was running
+            shows as <a href="how-it-works.html#status-driver-stopped"><code>waiting: driver-stopped</code></a> on the same stage, since
+            that heartbeat.
           </li>
           <li>
             The <a href="manifest.html#sandbox">runtime</a> of the manifest: <code>runtime host</code>, or
@@ -245,11 +249,39 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             A <code>HELD</code> line when the rollout is held: since when, by whom (<code>maintainer</code> or <code>driver</code>) and the
             reason when the hold has one.
           </li>
-          <li>One row per PR: id, state, PR number, head, CI or gate info, attempts as implement/fix/verify, and cost.</li>
+          <li>
+            One row per PR, in three columns: the id, the <a href="how-it-works.html#status">stage and status</a> as in
+            <code>merge · needs-you: approve</code>, and the info. A held PR whose status is running or needs you gets
+            <code>[held]</code> after it, and a merged PR shows <code>merged</code> alone. The info is the status sentence, then
+            <code>· &lt;age&gt;</code>, how long the status has held, then the way out in brackets when there is one. A merged PR's info is
+            its merge commit, with no age.
+          </li>
           <li>The last 8 events.</li>
         </ul>
 
-        <p>Before the first run there is no ledger yet, and it says so. The UI's board shows the same table with more columns.</p>
+        <pre><code>id   stage · status                  info
+P1   merged                          merged as 3f2a9c1
+P2   merge · needs-you: approve      verified, waits for your approval · 19m (rollout approve P2)
+P3   implement · running: implement  the implementer is working · 34m</code></pre>
+
+        <ul>
+          <li>
+            <strong>Width.</strong> The width is <code>COLUMNS</code> when it is a positive number, else the terminal's, and none when the
+            output goes to a pipe or a file. Only the info is cut, and it keeps at least 20 columns. The sentence is cut at the last word
+            that fits and ends with <code>…</code>, and the age and the way out stay whole. When they leave the sentence too little room,
+            the whole info is cut the same way. A word too long to fit is cut inside.
+          </li>
+          <li>
+            <strong>Filters.</strong> <a href="#flag-stage"><code>--stage S</code></a> keeps the PRs on one stage,
+            <a href="#flag-needs-you"><code>--needs-you</code></a> the PRs whose status needs you. Both together keep the PRs that match
+            both. The header lines and the recent events stay. With no PR left it prints <code>no PR matches</code>.
+          </li>
+        </ul>
+
+        <p>
+          Before the first run there is no ledger yet, and it says so. The PR number, head, attempts and cost are on the
+          <a href="#cmd-card">card</a> and the UI's board, which prints the same stage, status, sentence and way out.
+        </p>
 
         <h3 id="cmd-card">card <a class="anchor" href="#cmd-card" aria-label="Link to this command">#</a></h3>
 
@@ -258,11 +290,19 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
         <p>Everything you need before you approve one PR:</p>
 
         <ul>
-          <li>Title, branch, state, PR link and cost, and since when and by whom it is held.</li>
+          <li>Title and branch.</li>
+          <li>
+            The stage and status as <code>status</code> prints them, with <code>[held]</code> when that applies, the PR link and the cost.
+            Then the whole status sentence, <code>since &lt;time&gt;</code> and <code>way out: &lt;text&gt;</code> when there is one.
+          </li>
+          <li>Since when and by whom it is held, and the reason.</li>
           <li>The verified head and patch id, the approved head, the author and how approval works for it.</li>
           <li>The gate's last action and its reasons.</li>
           <li>The brief's path, and the reviewer's notes when the driver wrote it.</li>
-          <li>For a blocked PR, the agent's question and evidence.</li>
+          <li>
+            When the status asks a question (<code>brief-questions</code>, <code>decision</code> or <code>obstacle</code>),
+            <code>question (&lt;kind&gt;):</code> with the whole question, and the agent's evidence under it.
+          </li>
           <li>
             With <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, or after it answered, the delegate's runs and
             every answer or escalation with its plan references.
@@ -800,6 +840,21 @@ node $R release --all --dir D</code></pre>
                 <td>off</td>
                 <td>hold, release</td>
                 <td>The whole rollout in place of PR ids. With ids too, the CLI refuses the command and posts nothing.</td>
+              </tr>
+              <tr id="flag-stage">
+                <td>--stage S</td>
+                <td>every stage</td>
+                <td>status</td>
+                <td>
+                  Lists only the PRs on stage S: <code>brief</code>, <code>implement</code>, <code>pre-verify</code>, <code>verify</code>,
+                  <code>merge</code> or <code>merged</code>. Any other value exits 1 and names the known stages.
+                </td>
+              </tr>
+              <tr id="flag-needs-you">
+                <td>--needs-you</td>
+                <td>off</td>
+                <td>status</td>
+                <td>Lists only the PRs whose status needs you. With <code>--stage</code>, the PRs that match both.</td>
               </tr>
             </tbody>
           </table>

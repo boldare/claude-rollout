@@ -1,18 +1,6 @@
-// These mirror lib/kinds.mjs, which the browser cannot import. test/kinds.test.mjs keeps them equal.
-export const STATES = [
-  'pending',
-  'briefing',
-  'implementing',
-  'ready_claimed',
-  'verifying',
-  'verified',
-  'needs_fix',
-  'fixing',
-  'blocked',
-  'escalated',
-  'interrupted',
-  'merged',
-]
+// STAGES mirrors lib/state.ts and ERROR_KINDS lib/kinds.mjs, which the browser cannot import.
+// test/kinds.test.mjs keeps them equal.
+export const STAGES = ['brief', 'implement', 'pre-verify', 'verify', 'merge', 'merged']
 
 export const ERROR_KINDS = [
   'tick-error',
@@ -27,7 +15,6 @@ export const ERROR_KINDS = [
   'report-unchecked',
 ]
 
-const WAITING_STATES = ['blocked', 'escalated']
 const RESUMED = { brief: ', writer resumed', implement: ', implementer resumed', fix: ', implementer resumed' }
 const DETAIL_LIMIT = 200
 const HIDDEN_FIELDS = new Set(['at', 'id', 'kind'])
@@ -56,8 +43,44 @@ export function driverStatus(driver) {
   return driver.running ? 'running' : 'stopped'
 }
 
-export function isWaiting(row) {
-  return WAITING_STATES.includes(row.state)
+// A waiting status needs nobody: only a needs-you one waits for the maintainer.
+export function needsYou(row) {
+  return row.status?.kind === 'needs-you'
+}
+
+function onStage(row, stage) {
+  return row.status?.stage === stage
+}
+
+// All, the PRs that need you, then each stage that has a PR, in lifecycle order.
+export function filterChips(rows) {
+  const chips = [
+    { filter: null, label: 'all', count: rows.length },
+    { filter: 'needs-you', label: 'needs you', count: rows.filter(needsYou).length },
+  ]
+
+  for (const stage of STAGES) {
+    const count = rows.filter((row) => onStage(row, stage)).length
+
+    if (count > 0) {
+      chips.push({ filter: stage, label: stage, count })
+    }
+  }
+
+  return chips
+}
+
+// The filter is null, needs-you or a stage.
+export function shownRows(rows, filter) {
+  if (filter === null || filter === undefined) {
+    return rows
+  }
+
+  if (filter === 'needs-you') {
+    return rows.filter(needsYou)
+  }
+
+  return rows.filter((row) => onStage(row, filter))
 }
 
 function rowOf(state, id) {
@@ -77,19 +100,6 @@ export function answeredText(answered) {
   const who = answered.by === 'delegate' ? 'delegate answered' : 'answered'
 
   return `${who}${RESUMED[answered.role] ?? ''}`
-}
-
-export function stateCounts(rows) {
-  const counts = new Map()
-
-  for (const row of rows) {
-    counts.set(row.state, (counts.get(row.state) ?? 0) + 1)
-  }
-
-  const known = STATES.filter((state) => counts.has(state))
-  const unknown = [...counts.keys()].filter((state) => !STATES.includes(state)).sort()
-
-  return [...known, ...unknown].map((state) => ({ state, count: counts.get(state) }))
 }
 
 function kindMatches(event, kind) {

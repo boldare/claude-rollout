@@ -7,13 +7,13 @@ import { parse } from 'yaml'
 import { COMMANDS } from '../lib/control.mjs'
 import { GATE_CODES } from '../lib/judge.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { STAGES, STAGE_STATUSES } from '../lib/state.ts'
 import { ROLES } from '../lib/view.mjs'
-import { STATES } from '../ui/model.js'
 import { makeRollout } from './fixtures.mjs'
 
 // The docs site is plain HTML with no build step, so these tests hold it
 // together: one sidebar everywhere, links that resolve, tokens equal to the
-// UI's, and a place on the right page for every command, field and state.
+// UI's, and a place on the right page for every command, field, stage and status code.
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const DOCS = join(ROOT, 'docs')
@@ -219,11 +219,19 @@ test('docs: every manifest field, from the defaults and the example, has its row
   }
 })
 
-test('docs: every PR state has its row on the how it works page', () => {
+test('docs: every stage and every status code, driver-stopped included, has its row on the how it works page', () => {
   const pageIds = ids(read('how-it-works.html'))
+  const codes = new Set(Object.values(STAGE_STATUSES).flatMap((kinds) => Object.values(kinds).flat()))
 
-  for (const state of STATES) {
-    assert.ok(pageIds.includes(`state-${state}`), `how-it-works.html has no #state-${state}`)
+  assert.equal(STAGES.length, 6)
+  assert.equal(codes.size, 40)
+
+  for (const stage of STAGES) {
+    assert.ok(pageIds.includes(`stage-${stage}`), `how-it-works.html has no #stage-${stage}`)
+  }
+
+  for (const code of [...codes, 'driver-stopped']) {
+    assert.ok(pageIds.includes(`status-${code}`), `how-it-works.html has no #status-${code}`)
   }
 })
 

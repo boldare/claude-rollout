@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { runsFromEvents } from '../lib/runs.mjs'
+import { STAGE_STATUSES } from '../lib/state.ts'
 import { rolloutView } from '../lib/view.mjs'
 import { resource, unreachable } from '../ui/api.js'
 import {
@@ -20,19 +21,20 @@ import {
 } from '../ui/board-model.js'
 import { commandBody, commandNotice, dialogFor, panelControls, prControls, rolloutControls } from '../ui/commands.js'
 import { rememberOpen, rowClick } from '../ui/dom.js'
-import { duration, money, plural, roleLabel, sentence, serverAnswered, stateLabel } from '../ui/format.js'
+import { duration, money, plural, roleLabel, sentence, serverAnswered } from '../ui/format.js'
 import {
   ERROR_KINDS,
-  STATES,
+  STAGES,
   answeredText,
   driverStatus,
   errorCount,
   eventDetail,
+  filterChips,
   filterEvents,
-  isWaiting,
   mergeEvents,
+  needsYou,
   rowChanged,
-  stateCounts,
+  shownRows,
 } from '../ui/model.js'
 import { parseSse } from '../ui/sse.js'
 import { MARKERS, timelineLayout } from '../ui/timeline-layout.js'
@@ -293,10 +295,23 @@ test('driverStatus: held, running, stopped and unknown', () => {
   assert.equal(driverStatus(null), 'unknown')
 })
 
-test('isWaiting: blocked and escalated wait for the maintainer, nothing else does', () => {
-  for (const state of STATES) {
-    assert.equal(isWaiting({ state }), state === 'blocked' || state === 'escalated', state)
+test('needsYou: every needs-you code waits for the maintainer, approvals and merges by hand included, and no other kind does', () => {
+  let counted = 0
+
+  for (const [stage, kinds] of Object.entries(STAGE_STATUSES)) {
+    for (const [kind, codes] of Object.entries(kinds)) {
+      for (const code of codes) {
+        counted += 1
+        assert.equal(needsYou({ id: 'A1', status: { stage, kind, code } }), kind === 'needs-you', `${stage} · ${kind}: ${code}`)
+      }
+    }
   }
+
+  assert.equal(counted, 65)
+  assert.equal(needsYou({ id: 'A1', status: { stage: 'merge', kind: 'needs-you', code: 'approve' } }), true)
+  assert.equal(needsYou({ id: 'A1', status: { stage: 'merge', kind: 'needs-you', code: 'merge-by-hand' } }), true)
+  assert.equal(needsYou({ id: 'A1', status: { stage: 'implement', kind: 'waiting', code: 'driver-stopped' } }), false)
+  assert.equal(needsYou({ id: 'A1', status: { stage: 'merged', kind: null, code: null } }), false)
 })
 
 test('rowChanged: the row of one PR, compared field by field across two states', () => {
@@ -323,18 +338,45 @@ test('answeredText: who answered, and who resumed', () => {
   assert.equal(answeredText({ ...answered, run: 'A1-03-fix', role: 'fix' }), 'answered, implementer resumed')
 })
 
-test('stateCounts: known states in lifecycle order, then unknown ones sorted', () => {
-  const rows = ['merged', 'zeta', 'pending', 'merged', 'alpha', 'implementing'].map((state) => ({ state }))
+function stagedRow(id, stage, kind) {
+  return { id, status: { stage, kind } }
+}
 
-  assert.deepEqual(stateCounts(rows), [
-    { state: 'pending', count: 1 },
-    { state: 'implementing', count: 1 },
-    { state: 'merged', count: 2 },
-    { state: 'alpha', count: 1 },
-    { state: 'zeta', count: 1 },
+const STAGED_ROWS = [
+  stagedRow('A1', 'merged', null),
+  stagedRow('A2', 'merge', 'needs-you'),
+  stagedRow('A3', 'implement', 'running'),
+  stagedRow('A4', 'merged', null),
+  stagedRow('A5', 'implement', 'needs-you'),
+]
+
+test('filterChips: all, needs you even at zero, then each stage with a PR in lifecycle order', () => {
+  assert.deepEqual(filterChips(STAGED_ROWS), [
+    { filter: null, label: 'all', count: 5 },
+    { filter: 'needs-you', label: 'needs you', count: 2 },
+    { filter: 'implement', label: 'implement', count: 2 },
+    { filter: 'merge', label: 'merge', count: 1 },
+    { filter: 'merged', label: 'merged', count: 2 },
   ])
 
-  assert.deepEqual(stateCounts([]), [])
+  assert.deepEqual(filterChips([stagedRow('A1', 'brief', 'waiting')]), [
+    { filter: null, label: 'all', count: 1 },
+    { filter: 'needs-you', label: 'needs you', count: 0 },
+    { filter: 'brief', label: 'brief', count: 1 },
+  ])
+
+  assert.deepEqual(filterChips([]).length, 2)
+  assert.deepEqual(STAGES, ['brief', 'implement', 'pre-verify', 'verify', 'merge', 'merged'])
+})
+
+test('shownRows: every row without a filter, the rows that need you, or the rows on one stage', () => {
+  const ids = (filter) => shownRows(STAGED_ROWS, filter).map((row) => row.id)
+
+  assert.deepEqual(ids(null), ['A1', 'A2', 'A3', 'A4', 'A5'])
+  assert.deepEqual(ids('needs-you'), ['A2', 'A5'])
+  assert.deepEqual(ids('implement'), ['A3', 'A5'])
+  assert.deepEqual(ids('merged'), ['A1', 'A4'])
+  assert.deepEqual(ids('verify'), [])
 })
 
 test('filterEvents: by PR, driver events and error kinds, newest first', () => {
@@ -621,16 +663,6 @@ test('rowClick: a click on the row follows its link, a click on a link or a butt
   assert.deepEqual(visits, ['#r=demo'])
 })
 
-test('format: a state id reads as words, every state of the model included', () => {
-  assert.equal(stateLabel('needs_fix'), 'needs fix')
-  assert.equal(stateLabel('ready_claimed'), 'ready claimed')
-  assert.equal(stateLabel('verified'), 'verified')
-
-  for (const state of STATES) {
-    assert.doesNotMatch(stateLabel(state), /_/, state)
-  }
-})
-
 test('transcriptRoute: run and from belong to one PR and its Runs tab', () => {
   const route = { r: 'demo', view: 'board', pr: 'A1', tab: 'runs', run: 'A1-01-implement', from: 3 }
   const pick = (changes) => {
@@ -825,20 +857,22 @@ test('panelControls: release for a held row, retry for a stuck one, nothing read
   assert.deepEqual(panelControls({ id: 'A2', state: 'blocked', held: null }, true), [])
 })
 
-test('rowOpen: a waiting row opens by itself, any other on a click, and a choice sticks', () => {
+test('rowOpen: a row that needs you opens by itself, an approval too, any other on a click, and a choice sticks', () => {
   const run = { run: 'A1-01-implement' }
   const choices = new Map()
+  const decision = stagedRow('A1', 'implement', 'needs-you')
+  const working = stagedRow('A1', 'implement', 'running')
 
-  assert.equal(rowOpen({ id: 'A1', state: 'blocked' }, run, choices), true)
-  assert.equal(rowOpen({ id: 'A1', state: 'escalated' }, null, choices), true)
-  assert.equal(rowOpen({ id: 'A1', state: 'implementing' }, run, choices), false)
-  assert.equal(rowOpen({ id: 'A1', state: 'pending' }, null, new Map([['A1', true]])), false, 'nothing to show')
+  assert.equal(rowOpen(decision, run, choices), true)
+  assert.equal(rowOpen(stagedRow('A1', 'merge', 'needs-you'), null, choices), true, 'an approval has no run of its own')
+  assert.equal(rowOpen(working, run, choices), false)
+  assert.equal(rowOpen(stagedRow('A1', 'merge', 'waiting'), null, new Map([['A1', true]])), false, 'nothing to show')
 
   choices.set('A1', false)
-  assert.equal(rowOpen({ id: 'A1', state: 'blocked' }, run, choices), false)
+  assert.equal(rowOpen(decision, run, choices), false)
 
   choices.set('A1', true)
-  assert.equal(rowOpen({ id: 'A1', state: 'implementing' }, run, choices), true)
+  assert.equal(rowOpen(working, run, choices), true)
 })
 
 test('delegateText, answerPlaceholder and answerHint: what the delegate did and who resumes', () => {
@@ -853,23 +887,41 @@ test('delegateText, answerPlaceholder and answerHint: what the delegate did and 
   assert.equal(delegateText({ state: 'answer', reason: 'Use the old API.' }), 'answered')
   assert.equal(delegateText({ state: 'future', reason: '' }), 'future')
 
-  const brief = { id: 'A1', state: 'blocked', blocked: { kind: 'brief-questions' } }
-  const decision = { id: 'A1', state: 'blocked', blocked: { kind: 'needs-decision' } }
+  const brief = stagedRow('A1', 'brief', 'needs-you')
+  const decision = stagedRow('A1', 'implement', 'needs-you')
 
   assert.match(answerPlaceholder(brief), /brief writer/)
+  assert.match(
+    answerPlaceholder(stagedRow('A1', 'brief', 'waiting')),
+    /brief writer/,
+    'decision 17: no brief yet, a note goes to the writer',
+  )
+
   assert.match(answerPlaceholder(decision), /^Write what the implementer should do/)
-  assert.match(answerPlaceholder({ id: 'A1', state: 'escalated', blocked: null }), /implementer/)
+  assert.match(answerPlaceholder(stagedRow('A1', 'verify', 'needs-you')), /implementer/)
   assert.equal(answerHint(brief, true), "The brief writer resumes with it on the driver's next tick.")
   assert.equal(answerHint(decision, false), 'The implementer resumes with it once the driver runs.')
 })
 
-test('dialogFor: answer shows the question and the evidence, never an empty section', () => {
-  const blocked = { kind: 'needs-decision', question: 'Which API?\nThe old one is deprecated.', evidence: 'Both exist in src/api.' }
-  const answer = (pr) => dialogFor('answer', { rollout: 'demo', driver: null, pr })
+test('dialogFor: answer shows the sentence, then the question and the evidence, never an empty section', () => {
+  const question = { kind: 'needs-decision', text: 'Which API?\nThe old one is deprecated.', evidence: 'Both exist in src/api.' }
+  const status = {
+    stage: 'implement',
+    kind: 'needs-you',
+    code: 'decision',
+    sentence: 'the implementer asks: Which API?',
+    since: at(5),
+    wayOut: { kind: 'note', text: 'rollout note A2 "..."' },
+    marker: null,
+    question,
+  }
 
-  assert.deepEqual(answer({ id: 'A2', state: 'blocked', blocked }), {
+  const answer = (changes) =>
+    dialogFor('answer', { rollout: 'demo', driver: null, pr: { id: 'A2', state: 'blocked', status: { ...status, ...changes } } })
+
+  assert.deepEqual(answer({}), {
     title: 'Answer A2',
-    text: 'Blocked (needs-decision). The answer goes to the agent as a note.',
+    text: 'The implementer asks: Which API? The answer goes to the agent as a note.',
     sections: [
       { heading: 'question', text: 'Which API?\nThe old one is deprecated.' },
       { heading: 'evidence', text: 'Both exist in src/api.' },
@@ -878,13 +930,13 @@ test('dialogFor: answer shows the question and the evidence, never an empty sect
     withText: true,
   })
 
-  assert.deepEqual(answer({ id: 'A2', state: 'blocked', blocked: { ...blocked, evidence: '' } }).sections, [
+  assert.deepEqual(answer({ question: { ...question, evidence: '' } }).sections, [
     { heading: 'question', text: 'Which API?\nThe old one is deprecated.' },
   ])
 
-  assert.deepEqual(answer({ id: 'A2', state: 'blocked', blocked: null }), {
+  assert.deepEqual(answer({ code: 'dispute', sentence: 'the verifier upholds F1, which the implementer disputes', question: null }), {
     title: 'Answer A2',
-    text: 'Blocked (unknown). The answer goes to the agent as a note.',
+    text: 'The verifier upholds F1, which the implementer disputes. The answer goes to the agent as a note.',
     sections: [],
     confirmLabel: 'Send',
     withText: true,

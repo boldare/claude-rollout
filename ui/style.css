@@ -619,7 +619,7 @@ td > .badge {
   margin-bottom: 2px;
 }
 
-.badge.state::before,
+.badge.stage::before,
 .badge.driver::before {
   align-self: center;
   content: '';
@@ -630,68 +630,62 @@ td > .badge {
   background: var(--tone, var(--skip));
 }
 
-/* Waiting is the norm, so a pending PR stays quiet: a hollow dot and no fill. */
-.badge.state-pending {
+/* Waiting is the norm, so a status that needs nobody stays quiet: no fill. */
+.badge.kind-waiting {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--line);
   color: var(--ink-3);
-}
-
-.badge.state-pending::before {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--skip);
 }
 
 .badge.driver-running::before {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--pass) 22%, transparent);
 }
 
-.state-pending,
+/* A stage takes the tone of the role that works on it, and a status the tone of its kind. */
+
+.kind-waiting,
 .driver-stopped,
 .driver-unknown,
 .read-only {
   --tone: var(--skip);
 }
 
-.state-briefing {
+.stage-brief {
   --tone: var(--brief);
 }
 
-.state-implementing,
-.state-verifying,
-.state-fixing,
+.stage-implement,
+.kind-running,
 .active-run {
   --tone: var(--implement);
 }
 
-.state-ready_claimed {
+.stage-pre-verify {
   --tone: var(--fix);
 }
 
-.state-verified,
+.stage-verify {
+  --tone: var(--verify);
+}
+
+.stage-merge,
 .driver-running,
 .verdict-pass {
   --tone: var(--pass);
 }
 
-.state-needs_fix {
-  --tone: var(--verify);
-}
-
-.state-blocked,
-.state-escalated,
+.kind-needs-you,
 .verdict-fail {
   --tone: var(--fail);
 }
 
-.state-interrupted,
 .held,
 .driver-held,
 .verdict-warn {
   --tone: var(--warn);
 }
 
-.state-merged {
+.stage-merged {
   --tone: var(--merged);
 }
 
@@ -699,10 +693,6 @@ td > .badge {
   font-family: var(--font-mono);
   font-size: var(--mono-sm);
   font-weight: 400;
-}
-
-.badge.waiting {
-  --tone: var(--fail);
 }
 
 .badge.answered {
@@ -769,6 +759,16 @@ td.info {
   min-width: 13rem;
 }
 
+/* The info reads in the CLI's order: the sentence · how long it has held, then the way out. */
+td.info > .since::before {
+  content: '· ';
+}
+
+td.info > .way-out {
+  display: inline-block;
+  margin-top: 2px;
+}
+
 tr.clickable {
   cursor: pointer;
 }
@@ -787,11 +787,11 @@ tr.selected td:first-child {
 }
 
 /* A PR that waits for the maintainer stands out from running work. */
-tr.waiting td {
+tr.needs-you td {
   background: color-mix(in srgb, var(--fail) 10%, transparent);
 }
 
-tr.waiting td:first-child {
+tr.needs-you td:first-child {
   box-shadow: inset 2px 0 0 var(--fail);
 }
 
@@ -984,7 +984,8 @@ tr.open > td {
   margin-left: auto;
 }
 
-/* A waiting row's panel asks the question and takes the answer, so the maintainer never leaves the board. */
+/* The panel of a row that needs you says what it needs and takes the answer, so the maintainer never leaves the
+   board. */
 
 .run-panel.needs-you {
   gap: 14px;
