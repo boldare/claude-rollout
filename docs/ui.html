@@ -557,7 +557,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                         </div>
                         <p><span class="label">Way out</span> <code>rollout approve P2</code></p>
                         <div class="panel-footer">
-                          <span class="end"><a href="#transcripts">Open the transcript</a></span>
+                          <span class="end"><span class="fake-button">Retry</span><a href="#transcripts">Open the transcript</a></span>
                         </div>
                       </div>
                     </td>
@@ -679,7 +679,7 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                         <div class="panel-footer">
                           <span class="fake-button primary">Send</span
                           ><span class="muted">The implementer resumes with it on the driver's next tick.</span
-                          ><span class="end"><span class="fake-button">Retry</span><a href="#transcripts">Open the transcript</a></span>
+                          ><span class="end"><a href="#transcripts">Open the transcript</a></span>
                         </div>
                       </div>
                     </td>
@@ -723,10 +723,11 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             A row that needs you opens by itself, into a panel that asks you instead of showing the run. It names the status, the run that
             asked, or the driver when the driver raised it, what the delegate did about the question, and how long the PR has waited. The
             status sentence follows, then the question and the agent's evidence when there is one, and the last error when the sentence does
-            not hold it already. A status whose way out is a note gets a box for your <a href="#control-answer">answer</a> with Send, and
-            Retry where retry applies. Any other shows its way out: the command to run, or a link to the PR on GitHub. The box keeps what
-            you type while the page updates. <kbd>⌘</kbd> or <kbd>Ctrl</kbd> with <kbd>Enter</kbd> sends too. Once the server took the note
-            the box empties and says it was sent, until the driver applies it. A row you close stays closed.
+            not hold it already. A status whose way out is a note gets a box for your <a href="#control-answer">answer</a> with Send. Any
+            other shows its way out: the command to run, or a link to the PR on GitHub. <a href="#control-retry">Retry</a> sits at the end
+            of the panel wherever retry applies, so a decision, brief questions or a dispute get none. The box keeps what you type while the
+            page updates. <kbd>⌘</kbd> or <kbd>Ctrl</kbd> with <kbd>Enter</kbd> sends too. Once the server took the note the box empties and
+            says it was sent, until the driver applies it. A row you close stays closed.
           </li>
           <li>
             An <span class="badge answered">answered</span> badge appears once the driver has applied your answer, not when you press Send.
@@ -1007,7 +1008,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <p class="back">← Back to board</p>
             <div class="detail-head">
               <p class="detail-title">P2 <span class="muted">feat: cli flags</span></p>
-              <p class="controls"><span class="fake-button">Hold</span> <span class="fake-button">Note</span></p>
+              <p class="controls">
+                <span class="fake-button">Hold</span> <span class="fake-button">Note</span> <span class="fake-button">Retry</span>
+              </p>
             </div>
             <div class="facts pr-facts">
               <span class="badge stage stage-merge">Merge</span><span class="badge status kind-needs-you">Needs-you: review</span>
