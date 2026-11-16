@@ -770,7 +770,7 @@ test('retry: any other waiting status', () => {
   }
 })
 
-test('retry: a waiting status a row writes under a hold is held, the rollout scope over the PR own', () => {
+test("retry: a waiting status a row writes under a hold is held, the rollout's scope over the PR's own", () => {
   const ownHold = retried(staged('brief', 'needs-you', 'errors', { hold: HOLD, held: HOLD }))
 
   assert.deepEqual(ownHold.entry.status, { kind: 'waiting', code: 'held', scope: 'pr', since: ownHold.entry.status.since })
@@ -1270,7 +1270,7 @@ test('approve: approveRefusal(manifest, entry) is not null (merge: manual or aut
   )
 })
 
-test('approve: not on merge, no verification, or a status that is neither waiting nor needs-you: approve', () => {
+test('approve: Not on merge, no verification, or a status that is neither waiting nor needs-you: approve', () => {
   const cases = [
     [staged('implement', 'waiting', 'slot', { pr: 11 }), 'implement · waiting: slot'],
     [staged('pre-verify', 'waiting', 'ci', { pr: 11, claimedSha: SHA, verified: VERIFIED }), 'pre-verify · waiting: ci'],
@@ -1289,20 +1289,20 @@ test('approve: atWork set', () => {
   assertApprovalRejected(approvedWith(onMerge('needs-you', 'approve'), { running: 'delegate' }), AT_WORK)
 })
 
-test('approve: another head or patch than the verification', () => {
+test('approve: Another head or patch than the verification', () => {
   const stale = 'it names a different head than the one verified now; look at the card again'
 
   assertApprovalRejected(approvedWith(onMerge('needs-you', 'approve'), { command: { ...APPROVE, sha: 'b'.repeat(40) } }), stale)
   assertApprovalRejected(approvedWith(onMerge('needs-you', 'approve'), { command: { ...APPROVE, patchId: 'patch-other' } }), stale)
 })
 
-test('approve: posted before the verification finished', () => {
+test('approve: Posted before the verification finished', () => {
   const early = approvedWith(onMerge('needs-you', 'approve'), { command: { ...APPROVE, at: at(79) } })
 
   assertApprovalRejected(early, 'it was posted before the verification finished')
 })
 
-test('approve: already approved: entry.approved names the verified patch and its channel is not github', () => {
+test('approve: Already approved: entry.approved names the verified patch and its channel is not github', () => {
   const approved = { sha: SHA, patchId: 'patch-a1', at: at(81), channel: 'inbox' }
   const { events, entry, notices } = approvedWith(onMerge('waiting', 'merge-delay', { approved }))
   const reason = 'already approved at 2026-09-01 11:21 UTC. The merge delay counts from then'
@@ -1317,7 +1317,7 @@ test('approve: already approved: entry.approved names the verified patch and its
   assert.equal(github.entry.approved.channel, 'inbox')
 })
 
-test('approve: under a hold of the PR or the rollout', () => {
+test('approve: Under a hold of the PR or the rollout', () => {
   const own = approvedWith(onMerge('waiting', 'held', { hold: HOLD, held: HOLD, status: { scope: 'pr' } }))
 
   assert.deepEqual(
@@ -1335,7 +1335,7 @@ test('approve: under a hold of the PR or the rollout', () => {
   assert.equal(rollout.entry.status.scope, 'rollout')
 })
 
-test('approve: on merge, names the verified head and patch, posted after the verification', () => {
+test('approve: On merge, names the verified head and patch, posted after the verification', () => {
   const { events, entry, notices, effect } = approvedWith(onMerge('needs-you', 'approve'))
   const until = new Date(Date.parse(entry.approved.at) + 120_000).toISOString()
 
