@@ -688,6 +688,43 @@ test('prompts: the reason retry tells the fix run why it runs, and every other r
   assertFilled(prompts)
 })
 
+test('prompts: with a previous run, a fix run is told after the note that it ended without a report, and with none nothing is added', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const note = 'Blocking findings:\n- F1: cli.mjs:40 swallows the error.'
+  const stopped =
+    'Your previous run for this reason ended without a final report (error_during_execution). Inspect the worktree and the PR, then continue where it stopped.'
+
+  const told = {
+    fix: fixPrompt(manifest, pr, STATE, { reason: 'verifier findings', note, head: 'abc', previous: 'error_during_execution' }),
+    resumeFresh: resumeFreshPrompt(manifest, pr, STATE, { reason: 'verifier findings', note, previous: 'error_during_execution' }),
+  }
+
+  const untold = {
+    fix: fixPrompt(manifest, pr, STATE, { reason: 'verifier findings', note, head: 'abc' }),
+    resumeFresh: resumeFreshPrompt(manifest, pr, STATE, { reason: 'verifier findings', note, previous: null }),
+  }
+
+  for (const name of ['fix', 'resumeFresh']) {
+    assert.ok(told[name].includes(`${note}\n\n${stopped}\n\n`), told[name])
+    assert.equal(untold[name].includes('previous run'), false, name)
+    assert.ok(untold[name].includes(`${note}\n\n`), untold[name])
+    assert.equal(told[name].replace(`\n\n${stopped}`, ''), untold[name], name)
+  }
+
+  assert.ok(told.fix.includes('reason: **verifier findings**.'))
+  assert.ok(told.resumeFresh.includes('Reason you were started: **verifier findings**.'))
+
+  const empty = fixPrompt(manifest, pr, STATE, { reason: 'verifier findings', note: '', head: 'abc', previous: 'stopped' })
+
+  assert.ok(
+    empty.includes('reason: **verifier findings**.\n\nYour previous run for this reason ended without a final report (stopped).'),
+    empty,
+  )
+
+  assertFilled({ ...told, ...untold, empty })
+})
+
 test('prompts: a fresh implementer gets the ready commands in its step 7, and a fix run goes back to step 7', () => {
   const manifest = withReady(loadManifest(makeRollout()), ['npm test'], ['npm run lint'])
   const pr = manifest.all[0]

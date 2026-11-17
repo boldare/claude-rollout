@@ -92,10 +92,12 @@
           <li>
             <strong>Stop and resume.</strong> The first Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents (SIGTERM, then
             SIGKILL after 5 s), saves and exits. A second signal exits at once. On the next <code>run</code>, every run that was in progress
-            gets its attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. An implementer or fixer
-            then continues its own session, a verifier starts over and an unfinished brief is written again. A stop kills running ready and
-            pre-verify commands and their children the same way and drops their results. The next run cleans what they left in the worktree,
-            then runs them again.
+            gets its attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. A fix run the stop ended
+            keeps its fix, with its reason and note, and a delegate run hands its question back. An implementer or fixer then continues its
+            own session, a verifier starts over and an unfinished brief is written again. A stop kills running ready and pre-verify commands
+            and their children the same way and drops their results. The next run cleans what they left in the worktree, then runs them
+            again. Commands that passed are kept in the ledger for their head and their lists, so a restart does not run them again on that
+            head.
           </li>
         </ul>
 
@@ -681,10 +683,12 @@
                   The driver first judges the verdict by those criteria. A required one that does not pass, or that the verifier does not
                   report, is a finding, and a PASS with one counts as a FAIL. A recommended one never blocks. PASS from an untouched
                   worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>, or <code>escalated</code> when a
-                  finding the implementer disputed is still open. A PASS from a verifier that changed the tree, or for a stale SHA, is
-                  discarded: <code>ready_claimed</code>. When the verifier touched the tree, the driver resets it to the SHA. It first
-                  deletes the same untracked Claude Code files as before the verifier and logs <code>local-config-removed</code> when there
-                  were any. After <code>verify-done</code> and any reset, and before the event of the outcome, each criterion logs a
+                  finding the implementer disputed is still open. A PASS from a verifier that changed the tree is discarded, and the PR
+                  waits on <code>verify · waiting: slot</code> (<code>interrupted</code>) for the next verifier, or goes to
+                  <code>needs_fix</code> when a note waits in the queue. A PASS for a stale SHA is discarded too:
+                  <code>ready_claimed</code>. When the verifier touched the tree, the driver resets it to the SHA. It first deletes the same
+                  untracked Claude Code files as before the verifier and logs <code>local-config-removed</code> when there were any. After
+                  <code>verify-done</code> and any reset, and before the event of the outcome, each criterion logs a
                   <code>gate-check</code> event with stage <code>verify</code>, its id as the item, its level and its result: pass, fail or
                   unverifiable. As before the verifier, a result other than fail is logged once per claim and head.
                   <code>verify-done</code> keeps the verifier's own verdict.
@@ -752,13 +756,17 @@
               <tr id="state-interrupted">
                 <td class="nowrap"><span class="badge state state-interrupted">interrupted</span></td>
                 <td>
-                  A run ended without a report: a crash, a stop, a stall, a timeout or an outage. A READY report also waits here when GitHub
-                  could not be read to check it.
+                  A run ended without a report: a crash, a stop, a stall, a timeout or an outage. A fix run that fails or is stopped keeps
+                  its reason and note and goes back to <code>needs_fix</code> instead, so the next fix run names them again. A fix run whose
+                  end the driver never saw, because the driver was killed, still comes here on the next start. A READY report also waits
+                  here when GitHub could not be read to check it. A PR whose commands passed waits here for its verifier, on
+                  <code>verify · waiting: slot</code>.
                 </td>
                 <td>
                   A later tick resumes it. A parked READY report is checked again, with no agent run. An interrupted verifier re-checks the
-                  claim, an implementer with no session starts again, and anything else continues as a fix run. A PR with no brief file and
-                  no GitHub PR goes back to <code>pending</code> instead, so the brief writer runs first.
+                  claim, and so does a PR whose commands passed. On the same head and command lists it then starts the verifier without
+                  running the commands again. An implementer with no session starts again, and anything else continues as a fix run. A PR
+                  with no brief file and no GitHub PR goes back to <code>pending</code> instead, so the brief writer runs first.
                 </td>
               </tr>
               <tr id="state-merged">
@@ -850,8 +858,9 @@
         <p>
           Each status has one sentence, the same in the CLI and the UI, from <code>lib/sentences.ts</code>. A part with no value drops out,
           and times read <code>YYYY-MM-DD HH:MM UTC</code>. A question shows its first line in the sentence and in full on the card and the
-          PR page. Every <code>needs-you</code> status names its way out: what takes it away. A <code>waiting: held</code> status names the
-          release.
+          PR page. A question the <a href="#delegate">delegate</a> handed back ends with what it did, with the first line of its reason:
+          (the delegate passed it on: <var>reason</var>) when it escalated, (the delegate failed: <var>error</var>) when its run failed.
+          Every <code>needs-you</code> status names its way out: what takes it away. A <code>waiting: held</code> status names the release.
         </p>
 
         <div class="scroll">
@@ -1055,7 +1064,7 @@
                 <td class="nowrap"><code>brief-questions</code></td>
                 <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
                 <td>brief</td>
-                <td>the brief needs your answer: <var>question</var></td>
+                <td>the brief needs your answer: <var>question</var> (the delegate passed it on: <var>reason</var>)</td>
                 <td><code>rollout note &lt;id&gt; "..."</code></td>
               </tr>
               <tr id="status-attempts-exhausted">
@@ -1076,14 +1085,14 @@
                 <td class="nowrap"><code>decision</code></td>
                 <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
                 <td>implement</td>
-                <td>the implementer asks: <var>question</var></td>
+                <td>the implementer asks: <var>question</var> (the delegate passed it on: <var>reason</var>)</td>
                 <td><code>rollout note &lt;id&gt; "..."</code></td>
               </tr>
               <tr id="status-obstacle">
                 <td class="nowrap"><code>obstacle</code></td>
                 <td class="nowrap"><span class="badge status kind-needs-you">needs-you</span></td>
                 <td>implement</td>
-                <td>the implementer is blocked (<var>kind</var>): <var>question</var></td>
+                <td>the implementer is blocked (<var>kind</var>): <var>question</var> (the delegate passed it on: <var>reason</var>)</td>
                 <td>remove the cause, then <code>rollout retry &lt;id&gt;</code>, or <code>rollout note &lt;id&gt; "..."</code></td>
               </tr>
               <tr id="status-closed">
@@ -1291,21 +1300,23 @@
         <p>
           The delegate is off unless <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> is set. When a PR blocks on a
           question of an allowed kind, brief questions and <code>needs-decision</code> by default, the driver starts it in a free slot. The
-          PR stays <code>blocked</code> while it runs.
+          PR shows <code>running: delegate</code> on the question's stage while it runs, and stays <code>blocked</code>.
         </p>
 
         <p>
           It reads the question and the evidence, the plan and design notes, the brief, every earlier answer and the code. It answers only
           what the plan decides, and escalates the rest: a silent or ambiguous plan, security, credentials, publishing, releases, weakened
           tests, code scanning, a wider scope. An answer reaches the agent the same way your note does, prefixed as the delegate's. An
-          escalation leaves the PR blocked for you. When the delegate takes a question, the blocked notice is skipped and its answer or
+          escalation hands the question back to you as its <code>needs-you</code> status, and so does a failed run. The sentence then names
+          the delegate's reason or the run's error. When the delegate takes a question, the blocked notice is skipped and its answer or
           escalation is the one notification. It comes after the run, so it also waits for a free slot.
         </p>
 
         <p>
           Each question gets one run, also when that run fails, and a PR at most
           <a href="manifest.html#policy-delegate"><code>maxPerPr</code></a> runs. A note of yours always wins. It applies at once, also
-          while the delegate runs, and the delegate's late answer is dropped.
+          while the delegate runs, and the delegate's late answer is dropped. A delegate run a stop or a restart cut off hands the question
+          back as it was, and the delegate may take it again.
         </p>
 
         <h2 id="run">One agent run <a class="anchor" href="#run" aria-label="Link to this section">#</a></h2>
@@ -2005,7 +2016,9 @@
                 <td>A run ended without a report</td>
                 <td>
                   The PR becomes <code>interrupted</code> and resumes on a later tick. So does every run in progress when the driver stops.
-                  A brief run goes back to <code>pending</code> instead, and a delegate run leaves the PR <code>blocked</code>.
+                  A fix run that fails or is stopped keeps its fix instead: the PR goes back to <code>needs_fix</code>, and the next fix run
+                  gets the same reason and note, and the run's error. A brief run goes back to <code>pending</code>, and a delegate run
+                  hands the question back as its <code>needs-you</code> status.
                 </td>
               </tr>
               <tr>
@@ -2082,8 +2095,8 @@
             <a href="#gate">gate</a> as data from the API instead.
           </li>
           <li>
-            It looks at PRs that are <code>ready_claimed</code>, <code>verified</code> or <code>needs_fix</code>, while no agent runs for
-            them.
+            It looks at PRs that are <code>ready_claimed</code>, <code>verified</code> or <code>needs_fix</code>, and at PRs that wait on
+            <code>verify</code> for their verifier, while no agent runs for them.
           </li>
           <li>
             It waits until you have been quiet for

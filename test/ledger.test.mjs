@@ -101,6 +101,22 @@ test('freshPr has no hold, verdict history, handled feedback, findings or verify
   assert.equal(freshPr().verifyCriteria, null)
 })
 
+test('freshPr has no pass of the commands, and an entry from before it opens with none, the version kept', () => {
+  const manifest = loadManifest(makeRollout({ prs: { A1: { state: 'ready_claimed', pr: 11, claimedSha: 'a1a1a1a' } } }))
+  const file = join(manifest.dir, 'ledger.json')
+  const older = JSON.parse(readFileSync(file, 'utf8'))
+
+  delete older.prs.A1.commands
+  writeFileSync(file, JSON.stringify(older))
+
+  assert.equal(freshPr().commands, null)
+  assert.equal(Object.hasOwn(readLedger(manifest).prs.A1, 'commands'), false)
+  assert.equal(older.version, LEDGER_VERSION)
+  assert.equal(LEDGER_VERSION, 2)
+  assert.equal(openLedger(manifest).prs.A1.commands, null)
+  assert.equal(withDefaults({}).commands, null)
+})
+
 const FAILED_AT = '2026-09-01T10:00:00.000Z'
 
 test('recordFindings numbers the findings from F1 in order and replaces the earlier ones', () => {

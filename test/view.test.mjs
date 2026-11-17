@@ -1637,6 +1637,30 @@ test('effects: with the driver stopped, the effect starts from the runs it will 
   })
 })
 
+test('effects: a note on a PR the delegate works on answers the question, with the driver running or stopped', () => {
+  const delegating = {
+    state: 'blocked',
+    pr: 13,
+    blocked: DECISION,
+    stage: 'implement',
+    status: { kind: 'running', code: 'delegate', question: 'needs-decision', run: 'A3-01-delegate', since: at(5) },
+    fix: null,
+    hold: null,
+  }
+
+  const answer = 'after note: implement · waiting: slot (maintainer-note)'
+  const running = effectsOf({ prs: { A3: delegating } }).A3
+  const stopped = effectsOf({ prs: { A3: delegating }, lock: false }).A3
+
+  assert.deepEqual(running, {
+    retry: { applies: false, lines: ['implement · running: delegate', 'refused: an agent is working on this PR'] },
+    note: { applies: true, lines: ['implement · running: delegate', answer] },
+  })
+
+  assert.deepEqual(stopped.note.lines.slice(0, 2), ['implement · waiting: driver-stopped', answer])
+  assert.deepEqual(stopped.retry.lines.slice(1), ['refused: this PR waits for your answer: rollout note A3 "..."'])
+})
+
 test('commandPreview: the same lines for retry and note, approve with its command, and null with no ledger yet', () => {
   const { A1 } = samplePrs()
   const manifest = loadManifest(

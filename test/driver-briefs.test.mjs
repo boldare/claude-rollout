@@ -2,10 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { createDriver } from '../lib/driver.mjs'
 import { prDetail } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
 import { waitFor } from './fixtures.mjs'
-import { agentResult, driverFor, apply, SHA, eventsSince, kindsSince, modelDriver, launched } from './driver-helpers.mjs'
+import { agentResult, driverFor, apply, SHA, FETCH, eventsSince, kindsSince, modelDriver, launched, tickDriver } from './driver-helpers.mjs'
 
 const RULE = 'When the PR changes a rule or a behaviour, every file that states the old one is in Expected files.'
 const LEAN = 'The brief has no filler.'
@@ -757,4 +758,216 @@ test('delegate: with a note pending or the question taken already, the board sho
 
   await advanced(noted.driver, noted.pr)
   assert.equal(noted.calls.length, 0)
+})
+
+function placeOf(entry) {
+  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
+}
+
+const ESCALATION = 'The plan is silent on the flag.'
+const BRIEF_ANSWERS = [{ question: 'Which API?', answer: 'The REST one.' }]
+
+test('brief run: written', () => {
+  const { driver, pr, entry } = briefDoneDriver(null)
+
+  driver.onBriefDone(pr, agentResult({ output: briefOutput() }))
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual(entry.briefScope, ['lib/a.mjs'])
+})
+
+test('brief run: questions, or a required brief criterion that does not pass', () => {
+  const asked = briefDoneDriver(null)
+  const criterion = briefDoneDriver({ runChecks: false, required: [RULE], recommended: [] })
+  const failed = [{ id: 'B1', result: 'fail', evidence: 'docs/a.md states the old rule.' }]
+
+  asked.driver.onBriefDone(asked.pr, agentResult({ output: briefOutput({ questions: ['Which API?'] }) }))
+  criterion.driver.onBriefDone(criterion.pr, agentResult({ output: briefOutput({ criteria: failed }) }))
+
+  for (const [name, { entry }] of Object.entries({ asked, criterion })) {
+    assert.deepEqual(placeOf(entry), ['brief', 'needs-you', 'brief-questions'], name)
+  }
+})
+
+test('brief run: preview-conflict', () => {
+  const { driver, pr, entry } = briefDoneDriver(null)
+  const heads = [{ id: 'A2', sha: SHA, patchId: 'patch-a2' }]
+
+  driver.onBriefDone(pr, agentResult({ ok: false, previewConflict: true, error: 'conflict', costUsd: 0, seconds: 0 }), heads)
+
+  assert.deepEqual(placeOf(entry), ['brief', 'waiting', 'dependencies-merge'])
+  assert.deepEqual([entry.attempts.brief, entry.status.heads], [0, heads])
+})
+
+test('brief run: failed', () => {
+  const failing = briefDoneDriver(null)
+  const stopped = briefDoneDriver(null)
+
+  for (const { entry } of [failing, stopped]) {
+    entry.briefAnswers = structuredClone(BRIEF_ANSWERS)
+  }
+
+  failing.driver.onBriefDone(failing.pr, agentResult({ ok: false, error: 'error_during_execution' }))
+  stopped.driver.onBriefDone(stopped.pr, agentResult({ ok: false, error: 'stopped', stopped: true, costUsd: 0, seconds: 0 }))
+
+  assert.deepEqual(placeOf(failing.entry), ['brief', 'waiting', 'backoff'])
+  assert.deepEqual(placeOf(stopped.entry), ['brief', 'waiting', 'slot'])
+
+  for (const { entry } of [failing, stopped]) {
+    assert.deepEqual(entry.briefAnswers, BRIEF_ANSWERS)
+  }
+})
+
+test('delegate run: answer', async () => {
+  const decision = delegateDriver({ pr: 11, sessionId: 'session-1' })
+  const brief = delegateDriver({ blocked: BRIEF_QUESTIONS, attempts: { implement: 0, fix: 0, verify: 0, brief: 1 } }, { brief: false })
+
+  await advanced(decision.driver, decision.pr)
+  await advanced(brief.driver, brief.pr)
+
+  assert.deepEqual(placeOf(decision.entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([decision.entry.fix.reason, decision.entry.fixReason], ['delegate-answer', 'answer from the delegate'])
+  assert.deepEqual(placeOf(brief.entry), ['brief', 'waiting', 'slot'])
+  assert.deepEqual(brief.entry.briefAnswers, [{ question: 'Which API?', answer: `${PREFIX}Keep it as an alias.` }])
+})
+
+test('delegate run: escalate', async () => {
+  const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: ESCALATION })
+  const empty = delegateReport({ answer: '  ' })
+
+  for (const [name, result, reason] of [
+    ['escalate', escalate, ESCALATION],
+    ['empty answer', empty, 'the delegate gave an empty answer'],
+  ]) {
+    const { driver, pr, entry } = delegateDriver({ pr: 11 }, { results: [result] })
+
+    await advanced(driver, pr)
+
+    assert.deepEqual(placeOf(entry), ['implement', 'needs-you', 'decision'], name)
+    assert.deepEqual(
+      entry.status.question,
+      {
+        kind: 'needs-decision',
+        text: DECISION.question,
+        evidence: DECISION.evidence,
+        run: null,
+        delegate: { outcome: 'escalated', reason },
+      },
+      name,
+    )
+  }
+})
+
+test('delegate run: failed', async () => {
+  const failure = agentResult({ ok: false, output: null, error: 'killed by SIGKILL', costUsd: 0.5, seconds: 300 })
+  const { driver, pr, entry } = delegateDriver({ pr: 11 }, { results: [failure] })
+
+  await advanced(driver, pr)
+
+  assert.deepEqual(placeOf(entry), ['implement', 'needs-you', 'decision'])
+  assert.deepEqual(entry.status.question.delegate, { outcome: 'failed', reason: 'killed by SIGKILL' })
+  assert.ok(Date.parse(entry.retryAfter) > Date.now(), entry.retryAfter)
+})
+
+test('delegate run: dropped', async () => {
+  let finish
+  const late = new Promise((resolve) => {
+    finish = resolve
+  })
+
+  const { manifest, driver, pr, entry } = delegateDriver({ pr: 11 }, { results: [late] })
+
+  await driver.advance(pr)
+  apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Drop the old flag.' })
+
+  const noted = structuredClone({ stage: entry.stage, status: entry.status, fix: entry.fix })
+
+  finish(delegateReport())
+  await waitFor(() => driver.running.size === 0, 'the delegate to finish')
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual({ stage: entry.stage, status: entry.status, fix: entry.fix }, noted)
+  assert.equal(entry.fix.reason, 'maintainer-note')
+  assert.equal(entry.delegate.answers.at(-1).decision, 'dropped')
+})
+
+test('delegate: the sentence of a question it handed back names what it did', async () => {
+  const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: `${ESCALATION}\nThe brief is silent too.` })
+  const failure = agentResult({ ok: false, output: null, error: 'killed by SIGKILL', costUsd: 0.5, seconds: 300 })
+
+  for (const [result, ending] of [
+    [escalate, `(the delegate passed it on: ${ESCALATION})`],
+    [failure, '(the delegate failed: killed by SIGKILL)'],
+  ]) {
+    const { manifest, driver, pr } = delegateDriver({ pr: 11 }, { results: [result] })
+
+    await advanced(driver, pr)
+
+    const { sentence } = prDetail(manifest, driver.ledger, [], [], 'A1').status
+
+    assert.equal(sentence, `the implementer asks: ${DECISION.question} ${ending}`)
+  }
+})
+
+test('delegate: a note on a PR the delegate works on shows the answer it applies, not a queued note', async () => {
+  const { manifest, driver, pr, entry } = delegateDriver({ pr: 11 }, { results: [new Promise(() => {})] })
+
+  await driver.advance(pr)
+
+  const row = prDetail(manifest, driver.ledger, [], [], 'A1')
+
+  assert.deepEqual(placeOf(entry), ['implement', 'running', 'delegate'])
+  assert.deepEqual(row.effects.note.lines, ['implement · running: delegate', 'after note: implement · waiting: slot (maintainer-note)'])
+
+  apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Drop the old flag.' })
+
+  assert.deepEqual([...placeOf(entry), entry.fix.reason], ['implement', 'waiting', 'slot', 'maintainer-note'])
+})
+
+// A ledger a stopped driver left with the delegate at work on A1's question,
+// opened by a new driver with no slot.
+async function delegateLeft(blocked) {
+  const never = () => new Promise(() => {})
+  const labels = { method: 'POST', path: 'repos/example/widgets/labels', status: 201, body: {} }
+  const setup = tickDriver(
+    { A1: { state: 'blocked', blocked, pr: 11 } },
+    { rules: [FETCH], routes: [labels], policy: { concurrency: 1, delegate: {} }, runAgent: never },
+  )
+
+  const pr = setup.manifest.all.find((item) => item.id === 'A1')
+
+  mkdirSync(worktreePath(setup.manifest, pr), { recursive: true })
+
+  if (blocked.kind !== 'brief-questions') {
+    mkdirSync(dirname(pr.brief), { recursive: true })
+    writeFileSync(pr.brief, '# A1\n')
+  }
+
+  await setup.driver.advance(pr)
+  setup.driver.ledger.save()
+  assert.deepEqual(placeOf(setup.driver.ledger.prs.A1).slice(1), ['running', 'delegate'])
+
+  setup.manifest.policy.concurrency = 0
+
+  const driver = createDriver(setup.manifest, { notify: () => {}, runAgent: never })
+
+  return { ...setup, pr, driver, entry: driver.ledger.prs.A1 }
+}
+
+test('delegate: a ledger left on running: delegate opens with the question waiting for you after advance or start', async () => {
+  const advancing = await delegateLeft(DECISION)
+
+  assert.deepEqual(placeOf(advancing.entry), ['implement', 'running', 'delegate'])
+
+  await advancing.driver.advance(advancing.pr)
+
+  assert.deepEqual(placeOf(advancing.entry), ['implement', 'needs-you', 'decision'])
+  assert.deepEqual([advancing.entry.status.question.delegate, advancing.entry.delegate.runs], [null, 1])
+
+  const starting = await delegateLeft(BRIEF_QUESTIONS)
+
+  await starting.driver.start()
+
+  assert.deepEqual(placeOf(starting.entry), ['brief', 'needs-you', 'brief-questions'])
+  assert.equal(starting.entry.status.question.text, BRIEF_QUESTIONS.question)
 })
