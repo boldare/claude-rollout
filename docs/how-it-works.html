@@ -529,7 +529,7 @@
               <circle class="dg-dot" cx="28" cy="425" r="4" />
               <text class="dg-title" x="40" y="429">escalated</text>
             </g>
-            <text class="dg-text" x="14" y="460">rollout retry</text>
+            <text class="dg-text" x="14" y="460">rollout retry, or note</text>
 
             <path class="dg-edge" d="M250,30 H176" marker-end="url(#hiw-life-arrow)" />
             <text class="dg-label" x="210" y="23" text-anchor="middle">no brief</text>
@@ -720,12 +720,17 @@
                 </td>
                 <td>
                   <a href="commands.html#cmd-note"><code>rollout note</code></a> answers it. An answer to brief questions gives the brief
-                  attempt back. <a href="commands.html#cmd-retry"><code>rollout retry</code></a> starts over with fresh attempts. With
+                  attempt back. A question from the agent or about the brief waits for your words, so
+                  <a href="commands.html#cmd-retry"><code>rollout retry</code></a> is refused there. On an obstacle, retry sends the PR to a
+                  fix run with the reason <code>retry</code> and fresh attempts. With
                   <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, <a href="#delegate">the delegate</a> may
                   answer first. An agent sure that a code scanning alert is a false positive blocks with kind <code>code-scanning</code>,
-                  which never goes to the delegate. After a code scanning block or that report, dismiss a false positive on GitHub. Then
-                  <code>rollout retry</code> checks the claim again with no fix run. After a gate block or a reopened PR,
-                  <code>rollout retry</code> keeps a verification that still holds, and the gate looks again.
+                  which never goes to the delegate. After that report, dismiss a false positive on GitHub and retry. After a code scanning
+                  block of the driver's, a gate block or a reopened PR with no note kept, <code>rollout retry</code> keeps the stage, and
+                  the same tick reads the cause again: a claim is checked again, and a verification goes back to the gate. A note on a
+                  closed PR is kept, and the PR stays closed until a retry. After that retry the note sends the PR to a fix run: a claim
+                  when its check reads the note, and a verified PR at once, without its verification and approval, because the gate does not
+                  read notes.
                 </td>
               </tr>
               <tr id="state-escalated">
@@ -736,10 +741,12 @@
                   <a href="#outage">outage</a> never counts toward the five.
                 </td>
                 <td>
-                  <code>rollout retry</code> resets the attempts. A PR whose verification still holds goes back to <code>verified</code>.
-                  <code>rollout note</code> sends an answer to a fix run. On a PR with no brief and no GitHub PR, the note goes to the brief
-                  writer instead. After a disputed finding, both send the PR to <code>needs_fix</code> with the findings. A note goes with
-                  them, recorded as your decision on the dispute.
+                  <code>rollout retry</code> resets the attempts. Exhausted attempts wait for a slot on their stage, with any fix the PR
+                  owed, and errors go back to what the stage waits for. A PR on brief whose brief file exists moves on to implement instead.
+                  A PR whose verification still holds goes back to <code>verified</code>. <code>rollout note</code> sends an answer to a fix
+                  run, with one fresh attempt. A fix the PR owed keeps its reason, and the note joins it. On a PR still on brief with no
+                  brief file, the note goes to the brief writer instead. After a disputed finding only a note decides: it sends the PR to
+                  <code>needs_fix</code> with the findings, recorded as your decision on the dispute. Retry is refused there.
                 </td>
               </tr>
               <tr id="state-interrupted">

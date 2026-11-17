@@ -14,8 +14,9 @@ export const ROLES = ['brief', 'implement', 'fix', 'verify', 'delegate'] as cons
 export type Role = (typeof ROLES)[number]
 export type BudgetRole = Exclude<Role, 'delegate'>
 
-// Who acted. `github` is whoever acted on GitHub, outside the driver.
-export const ACTORS = ['maintainer', 'driver', 'delegate', 'github'] as const
+// Who acted. `github` is whoever acted on GitHub, outside the driver. `agent`
+// is any other agent the driver runs: a brief writer, an implementer or a verifier.
+export const ACTORS = ['maintainer', 'driver', 'delegate', 'github', 'agent'] as const
 export type Actor = (typeof ACTORS)[number]
 
 // Where an approval or a note came in: a command in the rollout's inbox, or GitHub.
@@ -29,7 +30,7 @@ export type IsoTime = string
 export type GitHubLogin = string
 
 // Some members of a union. Unlike Extract, it refuses a member the union does not have.
-type Subset<Union, Members extends Union> = Members
+export type Subset<Union, Members extends Union> = Members
 
 // Why the implementer is sent back. A fix in progress keeps its reason when a
 // note joins it or its run fails.
@@ -399,10 +400,13 @@ export interface RunRecord {
 export const COMMANDS = ['approve', 'note', 'retry', 'hold', 'release'] as const
 export type CommandName = (typeof COMMANDS)[number]
 
+// What a command takes from a PR it sends back to implement.
+export type Drop = 'verification' | 'approval'
+
 // What a command would do, computed from the ledger alone. The driver applies
 // it, and the CLI and the UI print it before the command is sent.
 export type CommandEffect =
-  | { applies: true; stage: Stage; status: Status | null; drops: ('verification' | 'approval')[]; queued: boolean }
+  | { applies: true; stage: Stage; status: Status | null; drops: Drop[]; queued: boolean }
   | { applies: false; reason: string; instead: string | null }
 
 export interface Ledger {

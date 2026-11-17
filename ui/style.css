@@ -1835,6 +1835,18 @@ dialog h3 {
   background: var(--well);
 }
 
+/* The effect reads as the CLI prints it, one line under the other. */
+dialog p.effect {
+  margin: 0;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: var(--mono-sm);
+}
+
+dialog p.effect:last-of-type {
+  margin-bottom: 14px;
+}
+
 dialog textarea {
   width: 100%;
   padding: 10px 12px;

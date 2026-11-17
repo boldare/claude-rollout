@@ -184,15 +184,25 @@ test('retry: a PR whose verification still holds goes back to verified, keeps it
   }
 })
 
-test('retry: a verification for an older head is dropped, and the PR goes back to its claim', () => {
+test('retry: a verification for an older head stays on merge, and the next sync checks the head', async () => {
   const stale = { ...samplePrs().A1, state: 'escalated', verified: { ...samplePrs().A1.verified, sha: NEW_HEAD }, ciPendingSince: at(85) }
-  const { manifest, driver } = tickDriver({ A1: stale }, { rules: [FETCH], routes: [prRoute()] })
+  const { manifest, driver, gate } = tickDriver({ A1: stale }, { rules: [FETCH], routes: [prRoute()] })
   const entry = driver.ledger.prs.A1
 
-  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'ready_claimed' }])
+  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'verified' }])
+  assert.equal(entry.stage, 'merge')
+  assert.equal(entry.verified.sha, NEW_HEAD)
+
+  // GitHub's head carries another patch than the one verified.
+  gate.facts = { patchId: 'patch-other' }
+
+  const before = readEvents(manifest).length
+  await driver.tick()
+
+  assert.ok(kindsSince(manifest, before).includes('head-moved-reverify'), kindsSince(manifest, before).join(', '))
+  assert.equal(entry.state, 'ready_claimed')
   assert.equal(entry.verified, null)
   assert.equal(entry.ciPendingSince, null)
-  assert.equal(entry.interruptedRole, null)
   assert.equal(entry.claimedSha, SHA)
 })
 

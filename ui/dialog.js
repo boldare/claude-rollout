@@ -54,7 +54,8 @@ function section({ heading, text }) {
   return [element('h3', heading), element('div', text, 'text dialog-section')]
 }
 
-export function ask({ title, text, sections = [], confirmLabel, withText = false, withDryRun = false }) {
+// `effect` is what the command does, as the view's lines say it, the same lines the CLI prints.
+export function ask({ title, text, sections = [], effect = [], confirmLabel, withText = false, withDryRun = false }) {
   const node = theDialog()
 
   finish(null)
@@ -71,6 +72,7 @@ export function ask({ title, text, sections = [], confirmLabel, withText = false
   }
 
   parts.push(...sections.flatMap(section))
+  parts.push(...effect.map((line) => element('p', line, 'effect')))
 
   if (textArea) {
     textArea.rows = 5

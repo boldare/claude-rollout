@@ -24,9 +24,11 @@ const BUILT_KINDS = {
   kind: ['fetch-failed', 'outside-deps-failed', 'watch-base-failed'],
 }
 
+// Every module of lib, in its subfolders too.
 function libFiles() {
-  return readdirSync(LIB)
-    .filter((name) => name.endsWith('.mjs'))
+  return readdirSync(LIB, { recursive: true })
+    .filter((name) => name.endsWith('.mjs') || name.endsWith('.ts'))
+    .sort()
     .map((name) => ({ file: `lib/${name}`, text: readFileSync(new URL(name, LIB), 'utf8') }))
 }
 

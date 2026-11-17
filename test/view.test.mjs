@@ -10,7 +10,19 @@ import { timeText } from '../lib/sentences.ts'
 import { isRunName, parseTranscript, readTranscript, succeeded, transcriptParser } from '../lib/transcript.mjs'
 import { runRecords, runsFromEvents, runsFromLedger } from '../lib/runs.mjs'
 import { stateOf } from '../lib/transitions.ts'
-import { costs, liveness, parseEvents, prDetail, prRows, readEvents, rolloutView, rowsMatching, runsOf } from '../lib/view.mjs'
+import {
+  commandPreview,
+  costs,
+  liveness,
+  parseEvents,
+  prDetail,
+  prRows,
+  readEvents,
+  refusalOf,
+  rolloutView,
+  rowsMatching,
+  runsOf,
+} from '../lib/view.mjs'
 import { START, at, interruptedTranscript, jsonLines, makeRollout, sampleEvents, samplePrs, sampleTranscript } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
@@ -369,6 +381,10 @@ test('prRows: a held PR waits for its release, and a PR missing from the ledger 
       wayOut: null,
       marker: null,
       question: null,
+    },
+    effects: {
+      retry: { applies: true, lines: ['brief · waiting: slot', 'after retry: brief · waiting: slot'] },
+      note: { applies: true, lines: ['brief · waiting: slot', 'after note: queued, the next writing agent reads it'] },
     },
     held: null,
     pr: null,
@@ -1559,4 +1575,90 @@ test('card: the commands the driver ran after the verifier, each with its stage,
 
   assert.doesNotMatch(cli('card', 'A1', '--dir', moved).stdout, /commands the driver ran/)
   assert.doesNotMatch(cli('card', 'A1', '--dir', makeRollout()).stdout, /commands the driver ran/)
+})
+
+const DECISION = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: '' }
+
+function effectsOf(options) {
+  const view = rolloutView(loadManifest(makeRollout({ events: [], ...options })))
+
+  return Object.fromEntries(view.rows.map((row) => [row.id, row.effects]))
+}
+
+test('effects: retry and note on each row, as lines: what applies, what is queued and what is refused', () => {
+  const { A1, A2 } = samplePrs()
+  const effects = effectsOf({ prs: { A1: { ...A1, held: null }, A2, A3: { state: 'blocked', pr: 13, blocked: DECISION } } })
+
+  assert.deepEqual(effects.A1, {
+    retry: { applies: true, lines: ['merge · waiting: gate-pending', 'after retry: merge · waiting: gate-pending'] },
+    note: {
+      applies: true,
+      lines: [
+        'merge · waiting: gate-pending',
+        'after note: implement · waiting: slot (maintainer-note)',
+        'verification and approval are dropped',
+      ],
+    },
+  })
+
+  assert.deepEqual(effects.A2, {
+    retry: { applies: false, lines: ['implement · running: implement', 'refused: an agent is working on this PR'] },
+    note: { applies: true, lines: ['implement · running: implement', 'after note: queued, the next writing agent reads it'] },
+  })
+
+  assert.deepEqual(effects.A3, {
+    retry: { applies: false, lines: ['implement · needs-you: decision', 'refused: this PR waits for your answer: rollout note A3 "..."'] },
+    note: { applies: true, lines: ['implement · needs-you: decision', 'after note: implement · waiting: slot (maintainer-note)'] },
+  })
+})
+
+test('effects: a merged PR refuses both, and a hold shows in the status after', () => {
+  const { A1 } = samplePrs()
+  const effects = effectsOf({ prs: { A1, A2: { state: 'merged', pr: 12 } } })
+
+  assert.deepEqual(effects.A2, {
+    retry: { applies: false, lines: ['merged', 'refused: already merged'] },
+    note: { applies: false, lines: ['merged', 'refused: already merged'] },
+  })
+
+  assert.deepEqual(effects.A1.note.lines.slice(1), [
+    'after note: implement · waiting: held (maintainer-note)',
+    'verification and approval are dropped',
+  ])
+})
+
+test('effects: with the driver stopped, the effect starts from the runs it will resume, and the command waits in the inbox', () => {
+  const effects = effectsOf({ prs: { A2: { ...samplePrs().A2, sessionId: 'session-1' } }, lock: false })
+  const waits = 'the driver is not running: the command waits in the inbox until it starts'
+
+  assert.deepEqual(effects.A2, {
+    retry: { applies: true, lines: ['implement · waiting: driver-stopped', 'after retry: implement · waiting: slot (no-report)', waits] },
+    note: { applies: true, lines: ['implement · waiting: driver-stopped', 'after note: queued, the next writing agent reads it', waits] },
+  })
+})
+
+test('commandPreview: the same lines for retry and note, approve with its command, and null with no ledger yet', () => {
+  const { A1 } = samplePrs()
+  const manifest = loadManifest(
+    makeRollout({ prs: { A1: { ...A1, held: null, approved: null }, A3: { state: 'blocked', pr: 13, blocked: DECISION } } }),
+  )
+
+  const rows = Object.fromEntries(rolloutView(manifest).rows.map((row) => [row.id, row]))
+  const approve = { cmd: 'approve', id: 'A1', sha: A1.verified.sha, patchId: A1.verified.patchId }
+
+  assert.deepEqual(commandPreview(manifest, { cmd: 'retry', id: 'A3' }), rows.A3.effects.retry)
+  assert.deepEqual(commandPreview(manifest, { cmd: 'note', id: 'A1', text: 'Rename the field.' }), rows.A1.effects.note)
+  assert.deepEqual(commandPreview(manifest, approve), {
+    applies: true,
+    lines: ['merge · waiting: gate-pending', 'after approve: merge · waiting: merge-delay'],
+  })
+
+  assert.deepEqual(commandPreview(manifest, { cmd: 'approve', id: 'A3' }), {
+    applies: false,
+    lines: ['implement · needs-you: decision', 'refused: nothing to approve: A3 is implement · needs-you: decision'],
+  })
+
+  assert.equal(refusalOf(commandPreview(manifest, { cmd: 'retry', id: 'A3' })), 'this PR waits for your answer: rollout note A3 "..."')
+  assert.equal(refusalOf(commandPreview(manifest, approve)), null)
+  assert.equal(commandPreview(loadManifest(makeRollout({ prs: null })), { cmd: 'retry', id: 'A1' }), null)
 })
