@@ -32,7 +32,7 @@ import type {
 // The values of STATES in kinds.mjs. tsc reads no .mjs file (no allowJs), and
 // state.ts types ledger version 3, which has stage and status in place of a
 // state. So they are spelled again here until version 3 removes both lists.
-type State =
+export type State =
   | 'pending'
   | 'briefing'
   | 'implementing'

@@ -1,8 +1,25 @@
 import { timeText } from '../sentences.ts'
 import { COMMANDS } from '../state.ts'
-import type { BudgetRole, CommandEffect, Fix, Hold, IsoTime, NoteRecord, OpenStage, Status } from '../state.ts'
+import type {
+  Actor,
+  BudgetRole,
+  Channel,
+  CommandEffect,
+  CommandName,
+  CommitStamp,
+  Drop,
+  Fix,
+  Hold,
+  IsoTime,
+  NeedsYouCode,
+  NoteRecord,
+  OpenStage,
+  Role,
+  Status,
+  Subset,
+} from '../state.ts'
 import * as transitions from '../transitions.ts'
-import type { PrEntry, StoredNote } from '../transitions.ts'
+import type { PrEntry, State, StoredNote } from '../transitions.ts'
 
 // The maintainer's commands from the inbox: approve, note, retry, hold and
 // release. retry, note and approve each follow one table keyed by the PR's
@@ -10,32 +27,60 @@ import type { PrEntry, StoredNote } from '../transitions.ts'
 // the CLI and the UI print what a command does before it is sent. Nothing
 // here reads the clock, the disk or the environment: the context brings it.
 
-const PR_COMMANDS: readonly string[] = COMMANDS
 // These take PR ids or all, the whole rollout.
-const SCOPED_COMMANDS = ['hold', 'release']
+const SCOPED_COMMANDS = ['hold', 'release'] as const satisfies readonly CommandName[]
 const AT_WORK = 'an agent is working on this PR'
 const STALE_APPROVAL = 'it names a different head than the one verified now; look at the card again'
 // What only the maintainer's words answer, which retry cannot give.
-const WAITS_FOR_WORDS = ['brief-questions', 'decision', 'dispute']
+const WAITS_FOR_WORDS = ['brief-questions', 'decision', 'dispute'] as const satisfies readonly NeedsYouCode[]
 // The driver reads these blocks again only after a retry, until it reads them every tick.
-const RELEASED_BY_RETRY = ['closed', 'gate-blocked', 'code-scanning-alerts']
+const RELEASED_BY_RETRY = ['closed', 'gate-blocked', 'code-scanning-alerts'] as const satisfies readonly NeedsYouCode[]
 // A note on these asks for a change, on any other it answers.
-const REQUEST_STATES = ['verified', 'ready_claimed']
+const REQUEST_STATES = ['verified', 'ready_claimed'] as const satisfies readonly State[]
 const NOTES_KEPT = 20
 
-type Say = (id: string, kind: string, detail?: Record<string, unknown>, message?: string | null) => void
+type ScopedCommand = (typeof SCOPED_COMMANDS)[number]
 type Author = NoteRecord['by']
-type Drop = 'verification' | 'approval'
 type Refusal = Extract<CommandEffect, { applies: false }>
+// What holds a PR's place in the driver's `running`: the role of its run, or
+// gate while the pre-verify commands run.
+type Job = Role | 'gate'
 
-// An agent run or the pre-verify commands, a delegate run, or nothing.
-export type AtWork = 'agent' | 'delegate' | null
+// The commands that follow a table of rows.
+export type TableCommand = Exclude<CommandName, ScopedCommand>
+
+// The pre-verify commands count as an agent: they hold the PR as its runs do.
+export type AtWork = Subset<Actor, 'agent' | 'delegate'> | null
+
+// A rejected command can be anything the inbox held, so its name stays unknown.
+interface Rejection {
+  command: unknown
+  reason: string
+  file?: string
+}
+
+// The events this module writes, by kind, with their detail. lib/kinds.mjs
+// lists every kind, but tsc reads no .mjs file, so test/kinds.test.mjs holds
+// these kinds to that list instead.
+interface CommandEvents {
+  'approval-rejected': { reason: string }
+  approved: { sha: string; channel: Channel }
+  'brief-answered': Record<string, never>
+  'command-rejected': Rejection
+  held: { state: State; running: Job | null } | ({ scope: 'rollout' } & Pick<Hold, 'by' | 'reason'>)
+  'needs-fix': { reason: string }
+  'note-queued': { state: State }
+  released: { state: State } | { scope: 'rollout'; stillHeld: string[] }
+  retry: { state: State }
+}
+
+type Say = <Kind extends keyof CommandEvents>(id: string, kind: Kind, detail: CommandEvents[Kind], message?: string | null) => void
 
 // The context lib/driver.mjs builds once. Its manifest and ledger are the driver's own objects.
 export interface CommandsContext {
   manifest: { all: { id: string }[]; policy: { attempts: Record<BudgetRole, number>; mergeDelaySeconds: number } }
   ledger: { data: { hold: Hold | null }; prs: Record<string, PrEntry> }
-  running: Map<string, string>
+  running: Map<string, Job>
   say: Say
   now: () => IsoTime
   inbox: () => unknown[]
@@ -53,24 +98,19 @@ export interface EffectFacts {
   approveRefusal: (entry: PrEntry) => string | null
 }
 
-export interface EffectCommand {
-  cmd: 'retry' | 'note' | 'approve'
+// An approve names the verified head and patch, and the time it was posted. A note brings its text.
+export interface EffectCommand extends Partial<CommitStamp> {
+  cmd: TableCommand
   id: string
   text?: string
-  sha?: string
   patchId?: string | null
-  at?: IsoTime
 }
 
 // With the fix after the row: a waiting status carries no fix reason, and the preview prints it.
 export type Effect = Refusal | (Extract<CommandEffect, { applies: true }> & { fix: Fix | null })
 
-interface InboxCommand {
-  cmd: string
-  id?: string
-  all?: boolean
-  [field: string]: unknown
-}
+// An inbox command once its shape is checked. hold and release name a PR, or all of them.
+type InboxCommand = { cmd: ScopedCommand; all: true } | { cmd: ScopedCommand; id: string } | EffectCommand
 
 interface RowInput extends EffectFacts {
   id: string
@@ -94,6 +134,18 @@ function listed(list: readonly string[], value: unknown): boolean {
   return typeof value === 'string' && list.includes(value)
 }
 
+function isCommand(value: unknown): value is CommandName {
+  return listed(COMMANDS, value)
+}
+
+function isScoped(value: unknown): value is ScopedCommand {
+  return listed(SCOPED_COMMANDS, value)
+}
+
+function textOf(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
 function refusal(reason: string, instead: string | null = null): Refusal {
   return { applies: false, reason, instead }
 }
@@ -103,9 +155,9 @@ function quiet(): void {}
 
 // A hold or release for PRs becomes one command per id, in order and
 // without repeats. Older CLIs and pages send a lone id. One with no id
-// becomes a bare command, which commandRefusal rejects.
+// becomes a bare command, which checkCommand rejects.
 function perId(command: unknown): unknown[] {
-  if (!plainObject(command) || !listed(SCOPED_COMMANDS, command.cmd) || command.all === true) {
+  if (!plainObject(command) || !isScoped(command.cmd) || command.all === true) {
     return [command]
   }
 
@@ -124,49 +176,63 @@ function perId(command: unknown): unknown[] {
   return [...new Set(ids)].map((id) => ({ cmd: command.cmd, id }))
 }
 
-function forRollout(command: Record<string, unknown>): boolean {
-  return listed(SCOPED_COMMANDS, command.cmd) && command.all === true
-}
-
-// The detail of the command-rejected event, or null for a command that may apply.
-function commandRefusal(context: CommandsContext, command: unknown): Record<string, unknown> | null {
-  if (!plainObject(command)) {
-    return { command: null, reason: 'not a JSON object' }
+// Only the fields each command reads, with their types. A field of another type reads as missing.
+function inboxCommand(cmd: CommandName, id: string, raw: Record<string, unknown>): InboxCommand {
+  if (cmd === 'approve') {
+    return { cmd, id, sha: textOf(raw.sha), patchId: raw.patchId === null ? null : textOf(raw.patchId), at: textOf(raw.at) }
   }
 
-  const { cmd, id } = command
+  if (cmd === 'note') {
+    return { cmd, id, text: textOf(raw.text) ?? '' }
+  }
+
+  if (cmd === 'retry') {
+    return { cmd, id }
+  }
+
+  // A hold or a release of one PR.
+  return { cmd, id }
+}
+
+// The command with its shape checked, or the detail of its command-rejected event.
+function checkCommand(context: CommandsContext, raw: unknown): { command: InboxCommand } | { rejection: Rejection } {
+  if (!plainObject(raw)) {
+    return { rejection: { command: null, reason: 'not a JSON object' } }
+  }
+
+  const { cmd, id } = raw
 
   if (cmd === 'invalid') {
-    return { command: cmd, file: command.file, reason: command.error }
+    return { rejection: { command: cmd, file: textOf(raw.file), reason: textOf(raw.error) ?? '' } }
   }
 
   // A hold of the whole rollout ignores any id, because a lost hold is worse than a stray id.
-  if (forRollout(command)) {
-    return null
+  if (isScoped(cmd) && raw.all === true) {
+    return { command: { cmd, all: true } }
   }
 
-  if (!listed(PR_COMMANDS, cmd)) {
-    return { command: cmd, reason: 'unknown command' }
+  if (!isCommand(cmd)) {
+    return { rejection: { command: cmd, reason: 'unknown command' } }
   }
 
-  if (listed(SCOPED_COMMANDS, cmd) && !Object.hasOwn(command, 'id')) {
-    return { command: cmd, reason: 'needs PR ids or all' }
+  if (isScoped(cmd) && !Object.hasOwn(raw, 'id')) {
+    return { rejection: { command: cmd, reason: 'needs PR ids or all' } }
   }
 
   if (typeof id !== 'string' || id === '') {
-    return { command: cmd, reason: 'needs a PR id' }
+    return { rejection: { command: cmd, reason: 'needs a PR id' } }
   }
 
   // Own keys only: ledger.prs.__proto__ is Object.prototype.
   if (!context.manifest.all.some((pr) => pr.id === id) || !Object.hasOwn(context.ledger.prs, id)) {
-    return { command: cmd, reason: `unknown PR ${id}` }
+    return { rejection: { command: cmd, reason: `unknown PR ${id}` } }
   }
 
-  if (cmd === 'approve' && !(typeof command.at === 'string' && Number.isFinite(Date.parse(command.at)))) {
-    return { command: cmd, reason: 'needs a valid at' }
+  if (cmd === 'approve' && !(typeof raw.at === 'string' && Number.isFinite(Date.parse(raw.at)))) {
+    return { rejection: { command: cmd, reason: 'needs a valid at' } }
   }
 
-  return null
+  return { command: inboxCommand(cmd, id, raw) }
 }
 
 function errorText(error: unknown): string {
@@ -184,55 +250,50 @@ export function applyCommands(context: CommandsContext): void {
   }
 }
 
-function applyCommand(context: CommandsContext, command: unknown): void {
+function applyCommand(context: CommandsContext, raw: unknown): void {
   const { say } = context
-  const rejection = commandRefusal(context, command)
+  const checked = checkCommand(context, raw)
 
-  if (rejection) {
-    say('-', 'command-rejected', rejection)
+  if ('rejection' in checked) {
+    say('-', 'command-rejected', checked.rejection)
     return
   }
 
-  const checked = command as InboxCommand
-  const where = forRollout(checked) ? '-' : String(checked.id)
+  const { command } = checked
+  const where = 'id' in command ? command.id : '-'
 
   try {
-    execute(context, checked)
+    execute(context, command)
   } catch (error) {
-    say(where, 'command-rejected', { command: checked.cmd, reason: errorText(error).slice(0, 200) })
+    say(where, 'command-rejected', { command: command.cmd, reason: errorText(error).slice(0, 200) })
   }
 }
 
 function execute(context: CommandsContext, command: InboxCommand): void {
-  const id = String(command.id)
-
   switch (command.cmd) {
     case 'approve':
-      applyTable(context, TABLES.approve, { ...command, cmd: 'approve', id } as EffectCommand, 'maintainer')
+    case 'retry':
+      applyTable(context, TABLES[command.cmd], command, 'maintainer')
       break
 
     case 'note':
-      applyNote(context, id, typeof command.text === 'string' ? command.text : '', 'maintainer')
-      break
-
-    case 'retry':
-      applyTable(context, TABLES.retry, { cmd: 'retry', id }, 'maintainer')
+      applyNote(context, command.id, command.text ?? '', 'maintainer')
       break
 
     case 'hold':
-      if (forRollout(command)) {
+      if ('all' in command) {
         holdRollout(context)
       } else {
-        holdPr(context, id)
+        holdPr(context, command.id)
       }
 
       break
 
     case 'release':
-      if (forRollout(command)) {
+      if ('all' in command) {
         releaseRollout(context)
       } else {
-        releasePr(context, id)
+        releasePr(context, command.id)
       }
 
       break
@@ -299,12 +360,12 @@ export function applyNote(context: CommandsContext, id: string, text: string, by
   applyTable(context, TABLES.note, { cmd: 'note', id, text }, by)
 }
 
-function atWorkOf(role: string | undefined): AtWork {
-  if (role === undefined) {
+function atWorkOf(job: Job | undefined): AtWork {
+  if (job === undefined) {
     return null
   }
 
-  return role === 'delegate' ? 'delegate' : 'agent'
+  return job === 'delegate' ? 'delegate' : 'agent'
 }
 
 function rowInput(context: CommandsContext, id: string, by: Author): RowInput {
@@ -465,7 +526,7 @@ function noteRefusal(entry: PrEntry): Refusal | null {
 
 // What the note answers, for the prompts that list it. Finding ids change
 // on every FAIL, so a dispute is named by the escalation's text.
-function noteRecord(entry: PrEntry, { at, by }: RowInput, state: string, text: string): StoredNote {
+function noteRecord(entry: PrEntry, { at, by }: RowInput, state: State, text: string): StoredNote {
   if (state === 'blocked') {
     return { at, by, kind: entry.blocked?.kind ?? null, question: entry.blocked?.question ?? null, text, run: null }
   }
@@ -488,11 +549,11 @@ function queued(entry: PrEntry, { id, say }: RowInput, text: string): void {
 
 function answerBrief(entry: PrEntry, { id, say, at }: RowInput, question: string | null, text: string): void {
   transitions.answerBrief(entry, question, text, at)
-  say(id, 'brief-answered')
+  say(id, 'brief-answered', {})
 }
 
 // A fix the note asks for. Its prose names who asked, so events keep their words.
-function noteFix(entry: PrEntry, input: RowInput, state: string, text: string): void {
+function noteFix(entry: PrEntry, input: RowInput, state: State, text: string): void {
   const { id, by, say, at, limits } = input
   const reason = listed(REQUEST_STATES, state) ? `request from the ${by}` : `answer from the ${by}`
 
@@ -522,7 +583,7 @@ function noteOnBrief(entry: PrEntry, input: RowInput, status: Status, text: stri
 }
 
 // A note joins a fix the PR owes, which keeps its reason.
-function noteOnImplement(entry: PrEntry, input: RowInput, status: Status, { state, text }: { state: string; text: string }): void {
+function noteOnImplement(entry: PrEntry, input: RowInput, status: Status, { state, text }: { state: State; text: string }): void {
   const { limits, at } = input
 
   if (status.kind === 'waiting') {
@@ -651,7 +712,7 @@ function approve(entry: PrEntry, input: RowInput): void {
   )
 }
 
-const TABLES: Record<EffectCommand['cmd'], Table> = {
+const TABLES: Record<TableCommand, Table> = {
   retry: { refusal: retryRefusal, apply: retry, refused: rejected },
   note: { refusal: noteRefusal, apply: note, refused: rejected },
   approve: { refusal: approvalRefusal, apply: approve, refused: approvalRejected },
