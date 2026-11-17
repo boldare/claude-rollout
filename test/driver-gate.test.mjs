@@ -2,8 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { GATE_CODES } from '../lib/judge.mjs'
 import { verifyPrompt } from '../lib/prompts.mjs'
 import { stageLabels } from '../lib/stage.mjs'
+import { toMerged, toVerified } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
 import { at, samplePrs } from './fixtures.mjs'
@@ -243,19 +245,21 @@ test('mergeCandidate: a block with the code scanning code blocks as code scannin
   }
 })
 
-test('mergeCandidate: a fix with the code scanning code goes back as code scanning, any other code as the merge gate', async () => {
+test('mergeCandidate: a fix from the gate goes back named by its cause, never as the merge gate', async () => {
   const cases = [
-    ['code-scanning', 'code scanning'],
-    ['ci-red', 'merge gate'],
+    ['code-scanning', 'code scanning', 'code-scanning'],
+    ['ci-red', 'CI is red', 'ci-red'],
+    ['policy-violations', 'rollout policy', 'policy'],
   ]
 
-  for (const [code, reason] of cases) {
+  for (const [code, reason, fixCode] of cases) {
     const { driver, pr, entry, stub } = stubbedGate()
     stub.verdict = { action: 'fix', code, reasons: [PLAIN_REASON] }
 
     assert.equal(await driver.mergeCandidate(pr), false)
     assert.equal(entry.state, 'needs_fix', code)
     assert.equal(entry.fixReason, reason, code)
+    assert.equal(entry.fix.reason, fixCode, code)
   }
 })
 
@@ -282,7 +286,7 @@ test('mergeCandidate: a new gate event needs a new action or code, new prose alo
   ])
 })
 
-test('mergeCandidate: a verified PR whose patch id the gate no longer matches is verified again, and its approval asked for again', async (context) => {
+test('mergeCandidate: a verified PR whose patch id the gate no longer matches is verified again, without its approval', async (context) => {
   const agents = []
   const sample = samplePrs().A1
   const emptyApproval = { ...sample.approved, patchId: '', channel: 'inbox' }
@@ -300,17 +304,18 @@ test('mergeCandidate: a verified PR whose patch id the gate no longer matches is
   assert.equal(await driver.mergeCandidate(pr), false)
   assert.equal(entry.state, 'ready_claimed')
   assert.equal(entry.verified, null)
+  assert.equal(entry.approved, null)
   assert.equal(entry.claimedSha, SHA)
   assert.equal(entry.gate, gateBefore)
   assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'head-moved-reverify', sha: SHA.slice(0, 7), reason: 'not-verified' }])
   assert.deepEqual(agents, [])
 
-  entry.state = 'verified'
-  entry.verified = { sha: SHA, patchId: 'patch-a1', at: at(90) }
+  toVerified(entry, { sha: SHA, at: at(90) })
+  entry.verified.patchId = 'patch-a1'
 
   assert.equal(await driver.mergeCandidate(pr), false)
   assert.equal(entry.gate.code, 'awaiting-inbox-approval')
-  assert.deepEqual(entry.approved, emptyApproval)
+  assert.equal(entry.approved, null)
   assert.equal(kindsSince(manifest).filter((kind) => kind === 'head-moved-reverify').length, 1)
 })
 
@@ -399,7 +404,7 @@ test('mergeNext: once the ready PR is merged, the one that waited is rebased and
       .map((event) => event.id)
 
   await driver.mergeNext()
-  driver.ledger.prs.A1.state = 'merged'
+  toMerged(driver.ledger.prs.A1)
   rebasableWorktree(manifest, tools)
   gate.facts = { baseIsAncestor: false }
   let before = readEvents(manifest).length
@@ -444,6 +449,440 @@ test('mergeNext: under human merge nothing waits for another PR', async () => {
 
   assert.equal(driver.ledger.prs.A3.gate.after, undefined)
   assert.notEqual(driver.ledger.prs.A3.gate.action, 'wait')
+})
+
+function placeOf(entry) {
+  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
+}
+
+const RED = { state: 'red', missing: [], pending: [], failing: ['test: failure'], runs: [] }
+const PENDING = { state: 'pending', missing: ['lint'], pending: ['test'], failing: [], runs: [] }
+const BLOCK_CODES = ['no-pr', 'pr-not-open', 'never-merge', 'draft', 'wrong-base', 'wrong-head', 'missing-label']
+const REFUSAL = {
+  tool: 'gh',
+  args: 'pr merge 11',
+  code: 1,
+  stderr: 'Pull request example/widgets#11 is not mergeable: the base branch policy prohibits the merge.\n',
+}
+
+// A code scanning alert as alertsFrom maps it, on A1's head unless `sha` says otherwise.
+function scanAlert(sha = SHA) {
+  return {
+    number: 4,
+    rule: 'js/shell-command-injection-from-environment',
+    securitySeverity: 'medium',
+    severity: 'warning',
+    tool: 'CodeQL',
+    path: 'bin/rollout.mjs',
+    line: 357,
+    message: 'This shell command depends on an uncontrolled absolute path.',
+    url: 'https://github.com/example/widgets/security/code-scanning/4',
+    sha,
+  }
+}
+
+function scanned(alerts) {
+  return { codeScanning: { available: true, alerts, baseOpen: [] } }
+}
+
+// A1 verified and not held, judged once by the merge gate on facts it merges
+// on, with `facts` and `pr` on top. Merges are auto unless `policy` says otherwise.
+async function judgedOnce({
+  facts = {},
+  pr = {},
+  policy = {},
+  fields = {},
+  rules = [],
+  routes = [],
+  readyTaken = null,
+  codeScanning,
+} = {}) {
+  const setup = tickDriver({ A1: { ...samplePrs().A1, held: null, ...fields } }, { policy: { merge: 'auto', ...policy }, rules, routes })
+  const manifestPr = setup.manifest.prs.find((item) => item.id === 'A1')
+
+  if (codeScanning) {
+    setup.manifest.repo.codeScanning = codeScanning
+  }
+
+  setup.gate.facts = facts
+  setup.gate.pr = pr
+
+  const acted = await setup.driver.mergeCandidate(manifestPr, { readyTaken })
+
+  return { ...setup, pr: manifestPr, entry: setup.driver.ledger.prs.A1, acted }
+}
+
+// The same verdict judged once by a stubbed gate.
+async function stubbedOnce(verdict) {
+  const setup = stubbedGate()
+
+  setup.stub.verdict = verdict
+  await setup.driver.mergeCandidate(setup.pr)
+
+  return setup
+}
+
+test('merge gate: held', async () => {
+  const { entry } = await judgedOnce({ fields: { held: samplePrs().A1.held } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'held'])
+  assert.deepEqual([entry.gate.code, entry.status.scope], ['held', 'pr'])
+})
+
+test('merge gate: halted', async () => {
+  assert.ok(!GATE_CODES.includes('halted'))
+
+  const { entry } = await judgedOnce({ facts: { mainChecks: { ...RED, sha: MERGE_SHA } } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'base-red'])
+  assert.deepEqual([entry.status.sha, entry.status.failing], [MERGE_SHA, ['test: failure']])
+})
+
+test('merge gate: deps-pending', async () => {
+  const { entry } = await judgedOnce({ facts: { depsPending: ['A3'] } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'dependencies'])
+  assert.deepEqual(entry.status.on, ['A3'])
+})
+
+test('merge gate: ci-pending', async () => {
+  const { entry } = await judgedOnce({ facts: { checks: PENDING } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'ci'])
+  assert.deepEqual([entry.status.sha, entry.status.missing, entry.status.pending], [SHA, ['lint'], ['test']])
+})
+
+test('merge gate: base-not-green', async () => {
+  const red = await judgedOnce({ facts: { mainChecks: { ...RED, sha: MERGE_SHA } } })
+
+  assert.deepEqual(placeOf(red.entry), ['merge', 'waiting', 'base-red'])
+
+  const pending = await judgedOnce({ facts: { mainChecks: { ...PENDING, sha: MERGE_SHA } } })
+
+  assert.deepEqual(placeOf(pending.entry), ['merge', 'waiting', 'base-pending'])
+  assert.equal(pending.entry.status.sha, MERGE_SHA)
+})
+
+test('merge gate: mergeable-unknown', async () => {
+  const { entry } = await judgedOnce({ pr: { mergeable: 'UNKNOWN' } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'mergeable-unknown'])
+})
+
+test('merge gate: github-merge-state', async () => {
+  const { entry } = await judgedOnce({ pr: { mergeStateStatus: 'BEHIND' } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'github-merge-state'])
+  assert.equal(entry.status.mergeState, 'BEHIND')
+})
+
+test('merge gate: code-scanning with action wait', async () => {
+  const { entry } = await judgedOnce({ facts: scanned([scanAlert(NEW_HEAD)]) })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'code-scanning-pending'])
+  assert.equal(entry.status.sha, SHA)
+})
+
+test("merge gate: queued, the driver's code", async () => {
+  const { entry } = await judgedOnce({ policy: { merge: 'manual' }, readyTaken: 13 })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'queued'])
+  assert.equal(entry.status.after, 13)
+})
+
+test('merge gate: the delay after an approval', async () => {
+  const approved = { sha: SHA, patchId: 'patch-a1', at: new Date().toISOString(), channel: 'inbox' }
+  const { entry, tools } = await judgedOnce({ policy: { merge: 'human', mergeDelaySeconds: 3600 }, fields: { approved } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'merge-delay'])
+  assert.equal(entry.status.until, new Date(Date.parse(approved.at) + 3_600_000).toISOString())
+  assert.deepEqual(mergeCalls(tools), [])
+})
+
+test('merge gate: awaiting-inbox-approval', async () => {
+  const { entry } = await judgedOnce({ policy: { merge: 'human' }, fields: { approved: null } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'approve'])
+})
+
+test('merge gate: awaiting-github-review, stale-github-review', async () => {
+  for (const [code, stale] of [
+    ['awaiting-github-review', false],
+    ['stale-github-review', true],
+  ]) {
+    const { entry } = await stubbedOnce({ action: 'wait', code, reasons: [PLAIN_REASON] })
+
+    assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'review'], code)
+    assert.equal(entry.status.stale, stale, code)
+  }
+})
+
+test('merge gate: changes-requested', async () => {
+  const { entry } = await stubbedOnce({ action: 'wait', code: 'changes-requested', reasons: [PLAIN_REASON] })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'changes-requested'])
+})
+
+test("merge gate: ready, the driver's code under merge: manual", async () => {
+  const { entry, tools } = await judgedOnce({ policy: { merge: 'manual' } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'merge-by-hand'])
+  assert.equal(entry.status.mergeState, 'CLEAN')
+  assert.deepEqual(mergeCalls(tools), [])
+})
+
+test('merge gate: github-blocked', async () => {
+  const { entry } = await judgedOnce({ pr: { mergeStateStatus: 'BLOCKED' } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'github-blocked'])
+})
+
+test("merge gate: merge-refused, the driver's code", async () => {
+  const { manifest, driver, tools, notices } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto' }, rules: [FETCH, REFUSAL], routes: [prRoute()] },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  await driver.tick()
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'merge-refused'])
+  assert.equal(mergeCalls(tools).length, 1)
+
+  await driver.tick()
+  await driver.tick()
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'merge-refused'])
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(notices, ['A1: GitHub refused to merge PR #11; check its ruleset requirements'])
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'verified' }])
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'gate-pending'])
+  assert.equal(entry.gate, null)
+
+  tools.answer([FETCH, MERGE_RULE])
+  await driver.tick()
+
+  assert.equal(mergeCalls(tools).length, 2)
+  assert.deepEqual(placeOf(entry), ['merge', 'running', 'merge'])
+  assert.deepEqual(kindsSince(manifest).slice(-2), ['gate-merge', 'merge-unconfirmed'])
+})
+
+test('merge gate: no-pr, pr-not-open, never-merge, draft, wrong-base, wrong-head, missing-label', async () => {
+  for (const code of BLOCK_CODES) {
+    const { driver, entry, stub, gate } = await stubbedOnce({ action: 'block', code, reasons: [`blocked by ${code}`] })
+
+    assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'gate-blocked'], code)
+    assert.deepEqual([entry.status.gate, entry.status.reasons], [code, [`blocked by ${code}`]], code)
+    assert.equal(entry.state, 'blocked', code)
+
+    // Read again on the next gate run, with no command.
+    stub.verdict = { action: 'wait', code: 'ci-pending', reasons: ['CI pending'] }
+    await driver.mergeNext()
+
+    assert.equal(gate.calls, 2, code)
+    assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'ci'], code)
+    assert.deepEqual([entry.state, entry.blocked], ['verified', null], code)
+  }
+})
+
+test('merge gate: code-scanning with action block', async () => {
+  const { entry } = await judgedOnce({ facts: scanned([scanAlert()]), codeScanning: { action: 'block', minSeverity: 'medium' } })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'code-scanning-alerts'])
+  assert.equal(entry.status.alerts.length, 1)
+  assert.deepEqual(entry.verified, samplePrs().A1.verified)
+  assert.equal(entry.state, 'blocked')
+})
+
+test('merge gate: policy-violations', async () => {
+  const { entry } = await judgedOnce({ facts: { files: [{ status: 'modified', path: '.github/workflows/ci.yml' }] } })
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['policy', 'rollout policy'])
+  assert.match(entry.fixNote, /^The merge gate sent the PR back:\n- touches \.github\/workflows\/ci\.yml/)
+})
+
+test('merge gate: ci-red', async () => {
+  const { manifest, entry } = await judgedOnce({ facts: { checks: RED } })
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['ci-red', 'CI is red'])
+  assert.equal(entry.fixNote, 'The merge gate sent the PR back:\n- test: failure\n- CI is red on the PR head')
+  assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'needs-fix', reason: 'CI is red' })
+  assert.equal(entry.verified, null)
+})
+
+test('merge gate: code-scanning with action fix', async () => {
+  const { entry } = await judgedOnce({ facts: scanned([scanAlert()]) })
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['code-scanning', 'code scanning'])
+  assert.match(entry.fixNote, /Never silence the analyser/)
+})
+
+test('merge gate: behind-base', async () => {
+  const worktree = (manifest) => {
+    const gitDir = join(
+      worktreePath(
+        manifest,
+        manifest.prs.find((item) => item.id === 'A1'),
+      ),
+      '.git',
+    )
+
+    mkdirSync(gitDir, { recursive: true })
+    writeFileSync(join(gitDir, 'rollout-ready'), '')
+  }
+
+  const rebased = tickDriver({ A1: { ...samplePrs().A1, held: null } }, { policy: { merge: 'auto' } })
+
+  worktree(rebased.manifest)
+  rebased.tools.answer([
+    { tool: 'git', args: 'rev-parse HEAD', stdout: REBASED },
+    { tool: 'git', args: '', stdout: '' },
+  ])
+
+  rebased.gate.facts = { baseIsAncestor: false }
+
+  assert.equal(await rebased.driver.mergeCandidate(rebased.manifest.prs.find((item) => item.id === 'A1')), true)
+  assert.deepEqual(placeOf(rebased.driver.ledger.prs.A1), ['merge', 'waiting', 'ci'])
+  assert.equal(rebased.driver.ledger.prs.A1.status.sha, REBASED)
+  assert.deepEqual(eventsSince(rebased.manifest).at(-1), { id: 'A1', kind: 'rebased', head: REBASED.slice(0, 7) })
+
+  const conflict = tickDriver({ A1: { ...samplePrs().A1, held: null } }, { policy: { merge: 'auto' } })
+
+  worktree(conflict.manifest)
+  conflict.tools.answer([
+    { tool: 'git', args: 'rebase origin/main', code: 1, stderr: 'CONFLICT (content): Merge conflict in lib/widget.mjs\n' },
+    { tool: 'git', args: 'diff --name-only', stdout: 'lib/widget.mjs\n' },
+    { tool: 'git', args: '', stdout: '' },
+  ])
+
+  conflict.gate.facts = { baseIsAncestor: false }
+
+  assert.equal(await conflict.driver.mergeCandidate(conflict.manifest.prs.find((item) => item.id === 'A1')), true)
+
+  const entry = conflict.driver.ledger.prs.A1
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason, entry.verified], ['rebase-conflict', 'rebase conflict', null])
+  assert.match(entry.fixNote, /Conflicting files: lib\/widget\.mjs/)
+})
+
+test('merge gate: merge', async () => {
+  const { manifest, driver, tools, github, cleaned } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto' }, rules: [FETCH, MERGE_RULE], routes: [prRoute()] },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  // GitHub accepts the merge and shows no merge commit yet.
+  await driver.tick()
+
+  assert.deepEqual(placeOf(entry), ['merge', 'running', 'merge'])
+  assert.equal(mergeCalls(tools).length, 1)
+
+  github.answer([prRoute(MERGED_PR)])
+  await driver.tick()
+
+  assert.deepEqual([entry.stage, entry.status, entry.state], ['merged', null, 'merged'])
+  assert.deepEqual(entry.merged, { by: 'driver', at: at(90), sha: MERGE_SHA, from: 'merge', verified: true })
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(cleaned, ['A1'])
+  assert.deepEqual(kindsSince(manifest).slice(-1), ['merged'])
+})
+
+test('merge gate: not-verified, merged-on-github', async () => {
+  const unverified = await judgedOnce({ facts: { patchId: 'patch-other' } })
+
+  assert.deepEqual(placeOf(unverified.entry), ['pre-verify', 'waiting', 'ci'])
+  assert.deepEqual([unverified.entry.verified, unverified.entry.approved], [null, null])
+
+  const { driver, github, entry, gate } = await judgedOnce({ pr: { state: 'MERGED' }, rules: [FETCH] })
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'gate-pending'])
+  assert.equal(entry.gate.code, 'merged-on-github')
+
+  github.answer([prRoute(MERGED_PR)])
+  gate.pr = {}
+  await driver.tick()
+
+  assert.deepEqual([entry.stage, entry.state], ['merged', 'merged'])
+  assert.equal(entry.merged.by, 'github')
+})
+
+test("mergeCandidate: the gate's own merge records the driver's merge, verified, from merge", async () => {
+  const { entry, acted } = await judgedOnce({ rules: [MERGE_RULE], routes: [prRoute(MERGED_PR)] })
+
+  assert.equal(acted, true)
+  assert.equal(entry.state, 'merged')
+  assert.deepEqual(entry.merged, { by: 'driver', at: entry.merged.at, sha: MERGE_SHA, from: 'merge', verified: true })
+  assert.ok(Number.isFinite(Date.parse(entry.merged.at)))
+})
+
+test('mergeNext: a draft made ready merges on the next tick, with one merge call and no command', async () => {
+  const { manifest, driver, tools, gate } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto' }, rules: [FETCH, MERGE_RULE], routes: [prRoute()] },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  gate.pr = { isDraft: true }
+  await driver.tick()
+
+  assert.deepEqual([...placeOf(entry), entry.status.gate], ['merge', 'needs-you', 'gate-blocked', 'draft'])
+  assert.deepEqual(mergeCalls(tools), [])
+
+  gate.pr = {}
+  await driver.tick()
+
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.ok(!kindsSince(manifest).includes('retry'))
+})
+
+test('mergeNext: a code scanning block on merge keeps the verification, and the PR merges once the alert is gone', async () => {
+  const { manifest, driver, tools, gate } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto' }, rules: [FETCH, MERGE_RULE], routes: [prRoute()] },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  manifest.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
+  gate.facts = scanned([scanAlert()])
+  await driver.tick()
+  await driver.tick()
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'code-scanning-alerts'])
+  assert.deepEqual(entry.verified, samplePrs().A1.verified)
+  assert.deepEqual(mergeCalls(tools), [])
+
+  gate.facts = scanned([])
+  await driver.tick()
+
+  assert.equal(mergeCalls(tools).length, 1)
+})
+
+test('mergeNext: a gate block given again keeps its time, and logs and notifies nothing', async () => {
+  const { manifest, driver, entry, stub, notices } = stubbedGate()
+
+  stub.verdict = { action: 'block', code: 'draft', reasons: ['PR is a draft'] }
+  await driver.mergeNext()
+
+  const since = entry.status.since
+  const events = readEvents(manifest).length
+
+  await driver.mergeNext()
+  await driver.mergeNext()
+
+  assert.deepEqual([...placeOf(entry), entry.status.since], ['merge', 'needs-you', 'gate-blocked', since])
+  assert.equal(readEvents(manifest).length, events)
+  assert.deepEqual(kindsSince(manifest), ['gate-block', 'blocked'])
+  assert.deepEqual(notices, ['A1: gate blocked: PR is a draft'])
 })
 
 const NEW_FINDING = 'README.md:3 still names the old flag.'
@@ -1159,10 +1598,6 @@ test('retry: a PR escalated over a dispute is refused, and the reason names roll
   assert.deepEqual(entry, before)
   assert.equal(entry.state, 'escalated')
 })
-
-function placeOf(entry) {
-  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
-}
 
 const RECHECKED = { F1: 'resolved', F2: 'wrong' }
 const PASS = { verdict: 'PASS', blocking: [] }

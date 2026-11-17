@@ -33,14 +33,13 @@ const AT_WORK = 'an agent is working on this PR'
 const STALE_APPROVAL = 'it names a different head than the one verified now; look at the card again'
 // What only the maintainer's words answer, which retry cannot give.
 const WAITS_FOR_WORDS = ['brief-questions', 'decision', 'dispute'] as const satisfies readonly NeedsYouCode[]
-// The driver reads these blocks again only after a retry, until it reads them every tick.
-const RELEASED_BY_RETRY = ['closed', 'gate-blocked', 'code-scanning-alerts'] as const satisfies readonly NeedsYouCode[]
 // A note on these asks for a change, on any other it answers.
 const REQUEST_STATES = ['verified', 'ready_claimed'] as const satisfies readonly State[]
 const NOTES_KEPT = 20
 
 type ScopedCommand = (typeof SCOPED_COMMANDS)[number]
 type Author = NoteRecord['by']
+type Answered = Pick<StoredNote, 'kind' | 'question'>
 type Refusal = Extract<CommandEffect, { applies: false }>
 // What holds a PR's place in the driver's `running`: the role of its run, or
 // gate while the pre-verify commands run.
@@ -112,12 +111,21 @@ export type Effect = Refusal | (Extract<CommandEffect, { applies: true }> & { fi
 // An inbox command once its shape is checked. hold and release name a PR, or all of them.
 type InboxCommand = { cmd: ScopedCommand; all: true } | { cmd: ScopedCommand; id: string } | EffectCommand
 
+// How a note came in. A review comment on GitHub has the github channel, and
+// the comments it carries are kept in feedbackInFix, not in noteHistory.
+export interface NoteOptions {
+  channel?: Channel
+  record?: boolean
+}
+
 interface RowInput extends EffectFacts {
   id: string
   by: Author
   // The rollout's hold.
   hold: Hold | null
   say: Say
+  channel: Channel
+  record: boolean
 }
 
 interface Table {
@@ -353,11 +361,11 @@ function releaseRollout({ manifest, ledger, say }: CommandsContext): void {
   say('-', 'released', { scope: 'rollout', stillHeld })
 }
 
-// A maintainer's note and a delegate's answer reach the agent the same way.
-// A delegate run is no agent at work for a note: when its answer applies,
-// `running` still holds it.
-export function applyNote(context: CommandsContext, id: string, text: string, by: Author): void {
-  applyTable(context, TABLES.note, { cmd: 'note', id, text }, by)
+// A maintainer's note, a review comment and a delegate's answer reach the
+// agent the same way. A delegate run is no agent at work for a note: when its
+// answer applies, `running` still holds it.
+export function applyNote(context: CommandsContext, id: string, text: string, by: Author, options: NoteOptions = {}): void {
+  applyTable(context, TABLES.note, { cmd: 'note', id, text }, by, options)
 }
 
 function atWorkOf(job: Job | undefined): AtWork {
@@ -368,13 +376,15 @@ function atWorkOf(job: Job | undefined): AtWork {
   return job === 'delegate' ? 'delegate' : 'agent'
 }
 
-function rowInput(context: CommandsContext, id: string, by: Author): RowInput {
+function rowInput(context: CommandsContext, id: string, by: Author, { channel = 'inbox', record = true }: NoteOptions): RowInput {
   const { manifest, ledger, running, say } = context
 
   return {
     id,
     by,
     say,
+    channel,
+    record,
     at: context.now(),
     atWork: atWorkOf(running.get(id)),
     briefWritten: context.briefWritten(id),
@@ -386,14 +396,14 @@ function rowInput(context: CommandsContext, id: string, by: Author): RowInput {
 }
 
 // A running status whose run is gone resumes first, as advance would in the same tick.
-function applyTable(context: CommandsContext, table: Table, command: EffectCommand, by: Author): void {
+function applyTable(context: CommandsContext, table: Table, command: EffectCommand, by: Author, options: NoteOptions = {}): void {
   const entry = context.ledger.prs[command.id]
 
   if (!context.running.has(command.id)) {
     transitions.recoverRun(entry, { refund: false, at: context.now() })
   }
 
-  const input = rowInput(context, command.id, by)
+  const input = rowInput(context, command.id, by, options)
   const refused = table.refusal(entry, input, command)
 
   if (refused) {
@@ -422,7 +432,16 @@ export function commandEffect(
   facts: EffectFacts,
 ): Effect {
   const entry = structuredClone(ledger.prs[command.id])
-  const input: RowInput = { ...facts, id: command.id, by: 'maintainer', hold: ledger.hold ?? null, say: quiet }
+  const input: RowInput = {
+    ...facts,
+    id: command.id,
+    by: 'maintainer',
+    hold: ledger.hold ?? null,
+    say: quiet,
+    channel: 'inbox',
+    record: true,
+  }
+
   const table = TABLES[command.cmd]
   const refused = table.refusal(entry, input, command)
 
@@ -502,40 +521,48 @@ function retry(entry: PrEntry, input: RowInput): void {
     transitions.wake(entry, stage, at)
   } else if (status.code === 'errors') {
     transitions.waitOnStage(entry, stage, at)
-  } else if (listed(RELEASED_BY_RETRY, status.code)) {
-    released(entry, stage, at)
+  } else if (status.code === 'merge-refused') {
+    transitions.retryMerge(entry, at)
   }
 
   say(id, 'retry', { state: entry.state })
-}
-
-// The same tick's sync, claim check or gate reads the block again. The gate
-// never reads a queued note, so one kept while a verified PR was closed sends it to a fix.
-function released(entry: PrEntry, stage: OpenStage, at: IsoTime): void {
-  if (stage === 'merge' && entry.pendingNote) {
-    transitions.dropVerification(entry)
-    transitions.toFix(entry, 'answer from the maintainer', '', { code: 'maintainer-note', at })
-  } else {
-    transitions.waitOnStage(entry, stage, at)
-  }
 }
 
 function noteRefusal(entry: PrEntry): Refusal | null {
   return entry.stage === 'merged' || !entry.status ? refusal('already merged') : null
 }
 
+const NOTHING_ASKED: Answered = { kind: null, question: null }
+
+// A note on a closed PR answers the status the close replaced, which the reopen brings back.
+function answeredWhenClosed(kept: Status | null | undefined): Answered {
+  if (kept?.kind !== 'needs-you') {
+    return NOTHING_ASKED
+  }
+
+  if (kept.code === 'decision' || kept.code === 'obstacle') {
+    return { kind: kept.question.kind, question: kept.question.text }
+  }
+
+  return kept.code === 'dispute' ? { kind: transitions.DISPUTE, question: kept.text } : NOTHING_ASKED
+}
+
 // What the note answers, for the prompts that list it. Finding ids change
 // on every FAIL, so a dispute is named by the escalation's text.
-function noteRecord(entry: PrEntry, { at, by }: RowInput, state: State, text: string): StoredNote {
+function answered(entry: PrEntry, state: State): Answered {
+  if (entry.status?.code === 'closed') {
+    return answeredWhenClosed(entry.closedFrom)
+  }
+
   if (state === 'blocked') {
-    return { at, by, kind: entry.blocked?.kind ?? null, question: entry.blocked?.question ?? null, text, run: null }
+    return { kind: entry.blocked?.kind ?? null, question: entry.blocked?.question ?? null }
   }
 
   if (transitions.escalatedOverDispute(entry)) {
-    return { at, by, kind: transitions.DISPUTE, question: entry.lastError, text, run: null }
+    return { kind: transitions.DISPUTE, question: entry.lastError }
   }
 
-  return { at, by, kind: null, question: null, text, run: null }
+  return NOTHING_ASKED
 }
 
 function queueNote(entry: PrEntry, text: string): void {
@@ -552,10 +579,19 @@ function answerBrief(entry: PrEntry, { id, say, at }: RowInput, question: string
   say(id, 'brief-answered', {})
 }
 
-// A fix the note asks for. Its prose names who asked, so events keep their words.
+// Its prose names who asked, so events keep their words.
+function noteReason({ by, channel }: RowInput, state: State): string {
+  if (channel === 'github') {
+    return 'maintainer review'
+  }
+
+  return listed(REQUEST_STATES, state) ? `request from the ${by}` : `answer from the ${by}`
+}
+
+// A fix the note asks for.
 function noteFix(entry: PrEntry, input: RowInput, state: State, text: string): void {
-  const { id, by, say, at, limits } = input
-  const reason = listed(REQUEST_STATES, state) ? `request from the ${by}` : `answer from the ${by}`
+  const { id, say, at, limits } = input
+  const reason = noteReason(input, state)
 
   transitions.freshAttempt(entry, 'fix', limits.fix)
   transitions.dropVerification(entry)
@@ -621,7 +657,11 @@ function note(entry: PrEntry, input: RowInput, command: EffectCommand): void {
   const text = command.text ?? ''
   const state = transitions.stateOf(entry)
 
-  entry.noteHistory = [...(entry.noteHistory ?? []), noteRecord(entry, input, state, text)].slice(-NOTES_KEPT)
+  if (input.record) {
+    const record = { at: input.at, by: input.by, ...answered(entry, state), text, run: null }
+
+    entry.noteHistory = [...(entry.noteHistory ?? []), record].slice(-NOTES_KEPT)
+  }
 
   if (status.code === 'brief-questions') {
     answerBrief(entry, input, entry.blocked?.question ?? status.question.text, text)

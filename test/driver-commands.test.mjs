@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { commandEffect } from '../lib/driver/commands.ts'
+import { applyNote, commandEffect } from '../lib/driver/commands.ts'
 import { approveRefusal } from '../lib/judge.mjs'
 import { implementPrompt } from '../lib/prompts.mjs'
 import { DISPUTE, stateOf, toBlocked } from '../lib/transitions.ts'
@@ -674,41 +674,50 @@ test('retry: an implement PR with work and no fix owed resumes it as after a cut
   assert.equal(entry.interruptedRole, 'fix')
 })
 
+// The driver reads these on GitHub every tick, so retry only resets the budgets.
 test('retry: closed, gate-blocked, code-scanning-alerts', () => {
   const owed = { pr: 11, fix: FINDINGS_FIX, fixReason: 'verifier findings', fixNote: '<findings>' }
   const gate = { action: 'block', code: 'draft', reasons: ['the PR is a draft'], at: at(85) }
   const cases = [
-    [staged('implement', 'needs-you', 'closed', owed), ['implement', 'waiting', 'slot'], 'needs_fix'],
-    [onMerge('needs-you', 'closed'), ['merge', 'waiting', 'gate-pending'], 'verified'],
-    [onMerge('needs-you', 'gate-blocked', { gate }), ['merge', 'waiting', 'gate-pending'], 'verified'],
-    [
-      staged('pre-verify', 'needs-you', 'code-scanning-alerts', { pr: 11, claimedSha: SHA }),
-      ['pre-verify', 'waiting', 'ci'],
-      'ready_claimed',
-    ],
+    staged('implement', 'needs-you', 'closed', owed),
+    onMerge('needs-you', 'closed'),
+    onMerge('needs-you', 'gate-blocked', { gate }),
+    staged('pre-verify', 'needs-you', 'code-scanning-alerts', { pr: 11, claimedSha: SHA }),
+    onMerge('needs-you', 'code-scanning-alerts'),
   ]
 
-  for (const [fixture, expected, state] of cases) {
-    const { events, entry } = retried(fixture)
+  for (const fixture of cases) {
+    const { events, entry, before, effect } = retried({ ...fixture, attempts: SPENT, tickErrors: 3 })
+    const where = place(before).join(' ')
 
-    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state }], expected.join(' '))
-    assert.deepEqual(place(entry), expected)
+    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'blocked' }], where)
+    assert.deepEqual([entry.stage, entry.status, entry.fix], [before.stage, before.status, before.fix], where)
+    assert.deepEqual([entry.attempts, entry.tickErrors], [RESET, 0], where)
+    assert.deepEqual(effect.drops, [], where)
   }
 })
 
-test('retry: a PR closed on merge with a note kept meanwhile goes to a fix, without its verification and approval', () => {
+test('retry: a PR closed with a note kept meanwhile stays closed, its note and verification kept for the reopen', () => {
   const approved = { sha: SHA, patchId: 'patch-a1', at: at(81), channel: 'inbox' }
-  const { events, entry, effect } = retried(onMerge('needs-you', 'closed', { approved, pendingNote: NOTE }))
+  const { events, entry, before } = retried(onMerge('needs-you', 'closed', { approved, pendingNote: NOTE }))
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'needs_fix' }])
-  assert.deepEqual(place(entry), ['implement', 'waiting', 'slot'])
-  assert.equal(entry.fix.reason, 'maintainer-note')
-  assert.deepEqual([entry.verified, entry.approved, entry.pendingNote], [null, null, NOTE])
-  assert.deepEqual(effect.drops, ['verification', 'approval'])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'blocked' }])
+  assert.deepEqual(entry.status, before.status)
+  assert.deepEqual([entry.verified, entry.approved, entry.pendingNote], [VERIFIED, approved, NOTE])
 })
 
-test('retry: approve, review, changes-requested, merge-by-hand, github-blocked, merge-refused', () => {
-  for (const code of ['approve', 'review', 'changes-requested', 'merge-by-hand', 'github-blocked', 'merge-refused']) {
+test('retry: merge · needs-you: merge-refused', () => {
+  const refused = { action: 'wait', code: 'merge-refused', reasons: ['GitHub refused the merge (ruleset)'], sha: SHA, at: at(85) }
+  const { events, entry, effect } = retried(onMerge('needs-you', 'merge-refused', { gate: refused, attempts: SPENT }))
+
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'verified' }])
+  assert.deepEqual(place(entry), ['merge', 'waiting', 'gate-pending'])
+  assert.deepEqual([entry.gate, entry.verified, entry.attempts], [null, VERIFIED, RESET])
+  assert.deepEqual(effect.drops, [])
+})
+
+test('retry: approve, review, changes-requested, merge-by-hand, github-blocked', () => {
+  for (const code of ['approve', 'review', 'changes-requested', 'merge-by-hand', 'github-blocked']) {
     const { events, entry, before } = retried(onMerge('needs-you', code, { attempts: SPENT }))
 
     assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'verified' }], code)
@@ -974,6 +983,94 @@ test('note: any needs-you: closed', () => {
     assertQueued(result, 'blocked')
     assert.deepEqual(result.entry.status, result.before.status)
     assert.deepEqual(result.entry.verified, fixture.verified ?? null)
+  }
+})
+
+test('note: on needs-you: closed, the record answers the status the close replaced', () => {
+  const decision = sampleStatus('needs-you', 'decision')
+  const dispute = sampleStatus('needs-you', 'dispute')
+  const cases = [
+    [decision, { kind: 'needs-decision', question: decision.question.text }],
+    [dispute, { kind: DISPUTE, question: dispute.text }],
+    [sampleStatus('needs-you', 'errors'), { kind: null, question: null }],
+    [null, { kind: null, question: null }],
+  ]
+
+  for (const [closedFrom, answered] of cases) {
+    const { entry } = noted(staged('implement', 'needs-you', 'closed', { pr: 11, closedFrom }))
+
+    assert.deepEqual(
+      entry.noteHistory.map(({ at: _, ...record }) => record),
+      [{ by: 'maintainer', ...answered, text: NOTE, run: null }],
+      closedFrom?.code ?? 'waiting',
+    )
+  }
+})
+
+// A command context of the driver, with its events in `events`.
+function noteContext(manifest, driver) {
+  const events = []
+  const context = {
+    manifest,
+    ledger: driver.ledger,
+    running: driver.running,
+    say: (id, kind, detail) => events.push({ id, kind, ...detail }),
+    now: () => new Date().toISOString(),
+    inbox: () => [],
+    briefWritten: () => false,
+    approveRefusal: () => null,
+  }
+
+  return { context, events }
+}
+
+test('applyNote: a review comment on GitHub asks for the maintainer review where a note answers or asks', () => {
+  const cases = [
+    staged('implement', 'needs-you', 'decision', { pr: 11, sessionId: 'session-1' }),
+    staged('pre-verify', 'waiting', 'ci', { pr: 11, claimedSha: SHA }),
+    onMerge('needs-you', 'approve', { approved: { sha: SHA, patchId: 'patch-a1', at: at(81), channel: 'inbox' } }),
+  ]
+
+  for (const fixture of cases) {
+    const { manifest, driver } = driverFor({ A1: fixture })
+    const { context, events } = noteContext(manifest, driver)
+    const entry = driver.ledger.prs.A1
+
+    applyNote(context, 'A1', NOTE, 'maintainer', { channel: 'github' })
+
+    assert.deepEqual(events, [{ id: 'A1', kind: 'needs-fix', reason: 'maintainer review' }], fixture.status.code)
+    assert.deepEqual(place(entry), ['implement', 'waiting', 'slot'], fixture.status.code)
+    assert.deepEqual([entry.fix.reason, entry.fixReason, entry.fixNote], ['maintainer-review', 'maintainer review', NOTE])
+    assert.deepEqual([entry.verified, entry.approved], [null, null], fixture.status.code)
+    assert.equal(entry.noteHistory.length, 1, fixture.status.code)
+  }
+})
+
+test('applyNote: a fix owed keeps its reason, a dispute gets the findings, and record: false adds no record', () => {
+  const owed = { pr: 11, fix: FINDINGS_FIX, fixReason: 'verifier findings', fixNote: '<findings>' }
+  const disputed = { pr: 11, claimedSha: SHA, fixReason: 'verifier findings', fixNote: '<findings>', escalation: DISPUTE }
+  const cases = [
+    [staged('implement', 'waiting', 'slot', owed), 'verifier-findings', [{ id: 'A1', kind: 'note-queued', state: 'needs_fix' }]],
+    [
+      staged('verify', 'needs-you', 'dispute', disputed),
+      'verifier-findings',
+      [
+        { id: 'A1', kind: 'needs-fix', reason: 'verifier findings' },
+        { id: 'A1', kind: 'note-queued', state: 'needs_fix' },
+      ],
+    ],
+  ]
+
+  for (const [fixture, reason, expected] of cases) {
+    const { manifest, driver } = driverFor({ A1: fixture })
+    const { context, events } = noteContext(manifest, driver)
+    const entry = driver.ledger.prs.A1
+
+    applyNote(context, 'A1', NOTE, 'maintainer', { channel: 'github', record: false })
+
+    assert.deepEqual(events, expected, fixture.status.code)
+    assert.deepEqual([entry.fix.reason, entry.fix.note, entry.pendingNote], [reason, '<findings>', NOTE], fixture.status.code)
+    assert.deepEqual(entry.noteHistory, [], fixture.status.code)
   }
 })
 

@@ -188,7 +188,7 @@ function guardHook(args) {
   return settings.hooks.PreToolUse.flatMap((entry) => entry.hooks)[0]
 }
 
-function run(manifest, logName, seams) {
+function run(manifest, logName, seams, signal = null) {
   return runAgent(
     manifest,
     manifest.all[0],
@@ -200,6 +200,7 @@ function run(manifest, logName, seams) {
       resume: false,
       cwd: manifest.repo.path,
       logName,
+      signal,
     },
     seams,
   )
@@ -264,6 +265,48 @@ function stderrSeen(child, text) {
     child.on('close', resolve)
   })
 }
+
+test('runAgent: aborting its signal stops the run as a stop of the driver does', async (context) => {
+  const manifest = loadManifest(makeRollout())
+  const controller = new AbortController()
+  const before = children.size
+
+  fakeClaude(manifest, 'exec sleep 30')
+
+  const running = run(manifest, 'A1-01-abort', undefined, controller.signal)
+  const [child] = [...children].slice(before)
+
+  context.after(() => child.kill('SIGKILL'))
+
+  assert.equal(children.size, before + 1)
+
+  controller.abort()
+
+  const result = await running
+
+  assert.equal(result.ok, false)
+  assert.equal(result.stopped, true)
+  assert.equal(child.stopReason, 'driver-stop')
+  assert.equal(children.size, before)
+})
+
+test('runAgent: a signal aborted before the run starts no process', async () => {
+  const manifest = loadManifest(makeRollout())
+  const controller = new AbortController()
+  const before = children.size
+
+  fakeClaude(manifest, 'exec sleep 30')
+  controller.abort()
+
+  const running = run(manifest, 'A1-01-aborted', undefined, controller.signal)
+
+  assert.equal(children.size, before)
+
+  const result = await running
+
+  assert.deepEqual([result.ok, result.stopped, result.costUsd, result.error], [false, true, 0, 'stopped by the driver'])
+  assert.equal(children.size, before)
+})
 
 test('runAgent: a run killed by a signal names the signal', async () => {
   const manifest = loadManifest(makeRollout())

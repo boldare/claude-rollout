@@ -19,14 +19,17 @@ import {
   fillFromState,
   fixReasonCode,
   freshAttempt,
+  gateVerdict,
   holdPr,
   joinFix,
   recoverRun,
   releasePr,
   reportUsed,
   reportWaits,
+  mergeStatus,
   resetBudgets,
   retryFix,
+  retryMerge,
   runFailed,
   runName,
   runStarted,
@@ -34,10 +37,12 @@ import {
   stateOf,
   toBlocked,
   toClaimed,
+  toClosed,
   toFix,
   toMergeStatus,
   toMerged,
   toPending,
+  toReopened,
   toVerified,
   unheld,
   verifyAgain,
@@ -384,7 +389,7 @@ test('transitions: toClaimed records the claim of a READY report', () => {
   })
 })
 
-test('transitions: claimNewHead claims the new head and drops the verification', () => {
+test('transitions: claimNewHead claims the new head and drops the verification and the approval', () => {
   const entry = entryWith({
     state: 'verified',
     pr: 7,
@@ -402,6 +407,7 @@ test('transitions: claimNewHead claims the new head and drops the verification',
   assert.deepEqual(entry, {
     ...before,
     verified: null,
+    approved: null,
     state: 'ready_claimed',
     claimedSha: SHA,
     claimedAt: AT,
@@ -613,6 +619,162 @@ test('transitions: escalateErrors escalates a PR after repeated errors', () => {
     escalationRun: 'P1-02-implement',
     status: { kind: 'needs-you', code: 'errors', error: 'GitHub answered 502 Bad Gateway for PR #7', count: 5, since: AT },
   })
+})
+
+const QUESTION_STATUS = {
+  kind: 'needs-you',
+  code: 'decision',
+  question: question('needs-decision', 'Keep the old flag?', 'cli.mjs:12', 'P1-01-implement'),
+  since: EARLIER,
+}
+
+const CLOSE = { at: AT, text: 'PR #7 was closed on GitHub.' }
+
+test('transitions: toClosed keeps a needs-you status whole in closedFrom, and the fix the PR owes', () => {
+  const fix = { reason: 'verifier-findings', note: '<findings>', since: OPENED }
+  const entry = entryWith({ state: 'needs_fix', pr: 7 })
+
+  entry.status = QUESTION_STATUS
+  entry.fix = fix
+  entry.state = stateOf(entry)
+
+  toClosed(entry, CLOSE)
+
+  assert.deepEqual(
+    [entry.stage, entry.status, entry.fix, entry.state],
+    ['implement', { kind: 'needs-you', code: 'closed', since: AT }, fix, 'blocked'],
+  )
+
+  assert.deepEqual(entry.closedFrom, QUESTION_STATUS)
+  assert.deepEqual(entry.blocked, { kind: 'closed', question: CLOSE.text, evidence: '', run: null })
+})
+
+test('transitions: toClosed keeps nothing from a waiting status, and a PR on its brief closes on implement', () => {
+  for (const [fields, stage] of [
+    [{ state: 'ready_claimed', pr: 7, claimedSha: SHA }, 'pre-verify'],
+    [{ state: 'pending', pr: 7 }, 'implement'],
+  ]) {
+    const entry = entryWith(fields)
+
+    toClosed(entry, CLOSE)
+
+    assert.deepEqual([entry.stage, entry.status.code, entry.closedFrom], [stage, 'closed', null], fields.state)
+  }
+})
+
+test('transitions: toReopened brings the kept status back unchanged, with its time and its question', () => {
+  const entry = entryWith({ state: 'needs_fix', pr: 7 })
+
+  entry.status = QUESTION_STATUS
+  entry.state = stateOf(entry)
+  toClosed(entry, CLOSE)
+  toReopened(entry, LATER)
+
+  assert.deepEqual([entry.stage, entry.status, entry.closedFrom, entry.state], ['implement', QUESTION_STATUS, null, 'blocked'])
+  assert.deepEqual(entry.blocked, {
+    kind: 'needs-decision',
+    question: 'Keep the old flag?',
+    evidence: 'cli.mjs:12',
+    run: 'P1-01-implement',
+  })
+
+  const disputed = entryWith({ state: 'escalated', escalation: DISPUTE, pr: 7, claimedSha: SHA })
+
+  toClosed(disputed, CLOSE)
+  toReopened(disputed, LATER)
+
+  assert.deepEqual([disputed.stage, disputed.status.code, disputed.status.since, disputed.blocked], ['verify', 'dispute', OPENED, null])
+  assert.equal(disputed.state, 'escalated')
+})
+
+test('transitions: toReopened without a kept status waits on the stage, as a retry does', () => {
+  const claimed = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
+  const verified = entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification() })
+
+  for (const entry of [claimed, verified]) {
+    toClosed(entry, CLOSE)
+    toReopened(entry, LATER)
+  }
+
+  assert.deepEqual([claimed.status, claimed.state, claimed.blocked], [ciAt(SHA, LATER), 'ready_claimed', null])
+  assert.deepEqual([verified.stage, verified.status.code, verified.state], ['merge', 'gate-pending', 'verified'])
+})
+
+test('transitions: toMerged with a record writes it, and drops what a close kept', () => {
+  const entry = entryWith({ state: 'needs_fix', pr: 7 })
+  const merged = { by: 'github', at: AT, sha: null, from: 'implement', verified: false }
+
+  entry.status = QUESTION_STATUS
+  entry.state = stateOf(entry)
+  toClosed(entry, CLOSE)
+  toMerged(entry, { merged })
+
+  assert.deepEqual([entry.stage, entry.status, entry.state, entry.merged, entry.closedFrom], ['merged', null, 'merged', merged, null])
+})
+
+test('transitions: retryMerge drops the stored verdict and waits for the gate', () => {
+  const refused = { action: 'wait', code: 'merge-refused', reasons: ['GitHub refused the merge (ruleset)'], sha: SHA, at: LATER }
+  const entry = entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification(), gate: refused })
+
+  assert.equal(entry.status.code, 'merge-refused')
+
+  retryMerge(entry, AT)
+
+  assert.deepEqual(
+    [entry.stage, entry.status, entry.gate, entry.state],
+    ['merge', { kind: 'waiting', code: 'gate-pending', since: AT }, null, 'verified'],
+  )
+})
+
+test('setStatus, gateVerdict, mergeStatus: a status that replaces closed, gate-blocked or code-scanning-alerts settles the state', () => {
+  const facts = {
+    pr: { headRefOid: SHA },
+    depsPending: [],
+    checks: { missing: [], pending: ['test'] },
+    mainChecks: { sha: OLD_SHA, failing: [] },
+  }
+
+  const gateBlock = { kind: 'gate', question: 'PR is a draft', evidence: '', run: null }
+  const alerts = { kind: 'code-scanning', question: 'New alerts.', evidence: 'alert', run: null }
+  const leave = [
+    (entry) => setStatus(entry, entry.stage, { kind: 'waiting', code: 'slot' }, LATER),
+    (entry) => gateVerdict(entry, { action: 'wait', code: 'ci-pending', reasons: [] }, facts, LATER),
+    (entry) => mergeStatus(entry, LATER),
+  ]
+
+  for (const [index, write] of leave.entries()) {
+    for (const block of [gateBlock, alerts]) {
+      const entry = entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification() })
+
+      toBlocked(entry, block, { at: AT })
+      assert.equal(entry.state, 'blocked')
+
+      write(entry)
+
+      assert.equal(entry.state, stateOf(entry), `${index} ${block.kind}`)
+      assert.equal(entry.state, 'verified', `${index} ${block.kind}`)
+      assert.equal(entry.blocked, null, `${index} ${block.kind}`)
+    }
+  }
+
+  const closed = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
+
+  toClosed(closed, CLOSE)
+  setStatus(closed, 'pre-verify', { kind: 'waiting', code: 'slot' }, LATER)
+
+  assert.deepEqual([closed.state, closed.blocked], ['ready_claimed', null])
+})
+
+test('setStatus: the same block written again keeps the state and the block', () => {
+  const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
+
+  toBlocked(entry, { kind: 'code-scanning', question: 'New alerts.', evidence: 'alert one', run: null }, { at: AT })
+  setStatus(entry, 'pre-verify', { kind: 'needs-you', code: 'code-scanning-alerts', alerts: ['alert two'] }, LATER)
+
+  assert.deepEqual(
+    [entry.state, entry.blocked.kind, entry.status.since, entry.status.alerts],
+    ['blocked', 'code-scanning', AT, ['alert two']],
+  )
 })
 
 test('transitions: toMerged with no field marks the PR merged and adds no key', () => {

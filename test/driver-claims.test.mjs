@@ -1,23 +1,27 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createDriver } from '../lib/driver.mjs'
 import { DRIVER_MARKER, setFetch } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { verifyPrompt } from '../lib/prompts.mjs'
+import { stateOf } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
-import { at, fakeGitHub, fakeTools, makeRollout, samplePrs } from './fixtures.mjs'
+import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
 import {
   agentResult,
   apply,
   SHA,
   FETCH,
   MAINTAINER_TOKEN,
+  MERGE_SHA,
   MERGED_PR,
   prRoute,
+  restPr,
   runsRoute,
+  stoppableAgent,
   tickDriver,
   eventsSince,
   kindsSince,
@@ -162,15 +166,16 @@ test('advance: a parked READY report GitHub now contradicts goes to a fix run an
 
 const GATE_BLOCK = { kind: 'gate', question: 'PR is a draft', evidence: '' }
 
-test('retry: a PR whose verification still holds goes back to verified, keeps its hold, and the gate looks again with no agent', async () => {
-  for (const state of [
-    { state: 'escalated', tickErrors: 5 },
-    { state: 'blocked', blocked: GATE_BLOCK },
+// A gate block needs no retry: the gate reads it again on every tick, and the retry only resets the budgets.
+test('retry: a PR whose verification still holds stays verified, keeps its hold, and the gate looks again with no agent', async () => {
+  for (const [state, retried] of [
+    [{ state: 'escalated', tickErrors: 5 }, 'verified'],
+    [{ state: 'blocked', blocked: GATE_BLOCK }, 'blocked'],
   ]) {
     const { manifest, driver, gate } = tickDriver({ A1: { ...samplePrs().A1, ...state } }, { rules: [FETCH], routes: [prRoute()] })
     const entry = driver.ledger.prs.A1
 
-    assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'verified' }], state.state)
+    assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: retried }], state.state)
     assert.deepEqual(entry.verified, samplePrs().A1.verified, state.state)
     assert.equal(entry.interruptedRole, null, state.state)
     assert.ok(entry.held, state.state)
@@ -243,18 +248,173 @@ test('retry: a parked READY report stays parked, and the next tick claims it wit
   assert.deepEqual(kindsSince(manifest, before), ['ready-claimed'])
 })
 
-test('sync: a head moved to another patch drops the verification, and the PR is claimed again at the new head', async () => {
+function placeOf(entry) {
+  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
+}
+
+const MERGE_TICK = { action: 'merge', code: 'merge', reasons: [], mergeState: 'CLEAN', sha: SHA, at: at(85) }
+
+test('the PR: merged, and the driver asked for the merge', async () => {
+  const { manifest, driver, cleaned, notices } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null, gate: MERGE_TICK } },
+    { rules: [FETCH], routes: [prRoute(MERGED_PR)] },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  await driver.tick()
+
+  assert.deepEqual([entry.stage, entry.status, entry.state], ['merged', null, 'merged'])
+  assert.deepEqual(entry.merged, { by: 'driver', at: at(90), sha: MERGE_SHA, from: 'merge', verified: true })
+  assert.deepEqual(driver.ledger.data.lastMerge, { id: 'A1', sha: MERGE_SHA, at: driver.ledger.data.lastMerge.at })
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind.startsWith('merged')),
+    [{ id: 'A1', kind: 'merged', pr: 11 }],
+  )
+
+  assert.deepEqual(cleaned, ['A1'])
+  assert.deepEqual(notices, ['A1: merged PR #11'])
+})
+
+test('the PR: merged outside the driver', async () => {
+  for (const [head, verified] of [
+    [SHA, true],
+    [NEW_HEAD, false],
+  ]) {
+    const { manifest, driver, cleaned, notices } = tickDriver(samplePrs(), {
+      rules: [FETCH],
+      routes: [prRoute({ ...MERGED_PR, head: { sha: head } })],
+    })
+
+    const entry = driver.ledger.prs.A1
+
+    await driver.tick()
+
+    // A head the driver has not seen counts as not verified, even with the verified patch.
+    assert.deepEqual(entry.merged, { by: 'github', at: at(90), sha: MERGE_SHA, from: 'merge', verified }, head)
+    assert.deepEqual(
+      eventsSince(manifest).filter((event) => event.kind.startsWith('merged')),
+      [{ id: 'A1', kind: 'merged-outside-driver', pr: 11, from: 'merge', verified, stopped: null }],
+      head,
+    )
+
+    assert.equal(entry.state, 'merged', head)
+    assert.equal(entry.mergeSha, MERGE_SHA, head)
+    assert.deepEqual(cleaned, ['A1'], head)
+    assert.deepEqual(notices, [], head)
+  }
+})
+
+test('the PR: merged while an agent runs', async () => {
+  const agent = stoppableAgent()
+  const { manifest, driver, cleaned } = tickDriver(
+    { A1: { state: 'pending', pr: 11 }, A2: { state: 'merged', pr: 12 }, A3: { state: 'merged', pr: 13 } },
+    { policy: { concurrency: 1 }, rules: [{ tool: 'git', args: '', stdout: '' }], routes: [prRoute(MERGED_PR)], runAgent: agent.runAgent },
+  )
+
+  const pr = manifest.prs.find((item) => item.id === 'A1')
+  const entry = driver.ledger.prs.A1
+
+  mkdirSync(join(worktreePath(manifest, pr), '.git'), { recursive: true })
+  writeFileSync(join(worktreePath(manifest, pr), '.git', 'rollout-ready'), '')
+  mkdirSync(dirname(pr.brief), { recursive: true })
+  writeFileSync(pr.brief, '# A1\n')
+
+  driver.launch(pr, 'implement')
+  await waitFor(() => agent.signals.length === 1, 'the implement run')
+
+  const budgets = { attempts: { ...entry.attempts }, refunds: entry.refunds, retryAfter: entry.retryAfter, failStreak: entry.failStreak }
+
+  await driver.tick()
+
+  assert.equal(agent.signals[0].aborted, true)
+
+  await waitFor(() => !driver.running.has('A1'), 'the stopped run to end')
+
+  assert.equal(entry.state, 'merged')
+  assert.deepEqual(entry.merged, { by: 'github', at: at(90), sha: MERGE_SHA, from: 'implement', verified: false })
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind === 'merged-outside-driver'),
+    [{ id: 'A1', kind: 'merged-outside-driver', pr: 11, from: 'implement', verified: false, stopped: 'implement' }],
+  )
+
+  assert.deepEqual(cleaned, ['A1'])
+  assert.deepEqual(
+    { attempts: entry.attempts, refunds: entry.refunds, retryAfter: entry.retryAfter, failStreak: entry.failStreak },
+    budgets,
+  )
+})
+
+test('the PR: closed without a merge', async () => {
+  const { manifest, driver, github, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute({ state: 'closed' })] })
+  const entry = driver.ledger.prs.A1
+
+  await driver.tick()
+  await driver.tick()
+
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'closed'])
+  assert.equal(entry.state, 'blocked')
+  assert.equal(entry.blocked.kind, 'closed')
+  assert.equal(
+    entry.blocked.question,
+    'PR #11 was closed on GitHub. Reopen it and the driver picks it up on the next tick, or drop it from the manifest.',
+  )
+
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind === 'blocked'),
+    [{ id: 'A1', kind: 'blocked', reason: 'closed' }],
+  )
+
+  assert.deepEqual(notices, ['A1: PR #11 was closed'])
+
+  github.answer([prRoute()])
+  await driver.tick()
+
+  // A1 is held, so the gate's verdict on merge is held.
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'held'])
+  assert.equal(entry.state, 'verified')
+  assert.equal(entry.blocked, null)
+  assert.deepEqual(entry.verified, samplePrs().A1.verified)
+})
+
+test('the PR: head moved after the verification, same patch', async () => {
   const { manifest, driver, gate } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute({ head: { sha: NEW_HEAD } })] })
   const entry = driver.ledger.prs.A1
 
-  // A1 stays held, so the gate waits on held before its own re-verification
-  // on not-verified could claim it again. Only sync claims it here.
+  gate.pr = { headRefOid: NEW_HEAD }
+  await driver.tick()
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'held'])
+  assert.deepEqual(entry.verified, { ...samplePrs().A1.verified, sha: NEW_HEAD })
+  assert.deepEqual(entry.approved, { ...samplePrs().A1.approved, sha: NEW_HEAD })
+  assert.equal(entry.claimedSha, NEW_HEAD)
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind.startsWith('head-moved')),
+    [{ id: 'A1', kind: 'head-moved-same-patch', sha: NEW_HEAD.slice(0, 7) }],
+  )
+})
+
+test('the PR: head moved after the verification, another patch', async () => {
+  const pending = { check_runs: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] }
+  const { manifest, driver, gate } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { rules: [FETCH], routes: [prRoute({ head: { sha: NEW_HEAD } }), runsRoute(NEW_HEAD, pending)] },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  // Sync claims the new head, so the gate no longer judges the PR in this tick.
+  // Its one read of the facts is sync's, which compares the patches.
   gate.pr = { headRefOid: NEW_HEAD }
   gate.facts = { patchId: 'patch-other' }
   await driver.tick()
 
+  assert.equal(gate.calls, 1)
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'ci'])
+  assert.deepEqual(entry.status.pending, ['test'])
   assert.equal(entry.state, 'ready_claimed')
   assert.equal(entry.verified, null)
+  assert.equal(entry.approved, null)
   assert.equal(entry.claimedSha, NEW_HEAD)
   assert.deepEqual(
     eventsSince(manifest).filter((event) => event.kind === 'head-moved-reverify'),
@@ -262,21 +422,172 @@ test('sync: a head moved to another patch drops the verification, and the PR is 
   )
 })
 
-test('sync: a PR closed on GitHub is blocked as closed, with a notice', async () => {
-  const { manifest, driver, notices } = tickDriver(samplePrs(), { rules: [FETCH], routes: [prRoute({ state: 'closed' })] })
+test('the PR: head moved before the verification', async () => {
+  const pending = { check_runs: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] }
+  const { manifest, driver, github, pr, entry } = claimDriver({})
+
+  entry.claimedAt = at(1)
+  github.answer([prRoute({ head: { sha: NEW_HEAD } }), runsRoute(NEW_HEAD, pending)])
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'ci'])
+  assert.equal(entry.status.sha, NEW_HEAD)
+  assert.equal(entry.claimedSha, NEW_HEAD)
+  assert.notEqual(entry.claimedAt, at(1))
+  assert.deepEqual(eventsSince(manifest), [{ id: 'A1', kind: 'claim-moved', claimed: SHA.slice(0, 7), head: NEW_HEAD.slice(0, 7) }])
+})
+
+test('the PR: a dependency outside this run merged', async () => {
+  const pulls = 'repos/example/widgets/pulls'
+  const mergedA1 = restPr({ ...MERGED_PR, labels: [{ name: 'rollout:demo' }] })
+  const { manifest, driver } = tickDriver(
+    { A1: { state: 'pending' }, A2: { state: 'pending' } },
+    { only: ['A2'], rules: [FETCH], routes: [{ path: pulls, query: { head: 'example:feat/a1' }, body: [mergedA1] }] },
+  )
+
+  await driver.tick()
+
+  assert.deepEqual([driver.ledger.prs.A1.stage, driver.ledger.prs.A1.state, driver.ledger.prs.A1.pr], ['merged', 'merged', 11])
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind === 'merged-outside-run'),
+    [{ id: 'A1', kind: 'merged-outside-run', pr: 11 }],
+  )
+})
+
+const DECISION_STATUS = {
+  kind: 'needs-you',
+  code: 'decision',
+  question: {
+    kind: 'needs-decision',
+    text: 'Keep the old flag?',
+    evidence: 'cli.mjs:12 still reads it.',
+    run: 'A1-01-implement',
+    delegate: null,
+  },
+  since: at(40),
+}
+
+const DISPUTE_STATUS = {
+  kind: 'needs-you',
+  code: 'dispute',
+  findings: ['F2'],
+  text: 'the verifier still finds F2 open, which the implementer disputed',
+  since: at(50),
+}
+
+// A1 on `stage` with `status`, as a driver of this version writes it, and its PR closed on GitHub.
+function closedLater(stage, status, fields = {}) {
+  const entry = { pr: 11, claimedSha: SHA, sessionId: 'session-1', hold: null, held: null, fix: null, ...fields, stage, status }
+
+  return tickDriver({ A1: { ...entry, state: stateOf(entry) } }, { rules: [FETCH], routes: [prRoute({ state: 'closed' })] })
+}
+
+test('a PR closed on a question or a dispute and open again gets it back, with its time, and no command', async () => {
+  const cases = [
+    [
+      'implement',
+      DECISION_STATUS,
+      {
+        blocked: { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 still reads it.', run: 'A1-01-implement' },
+      },
+    ],
+    [
+      'verify',
+      DISPUTE_STATUS,
+      { escalation: 'disputed finding', lastError: DISPUTE_STATUS.text, fixReason: 'verifier findings', fixNote: '<findings>' },
+    ],
+  ]
+
+  for (const [stage, status, fields] of cases) {
+    const { manifest, driver, github } = closedLater(stage, status, fields)
+    const entry = driver.ledger.prs.A1
+
+    await driver.tick()
+
+    assert.deepEqual(placeOf(entry), [stage, 'needs-you', 'closed'], status.code)
+    assert.deepEqual(entry.closedFrom, status, status.code)
+
+    github.answer([prRoute()])
+    await driver.tick()
+
+    assert.deepEqual(entry.status, status, status.code)
+    assert.equal(entry.stage, stage, status.code)
+    assert.equal(entry.closedFrom, null, status.code)
+    assert.equal(entry.state, stateOf(entry), status.code)
+    assert.ok(!kindsSince(manifest).some((kind) => ['retry', 'note-queued', 'needs-fix'].includes(kind)), status.code)
+  }
+
+  const decision = closedLater('implement', DECISION_STATUS)
+
+  await decision.driver.tick()
+  decision.github.answer([prRoute()])
+  await decision.driver.tick()
+
+  assert.deepEqual(decision.driver.ledger.prs.A1.blocked, {
+    kind: 'needs-decision',
+    question: 'Keep the old flag?',
+    evidence: 'cli.mjs:12 still reads it.',
+    run: 'A1-01-implement',
+  })
+})
+
+// The fake GitHub is the last driver's, so each driver runs to its end before the next one starts.
+async function noteWhileClosed(setup, note) {
+  await setup.driver.tick()
+
+  assert.deepEqual(apply(setup.manifest, setup.driver, { cmd: 'note', id: 'A1', text: note }), [
+    { id: 'A1', kind: 'note-queued', state: 'blocked' },
+  ])
+
+  setup.github.answer([prRoute()])
+  await setup.driver.tick()
+
+  return setup.driver.ledger.prs.A1
+}
+
+test('a note sent while the PR was closed answers the status the reopen brings back', async () => {
+  const note = 'Keep the flag, and say so in the README.'
+  const answered = await noteWhileClosed(closedLater('implement', DECISION_STATUS), note)
+
+  assert.deepEqual(placeOf(answered), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([answered.fix.reason, answered.fixReason, answered.fixNote], ['maintainer-note', 'answer from the maintainer', note])
+  assert.equal(answered.pendingNote, null)
+  assert.deepEqual(
+    answered.noteHistory.map((record) => [record.kind, record.question, record.text]),
+    [['needs-decision', 'Keep the old flag?', note]],
+  )
+
+  const disputed = closedLater('verify', DISPUTE_STATUS, {
+    escalation: 'disputed finding',
+    fixReason: 'verifier findings',
+    fixNote: '<findings>',
+  })
+
+  const ruled = await noteWhileClosed(disputed, note)
+
+  assert.deepEqual(placeOf(ruled), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([ruled.fix.reason, ruled.fix.note, ruled.pendingNote], ['verifier-findings', '<findings>', note])
+  assert.deepEqual(
+    ruled.noteHistory.map((record) => [record.kind, record.question, record.text]),
+    [['disputed finding', DISPUTE_STATUS.text, note]],
+  )
+})
+
+test('a PR closed from a waiting status is open again on the waiting status of its stage', async () => {
+  const waiting = { kind: 'waiting', code: 'ci', sha: SHA, missing: [], pending: ['test'], since: at(30) }
+  const { driver, github } = closedLater('pre-verify', waiting)
   const entry = driver.ledger.prs.A1
 
   await driver.tick()
 
-  // A gate that read the closed PR would block it too, as kind gate.
-  assert.equal(entry.state, 'blocked')
-  assert.equal(entry.blocked.kind, 'closed')
-  assert.deepEqual(
-    eventsSince(manifest).filter((event) => event.kind === 'blocked'),
-    [{ id: 'A1', kind: 'blocked', reason: 'closed' }],
-  )
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'needs-you', 'closed'])
+  assert.equal(entry.closedFrom, null)
 
-  assert.deepEqual(notices, ['A1: PR #11 was closed'])
+  github.answer([prRoute(), runsRoute(SHA, { check_runs: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] })])
+  await driver.tick()
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'ci'])
+  assert.equal(entry.state, 'ready_claimed')
 })
 
 test('checkClaim: a claimed PR merged or closed since sync is left to the next sync', async () => {
@@ -413,10 +724,15 @@ test('checkClaim: with action block, a new alert blocks the PR for the maintaine
   await driver.advance(pr)
 
   assert.equal(entry.state, 'blocked')
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'needs-you', 'code-scanning-alerts'])
+  assert.deepEqual(entry.status.alerts, [ALERT_REASON])
   assert.equal(entry.blocked.kind, 'code-scanning')
   assert.equal(entry.blocked.evidence, ALERT_REASON)
-  assert.match(entry.blocked.question, /^PR #11 has new code scanning alerts\. Dismiss a false positive on GitHub and run rollout retry/)
-  assert.equal(entry.verified, null)
+  assert.equal(
+    entry.blocked.question,
+    'PR #11 has new code scanning alerts. Dismiss a false positive on GitHub and the driver reads them again on the next tick, or send instructions with rollout note.',
+  )
+
   assert.equal(entry.claimPatchId, undefined)
   assert.deepEqual(eventsSince(manifest), [
     gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
@@ -426,6 +742,44 @@ test('checkClaim: with action block, a new alert blocks the PR for the maintaine
   ])
 
   assert.deepEqual(notices, [`A1: blocked (code-scanning): ${ALERT_REASON.slice(0, 120)}`])
+})
+
+test('checkClaim: a code scanning block is read again on the next tick, logs and notifies nothing again, and moves on once the alert is gone', async () => {
+  const { manifest, driver, gate, pr, entry, notices } = claimDriver(scanned([scanAlert()]))
+  const second = scanAlert({ number: 5, line: 360, url: 'https://github.com/example/widgets/security/code-scanning/5' })
+  const secondReason = ALERT_REASON.replace('357', '360').replace('code-scanning/4', 'code-scanning/5')
+
+  manifest.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
+
+  await driver.advance(pr)
+
+  const since = entry.status.since
+  const events = readEvents(manifest).length
+
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'needs-you', 'code-scanning-alerts'])
+  assert.equal(entry.status.since, since)
+  assert.equal(readEvents(manifest).length, events)
+  assert.equal(notices.length, 1)
+
+  gate.facts = scanned([scanAlert(), second])
+  await driver.advance(pr)
+
+  assert.deepEqual(entry.status.alerts, [ALERT_REASON, secondReason])
+  assert.equal(entry.status.since, since)
+  assert.deepEqual(kindsSince(manifest, events), ['gate-check'])
+  assert.equal(notices.length, 1)
+
+  gate.facts = scanned([])
+  await driver.advance(pr)
+
+  // No slot under concurrency 0: the claim goes on as any claim.
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'slot'])
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.blocked, null)
+  assert.equal(entry.claimPatchId, samplePrs().A1.verified.patchId)
+  assert.deepEqual(eventsSince(manifest).at(-1), gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium'))
 })
 
 test('checkClaim: an alert from an older commit waits for the analysis of the head, logged once', async () => {
@@ -484,11 +838,13 @@ test('checkClaim: no new alert, or one below the threshold, goes on to verificat
 
 const SCOPE_GATE = gatesWith({ preVerify: { scope: true } })
 
-test('checkClaim: with gates.preVerify.scope, an undeclared file out of scope goes back to the implementer before the verifier', async () => {
+test('after READY: files outside the scope, not listed in the report', async () => {
   const { manifest, driver, pr, entry, agentCalls } = verifiableDriver({ gates: SCOPE_GATE })
 
   await driver.advance(pr)
 
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.equal(entry.fix.reason, 'scope')
   assert.equal(entry.state, 'needs_fix')
   assert.equal(entry.fixReason, 'out of scope')
   assert.ok(entry.fixNote.includes('- README.md'))
@@ -583,7 +939,7 @@ test('checkClaim: untracked Claude Code files in the worktree are removed and lo
   assert.equal(existsSync(join(wt, 'CLAUDE.local.md')), false)
 })
 
-test('checkClaim: red CI logs a failed ci check right before it goes back to the implementer', async () => {
+test('after READY: CI is red', async () => {
   const { manifest, driver, github, pr, entry } = claimDriver({})
   const runs = {
     check_runs: [
@@ -596,6 +952,9 @@ test('checkClaim: red CI logs a failed ci check right before it goes back to the
 
   await driver.advance(pr)
 
+  // The failed ci check is logged right before the PR goes back to the implementer.
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.equal(entry.fix.reason, 'ci-red')
   assert.equal(entry.state, 'needs_fix')
   assert.deepEqual(eventsSince(manifest), [
     gateCheckEvent('ci', 'fail', 'failing: lint: failure'),
@@ -603,7 +962,23 @@ test('checkClaim: red CI logs a failed ci check right before it goes back to the
   ])
 })
 
-test('checkClaim: CI that does not settle logs a failed ci check right before it goes back to the implementer', async () => {
+test('after READY: CI runs on the head', async () => {
+  const { manifest, driver, github, pr, entry } = claimDriver({})
+  const running = { check_runs: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] }
+
+  github.answer([prRoute(), runsRoute(SHA, running)])
+
+  await driver.advance(pr)
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'ci'])
+  assert.deepEqual([entry.status.sha, entry.status.missing, entry.status.pending], [SHA, [], ['test']])
+  assert.equal(entry.state, 'ready_claimed')
+  assert.ok(entry.ciPendingSince)
+  assert.deepEqual(eventsSince(manifest), [])
+})
+
+test('after READY: CI does not settle within ciStallMinutes', async () => {
   const { manifest, driver, github, pr, entry } = claimDriver({})
   const running = { check_runs: [{ id: 1, name: 'test', status: 'in_progress', conclusion: null }] }
 
@@ -612,11 +987,69 @@ test('checkClaim: CI that does not settle logs a failed ci check right before it
 
   await driver.advance(pr)
 
+  // The failed ci check is logged right before the PR goes back to the implementer.
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.equal(entry.fix.reason, 'ci-stalled')
   assert.equal(entry.state, 'needs_fix')
   assert.deepEqual(eventsSince(manifest), [
     gateCheckEvent('ci', 'fail', 'not settled after 20 minutes (missing: none, running: test)'),
     { id: 'A1', kind: 'needs-fix', reason: 'CI did not settle' },
   ])
+})
+
+test('after READY: the PR breaks a rollout rule', async () => {
+  const { manifest, driver, pr, entry } = claimDriver({ files: [{ status: 'modified', path: '.github/workflows/ci.yml' }] })
+
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['policy', 'rollout policy'])
+  assert.match(entry.fixNote, /^The PR breaks rollout rules:\n- touches \.github\/workflows\/ci\.yml/)
+  assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'needs-fix'])
+})
+
+test('after READY: new code scanning alerts', async () => {
+  const cases = [
+    ['fix', scanned([scanAlert()]), ['implement', 'waiting', 'slot']],
+    ['block', scanned([scanAlert()]), ['pre-verify', 'needs-you', 'code-scanning-alerts']],
+    ['fix', scanned([scanAlert({ sha: NEW_HEAD })]), ['pre-verify', 'waiting', 'code-scanning-pending']],
+  ]
+
+  for (const [action, facts, place] of cases) {
+    const { manifest, driver, pr, entry } = claimDriver(facts)
+
+    manifest.repo.codeScanning = { action, minSeverity: 'medium' }
+    await driver.advance(pr)
+
+    assert.deepEqual(placeOf(entry), place, action)
+    assert.equal(entry.fix?.reason ?? null, place[0] === 'implement' ? 'code-scanning' : null, action)
+    assert.equal(entry.state, stateOf(entry), action)
+  }
+})
+
+test('after READY: the worktree cannot be set to the head', async () => {
+  const { manifest, driver, pr, entry, agentCalls } = verifiableDriver({
+    rules: [{ tool: 'git', args: 'status --porcelain', stdout: ' M lib/widget.mjs\n' }],
+  })
+
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['worktree', 'worktree not at the PR head'])
+  assert.match(entry.fixNote, /^worktree has uncommitted changes/)
+  assert.deepEqual(agentCalls, [])
+  assert.equal(kindsSince(manifest).at(-1), 'needs-fix')
+})
+
+test('after READY: no free slot', async () => {
+  const { manifest, driver, pr, entry } = claimDriver({})
+
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'slot'])
+  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(entry.claimPatchId, samplePrs().A1.verified.patchId)
+  assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'gate-check'])
 })
 
 test('checkClaim: a pass is logged once per claim, and again for a new claim', async () => {
@@ -704,27 +1137,30 @@ test('checkClaim: the scope gate failing again on the same SHA after a new READY
   assert.deepEqual(eventsSince(manifest), [...round, ...round])
 })
 
-test('checkClaim: a claim resumed after a fail, with no new READY, logs every check again', async () => {
-  const { manifest, driver, pr, entry } = claimDriver(scanned([scanAlert()]))
-  const round = [
-    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
-    gateCheckEvent('policy', 'pass', 'no violations'),
-    gateCheckEvent('code-scanning', 'fail', ALERT_REASON),
-    { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
-  ]
+test('checkClaim: a claim read again after a fail, with no new READY, logs each check once, and a fail with new evidence again', async () => {
+  const { manifest, driver, gate, pr, entry } = claimDriver(scanned([scanAlert()]))
+  const other = scanAlert({ line: 360 })
+  const otherReason = ALERT_REASON.replace('357', '360')
 
   manifest.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
   entry.claimedAt = at(1)
 
   await driver.advance(pr)
+  await driver.advance(pr)
 
-  entry.state = 'ready_claimed'
-
+  gate.facts = scanned([other])
+  await driver.advance(pr)
   await driver.advance(pr)
 
   assert.equal(entry.state, 'blocked')
   assert.equal(entry.claimedAt, at(1))
-  assert.deepEqual(eventsSince(manifest), [...round, ...round])
+  assert.deepEqual(eventsSince(manifest), [
+    gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
+    gateCheckEvent('policy', 'pass', 'no violations'),
+    gateCheckEvent('code-scanning', 'fail', ALERT_REASON),
+    { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
+    gateCheckEvent('code-scanning', 'fail', otherReason),
+  ])
 })
 
 test('checkClaim: code scanning turned off is a skip, not a pass', async () => {
@@ -792,7 +1228,7 @@ test('mergeCandidate: a new code scanning alert drops the verification and goes 
   ])
 })
 
-test('mergeCandidate: with action block, a new code scanning alert blocks and drops the verification', async () => {
+test('mergeCandidate: with action block, a new code scanning alert blocks and keeps the verification', async () => {
   const { manifest, driver, gate, notices } = tickDriver({ A1: { ...samplePrs().A1, held: null } })
   const entry = driver.ledger.prs.A1
   manifest.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
@@ -800,9 +1236,10 @@ test('mergeCandidate: with action block, a new code scanning alert blocks and dr
 
   assert.equal(await driver.mergeCandidate(manifest.prs.find((item) => item.id === 'A1')), false)
   assert.equal(entry.state, 'blocked')
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'code-scanning-alerts'])
   assert.equal(entry.blocked.kind, 'code-scanning')
   assert.equal(entry.blocked.evidence, ALERT_REASON)
-  assert.equal(entry.verified, null)
+  assert.deepEqual(entry.verified, samplePrs().A1.verified)
   assert.deepEqual(eventsSince(manifest), [
     { id: 'A1', kind: 'gate-block', code: 'code-scanning', reasons: [ALERT_REASON] },
     { id: 'A1', kind: 'blocked', reason: 'code-scanning' },
@@ -947,10 +1384,6 @@ test('claimReport: a finding id in addressed never reaches GitHub, and the revie
     [['inline-5', 'Renamed it to parseTicket.']],
   )
 })
-
-function placeOf(entry) {
-  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
-}
 
 const PR_12_ROUTE = prRoute({ number: 12, head: { sha: NEW_HEAD } })
 const FINDINGS = 'Blocking findings:\n- F1: cli.mjs:40 swallows the error.'
