@@ -7,6 +7,9 @@ import {
   briefWaits,
   briefWritten,
   claimNewHead,
+  commandsPassed,
+  delegateReturned,
+  delegateStarted,
   DISPUTE,
   dropVerification,
   escalateDispute,
@@ -73,6 +76,8 @@ function noReport(since = AT) {
 function question(kind, text, evidence, run) {
   return { kind, text, evidence, run, delegate: null }
 }
+
+const DECISION = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12', run: 'P1-01-implement' }
 
 test('transitions: escalatedOverDispute is true for a PR escalated over a dispute', () => {
   const entry = entryWith({ state: 'escalated', escalation: DISPUTE })
@@ -294,6 +299,27 @@ test('transitions: runFailed interrupts the PR with the role of the run', () => 
   runFailed(entry, 'fix', AT)
 
   assert.deepEqual(entry, { ...before, state: 'interrupted', interruptedRole: 'fix', status: slot(), fix: noReport() })
+})
+
+test("transitions: runFailed keeps a fix run's fix, its reason and its note, and the PR owes that fix again", () => {
+  const entry = entryWith({ state: 'fixing', pr: 7, sessionId: 'session-1', fixReason: 'verifier findings', fixNote: 'F1: the flag.' })
+  const before = structuredClone(entry)
+
+  runFailed(entry, 'fix', AT)
+
+  assert.deepEqual(entry, { ...before, state: 'needs_fix', interruptedRole: null, status: slot() })
+  assert.deepEqual(entry.fix, { reason: 'verifier-findings', note: 'F1: the flag.', since: OPENED })
+})
+
+test('transitions: runFailed keeps a fix in back-off while it lasts', () => {
+  const entry = entryWith({ state: 'fixing', pr: 7, fixReason: 'CI is red', fixNote: 'test fails', retryAfter: LATER, failStreak: 1 })
+
+  runFailed(entry, 'fix', AT)
+
+  assert.deepEqual(
+    [entry.state, entry.status, entry.fix.reason],
+    ['needs_fix', { kind: 'waiting', code: 'backoff', until: LATER, failures: 1, since: AT }, 'ci-red'],
+  )
 })
 
 test('transitions: runFailed rests a brief and a verify run on their own stage, in back-off while it lasts', () => {
@@ -681,6 +707,30 @@ test('recoverRun: commands a dead driver ran leave the claim waiting for a slot,
   assert.deepEqual(entry, { ...before, status: slot() })
 })
 
+test('recoverRun: a delegate whose run is gone hands its question back, with no refund and no role', () => {
+  const entry = entryWith({
+    state: 'blocked',
+    pr: 7,
+    blocked: DECISION,
+    delegate: { runs: 1, lastQuestion: null, limitNotified: false, answers: [] },
+  })
+
+  delegateStarted(entry, { run: 'P1-01-delegate', at: EARLIER })
+
+  const before = structuredClone(entry)
+
+  assert.equal(recoverRun(entry, { refund: true, at: AT }), null)
+  assert.deepEqual(entry, {
+    ...before,
+    status: {
+      kind: 'needs-you',
+      code: 'decision',
+      question: question('needs-decision', 'Keep the old flag?', 'cli.mjs:12', 'P1-01-implement'),
+      since: AT,
+    },
+  })
+})
+
 test('recoverRun: the driver own merge keeps its status', () => {
   const entry = entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification() })
 
@@ -1050,4 +1100,98 @@ test('setStatus: a write that keeps the stage, the kind and the code keeps the t
 
   assert.deepEqual(entry.status, slot())
   assert.equal(entry.state, 'ready_claimed')
+})
+
+test('delegateStarted: the delegate runs on the stage of the question, which stays blocked, and the fix owed stays', () => {
+  const fix = { reason: 'verifier-findings', note: 'F1', since: EARLIER }
+  const implement = entryWith({ state: 'blocked', pr: 7, blocked: DECISION })
+  const brief = entryWith({ state: 'blocked', blocked: { kind: 'brief-questions', question: 'Which API?', evidence: '', run: null } })
+
+  implement.fix = fix
+  delegateStarted(implement, { run: 'P1-01-delegate', at: AT })
+  delegateStarted(brief, { run: 'P1-02-delegate', at: AT })
+
+  assert.deepEqual(
+    [implement.stage, implement.status, implement.fix, implement.state, implement.blocked],
+    [
+      'implement',
+      { kind: 'running', code: 'delegate', question: 'needs-decision', run: 'P1-01-delegate', since: AT },
+      fix,
+      'blocked',
+      DECISION,
+    ],
+  )
+
+  assert.deepEqual(
+    [brief.stage, brief.status, brief.state],
+    ['brief', { kind: 'running', code: 'delegate', question: 'brief-questions', run: 'P1-02-delegate', since: AT }, 'blocked'],
+  )
+})
+
+test('delegateStarted: a block of an unknown kind runs as unknown', () => {
+  const entry = entryWith({ state: 'blocked', pr: 7, blocked: { ...DECISION, kind: 'gate' } })
+
+  delegateStarted(entry, { run: 'P1-01-delegate', at: AT })
+
+  assert.deepEqual([entry.stage, entry.status.question], ['implement', 'unknown'])
+})
+
+test('delegateReturned: the question waits for you again with what the delegate did, the fix owed kept', () => {
+  const fix = { reason: 'ci-red', note: 'test fails', since: EARLIER }
+  const cases = [
+    { blocked: DECISION, outcome: 'escalated', reason: 'The plan is silent.', code: 'decision' },
+    { blocked: { ...DECISION, kind: 'stuck' }, outcome: 'failed', reason: 'killed by SIGKILL', code: 'obstacle' },
+    { blocked: { ...DECISION, kind: 'brief-questions' }, outcome: null, reason: '', code: 'brief-questions' },
+  ]
+
+  for (const { blocked, outcome, reason, code } of cases) {
+    const entry = entryWith({ state: 'blocked', pr: 7, blocked })
+    const stage = code === 'brief-questions' ? 'brief' : 'implement'
+
+    entry.fix = stage === 'implement' ? fix : null
+    delegateStarted(entry, { run: 'P1-01-delegate', at: EARLIER })
+    delegateReturned(entry, { outcome, reason, at: AT })
+
+    const asked = question(blocked.kind, blocked.question, blocked.evidence, blocked.run)
+
+    assert.deepEqual(
+      [entry.stage, entry.status, entry.state],
+      [stage, { kind: 'needs-you', code, question: { ...asked, delegate: outcome ? { outcome, reason } : null }, since: AT }, 'blocked'],
+      code,
+    )
+
+    assert.equal(entry.fix, stage === 'implement' ? fix : null, code)
+  }
+})
+
+test('delegateReturned: an entry with no block takes the kind its status names, with an empty question', () => {
+  const entry = entryWith({ state: 'blocked', pr: 7, blocked: { ...DECISION, kind: 'environment' } })
+
+  delegateStarted(entry, { run: 'P1-01-delegate', at: EARLIER })
+  entry.blocked = null
+  delegateReturned(entry, { outcome: 'escalated', reason: '', at: AT })
+
+  assert.deepEqual(entry.status, {
+    kind: 'needs-you',
+    code: 'obstacle',
+    question: { kind: 'environment', text: '', evidence: '', run: null, delegate: { outcome: 'escalated', reason: '' } },
+    since: AT,
+  })
+
+  const bare = entryWith({ state: 'pending' })
+
+  bare.blocked = undefined
+  delegateReturned(bare, { outcome: null, reason: '', at: AT })
+
+  assert.deepEqual([bare.stage, bare.status.code, bare.status.question.kind], ['brief', 'brief-questions', 'unknown'])
+})
+
+test('commandsPassed: the pass is written to the entry and the PR waits on verify for a slot, as a cut-off verifier does', () => {
+  const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
+
+  setStatus(entry, 'pre-verify', { kind: 'running', code: 'commands', sha: SHA }, EARLIER)
+  commandsPassed(entry, { sha: SHA, key: '{"ready":[[],[]]}', at: AT })
+
+  assert.deepEqual(entry.commands, { sha: SHA, at: AT, key: '{"ready":[[],[]]}' })
+  assert.deepEqual([entry.stage, entry.status, entry.state, entry.interruptedRole], ['verify', slot(), 'interrupted', 'verify'])
 })

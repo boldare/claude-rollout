@@ -1,5 +1,5 @@
 import { WAY_OUT } from './state.ts'
-import type { Hold, ShownStatus, WayOut } from './state.ts'
+import type { Hold, Question, ShownStatus, WayOut } from './state.ts'
 
 // One sentence and one way out per status, so the CLI and the UI print the
 // same text. Pure: no I/O and no clock. The data comes from ledgers of any
@@ -58,6 +58,19 @@ function firstLine(text: string | null | undefined): string {
   )
 }
 
+// What the delegate did about the question, once it handed it back.
+function delegatePart(question: Question | null | undefined): string {
+  const delegate = question?.delegate
+
+  if (!delegate) {
+    return ''
+  }
+
+  const done = delegate.outcome === 'escalated' ? 'the delegate passed it on' : 'the delegate failed'
+
+  return ` (${done}${part(': ', firstLine(delegate.reason))})`
+}
+
 function failedRuns(failures: number): string {
   return failures === 1 ? '1 failed run' : `${failures} failed runs`
 }
@@ -112,10 +125,11 @@ const SENTENCES: Sentences = {
   'review-in-progress': (status) =>
     `the maintainer is reviewing${part(', last comment at ', status.lastCommentAt && timeText(status.lastCommentAt))}`,
   'driver-stopped': () => 'the driver is not running',
-  'brief-questions': (status) => `the brief needs your answer${part(': ', firstLine(status.question?.text))}`,
-  decision: (status) => `the implementer asks${part(': ', firstLine(status.question?.text))}`,
+  'brief-questions': (status) =>
+    `the brief needs your answer${part(': ', firstLine(status.question?.text))}${delegatePart(status.question)}`,
+  decision: (status) => `the implementer asks${part(': ', firstLine(status.question?.text))}${delegatePart(status.question)}`,
   obstacle: (status) =>
-    `the implementer is blocked${part(' (', status.question?.kind, ')')}${part(': ', firstLine(status.question?.text))}`,
+    `the implementer is blocked${part(' (', status.question?.kind, ')')}${part(': ', firstLine(status.question?.text))}${delegatePart(status.question)}`,
   dispute: (status) => {
     const findings = joined(status.findings)
 

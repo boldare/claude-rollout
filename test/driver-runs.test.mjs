@@ -4,6 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { briefDrift, createDriver, doneDetail } from '../lib/driver.mjs'
 import { endRun, readLedger } from '../lib/ledger.mjs'
+import { toFix } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { mirrorPath, previewPath, worktreePath } from '../lib/worktree.mjs'
 import { at, samplePrs, waitFor } from './fixtures.mjs'
@@ -427,6 +428,18 @@ function commandCheckEvent(stage, item, level, result, evidence) {
   return { id: 'A1', kind: 'gate-check', stage, item, level, result, sha: SHA.slice(0, 7), evidence }
 }
 
+function placeOf(entry) {
+  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
+}
+
+// Commands that pass leave the PR waiting for a slot for its verifier.
+function assertWaitsForVerifier(entry) {
+  assert.deepEqual([...placeOf(entry), entry.state], ['verify', 'waiting', 'slot', 'interrupted'])
+}
+
+// The key of COMMANDS_GATE: its four command lists, without a head.
+const COMMANDS_KEY = JSON.stringify({ ready: [[], []], preVerify: [['npm test'], ['npm run lint']] })
+
 function deferred() {
   let resolve
   const promise = new Promise((done) => {
@@ -505,7 +518,7 @@ test('pre-verify: a failed recommended command only informs, and the next advanc
 
   await preVerified(setup)
 
-  assert.equal(entry.state, 'ready_claimed')
+  assertWaitsForVerifier(entry)
   assert.deepEqual(agentCalls, [])
   assert.deepEqual(eventsSince(manifest), [
     ...CLAIM_PASSES,
@@ -639,28 +652,226 @@ test('pre-verify: a job that throws logs on-done-error, keeps the PR ready_claim
   assert.deepEqual(seam.commands(), ['npm test'])
 })
 
-test('pre-verify: a pass lives in this driver process only, so another driver on the same rollout runs the commands again', async () => {
+test('pre-verify: a pass on the ledger holds across a restart, so a new driver runs no command and starts the verifier', async () => {
   const seam = commandSeam()
   const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
   const { manifest, gate } = setup
+  const roles = []
 
   await preVerified(setup)
 
+  const stored = readLedger(manifest).prs.A1.commands
+
   assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
-  assert.equal(setup.entry.preVerify.sha, SHA)
+  assert.deepEqual([stored.sha, stored.key], [SHA, COMMANDS_KEY])
+  assert.ok(Date.parse(stored.at), stored.at)
 
   const restarted = createDriver(manifest, {
     notify: () => {},
     cleanup: async () => {},
     collectFacts: async () => ({ ...gateFacts(manifest, gate.pr), ...gate.facts }),
-    runAgent: () => new Promise(() => {}),
+    runAgent: (_, pr, options) => {
+      roles.push(options.role)
+      return new Promise(() => {})
+    },
     runCommand: seam.runCommand,
   })
 
-  await preVerified(setup, restarted)
+  // preVerified would wait for the verifier, which never ends.
+  await restarted.advance(setup.pr)
 
-  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint', 'npm test', 'npm run lint'])
-  assert.equal(restarted.ledger.prs.A1.state, 'ready_claimed')
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
+  assert.deepEqual(roles, ['verify'])
+  assert.equal(restarted.ledger.prs.A1.state, 'verifying')
+})
+
+test('pre-verify commands: passed', async () => {
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: commandSeam().runCommand })
+
+  await preVerified(setup)
+
+  assertWaitsForVerifier(setup.entry)
+  assert.equal(setup.entry.interruptedRole, 'verify')
+  assert.deepEqual({ ...setup.entry.commands, at: null }, { sha: SHA, at: null, key: COMMANDS_KEY })
+})
+
+test('pre-verify commands: failed-required', async () => {
+  const seam = commandSeam({ 'npm test': commandRun({ exitCode: 1, tail: 'not ok 3 - parses an empty list\n' }) })
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+  await preVerified(setup)
+
+  assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'slot'])
+  assert.equal(setup.entry.fix.reason, 'commands')
+  assert.equal(setup.entry.commands, null)
+})
+
+test('pre-verify commands: dropped', async () => {
+  const cases = [
+    { name: 'stopped', outcome: commandRun({ exitCode: null, signal: 'SIGTERM', stopped: true }) },
+    { name: 'claim moved', change: (entry) => (entry.claimedSha = NEW_HEAD) },
+  ]
+
+  for (const { name, change = () => {}, outcome = commandRun() } of cases) {
+    const job = deferred()
+    const seam = commandSeam({ 'npm test': () => job.promise })
+    const { driver, pr, entry } = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+    await driver.advance(pr)
+    change(entry)
+    job.resolve(outcome)
+    await waitFor(() => !driver.running.has('A1'), `the job to end (${name})`)
+
+    assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'slot'], name)
+    assert.equal(entry.commands, null, name)
+  }
+
+  // Another stage keeps the status it moved to.
+  const job = deferred()
+  const seam = commandSeam({ 'npm test': () => job.promise })
+  const { driver, pr, entry } = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+  await driver.advance(pr)
+  toFix(entry, 'CI is red', 'The test fails.', { code: 'ci-red', at: new Date().toISOString() })
+  job.resolve(commandRun())
+  await waitFor(() => !driver.running.has('A1'), 'the job to end (another stage)')
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.equal(entry.commands, null)
+})
+
+test('pre-verify: a note queued while the commands run sends the PR to a fix when they pass, with no free slot', async () => {
+  const job = deferred()
+  const seam = commandSeam({ 'npm test': () => job.promise })
+  const { manifest, driver, pr, entry } = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
+
+  await driver.advance(pr)
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Rename the flag.' }), [
+    { id: 'A1', kind: 'note-queued', state: 'ready_claimed' },
+  ])
+
+  manifest.policy.concurrency = 0
+  job.resolve(commandRun())
+  await waitFor(() => !driver.running.has('A1'), 'the commands to finish')
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['maintainer-note', 'answer from the maintainer'])
+  assert.equal(entry.pendingNote, 'Rename the flag.')
+  assert.equal(entry.commands.sha, SHA)
+  assert.equal(kindsSince(manifest).at(-1), 'needs-fix')
+})
+
+test('pre-verify: a review comment on a PR whose commands passed becomes a fix after the quiet period, as on a claim', async () => {
+  const comment = {
+    id: 501,
+    user: { login: 'maint' },
+    body: 'Please rename the flag.',
+    created_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+  }
+
+  const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: commandSeam().runCommand })
+  const { manifest, driver, entry, github } = setup
+
+  await preVerified(setup)
+  assertWaitsForVerifier(entry)
+
+  manifest.repo.maintainers = ['maint']
+  manifest.policy.concurrency = 0
+  github.answer([
+    prRoute(),
+    runsRoute(SHA),
+    { path: 'repos/example/widgets/pulls/11/comments', body: [] },
+    { path: 'repos/example/widgets/pulls/11/reviews', body: [] },
+    { path: 'repos/example/widgets/issues/11/comments', body: [comment] },
+  ])
+
+  await driver.tick()
+
+  assert.ok(kindsSince(manifest).includes('review-feedback'))
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['maintainer-review', 'maintainer review'])
+})
+
+const FINDINGS = 'Blocking findings:\n- F1: cli.mjs:40 swallows the error.'
+const FIX_OWED = {
+  state: 'needs_fix',
+  pr: 11,
+  claimedSha: SHA,
+  sessionId: 'session-1',
+  fixReason: 'verifier findings',
+  fixNote: FINDINGS,
+  attempts: { implement: 1, fix: 0, verify: 1, brief: 0 },
+}
+
+const PREVIOUS_RUN = 'Your previous run for this reason ended without a final report'
+
+// A1 owes a fix for the verifier's findings. Its first fix run, started
+// through the driver, ends with `first`. Every later run never ends.
+async function failedFix(first) {
+  let started = 0
+  const setup = modelDriver({ A1: FIX_OWED }, { result: () => (started++ === 0 ? Promise.resolve(first) : new Promise(() => {})) })
+
+  await launched(setup, 'fix', { reason: setup.entry.fixReason, note: setup.entry.fixNote })
+  await waitFor(() => !setup.driver.running.has('A1'), 'the fix run to end')
+
+  return setup
+}
+
+// The prompt of the fix run that follows, kept session or fresh.
+async function nextFixPrompt(setup, { fresh }) {
+  await setup.driver.advance(setup.pr)
+  await waitFor(() => setup.calls.length === 2, 'the next fix run')
+
+  const next = setup.calls[1]
+
+  assert.equal(next.resume, !fresh)
+  assert.ok(next.prompt.includes(fresh ? 'Reason you were started: **verifier findings**.' : 'reason: **verifier findings**.'), next.prompt)
+  assert.ok(next.prompt.includes(FINDINGS), next.prompt)
+  assert.equal(next.prompt.includes('previous run ended without a report'), false)
+
+  return next.prompt
+}
+
+test("a failed fix run for the verifier's findings resumes with them, with the session kept and with it lost", async () => {
+  const failure = agentResult({ ok: false, error: 'error_during_execution' })
+
+  for (const { name, ending, fresh } of [
+    { name: 'session kept', ending: failure, fresh: false },
+    { name: 'session lost', ending: { ...failure, sessionMissing: true }, fresh: true },
+  ]) {
+    const setup = await failedFix(ending)
+
+    assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'backoff'], name)
+    assert.deepEqual([setup.entry.fix.reason, setup.entry.fix.note], ['verifier-findings', FINDINGS], name)
+
+    setup.entry.retryAfter = null
+
+    const prompt = await nextFixPrompt(setup, { fresh })
+
+    assert.ok(prompt.includes(`${PREVIOUS_RUN} (error_during_execution).`), name)
+  }
+})
+
+test('a stopped fix run gives the attempt back with no backoff and resumes with the same reason and note, with the session kept and with it lost', async () => {
+  const stopped = agentResult({ ok: false, error: 'stopped', stopped: true, costUsd: 0, seconds: 0 })
+
+  for (const { name, ending, fresh } of [
+    { name: 'session kept', ending: stopped, fresh: false },
+    { name: 'session lost', ending: { ...stopped, sessionMissing: true }, fresh: true },
+  ]) {
+    const setup = await failedFix(ending)
+    const { entry } = setup
+
+    assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'], name)
+    assert.deepEqual([entry.attempts.fix, entry.refunds], [0, 1], name)
+    assert.deepEqual([entry.retryAfter, entry.failStreak], [null, undefined], name)
+    assert.deepEqual([entry.fix.reason, entry.fix.note, entry.fixReason], ['verifier-findings', FINDINGS, 'verifier findings'], name)
+
+    const prompt = await nextFixPrompt(setup, { fresh })
+
+    assert.ok(prompt.includes(`${PREVIOUS_RUN} (stopped).`), name)
+  }
 })
 
 test('pre-verify: a new head or changed commands run the commands again', async () => {
@@ -689,7 +900,7 @@ test('pre-verify: a new head or changed commands run the commands again', async 
 
   assert.equal(seam.calls.length, 8)
   assert.equal(entry.preVerify.sha, NEW_HEAD)
-  assert.equal(entry.state, 'ready_claimed')
+  assertWaitsForVerifier(entry)
 })
 
 test('pre-verify: the evidence keeps the whole summary and the end of the output, 300 characters at most', async () => {
@@ -782,7 +993,7 @@ test('ready: a failed recommended ready command lets the pre-verify commands run
   await preVerified(setup)
 
   assert.deepEqual(seam.commands(), ['npm ci', 'npm run docs', 'npm test', 'npm run lint'])
-  assert.equal(entry.state, 'ready_claimed')
+  assertWaitsForVerifier(entry)
   assert.deepEqual(agentCalls, [])
   assert.deepEqual(eventsSince(manifest).slice(CLAIM_PASSES.length + 1, CLAIM_PASSES.length + 2), [
     commandCheckEvent('ready', 'npm run docs', 'recommended', 'fail', `exit 1: ${tail.trim()}`),
@@ -845,7 +1056,7 @@ test('ready: a change to gates.ready alone runs the commands again on the same h
 
   assert.deepEqual(seam.commands(), ['npm test', 'npm run lint', 'npm run docs', 'npm test', 'npm run lint'])
   assert.equal(entry.claimedSha, SHA)
-  assert.equal(entry.state, 'ready_claimed')
+  assertWaitsForVerifier(entry)
   assert.deepEqual(agentCalls, [])
 
   await driver.advance(pr)
@@ -925,7 +1136,7 @@ test('pre-verify: what a stopped job left in the worktree is cleaned before the 
 
   assert.ok(gitLines(tools).some((line) => line.endsWith(`reset --quiet --hard ${SHA}`)))
   assert.ok(gitLines(tools).some((line) => line.endsWith('clean -fdq')))
-  assert.equal(entry.state, 'ready_claimed')
+  assertWaitsForVerifier(entry)
   assert.equal(entry.preVerifyCleanup, null)
   assert.deepEqual(seam.commands(), ['npm test', 'npm test', 'npm run lint'])
   assert.equal(kindsSince(manifest).includes('needs-fix'), false)
@@ -964,7 +1175,7 @@ test('pre-verify: what a job that threw after a command left is cleaned before t
   await preVerified(setup)
 
   assert.ok(gitLines(tools).some((line) => line.endsWith(`reset --quiet --hard ${SHA}`)))
-  assert.equal(entry.state, 'ready_claimed')
+  assertWaitsForVerifier(entry)
   assert.equal(entry.preVerifyCleanup, null)
   assert.deepEqual(seam.commands(), ['npm test', 'npm test', 'npm run lint'])
   assert.equal(kindsSince(manifest).includes('needs-fix'), false)

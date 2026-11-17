@@ -200,9 +200,9 @@ const MUTATIONS = [
   },
   {
     id: 'job-end-save-unguarded',
-    file: 'lib/driver.mjs',
+    file: 'lib/driver/runs.ts',
     find: '} catch (saveError) {',
-    replace: '} catch (saveError) {\n      throw saveError',
+    replace: '} catch (saveError) {\n    throw saveError',
     tests: ['test/driver-runs.test.mjs'],
   },
   {

@@ -203,6 +203,23 @@ pairTest('brief', 'running', 'brief-review', async () => {
   return setup.entry
 })
 
+// A1 blocked on `blocked`, with the delegate at work on it in a run that never ends.
+async function delegating(blocked) {
+  const setup = setupFor({ A1: { state: 'blocked', blocked, pr: 11 } }, { policy: { concurrency: 1, delegate: {} }, runAgent: NEVER })
+
+  mkdirSync(worktreePath(setup.manifest, setup.pr), { recursive: true })
+  writeBrief(setup.pr)
+  await setup.driver.advance(setup.pr)
+
+  assert.deepEqual([setup.entry.status.question, setup.entry.status.run], [blocked.kind, 'A1-01-delegate'])
+
+  return setup.entry
+}
+
+pairTest('brief', 'running', 'delegate', () =>
+  delegating({ kind: 'brief-questions', question: 'Which API?', evidence: 'The plan names two.' }),
+)
+
 pairTest('brief', 'waiting', 'dependencies', async () => {
   const { driver, pr, entry } = setupFor({ A1: { state: 'pending' } }, {}, 'A2')
 
@@ -319,6 +336,8 @@ pairTest('implement', 'running', 'fix', async () => {
   return setup.entry
 })
 
+pairTest('implement', 'running', 'delegate', () => delegating(DECISION))
+
 // A cut-off run with no PR yet waits for the dependencies too.
 pairTest('implement', 'waiting', 'dependencies', async () => {
   const cutOff = setupFor(
@@ -359,7 +378,7 @@ pairTest('implement', 'waiting', 'slot', async () => {
 
   await driver.advance(pr)
 
-  assert.equal(entry.fix.reason, 'no-report')
+  assert.equal(entry.fix.reason, 'ci-red')
 
   return entry
 })
@@ -792,12 +811,12 @@ test('a ledger opened with a verdict older than its verification waits for the g
   assert.equal(current.status.since, at(85))
 })
 
-test('commands that pass leave the claim waiting for a slot', async () => {
+test('commands that pass leave the PR on verify · waiting: slot', async () => {
   const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: commandSeam().runCommand })
 
   await preVerified(setup)
 
-  assertStatus(setup.entry, 'pre-verify', 'waiting', 'slot')
+  assertStatus(setup.entry, 'verify', 'waiting', 'slot')
 })
 
 test('a PR that stays on pre-verify · waiting: ci for five ticks logs one status event, and a new driver logs none', async () => {

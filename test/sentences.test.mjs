@@ -143,6 +143,33 @@ test('statusSentence: a question prints its first non-blank line only', () => {
   assert.equal(sentence('needs-you', 'decision', { question: { ...question, text: '' } }), 'the implementer asks')
 })
 
+test('statusSentence: a question the delegate handed back names what it did, with the first line of its reason', () => {
+  const plain = {
+    'brief-questions': 'the brief needs your answer: Keep the old flag?',
+    decision: 'the implementer asks: Keep the old flag?',
+    obstacle: 'the implementer is blocked (environment): Keep the old flag?',
+  }
+
+  const parts = [
+    [
+      { outcome: 'escalated', reason: '\nThe plan is silent on the flag.\nThe brief too.' },
+      ' (the delegate passed it on: The plan is silent on the flag.)',
+    ],
+    [{ outcome: 'escalated', reason: '' }, ' (the delegate passed it on)'],
+    [{ outcome: 'failed', reason: 'killed by SIGKILL' }, ' (the delegate failed: killed by SIGKILL)'],
+    [{ outcome: 'failed', reason: '  ' }, ' (the delegate failed)'],
+    [null, ''],
+  ]
+
+  for (const [code, text] of Object.entries(plain)) {
+    for (const [delegate, part] of parts) {
+      const question = { ...STATUS_SAMPLES[code].question, delegate }
+
+      assert.equal(sentence('needs-you', code, { question }), `${text}${part}`, `${code} ${JSON.stringify(delegate)}`)
+    }
+  }
+})
+
 test('statusSentence: a code with no sentence throws', () => {
   assert.throws(() => statusSentence({ kind: 'waiting', code: 'nothing', since: at(0) }, FACTS), /no sentence for the status code nothing/)
 })

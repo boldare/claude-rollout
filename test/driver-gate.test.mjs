@@ -610,8 +610,10 @@ test('verified: a PASS the driver discards, for a stale SHA or from a touched tr
   assert.deepEqual(kindsSince(stale.manifest), ['verify-done', 'verify-stale'])
   assert.deepEqual(kindsSince(touched.manifest), ['verify-done', 'verifier-touched-tree'])
 
+  assert.equal(stale.entry.state, 'ready_claimed')
+  assert.deepEqual([touched.entry.stage, touched.entry.status.kind, touched.entry.status.code], ['verify', 'waiting', 'slot'])
+
   for (const setup of [stale, touched]) {
-    assert.equal(setup.entry.state, 'ready_claimed')
     assert.deepEqual(setup.entry.findings, FIRST_ROUND)
   }
 })
@@ -1156,4 +1158,105 @@ test('retry: a PR escalated over a dispute is refused, and the reason names roll
 
   assert.deepEqual(entry, before)
   assert.equal(entry.state, 'escalated')
+})
+
+function placeOf(entry) {
+  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
+}
+
+const RECHECKED = { F1: 'resolved', F2: 'wrong' }
+const PASS = { verdict: 'PASS', blocking: [] }
+
+// What git shows after a verifier changed the worktree, until the reset.
+const TOUCHED_TREE = [
+  { tool: 'git', args: 'status --porcelain', stdout: ' M lib/a.mjs' },
+  { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+  { tool: 'git', args: 'reset', stdout: '' },
+  { tool: 'git', args: 'clean', stdout: '' },
+]
+
+test('verifier run: pass on the claimed head, tree untouched', async () => {
+  const setup = recheckDriver()
+
+  await rechecked(setup, recheckVerdict(RECHECKED, PASS))
+
+  assert.deepEqual(placeOf(setup.entry), ['merge', 'waiting', 'gate-pending'])
+  assert.equal(setup.entry.verified.sha, SHA)
+})
+
+test('verifier run: pass, a note waits in the queue', async () => {
+  const setup = recheckDriver({ pendingNote: 'Keep the README short.' })
+
+  await rechecked(setup, recheckVerdict(RECHECKED, PASS))
+
+  assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([setup.entry.fix.reason, setup.entry.verified], ['maintainer-note', null])
+})
+
+test('verifier run: fail, or a required criterion that does not pass', async () => {
+  const failing = recheckDriver()
+  const criterion = recheckDriver({ verifyCriteria: VERIFY_CRITERIA })
+
+  await rechecked(failing, recheckVerdict(RECHECKED))
+  await rechecked(criterion, criteriaVerdict({ V1: 'fail', V2: 'pass', V3: 'pass' }))
+
+  for (const [name, setup] of Object.entries({ failing, criterion })) {
+    assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'slot'], name)
+    assert.equal(setup.entry.fix.reason, 'verifier-findings', name)
+  }
+})
+
+test('verifier run: dispute', async () => {
+  const setup = recheckDriver()
+
+  await rechecked(setup, recheckVerdict({ F1: 'resolved', F2: 'open' }))
+
+  assert.deepEqual(placeOf(setup.entry), ['verify', 'needs-you', 'dispute'])
+  assert.deepEqual(setup.entry.status.findings, ['F2'])
+})
+
+test('verifier run: pass-discarded', async () => {
+  const setup = recheckDriver()
+
+  setup.tools.answer(TOUCHED_TREE)
+  await rechecked(setup, recheckVerdict(RECHECKED, PASS))
+
+  assert.deepEqual(placeOf(setup.entry), ['verify', 'waiting', 'slot'])
+  assert.deepEqual([setup.entry.interruptedRole, setup.entry.verified], ['verify', null])
+})
+
+test('verifier run: stale', async () => {
+  const setup = recheckDriver()
+
+  await rechecked(setup, recheckVerdict(RECHECKED, { ...PASS, sha: NEW_HEAD }))
+
+  assert.deepEqual(placeOf(setup.entry), ['pre-verify', 'waiting', 'ci'])
+  assert.equal(setup.entry.status.sha, SHA)
+})
+
+test('verifier run: failed', async () => {
+  const setup = recheckDriver()
+
+  await rechecked(setup, agentResult({ ok: false, output: null, error: 'error_during_execution' }))
+
+  assert.deepEqual(placeOf(setup.entry), ['verify', 'waiting', 'backoff'])
+  assert.equal(setup.entry.status.until, setup.entry.retryAfter)
+})
+
+test('verified: a note queued while the verifier ran goes to a fix when its PASS is discarded from a touched tree', async () => {
+  const setup = recheckDriver()
+  const { manifest, driver, entry } = setup
+
+  driver.running.set('A1', 'verify')
+  assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Keep the README short.' }), [
+    { id: 'A1', kind: 'note-queued', state: 'verifying' },
+  ])
+
+  setup.tools.answer(TOUCHED_TREE)
+  await rechecked(setup, recheckVerdict(RECHECKED, PASS))
+  driver.running.delete('A1')
+
+  assert.deepEqual(kindsSince(manifest).slice(-3), ['verify-done', 'verifier-touched-tree', 'needs-fix'])
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['maintainer-note', 'answer from the maintainer'])
 })

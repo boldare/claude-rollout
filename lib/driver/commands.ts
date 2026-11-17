@@ -611,7 +611,12 @@ function noteOnImplement(entry: PrEntry, input: RowInput, status: Status, { stat
   }
 }
 
+// A note answers the question a delegate works on, as the delegate's own answer does.
 function note(entry: PrEntry, input: RowInput, command: EffectCommand): void {
+  if (entry.status?.kind === 'running' && entry.status.code === 'delegate') {
+    transitions.delegateReturned(entry, { outcome: null, reason: '', at: input.at })
+  }
+
   const status = entry.status as Status
   const text = command.text ?? ''
   const state = transitions.stateOf(entry)

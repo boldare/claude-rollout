@@ -16,6 +16,7 @@ import type {
   NeedsYouCode,
   NeedsYouDetails,
   OpenStage,
+  PreVerifyEntry,
   Question,
   QuestionKind,
   Role,
@@ -135,6 +136,7 @@ export interface PrEntry {
   gate?: StoredVerdict | null
   lastError: EntryBase['lastError']
   mergeSha?: string
+  commands: PreVerifyEntry['commands']
 }
 
 // An entry from a ledger that no driver of this version has filled yet.
@@ -422,19 +424,30 @@ export function runStarted(entry: PrEntry, role: BudgetRole, { at, sha = '' }: {
   }
 }
 
+// A fix run that fails keeps the fix it ran for, so the next run still has
+// its reason and note. Any other run on implement owes a no-report fix.
 export function runFailed(entry: PrEntry, role: BudgetRole, at: IsoTime): void {
+  const fix = entry.fix
+
+  if (role === 'fix' && fix && fix.reason !== 'no-report') {
+    entry.interruptedRole = null
+    rest(entry, role, { at, fix })
+    return
+  }
+
   entry.interruptedRole = role
-  rest(entry, role, at)
+  rest(entry, role, { at, fix: noReport(at) })
 }
 
-// A run that ended without a report rests on the stage of its role.
-function rest(entry: PrEntry, role: BudgetRole, at: IsoTime): void {
+// A run that ended without a report rests on the stage of its role. On
+// implement it owes `fix`.
+function rest(entry: PrEntry, role: BudgetRole, { at, fix }: { at: IsoTime; fix: Fix }): void {
   if (role === 'brief') {
     moveTo(entry, 'brief', resting(entry, at), { since: at })
   } else if (role === 'verify') {
     moveTo(entry, 'verify', resting(entry, at), { since: at })
   } else {
-    moveTo(entry, 'implement', resting(entry, at), { since: at, fix: noReport(at) })
+    moveTo(entry, 'implement', resting(entry, at), { since: at, fix })
   }
 }
 
@@ -489,6 +502,41 @@ function questionOf(blocked: Blocked): Question {
     evidence: blocked.evidence ?? '',
     run: blocked.run ?? null,
     delegate: null,
+  }
+}
+
+// The question stays in `blocked`, and so does the fix the PR owes.
+export function delegateStarted(entry: PrEntry, { run, at }: { run: string; at: IsoTime }): void {
+  const question = entry.blocked ? questionOf(entry.blocked).kind : 'unknown'
+  const status = { kind: 'running', code: 'delegate', question, run } as const
+
+  if (question === 'brief-questions') {
+    moveTo(entry, 'brief', status, { since: at })
+  } else {
+    moveTo(entry, 'implement', status, { since: at, fix: entry.fix })
+  }
+}
+
+// The kind a running delegate names, for an entry with no block to read it from.
+function delegatedKind(status: Status | null): QuestionKind {
+  return status?.kind === 'running' && status.code === 'delegate' ? status.question : 'unknown'
+}
+
+// The question goes back to the maintainer with what the delegate did about
+// it. A null outcome hands it back as it was: a note came, or the run is gone.
+export function delegateReturned(
+  entry: PrEntry,
+  { outcome, reason, at }: { outcome: 'escalated' | 'failed' | null; reason: string; at: IsoTime },
+): void {
+  const asked = entry.blocked ? questionOf(entry.blocked) : { kind: delegatedKind(entry.status), text: '', evidence: '', run: null }
+  const question = { ...asked, delegate: outcome ? { outcome, reason } : null }
+
+  if (entry.stage === 'brief') {
+    moveTo(entry, 'brief', { kind: 'needs-you', code: 'brief-questions', question }, { since: at })
+  } else if (listed(OBSTACLE_KINDS, question.kind)) {
+    moveTo(entry, 'implement', { kind: 'needs-you', code: 'obstacle', question }, { since: at, fix: entry.fix })
+  } else {
+    moveTo(entry, 'implement', { kind: 'needs-you', code: 'decision', question }, { since: at, fix: entry.fix })
   }
 }
 
@@ -606,6 +654,12 @@ export function recoverRun(entry: PrEntry, { refund, at }: { refund: boolean; at
     return null
   }
 
+  // The question waits for its answer again, and the delegate may take it again.
+  if (status.code === 'delegate') {
+    delegateReturned(entry, { outcome: null, reason: '', at })
+    return null
+  }
+
   const role = RECOVERED[status.code]
 
   if (!role) {
@@ -616,7 +670,7 @@ export function recoverRun(entry: PrEntry, { refund, at }: { refund: boolean; at
     entry.interruptedRole = role
   }
 
-  rest(entry, role, at)
+  rest(entry, role, { at, fix: noReport(at) })
 
   if (refund) {
     entry.attempts[role] = Math.max(0, entry.attempts[role] - 1)
@@ -793,7 +847,15 @@ export function reviewStarted(entry: PrEntry, { run, at }: { run: string; at: Is
   }
 }
 
-// Commands that did not send the PR to a fix leave it waiting for a slot.
+// The pass holds for its head and its command lists, across a restart too.
+// The verifier then starts as a cut-off one would, once a slot is free and
+// the claim is read again.
+export function commandsPassed(entry: PrEntry, { sha, key, at }: CommitStamp & { key: string }): void {
+  entry.commands = { sha, at, key }
+  wake(entry, 'verify', at)
+}
+
+// Commands that neither passed nor sent the PR to a fix leave the claim waiting for a slot, to run again.
 export function commandsEnded(entry: PrEntry, at: IsoTime): void {
   if (entry.status?.kind === 'running' && entry.status.code === 'commands') {
     write(entry, 'pre-verify', SLOT, at)

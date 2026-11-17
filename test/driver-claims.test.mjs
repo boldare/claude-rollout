@@ -947,3 +947,116 @@ test('claimReport: a finding id in addressed never reaches GitHub, and the revie
     [['inline-5', 'Renamed it to parseTicket.']],
   )
 })
+
+function placeOf(entry) {
+  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
+}
+
+const PR_12_ROUTE = prRoute({ number: 12, head: { sha: NEW_HEAD } })
+const FINDINGS = 'Blocking findings:\n- F1: cli.mjs:40 swallows the error.'
+const FIXING = {
+  state: 'fixing',
+  pr: 11,
+  claimedSha: SHA,
+  sessionId: 'session-1',
+  fixReason: 'verifier findings',
+  fixNote: FINDINGS,
+  attempts: { implement: 1, fix: 1, verify: 1, brief: 0 },
+}
+
+// A1's implementer run of `role` ends with `result`. `routes` answer for GitHub.
+async function implementerEnds(state, role, result, routes = []) {
+  const setup = tickDriver({ A1: state }, { routes })
+  const entry = setup.driver.ledger.prs.A1
+
+  await setup.driver.onDone(
+    setup.manifest.prs.find((item) => item.id === 'A1'),
+    role,
+    result,
+    { run: `A1-02-${role}` },
+  )
+
+  return { ...setup, entry }
+}
+
+function blockedEnding(blocked) {
+  return agentResult({ output: { status: 'BLOCKED', summary: 'Blocked on a question.', blocked } })
+}
+
+test('implementer run: ready, the report matches GitHub', async () => {
+  const { entry } = await implementerEnds(IMPLEMENTING, 'implement', READY, [PR_12_ROUTE])
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'ci'])
+  assert.deepEqual([entry.pr, entry.claimedSha, entry.status.sha], [12, NEW_HEAD, NEW_HEAD])
+})
+
+test('implementer run: ready, a note waits in the queue', async () => {
+  const { entry } = await implementerEnds({ ...IMPLEMENTING, pendingNote: 'Keep the old flag.' }, 'implement', READY, [PR_12_ROUTE])
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['maintainer-note', 'answer from the maintainer'])
+})
+
+test('implementer run: ready, report-mismatch', async () => {
+  const closed = prRoute({ number: 12, state: 'closed', head: { sha: NEW_HEAD } })
+  const { entry } = await implementerEnds(IMPLEMENTING, 'implement', READY, [closed])
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.equal(entry.fix.reason, 'report-mismatch')
+})
+
+test('implementer run: ready, github-unavailable', async () => {
+  const { entry } = await implementerEnds(IMPLEMENTING, 'implement', READY, [{ path: PR_12, status: 502 }])
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'github'])
+  assert.deepEqual([entry.interruptedRole, entry.ready], ['report', READY.output])
+})
+
+test('implementer run: blocked: needs-decision, brief-contradiction or no kind', async () => {
+  for (const kind of ['needs-decision', 'brief-contradiction', null]) {
+    const blocked = kind ? { kind, question: 'Keep the old flag?', evidence: 'cli.mjs:12 reads it.' } : undefined
+    const { entry } = await implementerEnds(IMPLEMENTING, 'implement', blockedEnding(blocked))
+
+    assert.deepEqual(placeOf(entry), ['implement', 'needs-you', 'decision'], String(kind))
+    assert.equal(entry.status.question.kind, kind ?? 'unknown')
+  }
+})
+
+test('implementer run: blocked: environment, ci, code-scanning, stuck', async () => {
+  for (const kind of ['environment', 'ci', 'code-scanning', 'stuck']) {
+    const { entry } = await implementerEnds(FIXING, 'fix', blockedEnding({ kind, question: 'The runner has no Docker.', evidence: '' }))
+
+    assert.deepEqual(placeOf(entry), ['implement', 'needs-you', 'obstacle'], kind)
+    assert.equal(entry.status.question.kind, kind)
+  }
+})
+
+test('implementer run: failed', async () => {
+  const failure = agentResult({ ok: false, error: 'error_during_execution' })
+  const implementing = (await implementerEnds(IMPLEMENTING, 'implement', failure)).entry
+  const fixing = (await implementerEnds(FIXING, 'fix', failure)).entry
+
+  for (const entry of [implementing, fixing]) {
+    assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'backoff'])
+    assert.equal(entry.status.until, entry.retryAfter)
+  }
+
+  assert.deepEqual([implementing.state, implementing.fix.reason], ['interrupted', 'no-report'])
+  assert.deepEqual([fixing.state, fixing.interruptedRole], ['needs_fix', null])
+  assert.deepEqual(
+    [fixing.fix.reason, fixing.fix.note, fixing.fixReason, fixing.fixNote],
+    ['verifier-findings', FINDINGS, 'verifier findings', FINDINGS],
+  )
+})
+
+test('implementer run: failed with stopped', async () => {
+  const stopped = agentResult({ ok: false, error: 'stopped', stopped: true, costUsd: 0, seconds: 0 })
+  const { entry } = await implementerEnds(FIXING, 'fix', stopped)
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.attempts.fix, entry.refunds, entry.retryAfter], [0, 1, null])
+  assert.deepEqual(
+    [entry.fix.reason, entry.fix.note, entry.fixReason, entry.fixNote],
+    ['verifier-findings', FINDINGS, 'verifier findings', FINDINGS],
+  )
+})
