@@ -91,15 +91,20 @@
           </li>
           <li>
             <strong>Stop and resume.</strong> The first Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops every agent run (a process
-            gets SIGTERM, then SIGKILL after 5 s), waits up to 15 s for the runs to end, saves and exits. A second signal exits at once. A
-            stop and a hard end (a kill, a crash, a reboot) resume the same way, within the five refunds of a PR: every run that was in
-            progress gets its attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. A fix run keeps
-            its fix, with its reason and note, and a delegate run gives its run back and hands its question back. A run cut off by a hard
-            end, or still going when the stop saves, is ended this way by the next <code>run</code> at its start. An implementer or fixer
-            then continues its own session, a verifier starts over and an unfinished brief is written again. A stop kills running ready and
-            pre-verify commands and their children the same way and drops their results. The next run cleans what they left in the worktree,
-            then runs them again. Commands that passed are kept in the ledger for their head and their lists, so a restart does not run them
-            again on that head.
+            gets SIGTERM, then SIGKILL after 5 s), waits up to 15 s for the runs to end, saves and exits. A second signal exits at once. On
+            the host each agent runs in a process group of its own. A stop, the timeout and the stall watchdog signal that group, so they
+            also end what the agent started, and a Ctrl-C in the terminal reaches the agents only through the driver. A stop and a hard end
+            (a kill, a crash, a reboot) resume the same way, within the five refunds of a PR: every run that was in progress gets its
+            attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. A fix run keeps its fix, with its
+            reason and note, and a delegate run gives its run back and hands its question back. A run cut off by a hard end, or still going
+            when the stop saves, is ended this way by the next <code>run</code> at its start. Before any role resumes, that start ends the
+            agent process of every run with no end. On the host it signals the run's process group, and only while the pid still has the
+            start time the run recorded. A pid with another start time is left alone. Under Docker it removes the run's container with
+            <code>docker rm --force</code>. Each such run logs <code>outlived-process</code> with its outcome, and a process the start could
+            not end notifies you. An implementer or fixer then continues its own session, a verifier starts over and an unfinished brief is
+            written again. A stop kills running ready and pre-verify commands and their children the same way and drops their results. The
+            next run cleans what they left in the worktree, then runs them again. Commands that passed are kept in the ledger for their head
+            and their lists, so a restart does not run them again on that head.
           </li>
         </ul>
 
