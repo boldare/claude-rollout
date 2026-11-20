@@ -11,7 +11,6 @@ import type { CommandsContext } from './commands.ts'
 // or GitHub itself: the context brings it, as lib/driver.mjs builds it.
 
 export const EVIDENCE_CHARS = 300
-const MAX_REFUNDS = 5
 
 type Effort = string
 type BriefStep = 'write' | 'review'
@@ -1048,9 +1047,8 @@ function failed(context: RunsContext, pr: RunPr, role: BudgetRole, result: Agent
   // attempt back, a bounded number of times; every failure backs off.
   const idle = result.stopped || result.transient || result.account || ((result.costUsd ?? 0) < 0.01 && (result.seconds ?? 0) < 60)
 
-  if (idle && (entry.refunds ?? 0) < MAX_REFUNDS) {
-    entry.attempts[role] -= 1
-    entry.refunds = (entry.refunds ?? 0) + 1
+  if (idle) {
+    transitions.refundAttempt(entry, role)
   }
 
   backOff(context, entry, result)

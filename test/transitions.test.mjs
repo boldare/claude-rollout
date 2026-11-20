@@ -23,6 +23,7 @@ import {
   holdPr,
   joinFix,
   recoverRun,
+  refundAttempt,
   releasePr,
   reportUsed,
   reportWaits,
@@ -817,7 +818,7 @@ test('transitions: recoverRun sends a briefing back to pending with its attempt 
   const before = structuredClone(entry)
 
   assert.equal(recoverRun(entry, { refund: true, at: AT }), 'brief')
-  assert.deepEqual(entry, { ...before, state: 'pending', attempts: { ...before.attempts, brief: 0 }, status: slot() })
+  assert.deepEqual(entry, { ...before, state: 'pending', attempts: { ...before.attempts, brief: 0 }, refunds: 1, status: slot() })
 })
 
 test('transitions: recoverRun interrupts a run state with its role and no refund', () => {
@@ -838,6 +839,7 @@ test('transitions: recoverRun interrupts a run state with its attempt refunded',
     interruptedRole: 'verify',
     state: 'interrupted',
     attempts: { ...before.attempts, verify: 0 },
+    refunds: 1,
     status: slot(),
   })
 })
@@ -869,7 +871,7 @@ test('recoverRun: commands a dead driver ran leave the claim waiting for a slot,
   assert.deepEqual(entry, { ...before, status: slot() })
 })
 
-test('recoverRun: a delegate whose run is gone hands its question back, with no refund and no role', () => {
+test('recoverRun: a delegate whose run is gone hands its question back and gives its run back, with no role', () => {
   const entry = entryWith({
     state: 'blocked',
     pr: 7,
@@ -884,6 +886,7 @@ test('recoverRun: a delegate whose run is gone hands its question back, with no 
   assert.equal(recoverRun(entry, { refund: true, at: AT }), null)
   assert.deepEqual(entry, {
     ...before,
+    delegate: { ...before.delegate, runs: 0 },
     status: {
       kind: 'needs-you',
       code: 'decision',
@@ -904,7 +907,104 @@ test('recoverRun: the driver own merge keeps its status', () => {
   assert.deepEqual(entry, before)
 })
 
-test('resetBudgets: the attempts, the refunds, the failure streak, the errors, the backoff and the delegate runs go back', () => {
+test('refundAttempt: gives one attempt back and counts it under five refunds, none at five, never below 0', () => {
+  const attempts = { implement: 0, fix: 2, verify: 0, brief: 0 }
+  const first = entryWith({ attempts: { ...attempts } })
+  const fifth = entryWith({ attempts: { ...attempts }, refunds: 4 })
+  const spent = entryWith({ attempts: { ...attempts }, refunds: 5 })
+  const unused = entryWith({ attempts: { ...attempts }, refunds: 1 })
+
+  refundAttempt(first, 'fix')
+  refundAttempt(fifth, 'fix')
+  refundAttempt(spent, 'fix')
+  refundAttempt(unused, 'verify')
+
+  assert.deepEqual([first.attempts, first.refunds], [{ ...attempts, fix: 1 }, 1])
+  assert.deepEqual([fifth.attempts, fifth.refunds], [{ ...attempts, fix: 1 }, 5])
+  assert.deepEqual([spent.attempts, spent.refunds], [attempts, 5])
+  assert.deepEqual([unused.attempts, unused.refunds], [attempts, 1])
+})
+
+test('recoverRun: a cut-off fix run keeps the fix it ran for, with its reason and note, as a stopped one does', () => {
+  const fields = {
+    state: 'fixing',
+    pr: 7,
+    sessionId: 'session-1',
+    fixReason: 'verifier findings',
+    fixNote: 'F1: the flag.',
+    attempts: { implement: 1, fix: 1, verify: 1, brief: 0 },
+  }
+
+  const cut = entryWith(structuredClone(fields))
+  const stopped = entryWith(structuredClone(fields))
+  const before = structuredClone(cut)
+
+  assert.equal(recoverRun(cut, { refund: true, at: AT }), 'fix')
+
+  refundAttempt(stopped, 'fix')
+  runFailed(stopped, 'fix', AT)
+
+  assert.deepEqual(cut, stopped)
+  assert.deepEqual(cut, {
+    ...before,
+    state: 'needs_fix',
+    interruptedRole: null,
+    attempts: { ...before.attempts, fix: 0 },
+    refunds: 1,
+    status: slot(),
+  })
+
+  assert.deepEqual(cut.fix, { reason: 'verifier-findings', note: 'F1: the flag.', since: OPENED })
+})
+
+test('recoverRun: a refund at start counts against the five of a PR, and none is given at five', () => {
+  const attempts = { implement: 1, fix: 0, verify: 0, brief: 1 }
+  const fifth = entryWith({ state: 'implementing', attempts: { ...attempts }, refunds: 4 })
+  const spent = entryWith({ state: 'implementing', attempts: { ...attempts }, refunds: 5 })
+  const briefing = entryWith({ state: 'briefing', attempts: { ...attempts }, refunds: 5 })
+  const unrefunded = entryWith({ state: 'implementing', attempts: { ...attempts }, refunds: 4 })
+
+  recoverRun(fifth, { refund: true, at: AT })
+  recoverRun(spent, { refund: true, at: AT })
+  recoverRun(briefing, { refund: true, at: AT })
+  recoverRun(unrefunded, { refund: false, at: AT })
+
+  assert.deepEqual([fifth.attempts, fifth.refunds], [{ ...attempts, implement: 0 }, 5])
+  assert.deepEqual([spent.attempts, spent.refunds], [attempts, 5])
+  assert.deepEqual([briefing.attempts, briefing.refunds], [attempts, 5])
+  assert.deepEqual([unrefunded.attempts, unrefunded.refunds], [attempts, 4])
+})
+
+test('recoverRun: at start a cut-off delegate run gives its run back, as a stopped one does', () => {
+  const fields = { state: 'blocked', pr: 7, blocked: DECISION, refunds: 2 }
+  const delegated = (runs) => {
+    const entry = entryWith({ ...fields, delegate: { runs, lastQuestion: null, limitNotified: false, answers: [] } })
+
+    delegateStarted(entry, { run: 'P1-02-delegate', at: EARLIER })
+
+    return entry
+  }
+
+  const cut = delegated(2)
+  const stopped = delegated(2)
+  const kept = delegated(2)
+  const none = delegated(0)
+
+  recoverRun(cut, { refund: true, at: AT })
+  recoverRun(kept, { refund: false, at: AT })
+  recoverRun(none, { refund: true, at: AT })
+
+  stopped.delegate.runs -= 1
+  delegateReturned(stopped, { outcome: null, reason: '', at: AT })
+
+  assert.deepEqual(cut, stopped)
+  assert.deepEqual([cut.delegate.runs, cut.refunds], [1, 2])
+  assert.equal(cut.status.code, 'decision')
+  assert.equal(kept.delegate.runs, 2)
+  assert.equal(none.delegate.runs, 0)
+})
+
+test('resetBudgets:the attempts, the refunds, the failure streak, the errors, the backoff and the delegate runs go back', () => {
   const entry = entryWith({
     state: 'escalated',
     attempts: { implement: 2, fix: 4, verify: 3, brief: 2 },

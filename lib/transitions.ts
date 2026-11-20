@@ -185,6 +185,8 @@ const GITHUB = { kind: 'waiting', code: 'github' } as const satisfies Unstamped<
 const HELD_PR = { kind: 'waiting', code: 'held', scope: 'pr' } as const satisfies Unstamped<WaitingOf<'held'>>
 const GATE_PENDING = { kind: 'waiting', code: 'gate-pending' } as const satisfies Unstamped<WaitingOf<'gate-pending'>>
 const OBSTACLE_KINDS = ['environment', 'ci', 'stuck', 'code-scanning'] as const satisfies readonly QuestionKind[]
+// How many times a PR gets back the attempt of a run that did no work.
+const MAX_REFUNDS = 5
 
 // includes() on an `as const` list refuses a value outside the list, which is the value it is asked about.
 function listed(list: readonly string[], value: string | null | undefined): boolean {
@@ -429,6 +431,19 @@ export function runStarted(entry: PrEntry, role: BudgetRole, { at, sha = '' }: {
   } else {
     moveTo(entry, 'verify', { kind: 'running', code: 'verify', sha, run: '' }, { since: at })
   }
+}
+
+// A run that did no work (a stop, an outage, a quota wall, a crash) gives
+// its attempt back, MAX_REFUNDS times in a PR at most.
+export function refundAttempt(entry: PrEntry, role: BudgetRole): void {
+  const refunds = entry.refunds ?? 0
+
+  if (entry.attempts[role] <= 0 || refunds >= MAX_REFUNDS) {
+    return
+  }
+
+  entry.attempts[role] -= 1
+  entry.refunds = refunds + 1
 }
 
 // A fix run that fails keeps the fix it ran for, so the next run still has
@@ -698,8 +713,9 @@ export function toMerged(entry: PrEntry, { mergeSha, pr, merged }: { mergeSha?: 
 }
 
 // For a running status whose run is gone: the driver restarted, or its
-// onDone threw. Commands a dead driver ran are its own work, so they cost
-// no attempt and are run again.
+// onDone threw. An agent run ends as a stopped one does, so a fix run keeps
+// its fix, and `refund` gives back what a stop gives back. Commands a dead
+// driver ran are its own work, so they cost no attempt and are run again.
 export function recoverRun(entry: PrEntry, { refund, at }: { refund: boolean; at: IsoTime }): BudgetRole | null {
   const status = entry.status
 
@@ -714,6 +730,10 @@ export function recoverRun(entry: PrEntry, { refund, at }: { refund: boolean; at
 
   // The question waits for its answer again, and the delegate may take it again.
   if (status.code === 'delegate') {
+    if (refund) {
+      entry.delegate.runs = Math.max(0, entry.delegate.runs - 1)
+    }
+
     delegateReturned(entry, { outcome: null, reason: '', at })
     return null
   }
@@ -724,14 +744,14 @@ export function recoverRun(entry: PrEntry, { refund, at }: { refund: boolean; at
     return null
   }
 
-  if (role !== 'brief') {
-    entry.interruptedRole = role
+  if (refund) {
+    refundAttempt(entry, role)
   }
 
-  rest(entry, role, { at, fix: noReport(at) })
-
-  if (refund) {
-    entry.attempts[role] = Math.max(0, entry.attempts[role] - 1)
+  if (role === 'brief') {
+    rest(entry, role, { at, fix: noReport(at) })
+  } else {
+    runFailed(entry, role, at)
   }
 
   return role

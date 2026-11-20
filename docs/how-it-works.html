@@ -90,14 +90,16 @@
             <code>manifest.yaml</code> is rejected the same way, once, and loads again when it is back.
           </li>
           <li>
-            <strong>Stop and resume.</strong> The first Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents (SIGTERM, then
-            SIGKILL after 5 s), saves and exits. A second signal exits at once. On the next <code>run</code>, every run that was in progress
-            gets its attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. A fix run the stop ended
-            keeps its fix, with its reason and note, and a delegate run hands its question back. An implementer or fixer then continues its
-            own session, a verifier starts over and an unfinished brief is written again. A stop kills running ready and pre-verify commands
-            and their children the same way and drops their results. The next run cleans what they left in the worktree, then runs them
-            again. Commands that passed are kept in the ledger for their head and their lists, so a restart does not run them again on that
-            head.
+            <strong>Stop and resume.</strong> The first Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops every agent run (a process
+            gets SIGTERM, then SIGKILL after 5 s), waits up to 15 s for the runs to end, saves and exits. A second signal exits at once. A
+            stop and a hard end (a kill, a crash, a reboot) resume the same way, within the five refunds of a PR: every run that was in
+            progress gets its attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. A fix run keeps
+            its fix, with its reason and note, and a delegate run gives its run back and hands its question back. A run cut off by a hard
+            end, or still going when the stop saves, is ended this way by the next <code>run</code> at its start. An implementer or fixer
+            then continues its own session, a verifier starts over and an unfinished brief is written again. A stop kills running ready and
+            pre-verify commands and their children the same way and drops their results. The next run cleans what they left in the worktree,
+            then runs them again. Commands that passed are kept in the ledger for their head and their lists, so a restart does not run them
+            again on that head.
           </li>
         </ul>
 
@@ -433,7 +435,8 @@
           <li>
             <strong>An outage is nobody's error.</strong> When GitHub or the network is down, a failed call counts against no PR and no
             step, and fires no five-in-a-row notice. The tick logs one <code>github-unavailable</code> event and tries again on the next
-            tick. After 30 minutes in a row you get one notice, and one more when GitHub answers again (<code>github-back</code>).
+            tick. A start during an outage goes on, and logs the fetch or label call it lost the same way. After 30 minutes in a row you get
+            one notice, and one more when GitHub answers again (<code>github-back</code>).
           </li>
         </ul>
 
@@ -760,9 +763,9 @@
                 <td class="nowrap"><span class="badge state state-interrupted">interrupted</span></td>
                 <td>
                   A run ended without a report: a crash, a stop, a stall, a timeout or an outage. A fix run that fails or is stopped keeps
-                  its reason and note and goes back to <code>needs_fix</code> instead, so the next fix run names them again. A fix run whose
-                  end the driver never saw, because the driver was killed, still comes here on the next start. A READY report also waits
-                  here when GitHub could not be read to check it. A PR whose commands passed waits here for its verifier, on
+                  its reason and note and goes back to <code>needs_fix</code> instead, so the next fix run names them again. A fix run cut
+                  off by a hard end (a kill, a crash, a reboot) keeps its fix too, on the next start. A READY report also waits here when
+                  GitHub could not be read to check it. A PR whose commands passed waits here for its verifier, on
                   <code>verify · waiting: slot</code>.
                 </td>
                 <td>
@@ -1318,8 +1321,8 @@
         <p>
           Each question gets one run, also when that run fails, and a PR at most
           <a href="manifest.html#policy-delegate"><code>maxPerPr</code></a> runs. A note of yours always wins. It applies at once, also
-          while the delegate runs, and the delegate's late answer is dropped. A delegate run a stop or a restart cut off hands the question
-          back as it was, and the delegate may take it again.
+          while the delegate runs, and the delegate's late answer is dropped. A delegate run a stop or a restart cut off gives its run back
+          and hands the question back as it was, and the delegate may take it again.
         </p>
 
         <h2 id="run">One agent run <a class="anchor" href="#run" aria-label="Link to this section">#</a></h2>
@@ -2032,9 +2035,10 @@
                 <td>A run ended without a report</td>
                 <td>
                   The PR becomes <code>interrupted</code> and resumes on a later tick. So does every run in progress when the driver stops.
-                  A fix run that fails or is stopped keeps its fix instead: the PR goes back to <code>needs_fix</code>, and the next fix run
-                  gets the same reason and note, and the run's error. A brief run goes back to <code>pending</code>, and a delegate run
-                  hands the question back as its <code>needs-you</code> status.
+                  A fix run that fails, is stopped or is cut off by a hard end keeps its fix instead: the PR goes back to
+                  <code>needs_fix</code>, and the next fix run gets the same reason and note. It also gets the run's error, unless a hard
+                  end cut the run off. A brief run goes back to <code>pending</code>, and a delegate run hands the question back as its
+                  <code>needs-you</code> status.
                 </td>
               </tr>
               <tr>

@@ -168,9 +168,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             lock left by a dead process, or one without a real pid, is cleared.
           </li>
           <li>
-            On start, runs that were in progress get their attempt back and become
-            <a href="how-it-works.html#state-interrupted">interrupted</a>, or pending for a brief. Then it fetches <code>origin</code> and
-            creates the label <code>rollout:&lt;name&gt;</code>.
+            On start, each run that was in progress gets its attempt back, within the five refunds of a PR, and its PR becomes
+            <a href="how-it-works.html#state-interrupted">interrupted</a>, or pending for a brief. A fix run keeps its reason and note, so
+            its PR owes that fix again. A delegate run gives its run back and hands its question back. Then it fetches
+            <code>origin</code> and creates the label <code>rollout:&lt;name&gt;</code>. A fetch or label call lost to an outage of GitHub
+            or the network logs <code>github-unavailable</code>, and the start goes on. The next start creates a label lost this way.
           </li>
           <li>
             It ticks every <code>policy.tickSeconds</code> (60 s), and a new command in the inbox wakes it sooner. What one tick does is on
