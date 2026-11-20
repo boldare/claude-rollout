@@ -9,6 +9,7 @@
 //   rollout.mjs retry     <id> [--dir D]
 //   rollout.mjs hold | release <id>... | --all [--dir D]
 //   rollout.mjs stop      [--dir D]   (stops the driver; agents resume on the next run)
+//   rollout.mjs clean     [--dir D]   (removes the mirror of a rollout whose driver is not running)
 //   rollout.mjs preflight [--dir D] [--live]
 //   rollout.mjs sandbox   build [--dir D]   (builds the agents' image for sandbox.runtime docker)
 //   rollout.mjs ui        [--root ROOT] [--port N] [--no-open] [--read-only]
@@ -47,6 +48,7 @@ import {
   versionWarning,
 } from '../lib/preflight.mjs'
 import { buildImage, runtimeLine, runtimeSummary } from '../lib/sandbox.mjs'
+import { removeMirror } from '../lib/worktree.mjs'
 import { startServer } from '../lib/server.mjs'
 import { rolloutRoot } from '../lib/rollouts.mjs'
 import { execFile } from 'node:child_process'
@@ -852,6 +854,18 @@ async function main() {
       }
 
       console.log(lockHolder(manifest) ? `driver ${pid} is still stopping` : `driver ${pid} stopped; agents resume on the next run`)
+      break
+    }
+
+    case 'clean': {
+      if (lockHolder(manifest)) {
+        console.error('a driver is running: stop it before clean')
+        process.exit(1)
+      }
+
+      const removed = await removeMirror(manifest)
+
+      console.log(removed.length > 0 ? removed.map((path) => `removed ${path}`).join('\n') : 'nothing to remove')
       break
     }
 

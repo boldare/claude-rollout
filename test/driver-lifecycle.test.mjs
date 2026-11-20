@@ -10,7 +10,7 @@ import { ERROR_KINDS } from '../lib/kinds.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { worktreePath } from '../lib/worktree.mjs'
+import { mirrorPath, worktreePath } from '../lib/worktree.mjs'
 import { fakeGitHubRepo, makeRollout, waitFor } from './fixtures.mjs'
 import { MAINTAINER_TOKEN, agentResult, apply } from './driver-helpers.mjs'
 
@@ -138,7 +138,7 @@ function fakeAgents(manifest, github, verifiedHeads) {
 // repo.path in it, and the driver's clones next to it. The cleanup waits for
 // the jobs of `started.driver`, so a failed test leaves none writing into a
 // removed dir. `runAgent` replaces the fake agents of this first driver.
-function lifecycle(context, { runAgent = null } = {}) {
+function lifecycle(context, { runAgent = null, removeMirror = undefined } = {}) {
   const tmp = mkdtempSync(join(tmpdir(), 'rollout-lifecycle-'))
   const origin = join(tmp, 'origin.git')
   const dir = join(tmp, 'demo')
@@ -182,6 +182,7 @@ function lifecycle(context, { runAgent = null } = {}) {
   const driver = createDriver(manifest, {
     notify: (_, message) => notices.push(message),
     runAgent: runAgent ?? fakeAgents(manifest, github, verifiedHeads),
+    removeMirror,
   })
 
   started.driver = driver
@@ -291,6 +292,7 @@ test('lifecycle: one PR goes from pending to merged, squashed into the origin, a
 
   postCommand(setup.manifest, approve(setup.entry.verified))
   await tickUntil(setup, () => setup.driver.finished(), 'finish')
+  assert.equal(existsSync(mirrorPath(setup.manifest)), true)
   await setup.driver.finish()
 
   const number = setup.entry.pr
@@ -308,12 +310,55 @@ test('lifecycle: one PR goes from pending to merged, squashed into the origin, a
 
   assertSquashed(setup, { before, head })
   assert.equal(existsSync(worktreePath(setup.manifest, setup.pr)), false)
+  assert.equal(existsSync(mirrorPath(setup.manifest)), false)
+  assert.equal(existsSync(setup.manifest.wtRoot), false)
   assert.equal(git(setup.origin, 'for-each-ref', 'refs/heads/feat/a1'), '')
   assert.deepEqual(statuses(branchDeletes), [204])
   assert.deepEqual(statuses(openLists), [200])
   assert.deepEqual(setup.github.ghCalls(), [merge])
   assert.ok(setup.notices.includes(`A1: merged PR #${number}`))
   assertNoTrouble(setup)
+})
+
+// Runs the PR to merged and stops right before finish().
+async function mergedPr(setup) {
+  await setup.driver.start()
+  await tickUntil(setup, () => setup.entry.state === 'verified', 'verification')
+  postCommand(setup.manifest, approve(setup.entry.verified))
+  await tickUntil(setup, () => setup.driver.finished(), 'finish')
+}
+
+function finishedEvent(setup) {
+  return readEvents(setup.manifest).find((event) => event.kind === 'finished')
+}
+
+test('lifecycle: finish keeps the worktree root when something else is in it, and removes only the mirror', async (context) => {
+  const setup = lifecycle(context)
+
+  await mergedPr(setup)
+
+  const note = join(setup.manifest.wtRoot, 'notes.txt')
+
+  writeFileSync(note, 'mine\n')
+  await setup.driver.finish()
+
+  assert.equal(existsSync(mirrorPath(setup.manifest)), false)
+  assert.equal(existsSync(note), true)
+  assert.equal(finishedEvent(setup).mirrorError, null)
+})
+
+test('lifecycle: a mirror that cannot be removed does not stop finish, and the finished event says why', async (context) => {
+  const setup = lifecycle(context, {
+    removeMirror: async () => {
+      throw new Error('mirror is busy')
+    },
+  })
+
+  await mergedPr(setup)
+  await setup.driver.finish()
+
+  assert.equal(finishedEvent(setup).mirrorError, 'mirror is busy')
+  assert.equal(existsSync(mirrorPath(setup.manifest)), true)
 })
 
 test('lifecycle: a head pushed after the verification is verified again, and an approve of the old head is rejected', async (context) => {
