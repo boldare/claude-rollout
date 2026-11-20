@@ -90,6 +90,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
                 <td><span class="badge where-ui">Rollout header</span></td>
               </tr>
               <tr>
+                <td class="name"><a href="#cmd-clean">clean</a></td>
+                <td>Removes the mirror of a rollout whose driver is not running.</td>
+                <td><span class="badge where-cli">CLI only</span></td>
+              </tr>
+              <tr>
                 <td class="name"><a href="#cmd-status">status</a></td>
                 <td>The PR table, the driver's heartbeat and recent events.</td>
                 <td><span class="badge where-ui">board</span></td>
@@ -178,7 +183,10 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             It ticks every <code>policy.tickSeconds</code> (60 s), and a new command in the inbox wakes it sooner. What one tick does is on
             <a href="how-it-works.html">How it works</a>.
           </li>
-          <li>When every PR of the run has merged, it reports the release PR for you to merge and exits.</li>
+          <li>
+            When every PR of the run has merged, it removes the mirror and the empty worktree root, reports the release PR for you to merge
+            and exits.
+          </li>
           <li>
             Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops the agents and any ready or pre-verify commands, waits up to 15 s for
             them, saves and exits. A second signal exits at once. The next <code>run</code> resumes the implementers' sessions.
@@ -218,6 +226,18 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           implementers' sessions, and verifications, briefs and ready and pre-verify commands start over. Without a driver it prints
           <code>no driver is running</code>, and a lock with pid 0 or -1 counts as no driver. Any other refusal prints the reason and exits
           1.
+        </p>
+
+        <h3 id="cmd-clean">clean <a class="anchor" href="#cmd-clean" aria-label="Link to this command">#</a></h3>
+
+        <pre><code>node $R clean --dir D</code></pre>
+
+        <p>
+          Removes <code>mirror.git</code> from the rollout's worktree directory, then the directory itself if nothing else is in it. The
+          driver does the same when every PR is merged. <code>clean</code> is for a rollout that finished while the driver was stopped, or
+          that ends with a closed PR, where the driver keeps running in case of a reopen. It prints one line per path it removed, or
+          <code>nothing to remove</code>. With a driver running it prints that one is running, exits 1 and removes nothing. It touches no PR
+          clone, ledger, brief or log, and it calls nothing on GitHub. The next <code>run</code> clones the mirror again when it needs one.
         </p>
 
         <h2 id="watching">Watch <a class="anchor" href="#watching" aria-label="Link to this section">#</a></h2>

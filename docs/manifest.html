@@ -1649,7 +1649,9 @@ prs:
                 <td>mirror.git</td>
                 <td>
                   A bare mirror of the <code>origin</code> of <code>repo.path</code>, cloned with your credentials on first use and updated
-                  before each new clone.
+                  before each new clone. The driver removes it, and the worktree directory when it is empty, once every PR is merged.
+                  <a href="commands.html#cmd-clean"><code>rollout clean</code></a> does it for a rollout whose driver is not running. The
+                  next <code>run</code> clones it again when it needs one.
                 </td>
               </tr>
               <tr>
