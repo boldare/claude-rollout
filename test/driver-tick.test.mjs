@@ -15,7 +15,9 @@ import {
   FETCH,
   MERGE_RULE,
   SHA,
+  agentResult,
   apply,
+  launched,
   mergeCalls,
   modelDriver,
   prRoute,
@@ -353,6 +355,96 @@ test('tick: maintainer feedback waits for a quiet window, then sends the PR to a
 
   assert.ok(kindsSince(manifest).includes('review-feedback'))
   assert.equal(entry.state, 'needs_fix')
+})
+
+// The routes of a maintainer's conversation comment on PR 11, made `minutesAgo` minutes ago.
+function commentRoutes(minutesAgo) {
+  const comment = { id: 501, user: { login: 'maint' }, body: 'Keep the flag, and rename it.' }
+
+  return [
+    prRoute(),
+    { path: `${PR_11}/comments`, body: [] },
+    { path: `${PR_11}/reviews`, body: [] },
+    {
+      path: 'repos/example/widgets/issues/11/comments',
+      body: [{ ...comment, created_at: new Date(Date.now() - minutesAgo * 60_000).toISOString() }],
+    },
+  ]
+}
+
+test('tick: a review comment on a PR that waits for a decision starts a fix with the maintainer review after the quiet period', async () => {
+  const question = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12', run: 'A1-01-implement' }
+  const { manifest, driver, github } = tickDriver(
+    { A1: { state: 'blocked', blocked: question, pr: 11, sessionId: 'session-1' } },
+    { rules: [FETCH], routes: commentRoutes(0) },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  manifest.repo.maintainers = ['maint']
+  await driver.tick()
+
+  assert.deepEqual([entry.stage, entry.status.code, entry.feedbackWaiting], ['implement', 'decision', true])
+  assert.ok(!kindsSince(manifest).includes('review-feedback'))
+
+  github.answer(commentRoutes(10))
+  await driver.tick()
+
+  assert.deepEqual(kindsSince(manifest), ['review-feedback', 'needs-fix'])
+  assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'needs-fix', reason: 'maintainer review' })
+  assert.deepEqual([entry.stage, entry.status.kind, entry.status.code], ['implement', 'waiting', 'slot'])
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['maintainer-review', 'maintainer review'])
+  assert.match(entry.fixNote, /\[conversation-501\] the PR as a whole\n {3}"Keep the flag, and rename it\."/)
+  assert.deepEqual(
+    entry.feedbackInFix.map((item) => item.id),
+    ['conversation-501'],
+  )
+})
+
+test('tick: a review comment that comes while an agent runs waits unread until the run ends, then applies', async () => {
+  let finish = null
+  const owed = { state: 'needs_fix', pr: 11, sessionId: 'session-1', fixReason: 'CI is red', fixNote: 'The test fails.' }
+  const setup = modelDriver(
+    { A1: owed, A2: { state: 'merged', pr: 12 }, A3: { state: 'merged', pr: 13 } },
+    { result: () => new Promise((resolve) => (finish = resolve)) },
+  )
+
+  const { manifest, driver, github, entry } = setup
+  const feedbackReads = () => github.requests().filter((request) => request.path.endsWith('/comments')).length
+
+  manifest.repo.maintainers = ['maint']
+  github.answer(commentRoutes(10))
+  await launched(setup, 'fix', { reason: 'CI is red', note: 'The test fails.' })
+  await driver.tick()
+
+  assert.ok(!kindsSince(manifest).includes('review-feedback'))
+  assert.equal(feedbackReads(), 0)
+
+  finish(agentResult({ ok: false, error: 'error_during_execution' }))
+  await waitFor(() => !driver.running.has('A1'), 'the fix run to end')
+  await driver.tick()
+
+  assert.deepEqual(
+    kindsSince(manifest).filter((kind) => ['review-feedback', 'note-queued'].includes(kind)),
+    ['review-feedback', 'note-queued'],
+  )
+
+  assert.deepEqual([entry.fix.reason, entry.fixReason], ['ci-red', 'CI is red'])
+  assert.match(entry.pendingNote, /"Keep the flag, and rename it\."/)
+})
+
+test('tick: a merged PR reads no review comments', async () => {
+  const { manifest, driver, github } = tickDriver({ A1: { state: 'merged', pr: 11 } }, { rules: [FETCH], routes: commentRoutes(10) })
+
+  manifest.repo.maintainers = ['maint']
+  await driver.tick()
+
+  assert.deepEqual(
+    github.requests().filter((request) => request.path.startsWith(PR_11) || request.path.includes('/issues/11/')),
+    [],
+  )
+
+  assert.ok(!kindsSince(manifest).includes('review-feedback'))
 })
 
 test('tick: a deleted manifest.yaml is rejected once, and loads again when it is back', async () => {

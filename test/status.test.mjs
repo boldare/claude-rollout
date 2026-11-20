@@ -765,6 +765,19 @@ pairTest('merge', 'needs-you', 'gate-blocked', async () => {
   return entry
 })
 
+pairTest('merge', 'needs-you', 'code-scanning-alerts', async () => {
+  const setup = setupFor({ A1: VERIFIED }, { policy: { merge: 'auto' } })
+
+  setup.manifest.repo.codeScanning = { action: 'block', minSeverity: 'medium' }
+  setup.gate.facts = scanned(SHA)
+  await setup.driver.mergeCandidate(setup.pr)
+
+  assert.equal(setup.entry.status.alerts.length, 1)
+  assert.deepEqual(setup.entry.verified, VERIFIED.verified)
+
+  return setup.entry
+})
+
 pairTest('merge', 'needs-you', 'errors', async () => {
   const setup = setupFor({ A1: { ...VERIFIED, tickErrors: 4 } }, { routes: [prRoute()] })
 

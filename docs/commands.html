@@ -470,7 +470,11 @@ A2  verify · needs-you: dispute
               </tr>
               <tr>
                 <td class="nowrap">any <code>needs-you: closed</code></td>
-                <td>Kept and queued. The status stays until the PR is reopened and <a href="#cmd-retry">retried</a>.</td>
+                <td>
+                  Kept and queued. The status stays until the PR is open again on GitHub. The reopen brings back the status the close
+                  replaced, and the note then applies by the row of that status. It is recorded as the answer to that status: the question
+                  of a decision or an obstacle, or the dispute.
+                </td>
               </tr>
               <tr>
                 <td class="nowrap">an agent at work</td>
@@ -545,6 +549,12 @@ A2  verify · needs-you: dispute
             allowed. The fix run resumes the implementer's own session when there is one.
           </li>
           <li>A note never shortens a backoff: the PR waits in <code>backoff</code> while it lasts.</li>
+          <li>
+            A maintainer's review comment on GitHub follows the same rows once you have been quiet for
+            <a href="manifest.html#policy-feedbackQuietMinutes"><code>policy.feedbackQuietMinutes</code></a
+            >, with the reason <code>maintainer-review</code> where a note gives <code>maintainer-note</code> (see
+            <a href="how-it-works.html#feedback">maintainer feedback</a>).
+          </li>
           <li>
             In the UI: <a href="ui.html#control-note">Note</a>, or <a href="ui.html#control-answer">Answer</a> for a blocked PR. Both
             dialogs show the effect.
@@ -624,12 +634,22 @@ A2  verify · needs-you: dispute
               </tr>
               <tr>
                 <td class="nowrap"><code>closed</code>, <code>gate-blocked</code>, <code>code-scanning-alerts</code></td>
-                <td>The stage's waiting status, and the same tick's sync, claim check or gate reads the cause again. See below.</td>
+                <td>
+                  No change. Sync, the claim check or the gate reads the cause every tick, and the PR moves on once it is gone. A note kept
+                  while the PR is closed waits for the reopen.
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap"><code>merge · needs-you: merge-refused</code></td>
+                <td>
+                  <code>merge · waiting: gate-pending</code>. The stored verdict goes, and the next gate run judges the PR and tries the
+                  merge again.
+                </td>
               </tr>
               <tr>
                 <td class="nowrap">
                   <code>approve</code>, <code>review</code>, <code>changes-requested</code>, <code>merge-by-hand</code>,
-                  <code>github-blocked</code>, <code>merge-refused</code>
+                  <code>github-blocked</code>
                 </td>
                 <td>No change. The gate reads the cause every tick.</td>
               </tr>
@@ -665,9 +685,8 @@ A2  verify · needs-you: dispute
         <ul>
           <li>The first row that matches wins. A PR on brief whose brief file exists follows the implement rows, brief questions aside.</li>
           <li>
-            For now the driver reads a closed PR, a gate block and code scanning alerts again only after a retry, so a retry is how a
-            reopened or unblocked PR moves on. A note kept while a verified PR was closed sends it to a fix run instead, without its
-            verification and approval, because the gate does not read notes.
+            A merge GitHub refused is the one gate status that waits for a retry. The gate does not try the merge again before, so it
+            notifies once.
           </li>
           <li>It does not clear a hold. Under a hold, a waiting status after it shows <code>held</code>.</li>
           <li>The UI offers <a href="ui.html#control-retry">Retry</a> wherever retry applies.</li>

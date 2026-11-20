@@ -1,4 +1,4 @@
-import { GATE_BLOCK_CODES, QUESTION_KINDS, ROLES } from './state.ts'
+import { GATE_BLOCK_CODES, QUESTION_KINDS, ROLES, STAGE_STATUSES } from './state.ts'
 import type {
   Approval,
   BriefEntry,
@@ -11,6 +11,7 @@ import type {
   Head,
   Hold,
   IsoTime,
+  Merged,
   MergeStatus,
   NoteRecord,
   NeedsYouCode,
@@ -137,6 +138,10 @@ export interface PrEntry {
   lastError: EntryBase['lastError']
   mergeSha?: string
   commands: PreVerifyEntry['commands']
+  // The needs-you status a close replaced, which the reopen brings back.
+  closedFrom?: Status | null
+  // Missing on a merge an older driver recorded, and on a dependency outside the run.
+  merged?: Merged | null
 }
 
 // An entry from a ledger that no driver of this version has filled yet.
@@ -216,14 +221,16 @@ export const FIX_REASON_CODES: ReadonlyMap<string, FixReason> = new Map([
   ['retry', 'retry'],
 ])
 
-// A fix the merge gate sends names its cause by the verdict's code.
+// An older driver named every fix of the merge gate "merge gate". Only the
+// fill of a ledger it wrote reads these, to name the cause by the verdict's code.
 const GATE_FIX_REASONS: ReadonlyMap<string, FixReason> = new Map([
   ['policy-violations', 'policy'],
   ['ci-red', 'ci-red'],
 ])
 
 // Any other text, an older driver's or a fixture's, counts as the verifier's
-// findings. A cut-off run gets no-report from the transition itself.
+// findings. A cut-off run gets no-report from the transition itself. The gate
+// code counts only beside "merge gate", for the fill of an older ledger.
 export function fixReasonCode(reason: string | null | undefined, gateCode: string | null = null): FixReason {
   if (reason === 'merge gate') {
     return GATE_FIX_REASONS.get(gateCode ?? '') ?? 'verifier-findings'
@@ -473,8 +480,10 @@ export function toClaimed(entry: PrEntry, { pr, sha, at }: CommitStamp & { pr: n
   moveTo(entry, 'pre-verify', claimWait(sha), { since: at })
 }
 
+// Another patch is verified and approved again from the start.
 export function claimNewHead(entry: PrEntry, { sha, at }: CommitStamp): void {
   entry.verified = null
+  entry.approved = null
   entry.claimedSha = sha
   entry.claimedAt = at
   entry.ciPendingSince = null
@@ -589,6 +598,46 @@ export function toBlocked(
   settle(entry)
 }
 
+// A needs-you status the close replaces is kept whole, so the reopen brings
+// back the same question, findings or error, and its time.
+export function toClosed(entry: PrEntry, { at, text }: { at: IsoTime; text: string }): void {
+  const status = entry.status
+
+  entry.closedFrom = status?.kind === 'needs-you' && status.code !== 'closed' ? status : null
+  toBlocked(entry, { kind: 'closed', question: text, evidence: '', run: null }, { at })
+}
+
+// Only a question has a version 2 block to write back.
+function blockOf(status: Status): Blocked | null {
+  if (status.kind !== 'needs-you' || (status.code !== 'decision' && status.code !== 'obstacle')) {
+    return null
+  }
+
+  const { kind, text, evidence, run } = status.question
+
+  return { kind, question: text, evidence, run }
+}
+
+// What the close replaced comes back unchanged. With nothing kept, or a status
+// its stage does not have, the PR waits on its stage, and the next tick
+// computes the rest.
+export function toReopened(entry: PrEntry, at: IsoTime): void {
+  const kept = entry.closedFrom ?? null
+  const stage = openStage(entry)
+
+  entry.closedFrom = null
+
+  if (!kept || !listed(STAGE_STATUSES[stage][kept.kind], kept.code)) {
+    entry.blocked = null
+    waitOnStage(entry, stage, at)
+    return
+  }
+
+  entry.blocked = blockOf(kept)
+  entry.status = kept
+  settle(entry)
+}
+
 export function escalateExhausted(
   entry: PrEntry,
   { role, limit, at, run }: { role: BudgetRole; limit: number; at: IsoTime; run: string | null },
@@ -624,13 +673,22 @@ export function escalateErrors(entry: PrEntry, { at, run }: { at: IsoTime; run: 
   moveTo(entry, openStage(entry), status, { since: at, fix: entry.fix })
 }
 
-export function toMerged(entry: PrEntry, { mergeSha, pr }: { mergeSha?: string; pr?: number } = {}): void {
+// A dependency outside the run merges with no record, and adds no key.
+export function toMerged(entry: PrEntry, { mergeSha, pr, merged }: { mergeSha?: string; pr?: number; merged?: Merged } = {}): void {
   if (mergeSha !== undefined) {
     entry.mergeSha = mergeSha
   }
 
   if (pr !== undefined) {
     entry.pr = pr
+  }
+
+  if (merged !== undefined) {
+    entry.merged = merged
+  }
+
+  if (entry.closedFrom) {
+    entry.closedFrom = null
   }
 
   entry.stage = 'merged'
@@ -812,6 +870,13 @@ export function retryFix(entry: PrEntry, at: IsoTime): void {
   toFix(entry, 'retry', note, { code: 'retry', at })
 }
 
+// rollout retry on a refused merge. With no stored verdict, neither the stored
+// rule nor the fill brings merge-refused back, and the gate judges the PR again.
+export function retryMerge(entry: PrEntry, at: IsoTime): void {
+  entry.gate = null
+  moveTo(entry, 'merge', GATE_PENDING, { since: at })
+}
+
 // A PR sent back to implement is no longer verified or approved.
 export function dropVerification(entry: PrEntry): void {
   entry.verified = null
@@ -824,11 +889,24 @@ export function approveInbox(entry: PrEntry, approval: StoredApproval, { until, 
   moveTo(entry, 'merge', { kind: 'waiting', code: 'merge-delay', until }, { since: at })
 }
 
-// The status setters below keep the derived state as it is. They write the
-// stage and the status only, never the state or the fix.
+// The status setters below write the stage and the status only, never the
+// fix. They keep the derived state, unless they replace a block the driver
+// reads every tick: the PR then moves on, and the state follows.
+
+const READ_AGAIN = ['closed', 'gate-blocked', 'code-scanning-alerts'] as const satisfies readonly NeedsYouCode[]
+
+function leftBlock(entry: PrEntry, before: Status | null): void {
+  if (before?.kind === 'needs-you' && listed(READ_AGAIN, before.code) && entry.status?.code !== before.code) {
+    entry.blocked = null
+    settle(entry)
+  }
+}
 
 export function setStatus<At extends OpenStage>(entry: PrEntry, stage: At, status: Unstamped<StatusAt<At>>, at: IsoTime): void {
+  const before = entry.status
+
   write(entry, stage, status, at)
+  leftBlock(entry, before)
 }
 
 // The driver reserves a run's name after the run started.
@@ -874,15 +952,20 @@ export function gateVerdict(entry: PrEntry, verdict: StoredVerdict, facts: GateF
   })
 
   if (status) {
+    const before = entry.status
+
     write(entry, 'merge', status, at)
+    leftBlock(entry, before)
   }
 }
 
 // The stored rule of decision 37, for a PR on merge that no gate run decides.
 export function mergeStatus(entry: PrEntry, at: IsoTime): void {
   const { status, since } = storedRule(entry, at)
+  const before = entry.status
 
   write(entry, 'merge', status, since)
+  leftBlock(entry, before)
 }
 
 // A PR in back-off waits it out, on the stages that have one.

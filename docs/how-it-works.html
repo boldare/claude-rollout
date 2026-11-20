@@ -354,13 +354,15 @@
             waits on a red base by itself. A failed read logs <code>watch-base-failed</code> and is tried again on the next tick.
           </li>
           <li>
-            <strong>Sync every PR with GitHub.</strong> A merge or a close made on GitHub wins. A head that moved after verification is
-            checked again. Then look for new maintainer feedback on the PR.
+            <strong>Sync every PR with GitHub.</strong> A merge, a close or a reopen made on GitHub wins. A merge on GitHub stops the PR's
+            agent in the same tick, if one runs. A head that moved after verification is checked again. Then look for new maintainer
+            feedback on the PR.
           </li>
           <li>
-            <strong>Run the gate.</strong> Verified PRs go through the gate in priority order, then manifest order. PRs with an agent
-            running or feedback waiting are skipped. The first merge or rebase ends this step, so there is at most one per tick. The step is
-            skipped while the rollout is held or stopping, and in a tick whose fetch failed.
+            <strong>Run the gate.</strong> PRs on <code>merge</code> go through the gate in priority order, then manifest order, a gate
+            block and code scanning alerts included, so the gate reads them again every tick. PRs with an agent running or feedback waiting
+            are skipped, and so are a closed PR, a refused merge and a PR escalated for errors. The first merge or rebase ends this step, so
+            there is at most one per tick. The step is skipped while the rollout is held or stopping, and in a tick whose fetch failed.
           </li>
           <li>
             <strong>Advance every PR</strong> in priority order, unless the rollout is held. Briefs, implementers, fixers, verifiers and
@@ -661,10 +663,11 @@
                   >, a violation or a new alert: <code>needs_fix</code>. With the scope gate on, an undeclared file out of scope:
                   <code>needs_fix</code>. A new alert under
                   <a href="manifest.html#repo-codeScanning"><code>codeScanning.action: block</code></a
-                  >: <code>blocked</code>. An alert from an analysis of an older commit: it stays here and waits for the analysis of the
-                  head. A <a href="manifest.html#criteria-catalog">criteria catalog</a> that is missing from
-                  <code>origin/&lt;base&gt;</code> or invalid when the verifier would start: it stays here with an <code>error</code> event,
-                  no verifier starts, and five erroring ticks in a row escalate it.
+                  >: <code>blocked</code>, and the claim check reads the alerts again on every tick until they are gone. An alert from an
+                  analysis of an older commit: it stays here and waits for the analysis of the head. A
+                  <a href="manifest.html#criteria-catalog">criteria catalog</a> that is missing from <code>origin/&lt;base&gt;</code> or
+                  invalid when the verifier would start: it stays here with an <code>error</code> event, no verifier starts, and five
+                  erroring ticks in a row escalate it.
                 </td>
               </tr>
               <tr id="state-verifying">
@@ -729,12 +732,12 @@
                   fix run with the reason <code>retry</code> and fresh attempts. With
                   <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, <a href="#delegate">the delegate</a> may
                   answer first. An agent sure that a code scanning alert is a false positive blocks with kind <code>code-scanning</code>,
-                  which never goes to the delegate. After that report, dismiss a false positive on GitHub and retry. After a code scanning
-                  block of the driver's, a gate block or a reopened PR with no note kept, <code>rollout retry</code> keeps the stage, and
-                  the same tick reads the cause again: a claim is checked again, and a verification goes back to the gate. A note on a
-                  closed PR is kept, and the PR stays closed until a retry. After that retry the note sends the PR to a fix run: a claim
-                  when its check reads the note, and a verified PR at once, without its verification and approval, because the gate does not
-                  read notes.
+                  which never goes to the delegate. After that report, dismiss a false positive on GitHub and retry. A code scanning block
+                  of the driver's, a gate block and a PR closed on GitHub need no command. The driver reads them again on every tick, and
+                  the PR moves on once the alert is dismissed, the gate passes or the PR is open again. A code scanning block keeps the
+                  verification. <code>rollout retry</code> on them only resets the budgets. A reopened PR gets back the status the close
+                  replaced, a question or a dispute with its time included, or else the waiting status of its stage. A note on a closed PR
+                  is kept, and after the reopen it applies as a note on the status the PR has again.
                 </td>
               </tr>
               <tr id="state-escalated">
@@ -1601,11 +1604,11 @@
 
         <p>
           A fix run resumes the implementer's session with <code>--resume</code>, so the agent keeps everything it knew. Its prompt names
-          the reason (for example <em>CI is red</em>, <em>rollout policy</em>, <em>verifier findings</em>, <em>merge gate</em>,
-          <em>rebase conflict</em> or <em>maintainer review</em>), a note with the details and the current head. A note you queued is
-          appended. If the session is gone, the driver drops it, and the next fix starts a new session with the whole implement prompt
-          inside <code>resume-fresh.md</code>. That prompt lists every recorded decision after the brief, oldest first, so the new session
-          loses none of them.
+          the reason (for example <em>CI is red</em>, <em>rollout policy</em>, <em>code scanning</em>, <em>verifier findings</em>,
+          <em>rebase conflict</em> or <em>maintainer review</em>), a note with the details and the current head. A fix from the merge gate
+          names its cause the same way. A note you queued is appended. If the session is gone, the driver drops it, and the next fix starts
+          a new session with the whole implement prompt inside <code>resume-fresh.md</code>. That prompt lists every recorded decision after
+          the brief, oldest first, so the new session loses none of them.
         </p>
 
         <p>
@@ -1863,11 +1866,23 @@
               <tr id="gate-merge-refused">
                 <td class="nowrap"><code>merge-refused</code></td>
                 <td>wait</td>
-                <td>GitHub refused the merge.</td>
+                <td>GitHub refused the merge. The gate leaves the PR alone until <code>rollout retry</code>.</td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <p>
+          Each verdict becomes the PR's status. A wait or a code that asks you for something is a status on <code>merge</code> that the gate
+          replaces on its next run, for example <code>held</code>, <code>dependencies</code>, <code>ci</code>, <code>base-red</code>,
+          <code>approve</code>, <code>review</code> or <code>merge-by-hand</code>. A block is <code>needs-you: gate-blocked</code> with its
+          code, or <code>code-scanning-alerts</code>, and the gate reads it again on every tick. A fix goes to
+          <code>implement · waiting</code> with the reason <code>policy</code>, <code>ci-red</code> or <code>code-scanning</code>. A rebase
+          waits for CI on the new head, and a conflict goes to <code>implement</code> with the reason <code>rebase-conflict</code>. A merge
+          is <code>running: merge</code> until the PR is <code>merged</code>. Only <code>merge-refused</code> waits for
+          <code>rollout retry</code>. <code>not-verified</code> sends the PR back to <code>pre-verify</code>, and
+          <code>merged-on-github</code> lasts until the next sync records the merge.
+        </p>
 
         <p>
           With <code>merge: human</code> the driver then waits
@@ -1887,6 +1902,7 @@
           </li>
           <li>
             <strong>GitHub refusing the merge</strong> is a state to wait in, not an error. The gate records it and you get a notification.
+            The PR waits on <code>merge-refused</code> until <code>rollout retry</code>, so the driver does not try the merge on every tick.
           </li>
           <li>
             <strong>A merge GitHub has not confirmed</strong>, accepted but with no merge commit to read yet (a merge queue, for example),
@@ -2095,8 +2111,8 @@
             <a href="#gate">gate</a> as data from the API instead.
           </li>
           <li>
-            It looks at PRs that are <code>ready_claimed</code>, <code>verified</code> or <code>needs_fix</code>, and at PRs that wait on
-            <code>verify</code> for their verifier, while no agent runs for them.
+            It looks at every PR with a GitHub PR, at any stage and status, a question or a dispute included. While an agent or the
+            pre-verify commands work on the PR, or the PR is closed, the comments wait unread until the run ends or the PR is open again.
           </li>
           <li>
             It waits until you have been quiet for
@@ -2104,8 +2120,11 @@
             (3), so a review in progress is not cut short. Meanwhile the gate skips the PR.
           </li>
           <li>
-            Then it drops the verification and sends the PR to a fix run with every new comment, the file and line, and the code it refers
-            to. The fixer lists each comment id in <code>addressed</code>, with what it did.
+            Then the comments follow the rows of <a href="commands.html#cmd-note"><code>rollout note</code></a
+            >, with the reason <code>maintainer-review</code> where a note gives <code>maintainer-note</code>. Most rows send the PR to a
+            fix run without its verification and approval. A fix the PR owes keeps its reason, and the comments join it. On a dispute the
+            findings go to the fix run, with the comments as your ruling. The note holds every new comment, the file and line, and the code
+            it refers to. The fixer lists each comment id in <code>addressed</code>, with what it did.
           </li>
           <li>
             After the fixer reports READY, the driver answers each inline thread with that action and the new short SHA, as the bot. Without
@@ -2144,8 +2163,8 @@
         </ul>
 
         <p>
-          Notices that could repeat on every tick are sent once per patch or head, and once per outage. A merge GitHub refuses is the
-          exception: it notifies on each refused attempt.
+          Notices that could repeat on every tick are sent once per patch or head, once per block, and once per outage. A merge GitHub
+          refuses notifies once, because the driver tries it again only after <code>rollout retry</code>.
         </p>
 
         <nav class="pager" aria-label="Pages">

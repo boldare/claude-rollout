@@ -52,9 +52,9 @@ const CI_RED_BLOCK = [
 const MUTATIONS = [
   {
     id: 'merge-ignores-rollout-hold',
-    file: 'lib/driver.mjs',
-    find: 'if (ledger.data.hold || stopping) {',
-    replace: 'if (stopping) {',
+    file: 'lib/driver/gate.ts',
+    find: 'if (ledger.data.hold || context.isStopping()) {',
+    replace: 'if (context.isStopping()) {',
     tests: ['test/driver-tick.test.mjs'],
   },
   {
@@ -80,9 +80,12 @@ const MUTATIONS = [
   },
   {
     id: 'merge-not-recorded',
-    file: 'lib/driver.mjs',
-    // sync calls toMerged with no mergeSha and sets lastMerge at 8 spaces, so its lines do not match.
-    find: '    transitions.toMerged(entry, { mergeSha })\n    ledger.data.lastMerge = { id: pr.id, sha: mergeSha, at: now() }\n',
+    file: 'lib/driver/gate.ts',
+    find: [
+      "  transitions.toMerged(entry, { mergeSha, merged: { by: 'driver', at, sha: mergeSha, from: 'merge', verified: true } })",
+      '  ledger.data.lastMerge = { id: pr.id, sha: mergeSha, at }',
+      '',
+    ].join('\n'),
     replace: '',
     tests: ['test/driver-gate.test.mjs'],
   },
@@ -102,14 +105,14 @@ const MUTATIONS = [
   },
   {
     id: 'moved-head-keeps-verification',
-    file: 'lib/driver.mjs',
-    find: "if (entry.state === 'verified' && githubPr.headRefOid !== entry.verified.sha) {",
+    file: 'lib/driver/sync.ts',
+    find: "if (entry.stage === 'merge' && entry.verified && githubPr.headRefOid !== entry.verified.sha) {",
     replace: 'if (false) {',
     tests: ['test/driver-claims.test.mjs'],
   },
   {
     id: 'closed-pr-not-blocked',
-    file: 'lib/driver.mjs',
+    file: 'lib/driver/sync.ts',
     find: "if (githubPr.state === 'CLOSED') {",
     replace: 'if (false) {',
     tests: ['test/driver-claims.test.mjs'],
@@ -144,16 +147,16 @@ const MUTATIONS = [
   },
   {
     id: 'feedback-no-quiet-window',
-    file: 'lib/driver.mjs',
-    find: 'if (minutesSince(fresh.at(-1).at) < manifest.policy.feedbackQuietMinutes) {',
+    file: 'lib/driver/sync.ts',
+    find: 'if (minutesSince(context, latest) < manifest.policy.feedbackQuietMinutes) {',
     replace: 'if (false) {',
     tests: ['test/driver-tick.test.mjs'],
   },
   {
     id: 'feedback-does-not-hold-merge',
-    file: 'lib/driver.mjs',
-    find: ' && !ledger.prs[pr.id].feedbackWaiting)',
-    replace: ')',
+    file: 'lib/driver/gate.ts',
+    find: ' && !entry.feedbackWaiting',
+    replace: '',
     tests: ['test/driver-gate.test.mjs'],
   },
   {
@@ -186,16 +189,23 @@ const MUTATIONS = [
   },
   {
     id: 'merge-delay-dropped',
-    file: 'lib/driver.mjs',
+    file: 'lib/driver/gate.ts',
     find: "if (manifest.policy.merge === 'human' && approvedFor < manifest.policy.mergeDelaySeconds) {",
     replace: 'if (false) {',
     tests: ['test/driver-commands.test.mjs'],
   },
   {
     id: 'not-verified-stays-verified',
-    file: 'lib/driver.mjs',
-    find: "if (judged.code === 'not-verified' && entry.state === 'verified') {",
+    file: 'lib/driver/gate.ts',
+    find: "if (judged.code === 'not-verified' && entry.stage === 'merge' && facts.pr) {",
     replace: 'if (false) {',
+    tests: ['test/driver-gate.test.mjs'],
+  },
+  {
+    id: 'merge-refused-tried-again',
+    file: 'lib/driver/gate.ts',
+    find: "const NOT_JUDGED = ['closed', 'merge-refused', 'errors']",
+    replace: "const NOT_JUDGED = ['closed', 'errors']",
     tests: ['test/driver-gate.test.mjs'],
   },
   {

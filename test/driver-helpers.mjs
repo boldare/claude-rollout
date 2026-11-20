@@ -16,6 +16,29 @@ export function agentResult(overrides = {}) {
   return { ok: true, output: null, costUsd: 1.25, seconds: 60, denials: [], error: null, stopped: false, ...overrides }
 }
 
+// An agent that runs until its signal is aborted, as runAgent in lib/spawn.mjs
+// does, and then ends stopped. `signals` holds the signal of every call.
+export function stoppableAgent() {
+  const signals = []
+
+  function runAgent(_, pr, options) {
+    signals.push(options.signal)
+
+    return new Promise((resolve) => {
+      const stopped = () => resolve(agentResult({ ok: false, stopped: true, error: 'stopped', costUsd: 0, seconds: 0 }))
+
+      if (options.signal.aborted) {
+        stopped()
+        return
+      }
+
+      options.signal.addEventListener('abort', stopped, { once: true })
+    })
+  }
+
+  return { signals, runAgent }
+}
+
 // A driver on a fixture rollout and a fake GitHub that answers `routes`. It
 // never sends a desktop notification: a test that checks them passes its own notify.
 export function driverFor(prs, { policy = {}, routes = [], ...options } = {}) {
