@@ -136,8 +136,9 @@ function fakeAgents(manifest, github, verifiedHeads) {
 
 // A rollout of A1 in one temp dir: the bare origin, the rollout dir with
 // repo.path in it, and the driver's clones next to it. The cleanup waits for
-// the driver's jobs, so a failed test leaves none writing into a removed dir.
-function lifecycle(context) {
+// the jobs of `started.driver`, so a failed test leaves none writing into a
+// removed dir. `runAgent` replaces the fake agents of this first driver.
+function lifecycle(context, { runAgent = null } = {}) {
   const tmp = mkdtempSync(join(tmpdir(), 'rollout-lifecycle-'))
   const origin = join(tmp, 'origin.git')
   const dir = join(tmp, 'demo')
@@ -180,7 +181,7 @@ function lifecycle(context) {
 
   const driver = createDriver(manifest, {
     notify: (_, message) => notices.push(message),
-    runAgent: fakeAgents(manifest, github, verifiedHeads),
+    runAgent: runAgent ?? fakeAgents(manifest, github, verifiedHeads),
   })
 
   started.driver = driver
@@ -191,6 +192,7 @@ function lifecycle(context) {
     manifest,
     github,
     driver,
+    started,
     notices,
     verifiedHeads,
     pr: manifest.prs.find((item) => item.id === 'A1'),
@@ -383,6 +385,53 @@ test('lifecycle: a hold of the rollout keeps an approved PR through five ticks, 
 
   postCommand(setup.manifest, { cmd: 'release', all: true })
   await tickUntil(setup, () => setup.entry.state === 'merged', 'merge after release --all')
+
+  assertSquashed(setup, { before, head })
+  assertNoTrouble(setup)
+})
+
+test('lifecycle: a driver that ends between two ticks with a run in flight is replaced by a new one on the same directory, and the PR merges', async (context) => {
+  const calls = []
+  const first = lifecycle(context, {
+    runAgent: (_, pr, { role }) => {
+      calls.push(role)
+
+      return new Promise(() => {})
+    },
+  })
+
+  await first.driver.start()
+  await first.driver.tick()
+  // The agent is called once its worktree is ready.
+  await waitFor(() => calls.length === 1, 'the implement run')
+
+  // The first driver is dropped with no stop, as a kill leaves it.
+  const manifest = loadManifest(first.manifest.dir)
+  const driver = createDriver(manifest, {
+    notify: (_, message) => first.notices.push(message),
+    runAgent: fakeAgents(manifest, first.github, first.verifiedHeads),
+  })
+
+  const setup = { ...first, manifest, driver, entry: driver.ledger.prs.A1 }
+
+  first.started.driver = driver
+
+  await driver.start()
+  await tickUntil(setup, () => setup.entry.state === 'verified', 'verification')
+
+  const before = originMain(setup)
+  const head = setup.entry.verified.sha
+
+  postCommand(setup.manifest, approve(setup.entry.verified))
+  await tickUntil(setup, () => setup.entry.state === 'merged', 'merge')
+
+  const recovered = readEvents(setup.manifest).filter((event) => event.kind === 'recovered-interrupted')
+
+  assert.deepEqual(calls, ['implement'])
+  assert.deepEqual(
+    recovered.map((event) => [event.id, event.role]),
+    [['A1', 'implement']],
+  )
 
   assertSquashed(setup, { before, head })
   assertNoTrouble(setup)

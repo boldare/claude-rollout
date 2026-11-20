@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createDriver } from '../lib/driver.mjs'
 import { GitHubError } from '../lib/gh.mjs'
 import { baseChecks, setFetch } from '../lib/github.mjs'
+import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
@@ -23,6 +24,7 @@ import {
   prRoute,
   restPr,
   runsRoute,
+  stoppableAgent,
   tickDriver,
   eventsSince,
   kindsSince,
@@ -1079,4 +1081,286 @@ test('tick: a label GitHub refuses is kept on the PR row, counts no error and is
 
   assert.equal(driver.ledger.prs.A1.stageLabelError, null)
   assert.equal(labelWrites(github).length, 2)
+})
+
+// A stop sets a flag in lib/spawn.mjs for the rest of this process, so these
+// tests come last and none of them uses the real runAgent.
+
+const LABELS = 'repos/example/widgets/labels'
+const LABEL_POST = { method: 'POST', path: LABELS, status: 201, body: {} }
+const LABEL_502 = { ...VIEW_502, method: 'POST', path: LABELS }
+const FINDINGS_NOTE = 'F1: cli.mjs:40 swallows the error.'
+
+// An agent that records its calls and never ends.
+function recordingAgent() {
+  const calls = []
+
+  function runAgent(_, pr, options) {
+    calls.push({ id: pr.id, role: options.role })
+
+    return new Promise(() => {})
+  }
+
+  return { calls, runAgent }
+}
+
+function savedEntry(manifest, id) {
+  return JSON.parse(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8')).prs[id]
+}
+
+// Where a PR resumes: its stage and status, the fix it owes and what its fix runs cost.
+function resumesAt(entry) {
+  return {
+    stage: entry.stage,
+    status: `${entry.status.kind}: ${entry.status.code}`,
+    fix: entry.fix && { reason: entry.fix.reason, note: entry.fix.note },
+    fixAttempts: entry.attempts.fix,
+    refunds: entry.refunds,
+  }
+}
+
+const FIX_KEPT = { stage: 'implement', status: 'waiting: slot', fix: { reason: 'verifier-findings', note: FINDINGS_NOTE } }
+
+// A1's fix run for the verifier's findings, on an agent that runs until its
+// signal is aborted. `refunds` refunds of the PR are spent already.
+async function fixRun(refunds) {
+  const agent = stoppableAgent()
+  const owed = {
+    state: 'needs_fix',
+    pr: 11,
+    claimedSha: SHA,
+    sessionId: 'session-1',
+    fixReason: 'verifier findings',
+    fixNote: FINDINGS_NOTE,
+    attempts: { implement: 1, fix: 0, verify: 1, brief: 0 },
+    refunds,
+  }
+
+  const setup = modelDriver({ A1: owed, A3: { state: 'merged', pr: 13 } }, { result: (options) => agent.runAgent(null, null, options) })
+
+  await launched(setup, 'fix', { reason: setup.entry.fixReason, note: setup.entry.fixNote })
+
+  return { ...setup, signals: agent.signals }
+}
+
+test('start, stop and a driver that died: stop, or a signal', async () => {
+  const { manifest, driver, entry, signals } = await fixRun(0)
+
+  assert.deepEqual([entry.status.kind, entry.status.code, signals[0].aborted], ['running', 'fix', false])
+
+  await driver.stop()
+
+  assert.equal(signals[0].aborted, true)
+  assert.equal(driver.running.has('A1'), false)
+  assert.deepEqual(resumesAt(entry), { ...FIX_KEPT, fixAttempts: 0, refunds: 1 })
+  assert.equal(entry.retryAfter, null)
+  assert.deepEqual(resumesAt(savedEntry(manifest, 'A1')), resumesAt(entry))
+  assert.equal(savedEntry(manifest, 'A1').retryAfter, null)
+})
+
+test('start, stop and a driver that died: a hard end: kill, crash, reboot', async () => {
+  const setup = modelDriver({ A1: { state: 'pending' }, A3: { state: 'merged', pr: 13 } })
+
+  await setup.driver.tick()
+  await waitFor(() => setup.calls.length === 1, 'the implement run')
+
+  const started = eventsSince(setup.manifest).find((event) => event.kind === 'implement-start')
+  const saved = savedEntry(setup.manifest, 'A1')
+
+  assert.equal(saved.state, 'implementing')
+  assert.deepEqual(
+    [saved.stage, saved.status.kind, saved.status.code, saved.status.run],
+    ['implement', 'running', 'implement', started.run],
+  )
+})
+
+test('start, stop and a driver that died: start after a hard end', async () => {
+  for (const { refunds, budget } of [
+    { refunds: 0, budget: { fixAttempts: 0, refunds: 1 } },
+    { refunds: 5, budget: { fixAttempts: 1, refunds: 5 } },
+  ]) {
+    const stopped = await fixRun(refunds)
+
+    await stopped.driver.stop()
+
+    const crashed = await fixRun(refunds)
+
+    // A tick saves the ledger, a launch alone does not.
+    crashed.driver.ledger.save()
+    crashed.github.answer([LABEL_POST])
+
+    const next = createDriver(loadManifest(crashed.manifest.dir), { notify: () => {}, runAgent: recordingAgent().runAgent })
+
+    await next.start()
+
+    assert.deepEqual(resumesAt(stopped.entry), { ...FIX_KEPT, ...budget }, `stop, ${refunds} refunds before`)
+    assert.deepEqual(resumesAt(next.ledger.prs.A1), { ...FIX_KEPT, ...budget }, `start, ${refunds} refunds before`)
+  }
+})
+
+test('start, stop and a driver that died: a verifier run cut off', async () => {
+  const agent = recordingAgent()
+  const { manifest, driver } = tickDriver(
+    {
+      A1: { state: 'verifying', pr: 11, claimedSha: SHA, attempts: { implement: 1, fix: 0, verify: 1, brief: 0 } },
+      A3: { state: 'merged', pr: 13 },
+    },
+    { policy: { concurrency: 1 }, rules: [FETCH], routes: [LABEL_POST, prRoute(), runsRoute(SHA, RED_RUNS)], runAgent: agent.runAgent },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  await driver.start()
+
+  assert.deepEqual([entry.stage, entry.status.kind, entry.status.code], ['verify', 'waiting', 'slot'])
+  assert.deepEqual([entry.attempts.verify, entry.refunds, entry.interruptedRole], [0, 1, 'verify'])
+
+  const before = readEvents(manifest).length
+
+  await driver.tick()
+
+  assert.deepEqual([entry.stage, entry.status.kind, entry.fix.reason], ['implement', 'waiting', 'ci-red'])
+  assert.ok(!kindsSince(manifest, before).includes('verify-start'))
+  assert.deepEqual(agent.calls, [])
+})
+
+test('start, stop and a driver that died: pre-verify commands cut off', async () => {
+  const attempts = { implement: 1, fix: 0, verify: 0, brief: 0 }
+  const commands = { stage: 'pre-verify', status: { kind: 'running', code: 'commands', sha: SHA, since: at(85) } }
+  const { manifest, driver } = tickDriver(
+    { A1: { state: 'ready_claimed', pr: 11, claimedSha: SHA, attempts, preVerifyCleanup: SHA, ...commands } },
+    { rules: [FETCH], routes: [LABEL_POST], runAgent: recordingAgent().runAgent },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  assert.deepEqual([entry.stage, entry.status.kind, entry.status.code], ['pre-verify', 'running', 'commands'])
+
+  await driver.start()
+
+  assert.deepEqual([entry.stage, entry.status.kind, entry.status.code], ['pre-verify', 'waiting', 'slot'])
+  assert.equal(entry.preVerifyCleanup, SHA)
+  assert.deepEqual(entry.attempts, attempts)
+  assert.deepEqual(kindsSince(manifest), ['driver-start'])
+})
+
+test('start, stop and a driver that died: a merge asked for, the process died before the answer', async () => {
+  const { A1 } = samplePrs()
+  const asked = {
+    ...A1,
+    held: null,
+    gate: { ...A1.gate, action: 'merge', code: 'merge', reasons: [] },
+    stage: 'merge',
+    status: { kind: 'running', code: 'merge', sha: SHA, since: at(85) },
+  }
+
+  const { manifest, driver, github } = tickDriver(
+    { A1: asked, A3: { state: 'merged', pr: 13 } },
+    { rules: [FETCH], routes: [LABEL_POST], runAgent: recordingAgent().runAgent },
+  )
+
+  const entry = driver.ledger.prs.A1
+
+  await driver.start()
+
+  assert.deepEqual([entry.stage, entry.status.kind, entry.status.code], ['merge', 'running', 'merge'])
+
+  github.answer([prRoute(MERGED_PR)])
+
+  const before = readEvents(manifest).length
+
+  await driver.tick()
+
+  const kinds = kindsSince(manifest, before)
+
+  assert.deepEqual([entry.stage, entry.merged.by], ['merged', 'driver'])
+  assert.ok(kinds.includes('merged'), kinds.join(', '))
+  assert.ok(!kinds.includes('merged-outside-driver'), kinds.join(', '))
+})
+
+test('start, stop and a driver that died: a command sent while the driver is down', async () => {
+  const { manifest, driver, tools } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null }, A3: { state: 'merged', pr: 13 } },
+    { rules: [FETCH, MERGE_RULE], routes: [LABEL_POST, prRoute()], runAgent: recordingAgent().runAgent },
+  )
+
+  // No driver reads the inbox before its first tick.
+  postCommand(manifest, { cmd: 'hold', id: 'A1' })
+
+  await driver.start()
+  await driver.tick()
+
+  const held = eventsSince(manifest).filter((event) => event.kind === 'held')
+
+  assert.deepEqual(
+    held.map((event) => event.id),
+    ['A1'],
+  )
+
+  assert.equal(driver.ledger.prs.A1.held.by, 'maintainer')
+  assert.deepEqual(mergeCalls(tools), [])
+})
+
+test('start, stop and a driver that died: start while GitHub does not answer', async () => {
+  const agent = recordingAgent()
+  const verifying = { state: 'verifying', pr: 12, claimedSha: SHA, attempts: { implement: 1, fix: 0, verify: 1, brief: 0 } }
+  const { manifest, driver, tools } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null }, A2: verifying, A3: { state: 'merged', pr: 13 } },
+    {
+      policy: { concurrency: 2 },
+      rules: [FETCH_UNREACHABLE, MERGE_RULE],
+      routes: [LABEL_502, VIEW_502, { ...VIEW_502, path: 'repos/example/widgets/pulls/12' }],
+      runAgent: agent.runAgent,
+    },
+  )
+
+  await driver.start()
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ['recovered-interrupted', 'github-unavailable', 'driver-start'],
+  )
+
+  assert.deepEqual(events[0], { id: 'A2', kind: 'recovered-interrupted', role: 'verify' })
+  assert.equal(events[1].source, 'fetch')
+
+  await driver.tick()
+
+  assert.deepEqual(mergeCalls(tools), [])
+  assert.deepEqual(
+    kindsSince(manifest, events.length).filter((kind) => kind.endsWith('-start')),
+    [],
+  )
+
+  assert.deepEqual(agent.calls, [])
+})
+
+test('start: a label call lost to an outage is logged with source label, and the start goes on', async () => {
+  const { manifest, driver } = tickDriver(samplePrs(), { rules: [FETCH], routes: [LABEL_502], runAgent: recordingAgent().runAgent })
+
+  await driver.start()
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ['recovered-interrupted', 'github-unavailable', 'driver-start'],
+  )
+
+  assert.deepEqual(events[1], {
+    id: '-',
+    kind: 'github-unavailable',
+    source: 'label',
+    error: 'POST repos/example/widgets/labels: HTTP 502: Bad Gateway',
+    minutes: 0,
+  })
+})
+
+test('start: a fetch that fails for another reason still rejects the start', async () => {
+  const { manifest, driver } = tickDriver(samplePrs(), { rules: [FETCH_FAILS], routes: [LABEL_POST], runAgent: recordingAgent().runAgent })
+
+  await assert.rejects(driver.start(), /unable to access the remote/)
+  assert.ok(!kindsSince(manifest).includes('driver-start'))
 })

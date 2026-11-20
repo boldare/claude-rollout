@@ -59,9 +59,9 @@ const MUTATIONS = [
   },
   {
     id: 'advance-ignores-rollout-hold',
-    file: 'lib/driver.mjs',
-    find: 'if (!ledger.data.hold && !stopping) {',
-    replace: 'if (!stopping) {',
+    file: 'lib/driver/loop.ts',
+    find: 'if (!ledger.data.hold && !state.stopping) {',
+    replace: 'if (!state.stopping) {',
     tests: ['test/driver-tick.test.mjs'],
   },
   {
@@ -98,9 +98,9 @@ const MUTATIONS = [
   },
   {
     id: 'start-throws',
-    file: 'lib/driver.mjs',
-    find: 'async function start() {',
-    replace: "async function start() {\n    throw new Error('mutation: start throws')",
+    file: 'lib/driver/loop.ts',
+    find: 'export async function start(context: LoopContext): Promise<void> {',
+    replace: "export async function start(context: LoopContext): Promise<void> {\n  throw new Error('mutation: start throws')",
     tests: ['test/driver-tick.test.mjs'],
   },
   {
