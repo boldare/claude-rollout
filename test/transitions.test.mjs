@@ -1004,7 +1004,7 @@ test('recoverRun: at start a cut-off delegate run gives its run back, as a stopp
   assert.equal(none.delegate.runs, 0)
 })
 
-test('resetBudgets:the attempts, the refunds, the failure streak, the errors, the backoff and the delegate runs go back', () => {
+test('resetBudgets: the attempts, the refunds, the failure streak, the errors, the backoff and the delegate runs go back', () => {
   const entry = entryWith({
     state: 'escalated',
     attempts: { implement: 2, fix: 4, verify: 3, brief: 2 },
