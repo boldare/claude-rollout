@@ -304,6 +304,38 @@ export interface Finding {
   answer: { outcome: 'fixed' | 'disputed'; action: string } | null
 }
 
+export const REVIEW_SEVERITIES = ['high', 'medium', 'low'] as const
+export type ReviewSeverity = (typeof REVIEW_SEVERITIES)[number]
+
+// One finding of an external review as review.json gives it, with its texts cut to their limits.
+export interface ReviewFinding {
+  severity: ReviewSeverity
+  criterion: string
+  title: string
+  file: string
+  line: number
+  failureScenario: string
+  fix: string
+  // Whether the review's previous run reported it too. Null in the list of fixed ones.
+  status: 'new' | 'open' | null
+}
+
+// What the driver read for one head. It lives as long as the claim: a new head drops it.
+export interface Review extends CommitStamp {
+  // The review's check run this result came from, so a new run of the same head is read again.
+  run: number | null
+  // The commit the review read when its result was carried to this head. Line numbers refer to it.
+  reusedFrom: string | null
+  // Why there is no result. Null when the file was read.
+  skipped: string | null
+  findings: ReviewFinding[]
+  fixed: ReviewFinding[]
+  // How many findings the file had beyond the 50 the driver keeps.
+  leftOut: number
+  // The candidates fixed at the launch of the last verifier of this head. The prompt and the judgment of the verdict read this list.
+  candidates: { id: string; key: string }[]
+}
+
 export interface NoteRecord {
   at: IsoTime
   by: Subset<Actor, 'maintainer' | 'delegate'>
