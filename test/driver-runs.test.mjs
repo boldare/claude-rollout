@@ -881,6 +881,117 @@ test('a stopped fix run gives the attempt back with no backoff and resumes with 
   }
 })
 
+// A1 with a session, whose runs end with the results pushed to `results`.
+function sessionCostDriver(known) {
+  const results = []
+  const setup = modelDriver({ A1: known }, { result: () => Promise.resolve(results.shift()) })
+
+  return { ...setup, results }
+}
+
+// Launches a run and waits for it to end with `reported`, the cost Claude
+// Code would write in its result line.
+async function runsTo(setup, role, reported, options) {
+  const before = setup.calls.length
+
+  setup.results.push(agentResult({ ok: false, error: 'error_during_execution', costUsd: reported }))
+  setup.driver.launch(setup.pr, role, options)
+  await waitFor(() => setup.calls.length > before && !setup.driver.running.has('A1'), `the ${role} run to end`)
+  setup.entry.retryAfter = null
+
+  return setup.calls.at(-1)
+}
+
+function recordedCosts(setup) {
+  return Object.values(setup.driver.ledger.data.runs).map((record) => record.costUsd)
+}
+
+const OWED = { reason: 'verifier findings', note: FINDINGS }
+
+test('a resumed fix run records only the cost it added, in its record, its done event and the entry', async () => {
+  const setup = sessionCostDriver({ state: 'pending' })
+  const { entry } = setup
+  const implement = await runsTo(setup, 'implement', 2)
+
+  assert.equal(implement.resume, false)
+  assert.equal(entry.sessionCostUsd, 2)
+
+  const first = await runsTo(setup, 'fix', 3.5, OWED)
+
+  assert.equal(first.resume, true)
+  assert.equal(first.sessionId, implement.sessionId)
+  assert.equal(entry.sessionCostUsd, 3.5)
+
+  await runsTo(setup, 'fix', 4, OWED)
+
+  assert.deepEqual(recordedCosts(setup), [2, 1.5, 0.5])
+  assert.equal(entry.costUsd, 4)
+  assert.equal(entry.sessionCostUsd, 4)
+
+  const events = eventsSince(setup.manifest)
+
+  assert.deepEqual(
+    events.filter((event) => event.kind === 'fix-done').map((event) => [event.cost, event.reportedCost]),
+    [
+      [1.5, 3.5],
+      [0.5, 4],
+    ],
+  )
+
+  assert.equal(events.find((event) => event.kind === 'implement-done').reportedCost, undefined)
+})
+
+test('a fix run that starts a new session after the session was lost records its cost as reported', async () => {
+  const setup = sessionCostDriver({ ...FIX_OWED, sessionCostUsd: 3 })
+  const { entry } = setup
+
+  setup.results.push(agentResult({ ok: false, error: 'no session', costUsd: 0, sessionMissing: true }))
+  setup.driver.launch(setup.pr, 'fix', OWED)
+  await waitFor(() => entry.sessionId === null && !setup.driver.running.has('A1'), 'the lost session')
+
+  assert.equal(entry.sessionCostUsd, 0)
+  entry.retryAfter = null
+
+  const fresh = await runsTo(setup, 'fix', 1.75, OWED)
+
+  assert.equal(fresh.resume, false)
+  assert.deepEqual(recordedCosts(setup), [0, 1.75])
+  assert.equal(entry.costUsd, 1.75)
+  assert.equal(entry.sessionCostUsd, 1.75)
+  assert.deepEqual(
+    eventsSince(setup.manifest).filter((event) => event.reportedCost !== undefined),
+    [],
+  )
+})
+
+test('a resumed fix run that reports no cost records 0 and keeps the session cost', async () => {
+  const setup = sessionCostDriver({ ...FIX_OWED, sessionCostUsd: 3 })
+  const { entry } = setup
+
+  const resumed = await runsTo(setup, 'fix', 0, OWED)
+
+  assert.equal(resumed.resume, true)
+  assert.deepEqual(recordedCosts(setup), [0])
+  assert.equal(entry.costUsd, 0)
+  assert.equal(entry.sessionCostUsd, 3)
+})
+
+test('a verify run between two fixes changes neither the session cost nor the cost of the next fix', async () => {
+  const setup = sessionCostDriver({ ...FIX_OWED, sessionCostUsd: 2, costUsd: 2 })
+  const { entry } = setup
+
+  await runsTo(setup, 'fix', 3.5, OWED)
+  await runsTo(setup, 'verify', 9, { sha: SHA })
+
+  assert.equal(entry.sessionCostUsd, 3.5)
+
+  await runsTo(setup, 'fix', 4, OWED)
+
+  assert.deepEqual(recordedCosts(setup), [1.5, 9, 0.5])
+  assert.equal(entry.costUsd, 13)
+  assert.equal(entry.sessionCostUsd, 4)
+})
+
 test('pre-verify: a new head or changed commands run the commands again', async () => {
   const seam = commandSeam()
   const setup = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })

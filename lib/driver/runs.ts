@@ -118,6 +118,8 @@ export interface AgentResult<Report> {
   logError?: string | null
   previewConflict?: boolean
   run?: string
+  // What Claude Code reported, set when the run's own cost differs from it.
+  reportedCost?: number
 }
 
 interface AgentOptions {
@@ -389,6 +391,7 @@ export function doneDetail(role: Role, run: string, result: AgentResult<Headline
     ok: result.ok,
     result: result.ok ? HEADLINES[role](result.output) : null,
     cost: result.costUsd,
+    ...(result.reportedCost === undefined ? {} : { reportedCost: result.reportedCost }),
     seconds: result.seconds,
     awakeSeconds: result.awakeSeconds ?? null,
     denials: result.denials?.length ?? 0,
@@ -416,6 +419,25 @@ export function headsKey(heads: Head[]): string {
 // What a job that threw before its agent ended reports.
 function thrown(error: unknown): AgentResult<never> {
   return { ok: false, error: String(error), costUsd: 0, denials: [], seconds: 0, awakeSeconds: 0 }
+}
+
+// Claude Code reports a resumed session's cost from the session's start, so a
+// resumed run owns only what the session's reported cost rose by.
+function ownCost<Report>(entry: RunEntry, role: Role, resume: boolean, result: AgentResult<Report>): AgentResult<Report> {
+  const reported = result.costUsd ?? 0
+  const earlier = entry.sessionCostUsd
+
+  if (role !== 'verify' && reported > 0) {
+    entry.sessionCostUsd = reported
+  }
+
+  if (!resume) {
+    return result
+  }
+
+  const own = Math.max(0, Number((reported - earlier).toFixed(4)))
+
+  return own === reported ? result : { ...result, costUsd: own, reportedCost: reported }
 }
 
 function addCost(entry: RunEntry, result: AgentResult<unknown>): void {
@@ -588,6 +610,7 @@ export function launch(context: RunsContext, pr: RunPr, role: BudgetRole, { reas
   if (role === 'implement') {
     sessionId = context.randomUUID()
     entry.sessionId = sessionId
+    entry.sessionCostUsd = 0
     effort = context.raiseEffort(pr.effort.implement, entry.attempts.implement - 1)
     model = implementerModel(context, pr, entry, entry.attempts.implement > 1)
     entry.briefDrift = briefDrift(entry.briefHeads, ledger.prs)
@@ -608,6 +631,7 @@ export function launch(context: RunsContext, pr: RunPr, role: BudgetRole, { reas
     } else {
       sessionId = context.randomUUID()
       entry.sessionId = sessionId
+      entry.sessionCostUsd = 0
       prompt = prompts.resumeFreshPrompt(manifest, pr, entry, { reason, note: text, previous })
     }
 
@@ -642,7 +666,7 @@ export function launch(context: RunsContext, pr: RunPr, role: BudgetRole, { reas
   endJob(
     context,
     pr,
-    job.then((result) => onDone(context, pr, role, result, { sha, run })),
+    job.then((result) => onDone(context, pr, role, ownCost(entry, role, resume, result), { sha, run })),
     (error) => {
       say(pr.id, 'on-done-error', { error: String(error).slice(0, 300) })
 
@@ -1068,6 +1092,7 @@ function failed(context: RunsContext, pr: RunPr, role: BudgetRole, result: Agent
 
   if (role !== 'verify' && result.sessionMissing) {
     entry.sessionId = null
+    entry.sessionCostUsd = 0
   }
 
   transitions.runFailed(entry, role, context.now())

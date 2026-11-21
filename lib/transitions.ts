@@ -108,6 +108,8 @@ interface StoredFields {
   implementCutOff: boolean
   pr: number | null
   sessionId: string | null
+  // The last cost an agent reported for the session in sessionId. It covers the session from its start.
+  sessionCostUsd: number
   claimedSha: string | null
   claimedAt: IsoTime | null
   claimPatchId?: string | null

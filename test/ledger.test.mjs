@@ -1249,3 +1249,9 @@ test('the migration from version 2 stamps an escalation with no time of its own,
 
   assert.deepEqual([stamped.status.since, stamped.escalationRun], [at(38), 'A1-01-implement'])
 })
+
+test('an entry from a ledger without sessionCostUsd loads with 0', () => {
+  assert.equal(freshPr().sessionCostUsd, 0)
+  assert.equal(withDefaults({ sessionId: 'session-1' }).sessionCostUsd, 0)
+  assert.equal(withDefaults({ sessionId: 'session-1', sessionCostUsd: 2.5 }).sessionCostUsd, 2.5)
+})
