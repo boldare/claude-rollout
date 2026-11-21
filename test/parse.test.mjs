@@ -33,6 +33,7 @@ import {
   refreshOutsideDeps,
   remoteRepo,
   replyAsAgents,
+  reviewFor,
   reviewsFor,
   setFetch,
   setStageLabels,
@@ -42,7 +43,8 @@ import {
 } from '../lib/github.mjs'
 import { githubApproval } from '../lib/judge.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
-import { fakeGitHub, fakeTools, makeRollout, withProcessEnv } from './fixtures.mjs'
+import { MAX_ENTRY_BYTES } from '../lib/zip.ts'
+import { fakeGitHub, fakeTools, makeRollout, withProcessEnv, zipArchive } from './fixtures.mjs'
 
 function nulRecords(...records) {
   return records.map((record) => `${record.join('\0')}\0`).join('')
@@ -1152,6 +1154,260 @@ test('codeScanningFor: a repo without code scanning is unavailable, a server err
   )
 
   await assert.rejects(codeScanningFor(limited.manifest, 11), (error) => error.kind === 'rate-limit')
+})
+
+const ARTIFACTS = 'repos/example/widgets/actions/artifacts'
+const REVIEW_HEAD = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3'
+const OLDER_HEAD = 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4'
+const OLDEST_HEAD = 'e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5'
+const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
+
+const REVIEW_FINDING = {
+  severity: 'medium',
+  criterion: 'review.correctness',
+  title: 'The total ignores a refunded line',
+  file: 'src/orders/total.ts',
+  line: 42,
+  failure_scenario: 'An order with one refunded line shows the full price.',
+  fix: 'Skip a line whose refund is settled.',
+  status: 'new',
+}
+
+function reviewJson(changes = {}) {
+  return JSON.stringify({ schema_version: 1, revision: REVIEW_HEAD, findings: [REVIEW_FINDING], fixed: [], ...changes })
+}
+
+function artifactJson(id, sha, { name = 'review-11', expired = false, created = '2026-10-01T10:00:00Z', size = 900 } = {}) {
+  return { id, name, size_in_bytes: size, expired, created_at: created, workflow_run: { id: id * 10, head_sha: sha } }
+}
+
+function listRoute(artifacts, name = 'review-11') {
+  return { path: ARTIFACTS, query: { name }, body: { total_count: artifacts.length, artifacts }, items: 'artifacts' }
+}
+
+// The API's 302 for one artifact, and the storage host's answer.
+function zipRoutes(id, storage) {
+  return [
+    { path: `${ARTIFACTS}/${id}/zip`, status: 302, headers: { location: `https://storage.example.com/artifacts/${id}.zip?sig=synthetic` } },
+    { path: `artifacts/${id}.zip`, ...storage },
+  ]
+}
+
+function reviewRoutes(
+  storage = { body: zipArchive([{ name: 'review.json', data: reviewJson() }]) },
+  artifacts = [artifactJson(7, REVIEW_HEAD)],
+) {
+  return [listRoute(artifacts), ...zipRoutes(7, storage)]
+}
+
+const READ_REVIEW = {
+  available: true,
+  review: {
+    reusedFrom: null,
+    findings: [
+      {
+        severity: 'medium',
+        criterion: 'review.correctness',
+        title: 'The total ignores a refunded line',
+        file: 'src/orders/total.ts',
+        line: 42,
+        failureScenario: 'An order with one refunded line shows the full price.',
+        fix: 'Skip a line whose refund is settled.',
+        status: 'new',
+      },
+    ],
+    fixed: [],
+    leftOut: 0,
+  },
+}
+
+test('reviewFor downloads the newest live artifact of the head, and only that one, from a list of older heads listed oldest first', async () => {
+  const artifacts = [
+    artifactJson(101, OLDEST_HEAD, { created: '2026-10-01T09:00:00Z' }),
+    artifactJson(102, OLDER_HEAD, { created: '2026-10-01T09:30:00Z' }),
+    artifactJson(103, REVIEW_HEAD, { created: '2026-10-01T09:45:00Z', expired: true }),
+    artifactJson(104, REVIEW_HEAD, { created: '2026-10-01T10:00:00Z' }),
+    artifactJson(105, REVIEW_HEAD, { created: '2026-10-01T10:10:00Z' }),
+  ]
+
+  const github = useGitHub([listRoute(artifacts), ...zipRoutes(105, { body: zipArchive([{ name: 'review.json', data: reviewJson() }]) })])
+
+  assert.deepEqual(await reviewFor(plainManifest(), 11, REVIEW_HEAD), READ_REVIEW)
+
+  const [list, api, storage, ...rest] = github.requests()
+
+  assert.deepEqual(rest, [])
+  assert.equal(list.path, ARTIFACTS)
+  assert.deepEqual(list.query, { name: 'review-11', per_page: '100' })
+  assert.equal(api.path, `${ARTIFACTS}/105/zip`)
+  assert.equal(api.headers.authorization, `Bearer ${MAINTAINER_TOKEN}`)
+  assert.equal(storage.url, 'https://storage.example.com/artifacts/105.zip?sig=synthetic')
+  assert.equal(storage.headers.authorization, undefined)
+})
+
+test('reviewFor takes the latest created_at whatever the order, the highest id between two of one second, and skips another name', async () => {
+  const artifacts = [
+    artifactJson(9, REVIEW_HEAD, { created: '2026-10-01T10:00:00Z' }),
+    artifactJson(12, REVIEW_HEAD, { created: '2026-10-01T10:00:00Z' }),
+    artifactJson(30, REVIEW_HEAD, { created: '2026-10-01T11:00:00Z', name: 'review-110' }),
+    artifactJson(10, REVIEW_HEAD, { created: '2026-10-01T09:00:00Z' }),
+  ]
+
+  const github = useGitHub([listRoute(artifacts), ...zipRoutes(12, { body: zipArchive([{ name: 'review.json', data: reviewJson() }]) })])
+
+  assert.deepEqual(await reviewFor(plainManifest(), 11, REVIEW_HEAD), READ_REVIEW)
+  assert.equal(github.requests()[1].path, `${ARTIFACTS}/12/zip`)
+})
+
+test('reviewFor: the artifact option names the artifact with {pr} in it', async () => {
+  const artifacts = [artifactJson(7, REVIEW_HEAD, { name: 'agent-review-11' })]
+  const github = useGitHub([
+    listRoute(artifacts, 'agent-review-11'),
+    ...zipRoutes(7, { body: zipArchive([{ name: 'review.json', data: reviewJson() }]) }),
+  ])
+
+  assert.deepEqual(await reviewFor(plainManifest(), 11, REVIEW_HEAD, { artifact: 'agent-review-{pr}' }), READ_REVIEW)
+  assert.deepEqual(github.requests()[0].query, { name: 'agent-review-11', per_page: '100' })
+})
+
+test('reviewFor: a result it cannot get is unavailable, with its reason', async () => {
+  const holding = (data) => ({ body: zipArchive([{ name: 'review.json', data }]) })
+
+  const cases = [
+    ['no artifact for this head', reviewRoutes(undefined, [artifactJson(7, OLDER_HEAD)]), 'the review left no artifact for this head'],
+    ['an empty list', reviewRoutes(undefined, []), 'the review left no artifact for this head'],
+    [
+      'every artifact of the head expired',
+      reviewRoutes(undefined, [artifactJson(7, REVIEW_HEAD, { expired: true }), artifactJson(8, REVIEW_HEAD, { expired: true })]),
+      "the review's artifact has expired",
+    ],
+    [
+      'an archive over 5 MB',
+      reviewRoutes(undefined, [artifactJson(7, REVIEW_HEAD, { size: MAX_ARTIFACT_BYTES + 1 })]),
+      "the review's artifact is too large",
+    ],
+    ['a download over 5 MB', reviewRoutes({ body: new Uint8Array(MAX_ARTIFACT_BYTES + 1) }), "the review's artifact is too large"],
+    ['a review.json over 1 MB', reviewRoutes(holding(' '.repeat(MAX_ENTRY_BYTES + 1))), "the review's artifact is too large"],
+    ['no review.json', reviewRoutes({ body: zipArchive([{ name: 'report.md', data: '# Report' }]) }), 'the artifact has no review.json'],
+    [
+      'an archive the reader cannot read',
+      reviewRoutes({ body: new TextEncoder().encode('not a zip archive') }),
+      "the review's artifact is not a zip archive the driver can read: no end of central directory record",
+    ],
+    [
+      'a review.json of another revision',
+      reviewRoutes(holding(reviewJson({ revision: '1a2b3c4d5e6f' }))),
+      'revision 1a2b3c4 is not the head',
+    ],
+  ]
+
+  for (const [label, routes, reason] of cases) {
+    const github = useGitHub(routes)
+
+    assert.deepEqual(await reviewFor(plainManifest(), 11, REVIEW_HEAD), { available: false, reason }, label)
+
+    if (label === 'an archive over 5 MB') {
+      assert.deepEqual(
+        github.requests().map((request) => request.path),
+        [ARTIFACTS],
+      )
+    }
+  }
+})
+
+test('reviewFor: a 403 on the list and a 404 or a 410 on the download are unavailable, with the status in the reason', async () => {
+  const forbidden = { path: ARTIFACTS, status: 403, body: { message: 'Resource not accessible by integration' } }
+  const long = { message: `Artifact has expired ${'x'.repeat(300)}` }
+
+  const cases = [
+    [[forbidden], 'HTTP 403: Resource not accessible by integration'],
+    [reviewRoutes({ status: 404, body: { message: 'Not Found' } }), 'HTTP 404: Not Found'],
+    [
+      [listRoute([artifactJson(7, REVIEW_HEAD)]), { path: `${ARTIFACTS}/7/zip`, status: 404, body: { message: 'Not Found' } }],
+      'HTTP 404: Not Found',
+    ],
+    [
+      [listRoute([artifactJson(7, REVIEW_HEAD)]), { path: `${ARTIFACTS}/7/zip`, status: 410, body: { message: 'Artifact has expired' } }],
+      'HTTP 410: Artifact has expired',
+    ],
+    [reviewRoutes({ status: 403, body: '<Error>AuthenticationFailed</Error>' }), 'HTTP 403: Forbidden'],
+    [
+      [listRoute([artifactJson(7, REVIEW_HEAD)]), { path: `${ARTIFACTS}/7/zip`, status: 410, body: long }],
+      `HTTP 410: ${long.message}`.slice(0, 200),
+    ],
+  ]
+
+  for (const [routes, detail] of cases) {
+    useGitHub(routes)
+
+    assert.deepEqual(await reviewFor(plainManifest(), 11, REVIEW_HEAD), {
+      available: false,
+      reason: `the driver cannot read the review's artifact: ${detail}`,
+    })
+  }
+})
+
+test('reviewFor: a rate limit, a 500, a 401 and a network error reject, and githubUnavailable tells the outage', async () => {
+  const listed = listRoute([artifactJson(7, REVIEW_HEAD)])
+
+  const cases = [
+    [
+      [{ path: ARTIFACTS, status: 403, body: { message: 'API rate limit exceeded' }, headers: { 'retry-after': '60' } }],
+      'rate-limit',
+      true,
+    ],
+    [[{ path: ARTIFACTS, status: 500, body: { message: 'Server Error' } }], 'http', true],
+    [[listed, { path: `${ARTIFACTS}/7/zip`, status: 500, body: { message: 'Server Error' } }], 'http', true],
+    [[listed, { path: `${ARTIFACTS}/7/zip`, error: 'ECONNRESET' }], 'network', true],
+    [reviewRoutes({ error: 'ECONNRESET' }), 'network', true],
+    [[listed, { path: `${ARTIFACTS}/7/zip`, status: 401, body: { message: 'Bad credentials' } }], 'http', false],
+  ]
+
+  for (const [routes, kind, outage] of cases) {
+    useGitHub(routes)
+
+    const error = await rejection(reviewFor(plainManifest(), 11, REVIEW_HEAD))
+
+    assert.ok(error instanceof GitHubError, String(error))
+    assert.equal(error.kind, kind, error.message)
+    assert.equal(githubUnavailable(error), outage, error.message)
+  }
+
+  const tooLarge = new GitHubError({
+    method: 'GET',
+    path: ARTIFACTS,
+    status: 200,
+    kind: 'too-large',
+    detail: 'the answer is larger than 5 bytes',
+  })
+
+  assert.equal(githubUnavailable(tooLarge), false)
+})
+
+test("reviewFor: with one tick's reads, two calls ask for the list once and download once, and another head reads again", async () => {
+  const github = useGitHub(reviewRoutes())
+  const manifest = plainManifest()
+  const reads = tickReads()
+  const [first, second] = await Promise.all([
+    reviewFor(manifest, 11, REVIEW_HEAD, { reads }),
+    reviewFor(manifest, 11, REVIEW_HEAD, { reads }),
+  ])
+
+  assert.deepEqual(first, READ_REVIEW)
+  assert.equal(second, first)
+  assert.equal(await reviewFor(manifest, 11, REVIEW_HEAD, { reads }), first)
+  assert.deepEqual(
+    github.requests().map((request) => request.path),
+    [ARTIFACTS, `${ARTIFACTS}/7/zip`, 'artifacts/7.zip'],
+  )
+
+  assert.deepEqual(await reviewFor(manifest, 11, OLDER_HEAD, { reads }), {
+    available: false,
+    reason: 'the review left no artifact for this head',
+  })
+
+  await reviewFor(manifest, 11, REVIEW_HEAD)
+  assert.equal(github.requests().filter((request) => request.path === ARTIFACTS).length, 3)
 })
 
 const BASE_TIP = 'b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0'

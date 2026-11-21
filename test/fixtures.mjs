@@ -4,6 +4,7 @@ import { once } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { crc32, deflateRawSync } from 'node:zlib'
 import { parse, stringify } from 'yaml'
 import { freshPr, versionTwoPr } from '../lib/ledger.mjs'
 import { runRecords } from '../lib/runs.mjs'
@@ -721,10 +722,15 @@ function prependBin(file, bin) {
 
 const NULL_BODY_STATUSES = [204, 205, 304]
 
-// A string body is text, anything else JSON. Route headers win.
+// A string body is text, a Uint8Array (a Buffer included) a zip archive's
+// bytes, anything else JSON. Route headers win.
 function respond(status, body, headers) {
   if (body === undefined || NULL_BODY_STATUSES.includes(status)) {
     return new Response(null, { status, headers })
+  }
+
+  if (body instanceof Uint8Array) {
+    return new Response(body, { status, headers: { 'content-type': 'application/zip', ...headers } })
   }
 
   if (typeof body === 'string') {
@@ -757,9 +763,9 @@ function servedPage(route, url) {
 }
 
 function etagOf(body) {
-  const text = typeof body === 'string' ? body : JSON.stringify(body ?? null)
+  const content = typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body ?? null)
 
-  return `"${createHash('sha256').update(text).digest('hex').slice(0, 32)}"`
+  return `"${createHash('sha256').update(content).digest('hex').slice(0, 32)}"`
 }
 
 // How undici's fetch rejects when the connection fails.
@@ -854,6 +860,110 @@ export function fakeGitHub(routes = []) {
   }
 
   return { fetch, answer, requests }
+}
+
+const ZIP_METHODS = { stored: 0, deflated: 8 }
+const STREAMED_FLAG = 0x08
+
+function zipHeader(fields) {
+  const header = Buffer.alloc(fields.reduce((length, [, , size]) => length + size, 0))
+  let offset = 0
+
+  for (const [, value, size] of fields) {
+    if (size === 2) {
+      header.writeUInt16LE(value, offset)
+    } else {
+      header.writeUInt32LE(value, offset)
+    }
+
+    offset += size
+  }
+
+  return header
+}
+
+// A zip archive for lib/zip.ts. An entry is { name, data, method = 'deflated',
+// size, crc }, where data is a string or bytes and a number for method is
+// written as it is, with the data stored. size and crc override the
+// uncompressed size and the CRC-32 the headers give, to build a header that
+// lies. Streamed, as a zip written as a stream is, each local header sets
+// flag bit 3 with zero sizes and CRC-32, and a data descriptor follows the data.
+export function zipArchive(entries, { streamed = true } = {}) {
+  const parts = []
+  const directory = []
+  let offset = 0
+
+  for (const { name, data, method = 'deflated', size, crc } of entries) {
+    const nameBytes = Buffer.from(name)
+    const content = Buffer.from(data)
+    const body = method === 'deflated' ? deflateRawSync(content) : content
+    const code = typeof method === 'number' ? method : ZIP_METHODS[method]
+    const declared = { crc: crc ?? crc32(content), compressed: body.length, size: size ?? content.length }
+    const flags = streamed ? STREAMED_FLAG : 0
+    const inLocal = streamed ? { crc: 0, compressed: 0, size: 0 } : declared
+
+    const local = zipHeader([
+      ['signature', 0x04034b50, 4],
+      ['version', 20, 2],
+      ['flags', flags, 2],
+      ['method', code, 2],
+      ['time', 0, 2],
+      ['date', 0, 2],
+      ['crc', inLocal.crc, 4],
+      ['compressed', inLocal.compressed, 4],
+      ['size', inLocal.size, 4],
+      ['name length', nameBytes.length, 2],
+      ['extra length', 0, 2],
+    ])
+
+    const descriptor = streamed
+      ? zipHeader([
+          ['signature', 0x08074b50, 4],
+          ['crc', declared.crc, 4],
+          ['compressed', declared.compressed, 4],
+          ['size', declared.size, 4],
+        ])
+      : Buffer.alloc(0)
+
+    const central = zipHeader([
+      ['signature', 0x02014b50, 4],
+      ['made by', 20, 2],
+      ['version', 20, 2],
+      ['flags', flags, 2],
+      ['method', code, 2],
+      ['time', 0, 2],
+      ['date', 0, 2],
+      ['crc', declared.crc, 4],
+      ['compressed', declared.compressed, 4],
+      ['size', declared.size, 4],
+      ['name length', nameBytes.length, 2],
+      ['extra length', 0, 2],
+      ['comment length', 0, 2],
+      ['disk', 0, 2],
+      ['internal attributes', 0, 2],
+      ['external attributes', 0, 4],
+      ['local offset', offset, 4],
+    ])
+
+    parts.push(local, nameBytes, body, descriptor)
+    directory.push(central, nameBytes)
+    offset += local.length + nameBytes.length + body.length + descriptor.length
+  }
+
+  const centralDirectory = Buffer.concat(directory)
+
+  const end = zipHeader([
+    ['signature', 0x06054b50, 4],
+    ['disk', 0, 2],
+    ['directory disk', 0, 2],
+    ['entries on disk', entries.length, 2],
+    ['entries', entries.length, 2],
+    ['directory size', centralDirectory.length, 4],
+    ['directory offset', offset, 4],
+    ['comment length', 0, 2],
+  ])
+
+  return Buffer.concat([...parts, centralDirectory, end])
 }
 
 // The gh of fakeGitHubRepo, for `pr merge` alone. It squashes the PR head onto
