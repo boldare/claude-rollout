@@ -139,6 +139,8 @@ export interface LoopContext {
     pr: RunPr,
     options: AgentOptions & { signal: AbortSignal; onProcess: (recorded: RecordedProcess) => void },
   ) => Promise<AgentOutcome>
+  // Resolves to the paths it removed.
+  removeMirror: () => Promise<string[]>
   stopAllAgents: () => void
   liveChildren: () => number
   recordProcess: (data: LoopLedger['data'], run: string, recorded: RecordedProcess) => void
@@ -901,11 +903,18 @@ export async function finish(context: LoopContext): Promise<void> {
   const { manifest, ledger, say } = context
   const release = await context.github.findReleasePr(manifest).catch(() => null)
   const cost = manifest.prs.reduce((sum, pr) => sum + ledger.prs[pr.id].costUsd, 0)
+  // The mirror is a cache of the whole repository that nothing reads after the last clone.
+  // A failure is only reported, because the rollout is finished either way and `clean` retries it.
+  const mirrorError = await context.removeMirror().then(
+    () => null,
+    (error: unknown) => messageOf(error).slice(0, 300),
+  )
+
   const text = release
     ? `All PRs merged. Release PR #${release.number} is open: review it and merge it yourself to publish.`
     : 'All PRs merged. No release PR is open yet (the release workflow may still be running).'
 
-  say('-', 'finished', { cost: Number(cost.toFixed(2)), release: release?.url ?? null }, text)
+  say('-', 'finished', { cost: Number(cost.toFixed(2)), release: release?.url ?? null, mirrorError }, text)
 }
 
 // A stop ends every run as a merge on GitHub ends one: the agent processes

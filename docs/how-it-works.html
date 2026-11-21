@@ -408,7 +408,7 @@
         <p>
           Then the driver sleeps for <a href="manifest.html#policy-tickSeconds"><code>policy.tickSeconds</code></a> (60 s). A new file in
           <code>inbox/</code> ends the sleep early, after a 500 ms pause that folds a burst of commands into one tick. Once every PR of the
-          run is merged and no agent runs, the driver reports the release PR and exits.
+          run is merged and no agent runs, the driver removes the mirror, reports the release PR and exits.
         </p>
 
         <ul>

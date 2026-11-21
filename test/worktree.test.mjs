@@ -13,6 +13,7 @@ import {
   prepareWorktree,
   previewPath,
   rebaseWorktree,
+  removeMirror,
   removePreview,
   removeWorktree,
   resetWorktree,
@@ -346,6 +347,45 @@ test('removeWorktree also deletes the implementer home of the PR', async (contex
   await removeWorktree(manifest, pr)
 
   assert.equal(existsSync(home), false)
+})
+
+test('removeMirror deletes the mirror and the empty worktree root, and a clone made from it still works', async (context) => {
+  const { manifest, pr } = fixture(context)
+  const wt = await prepareWorktree(manifest, pr)
+
+  await removeWorktree(manifest, pr)
+
+  assert.deepEqual(await removeMirror(manifest), [mirrorPath(manifest), manifest.wtRoot])
+  assert.equal(existsSync(manifest.wtRoot), false)
+
+  await prepareWorktree(manifest, pr)
+
+  assert.equal(existsSync(join(wt, 'a.txt')), true)
+  assert.equal(existsSync(mirrorPath(manifest)), true)
+})
+
+test('removeMirror keeps a clone and anything else in the worktree root', async (context) => {
+  const { manifest, pr } = fixture(context)
+  const wt = await prepareWorktree(manifest, pr)
+  const note = join(manifest.wtRoot, 'notes.txt')
+
+  writeFileSync(note, 'mine\n')
+
+  assert.deepEqual(await removeMirror(manifest), [mirrorPath(manifest)])
+  assert.equal(existsSync(mirrorPath(manifest)), false)
+  assert.equal(existsSync(join(wt, 'a.txt')), true)
+  assert.equal(readFileSync(note, 'utf8'), 'mine\n')
+})
+
+test('removeMirror removes an empty worktree root without a mirror, and nothing when the root is missing', async (context) => {
+  const { manifest } = fixture(context)
+
+  assert.deepEqual(await removeMirror(manifest), [])
+
+  mkdirSync(manifest.wtRoot)
+
+  assert.deepEqual(await removeMirror(manifest), [manifest.wtRoot])
+  assert.deepEqual(await removeMirror(manifest), [])
 })
 
 // Every regular file under a mirror's objects, info/ aside, relative to objects/.
@@ -831,6 +871,7 @@ const HOST_OPERATIONS = [
   ['mkdirSync', /\bmkdirSync\b/],
   ['rmSync', /\brmSync\b/],
   ['rm', /\brm\(/],
+  ['rmdir', /\brmdir\(/],
   ['cpSync', /\bcpSync\b/],
   ['copyFileSync', /\bcopyFileSync\b/],
   ['openSync', /\bopenSync\b/],
@@ -859,6 +900,7 @@ const ALLOWED_TOUCHES = [
   ['preparePreview', 'hostGit'],
   ['prepareWorktree', 'rm'],
   ['removeLocalConfig', 'rmSync'],
+  ['removeMirror', 'rmdir'],
   ['removePreview', 'rm'],
   ['removeWorktree', 'rm'],
 ]
