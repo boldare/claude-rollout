@@ -21,6 +21,7 @@ import type {
   PreVerifyEntry,
   Question,
   QuestionKind,
+  Review,
   Role,
   RunRecord,
   RunningCode,
@@ -130,6 +131,8 @@ interface StoredFields {
   closedFrom?: Status | null
   // Missing on a merge an older driver recorded, and on a dependency outside the run.
   merged?: Merged | null
+  // Missing on an entry no external review was read for.
+  review?: Review | null
 }
 
 type Placement<Member> = Member extends Entry ? Pick<Member, 'stage' | 'status'> : never
@@ -473,12 +476,20 @@ function claimWait(sha: string | null): Unstamped<WaitingOf<'ci'>> {
   return { kind: 'waiting', code: 'ci', sha: sha ?? '', missing: [], pending: [] }
 }
 
+// A review speaks for its head only. An entry with none, or with one of this head, stays as it is.
+function dropOtherReview(entry: PrEntry, sha: string): void {
+  if (entry.review && entry.review.sha !== sha) {
+    entry.review = null
+  }
+}
+
 export function toClaimed(entry: PrEntry, { pr, sha, at }: CommitStamp & { pr: number }): void {
   entry.pr = pr
   entry.claimedSha = sha
   entry.claimedAt = at
   entry.ciPendingSince = null
   entry.verified = null
+  dropOtherReview(entry, sha)
   place(entry, 'pre-verify', claimWait(sha), { since: at })
 }
 
@@ -489,7 +500,21 @@ export function claimNewHead(entry: PrEntry, { sha, at }: CommitStamp): void {
   entry.claimedSha = sha
   entry.claimedAt = at
   entry.ciPendingSince = null
+  dropOtherReview(entry, sha)
   place(entry, 'pre-verify', claimWait(sha), { since: at })
+}
+
+// The claim check found the PR on another head. The status is the claim check's to write.
+export function claimMoved(entry: PrEntry, { sha, at }: CommitStamp): void {
+  entry.claimedSha = sha
+  entry.claimedAt = at
+  entry.ciPendingSince = null
+  dropOtherReview(entry, sha)
+}
+
+// The result of the external review of the claimed head, or the reason there is none.
+export function reviewRead(entry: PrEntry, review: Review): void {
+  entry.review = review
 }
 
 export function verifyAgain(entry: PrEntry, at: IsoTime): void {

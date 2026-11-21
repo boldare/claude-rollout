@@ -224,7 +224,7 @@ test('docs: every stage and every status code, driver-stopped included, has its 
   const codes = new Set(Object.values(STAGE_STATUSES).flatMap((kinds) => Object.values(kinds).flat()))
 
   assert.equal(STAGES.length, 6)
-  assert.equal(codes.size, 40)
+  assert.equal(codes.size, 41)
 
   for (const stage of STAGES) {
     assert.ok(pageIds.includes(`stage-${stage}`), `how-it-works.html has no #stage-${stage}`)

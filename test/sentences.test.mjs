@@ -30,7 +30,7 @@ function sentence(kind, code, changes = {}, facts = FACTS) {
 test('statusSentence: every code of STAGE_STATUSES and driver-stopped has a whole sentence', () => {
   const statuses = allStatuses()
 
-  assert.equal(statuses.length, 41)
+  assert.equal(statuses.length, 42)
   assert.deepEqual(
     Object.keys(STATUS_SAMPLES).sort(),
     statuses
@@ -110,6 +110,11 @@ test('statusSentence: an empty sha reads the head, and drops its part on the bas
   assert.equal(sentence('waiting', 'base-red', { sha: '' }), 'main is red: test, lint. Merges wait until it is green')
   assert.equal(sentence('waiting', 'base-pending', { sha: '' }), 'main is not green yet')
   assert.equal(sentence('waiting', 'base-pending', {}, { ...FACTS, base: 'develop' }), 'develop is not green yet at b0b0b0b')
+})
+
+test('statusSentence: the wait for the external review names its head, or the head without a sha', () => {
+  assert.equal(sentence('waiting', 'external-review'), 'the review of a1a1a1a has not finished yet')
+  assert.equal(sentence('waiting', 'external-review', { sha: '' }), 'the review of the head has not finished yet')
 })
 
 test('statusSentence: a count of 0 drops its part, and one failure is one run', () => {

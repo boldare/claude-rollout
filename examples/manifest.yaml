@@ -93,6 +93,11 @@ policy:
 #       - Every new option has its row in the docs.
 #     # Read from the base branch at every verifier launch. Every entry that applies is required.
 #     criteriaFrom: docs/criteria.yaml
+#     # The claim waits for this check run of the review workflow, then reads review.json from its artifact.
+#     externalFindings:
+#       check: agent review
+#       artifact: review-{pr}
+#       minSeverity: medium
 
 # Where agents, repo.install and the ready and pre-verify commands run (see docs/manifest.html#sandbox
 # and docs/security.html#boundaries). host is the default and runs them as you. docker runs each one in

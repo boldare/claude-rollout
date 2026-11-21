@@ -171,14 +171,14 @@ function assertInOrder(line, parts, id) {
 }
 
 test('parity: every stage and code, a merged PR and a held running one read the same in rollout status and on the board', () => {
-  assert.equal(pairs().length, 65)
+  assert.equal(pairs().length, 66)
 
   const dir = everyStatusRollout()
   const view = viewOf(dir)
   const lines = cliLines(cli('status', '--dir', dir))
   const board = boardRows(view, null)
 
-  assert.equal(board.size, 67)
+  assert.equal(board.size, 68)
   assert.deepEqual([...lines.keys()], [...board.keys()])
 
   for (const [id, row] of board) {
