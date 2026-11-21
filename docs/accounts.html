@@ -567,8 +567,10 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
             runs of each role a PR gets before it escalates, and the costs show in <code>status</code>, the card and the UI.
           </li>
           <li>
-            A PR's cost is the sum of the <code>total_cost_usd</code> each run reports. On a subscription it is what the run would cost on
-            the API, not a charge.
+            A PR's cost is the sum of the <code>total_cost_usd</code> each run reports. A resumed fix run counts only what it added on top
+            of its session's earlier runs, because Claude Code reports a resumed session's cost from its start. A ledger written before this
+            rule records the first resumed fix after the upgrade in full once. On a subscription the cost is what the run would cost on the
+            API, not a charge.
           </li>
           <li>
             A run killed before it reported a cost gets an estimate from the list prices in <code>lib/prices.mjs</code>. The UI shows

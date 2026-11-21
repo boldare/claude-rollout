@@ -1070,3 +1070,9 @@ test('openLedger: a ledger it filled and saved still says version 2', () => {
   assert.equal(stored(manifest).prs.A1.stage, 'implement')
   assert.match(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8'), /^\{\n {2}"version": 2,/)
 })
+
+test('an entry from a ledger without sessionCostUsd loads with 0', () => {
+  assert.equal(freshPr().sessionCostUsd, 0)
+  assert.equal(withDefaults({ sessionId: 'session-1' }).sessionCostUsd, 0)
+  assert.equal(withDefaults({ sessionId: 'session-1', sessionCostUsd: 2.5 }).sessionCostUsd, 2.5)
+})
