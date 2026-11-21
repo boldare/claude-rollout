@@ -323,7 +323,7 @@ test('lifecycle: one PR goes from pending to merged, squashed into the origin, a
 // Runs the PR to merged and stops right before finish().
 async function mergedPr(setup) {
   await setup.driver.start()
-  await tickUntil(setup, () => setup.entry.state === 'verified', 'verification')
+  await tickUntil(setup, () => setup.entry.stage === 'merge', 'verification')
   postCommand(setup.manifest, approve(setup.entry.verified))
   await tickUntil(setup, () => setup.driver.finished(), 'finish')
 }
