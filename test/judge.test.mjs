@@ -412,19 +412,19 @@ test('a PR in a repo without changesets needs none', () => {
 })
 
 test('a held PR waits: no merge, no rebase, no ready notice in manual mode', () => {
-  const held = { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z', by: 'maintainer', reason: null } }
+  const held = { ...verifiedAndApproved, hold: { at: '2026-09-27T09:00:00Z', by: 'maintainer', reason: null } }
   const verdict = judge(manifest, pr, held, facts())
 
   assertVerdict(verdict, 'wait', 'held')
   assert.deepEqual(verdict.reasons, ['held by maintainer (rollout release A1)'])
   assertVerdict(judge(manifest, pr, held, facts({ baseIsAncestor: false })), 'wait', 'held')
   assertVerdict(judge({ ...manifest, policy: { ...manifest.policy, merge: 'manual' } }, pr, held, facts()), 'wait', 'held')
-  assertVerdict(judge(manifest, pr, { ...held, held: null }, facts()), 'merge', 'merge')
+  assertVerdict(judge(manifest, pr, { ...held, hold: null }, facts()), 'merge', 'merge')
 })
 
 test('a held PR names who held it and why in its reason', () => {
   const hold = { at: '2026-09-27T09:00:00Z', by: 'driver', reason: 'usage limit reached' }
-  const verdict = judge(manifest, pr, { ...verifiedAndApproved, held: hold }, facts())
+  const verdict = judge(manifest, pr, { ...verifiedAndApproved, hold }, facts())
 
   assertVerdict(verdict, 'wait', 'held')
   assert.deepEqual(verdict.reasons, ['held by driver: usage limit reached (rollout release A1)'])
@@ -605,12 +605,17 @@ test('judge: code scanning comes after red and pending CI, and before the base a
 
 test('currentGate: the verdict counts only while the PR is verified and the gate ran since', () => {
   const gate = { action: 'ready', reasons: ['ready'], at: '2026-01-01T10:05:00.000Z' }
-  const entry = { state: 'verified', verified: { at: '2026-01-01T10:00:00.000Z' }, gate }
+  const entry = {
+    stage: 'merge',
+    status: { kind: 'waiting', code: 'gate-pending', since: '2026-01-01T10:00:00.000Z' },
+    verified: { at: '2026-01-01T10:00:00.000Z' },
+    gate,
+  }
 
   assert.equal(currentGate(entry), gate)
   assert.deepEqual(currentGate({ ...entry, gate: { ...gate, at: entry.verified.at } }), { ...gate, at: entry.verified.at })
   assert.equal(currentGate({ ...entry, verified: { at: '2026-01-01T11:00:00.000Z' } }), null)
-  assert.equal(currentGate({ ...entry, state: 'needs_fix' }), null)
+  assert.equal(currentGate({ ...entry, stage: 'implement', status: { kind: 'waiting', code: 'slot', since: entry.verified.at } }), null)
   assert.equal(currentGate({ ...entry, gate: null }), null)
 })
 
@@ -681,7 +686,7 @@ test('judge: every gate code, each with its action', () => {
     [
       'held',
       'wait',
-      judge(manifest, pr, { ...verifiedAndApproved, held: { at: '2026-09-27T09:00:00Z', by: 'maintainer', reason: null } }, facts()),
+      judge(manifest, pr, { ...verifiedAndApproved, hold: { at: '2026-09-27T09:00:00Z', by: 'maintainer', reason: null } }, facts()),
     ],
     ['no-pr', 'block', judge(manifest, pr, verifiedAndApproved, facts({ pr: null }))],
     ['merged-on-github', 'wait', judge(manifest, pr, verifiedAndApproved, withPr({ state: 'MERGED' }))],

@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
-import { ERROR_KINDS, EVENT_KINDS, STATES, errorCount } from '../lib/kinds.mjs'
+import { ERROR_KINDS, EVENT_KINDS, errorCount } from '../lib/kinds.mjs'
 import { STAGES } from '../lib/state.ts'
-import { ERROR_KINDS as UI_ERROR_KINDS, STAGES as UI_STAGES } from '../ui/model.js'
+import { BLOCK_CODES } from '../lib/transitions.ts'
+import { BLOCK_CODES as UI_BLOCK_CODES, ERROR_KINDS as UI_ERROR_KINDS, STAGES as UI_STAGES } from '../ui/model.js'
 
 const LIB = new URL('../lib/', import.meta.url)
 // say( and ledger.event( take the kind second, a bare log( takes it first. A call can span lines.
@@ -61,22 +62,7 @@ function writtenKinds() {
   return written
 }
 
-test('kinds: the states and error kinds', () => {
-  assert.deepEqual(STATES, [
-    'pending',
-    'briefing',
-    'implementing',
-    'ready_claimed',
-    'verifying',
-    'verified',
-    'needs_fix',
-    'fixing',
-    'blocked',
-    'escalated',
-    'interrupted',
-    'merged',
-  ])
-
+test('kinds: the error kinds', () => {
   assert.deepEqual(ERROR_KINDS, [
     'tick-error',
     'error',
@@ -91,8 +77,9 @@ test('kinds: the states and error kinds', () => {
   ])
 })
 
-test('kinds: ui/model.js mirrors the stages and error kinds of lib', () => {
+test('kinds: ui/model.js mirrors the stages, the block codes and the error kinds of lib', () => {
   assert.deepEqual(UI_STAGES, [...STAGES])
+  assert.deepEqual(UI_BLOCK_CODES, [...BLOCK_CODES])
   assert.deepEqual(UI_ERROR_KINDS, ERROR_KINDS)
 })
 

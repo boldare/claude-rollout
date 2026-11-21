@@ -222,6 +222,13 @@ const MUTATIONS = [
     replace: 'checkRuns.filter(() => ignoredGlobs.length === 0)',
     tests: ['test/checks.test.mjs'],
   },
+  {
+    id: 'outlived-start-time-ignored',
+    file: 'lib/sandbox.mjs',
+    find: 'found !== startTime',
+    replace: 'found !== found',
+    tests: ['test/sandbox.test.mjs'],
+  },
 ]
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))

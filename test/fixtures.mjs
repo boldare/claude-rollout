@@ -1,12 +1,13 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { once } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
-import { freshPr } from '../lib/ledger.mjs'
+import { freshPr, versionTwoPr } from '../lib/ledger.mjs'
 import { runRecords } from '../lib/runs.mjs'
-import { fillFromState } from '../lib/transitions.ts'
+import { fromVersionTwo } from '../lib/transitions.ts'
 
 // A synthetic rollout directory, in a fresh temp dir unless `dir` names one.
 // Every part can be overridden, and null leaves the file out.
@@ -308,24 +309,28 @@ function sampleManifest(dir, policy) {
   }
 }
 
-// A legacy ledger is one a driver from before ledger versions wrote. Any
-// other records the runs of the events, as the driver that holds the lock
-// would, unless `runs` gives them, and fills each entry's stage and status
-// from its state. Fixtures name a state, the fill does the rest.
-function ledgerOf(options, prs) {
+// A legacy ledger is one a driver from before ledger versions wrote, with
+// every entry over the version 2 defaults. Any other records the runs of the
+// events, as the driver that holds the lock would, unless `runs` gives them.
+// An entry with a stage is kept over the version 3 defaults. Any other names
+// a version 2 state, and the migration from version 2 does the rest.
+function ledgerOf(options, entries) {
   if (options.legacy) {
-    return { prs, paused: false }
+    const prs = Object.entries(entries).map(([id, fields]) => [id, { ...versionTwoPr(), ...fields }])
+
+    return { prs: Object.fromEntries(prs), paused: false }
   }
 
   const events = (options.events ?? []).filter((event) => typeof event !== 'string')
   const runs = options.runs ?? runRecords(events, { driverRunning: true })
-  const filledAt = new Date().toISOString()
+  const migratedAt = new Date().toISOString()
+  const context = (id) => ({ id, briefWritten: false, runs, events, at: migratedAt })
+  const prs = Object.entries(entries).map(([id, fields]) => [
+    id,
+    fields.stage ? { ...freshPr(), ...fields } : fromVersionTwo({ ...versionTwoPr(), ...fields }, context(id)),
+  ])
 
-  for (const [id, entry] of Object.entries(prs)) {
-    fillFromState(entry, { id, briefWritten: false, runs, at: filledAt })
-  }
-
-  return { version: 2, prs, runs, hold: options.hold }
+  return { version: 3, prs: Object.fromEntries(prs), runs, hold: options.hold }
 }
 
 export function makeRollout(overrides = {}) {
@@ -353,8 +358,7 @@ export function makeRollout(overrides = {}) {
   writeFileSync(join(dir, 'manifest.yaml'), stringify({ ...sampleManifest(dir, options.policy), ...options.manifest }))
 
   if (options.prs) {
-    const prs = Object.fromEntries(Object.entries(options.prs).map(([id, state]) => [id, { ...freshPr(), ...state }]))
-    writeFileSync(join(dir, 'ledger.json'), JSON.stringify(ledgerOf(options, prs), null, 2))
+    writeFileSync(join(dir, 'ledger.json'), JSON.stringify(ledgerOf(options, options.prs), null, 2))
   }
 
   if (options.events) {
@@ -455,11 +459,12 @@ export function fakeTools(dir, rules = []) {
 // The docker client of the Docker runtime, without a daemon. run starts the
 // argv after the image as a local process in its own group, in the -w
 // directory and with the environment the entrypoint would give it. With
-// --entrypoint X the argv is X and the words after the image. stop and kill
-// signal the group of a run with --name. version and image inspect answer
-// from docker.json: the server version, null for a daemon that does not
-// answer, and the images that exist. Every call is recorded like a fakeTools
-// call.
+// --entrypoint X the argv is X and the words after the image. stop, kill and
+// rm --force signal the group of a run with --name. rm prints the name it
+// removed, or says there is no such container and exits 0, as Docker 20.10
+// to 29.0 do. version, rm and image inspect answer from docker.json: the
+// server version, null for a daemon that does not answer, and the images
+// that exist. Every call is recorded like a fakeTools call.
 const FAKE_DOCKER = `#!/usr/bin/env node
 const { spawn } = require('node:child_process')
 const { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
@@ -634,6 +639,20 @@ function version() {
   }
 }
 
+function remove() {
+  const name = rest[rest.length - 1]
+
+  if (state.server === null) {
+    version()
+  } else if (existsSync(pidFile(name))) {
+    signalGroup(Number(readFileSync(pidFile(name), 'utf8')), 'SIGKILL')
+    rmSync(pidFile(name), { force: true })
+    process.stdout.write(name + '\\n')
+  } else {
+    process.stderr.write('Error response from daemon: No such container: ' + name + '\\n')
+  }
+}
+
 function inspectImage() {
   const tag = rest[rest.length - 1]
 
@@ -655,6 +674,8 @@ if (command === 'run') {
   stop()
 } else if (command === 'kill') {
   kill()
+} else if (command === 'rm' && rest[0] === '--force') {
+  remove()
 } else if (command !== 'build') {
   process.stderr.write('fake docker: no fake for ' + command + '\\n')
   process.exitCode = 1
@@ -1191,6 +1212,36 @@ export function alive(pid) {
   } catch {
     return false
   }
+}
+
+// A shell that leads a process group of its own. After the test its group
+// gets SIGKILL, unless the shell ended, since its pid may then name another
+// process. Its stdout is a pipe, so a script can say it is ready.
+export function groupChild(context, script = 'exec sleep 30') {
+  const child = spawn('sh', ['-c', script], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+
+  context.after(() => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return
+    }
+
+    try {
+      process.kill(-child.pid, 'SIGKILL')
+    } catch {
+      // The group ended between the check and the kill.
+    }
+  })
+
+  return child
+}
+
+// The pid of a process that ended and was reaped.
+export async function gonePid() {
+  const child = spawn('sh', ['-c', 'exit 0'], { stdio: 'ignore' })
+
+  await once(child, 'close')
+
+  return child.pid
 }
 
 // Polls, so a check on a detached process or a file another process writes

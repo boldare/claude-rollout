@@ -20,10 +20,12 @@ import {
   recheckedFindings,
   recordAnswers,
   recordFindings,
+  recordProcess,
   recordVerdict,
   reserveRunName,
   startRun,
   tickNote,
+  versionTwoPr,
   watchInbox,
   withDefaults,
 } from '../lib/ledger.mjs'
@@ -94,7 +96,7 @@ test('recordVerdict keeps the latest verdict and the last 10', () => {
 })
 
 test('freshPr has no hold, verdict history, handled feedback, findings or verify criteria', () => {
-  assert.equal(freshPr().held, null)
+  assert.equal(freshPr().hold, null)
   assert.deepEqual(freshPr().verdicts, [])
   assert.deepEqual(freshPr().feedbackHandled, [])
   assert.equal(freshPr().findings, null)
@@ -112,7 +114,7 @@ test('freshPr has no pass of the commands, and an entry from before it opens wit
   assert.equal(freshPr().commands, null)
   assert.equal(Object.hasOwn(readLedger(manifest).prs.A1, 'commands'), false)
   assert.equal(older.version, LEDGER_VERSION)
-  assert.equal(LEDGER_VERSION, 2)
+  assert.equal(LEDGER_VERSION, 3)
   assert.equal(openLedger(manifest).prs.A1.commands, null)
   assert.equal(withDefaults({}).commands, null)
 })
@@ -341,14 +343,14 @@ function withLedger(ledger) {
   return loadManifest(dir)
 }
 
-test('openLedger migrates a version 1 ledger once: version 2 with the runs of its events, also on disk', () => {
+test('openLedger migrates a version 1 ledger once: version 3 with the runs of its events, also on disk', () => {
   const manifest = loadManifest(makeRollout({ legacy: true }))
   const { data } = openLedger(manifest)
 
-  assert.equal(LEDGER_VERSION, 2)
-  assert.equal(data.version, 2)
+  assert.equal(LEDGER_VERSION, 3)
+  assert.equal(data.version, 3)
   assert.deepEqual(runsFromLedger(data), runsFromEvents(readEvents(manifest)))
-  assert.equal(stored(manifest).version, 2)
+  assert.equal(stored(manifest).version, 3)
   assert.deepEqual(stored(manifest).runs, data.runs)
 
   const late = { at: at(90), id: 'A3', kind: 'implement-start', run: 'A3-01-implement', log: 'logs/A3-01-implement.jsonl' }
@@ -358,7 +360,7 @@ test('openLedger migrates a version 1 ledger once: version 2 with the runs of it
   assert.deepEqual(openLedger(manifest).data.runs, data.runs)
 })
 
-test('openLedger: a version 1 ledger without events migrates to no runs, and one without a file starts at version 2 and writes nothing', () => {
+test('openLedger: a version 1 ledger without events migrates to no runs, and one without a file starts at version 3 and writes nothing', () => {
   const legacy = loadManifest(makeRollout({ legacy: true, events: null }))
 
   assert.deepEqual(openLedger(legacy).data.runs, {})
@@ -366,7 +368,7 @@ test('openLedger: a version 1 ledger without events migrates to no runs, and one
   const fresh = loadManifest(makeRollout({ prs: null }))
   const { data } = openLedger(fresh)
 
-  assert.equal(data.version, 2)
+  assert.equal(data.version, 3)
   assert.deepEqual(data.runs, {})
   assert.deepEqual(Object.keys(data.prs), ['A1', 'A2', 'A3'])
   assert.equal(data.hold, null)
@@ -405,21 +407,21 @@ test('openLedger: a stored paused false becomes no hold and no key, also from be
 })
 
 test('openLedger and the view read a PR hold from before authors as one the maintainer set', () => {
-  const manifest = loadManifest(makeRollout())
+  const manifest = loadManifest(makeRollout({ legacy: true }))
 
   assert.deepEqual(readLedger(manifest).prs.A1.held, { at: at(81) })
-  assert.deepEqual(prDetail(manifest, readLedger(manifest), [], [], 'A1').held, { at: at(81), by: 'maintainer', reason: null })
+  assert.deepEqual(prDetail(manifest, readLedger(manifest), [], [], 'A1').hold, { at: at(81), by: 'maintainer', reason: null })
 
   const { prs } = openLedger(manifest)
 
-  assert.deepEqual(prs.A1.held, { at: at(81), by: 'maintainer', reason: null })
-  assert.equal(prs.A2.held, null)
+  assert.deepEqual(prs.A1.hold, { at: at(81), by: 'maintainer', reason: null })
+  assert.equal(prs.A2.hold, null)
 
   const byDriver = { at: at(5), by: 'driver', reason: 'usage limit reached' }
 
-  assert.deepEqual(withDefaults({ held: byDriver }).held, byDriver)
-  assert.equal(withDefaults({ held: null }).held, null)
-  assert.equal(withDefaults({}).held, null)
+  assert.deepEqual(withDefaults({ hold: byDriver }).hold, byDriver)
+  assert.equal(withDefaults({ hold: null }).hold, null)
+  assert.equal(withDefaults({}).hold, null)
 })
 
 test('MIGRATIONS: the step from 1 to 2 is pure, fills the defaults of every entry and stamps nothing', () => {
@@ -446,7 +448,7 @@ test('MIGRATIONS: the step from 1 to 2 is pure, fills the defaults of every entr
   assert.equal(migrated.paused, true)
   assert.deepEqual(migrated.lastMerge, before.lastMerge)
   assert.deepEqual(migrated.prs.Z9.delegate, { runs: 1, lastQuestion: null, limitNotified: false, answers: [] })
-  assert.deepEqual(migrated.prs.Z9, withDefaults(before.prs.Z9))
+  assert.deepEqual(migrated.prs.Z9, { ...versionTwoPr(), ...before.prs.Z9, delegate: migrated.prs.Z9.delegate })
   assert.equal(migrated.prs.Z9.escalatedAt, null)
   assert.deepEqual(migrated.prs.A1.blocked, before.prs.A1.blocked)
   assert.deepEqual(migrated.prs.A1.noteHistory, [note])
@@ -471,7 +473,7 @@ test('openLedger and readLedger refuse a ledger a newer driver wrote, and change
   assert.throws(() => readLedger(manifest), /newer driver/)
   assert.throws(() => migrate(stored(manifest), manifest), /newer driver/)
   assert.throws(() => readLedger(manifest), {
-    message: /^ledger\.json is version 99, written by a newer driver than this one \(version 2\)\./,
+    message: /^ledger\.json is version 99, written by a newer driver than this one \(version 3\)\./,
   })
 
   assert.deepEqual(readFileSync(file), before)
@@ -589,6 +591,29 @@ test('startRun and endRun write the record of one run, and endRun without a star
   assert.deepEqual(Object.keys(data.runs), ['A1-01-implement', 'A2-01-brief-review'])
 })
 
+test('recordProcess sets the process of an open run, and leaves an ended run and a missing one alone', () => {
+  const data = {}
+  const recorded = { pid: 4242, startTime: 'Tue Sep  1 10:00:00 2026' }
+
+  startRun(data, { run: 'A1-01-implement', id: 'A1', role: 'implement' }, at(0))
+  startRun(data, { run: 'A1-02-verify', id: 'A1', role: 'verify' }, at(1))
+  endRun(data, { id: 'A1', role: 'verify' }, doneDetail('verify', 'A1-02-verify', { ok: true, costUsd: 1 }), at(2))
+
+  const ended = structuredClone(data.runs['A1-02-verify'])
+
+  recordProcess(data, 'A1-01-implement', recorded)
+  recordProcess(data, 'A1-02-verify', { container: 'rollout-demo-A1-02-verify' })
+  recordProcess(data, 'A1-03-fix', recorded)
+
+  assert.deepEqual(data.runs['A1-01-implement'].process, recorded)
+  assert.deepEqual(data.runs['A1-02-verify'], ended)
+  assert.deepEqual(Object.keys(data.runs), ['A1-01-implement', 'A1-02-verify'])
+
+  endRun(data, { id: 'A1', role: 'implement' }, doneDetail('implement', 'A1-01-implement', { ok: true, costUsd: 1 }), at(3))
+
+  assert.deepEqual(data.runs['A1-01-implement'].process, recorded)
+})
+
 test('startRun and endRun change nothing without a run name', () => {
   const data = {}
 
@@ -635,7 +660,7 @@ test('openLedger drops a halt an older driver stored, and saves that', () => {
 
   assert.equal(Object.hasOwn(data, 'halted'), false)
   assert.equal(Object.hasOwn(stored(manifest), 'halted'), false)
-  assert.equal(stored(manifest).version, 2)
+  assert.equal(stored(manifest).version, 3)
 })
 
 test('tickNote and parseTickNote: the numbers of a tick make the round trip, with - for no rate limit, and other notes parse to null', () => {
@@ -708,8 +733,8 @@ const RUNS = {
   'A2-01-implement': { ...runOf('implement', at(60)), id: 'A2' },
 }
 
-// One row per row of the fill's table: the version 2 entry, how the rollout
-// looks, and the stage, status (without its time) and fix the open fills in.
+// One row per row of the migration's table: the version 2 entry, how the
+// rollout looks, and the stage, status (without its time) and fix the open fills in.
 const FILL_ROWS = [
   ['pending with no brief file', { state: 'pending' }, {}, ['brief', SLOT, null]],
   ['pending with a brief written', { state: 'pending' }, { brief: true }, ['implement', SLOT, null]],
@@ -832,6 +857,9 @@ const FILL_ROWS = [
   ['merged', { state: 'merged', pr: 11 }, {}, ['merged', null, null]],
 ]
 
+// The fields version 3 removed.
+const REMOVED = ['state', 'interruptedRole', 'blocked', 'escalation', 'escalatedAt', 'held']
+
 // A raw version 2 ledger with A1 as an older driver wrote it, opened as the driver opens it.
 function openedA1(fields, { brief: written = false, runs = RUNS } = {}) {
   const manifest = withLedger({ version: 2, prs: { A1: fields }, runs, hold: null })
@@ -856,13 +884,19 @@ function untimed(value) {
   return rest
 }
 
-// A row's `since` names the time the fill takes in place of the time of the open.
+// A row's `since` names the time the migration takes in place of the time of the open.
 for (const [name, fields, rollout, [stage, status, fix]] of FILL_ROWS) {
-  test(`openLedger fills stage and status from the state: ${name}`, () => {
+  test(`openLedger migrates a version 2 entry to version 3: ${name}`, () => {
     const before = Date.now()
-    const { entry } = openedA1(fields, rollout)
+    const { manifest, entry } = openedA1(fields, rollout)
 
     assert.deepEqual([entry.stage, untimed(entry.status), untimed(entry.fix)], [stage, status, fix])
+    assert.deepEqual(
+      REMOVED.filter((key) => Object.hasOwn(entry, key)),
+      [],
+    )
+
+    assert.equal(stored(manifest).version, 3)
 
     for (const stamped of [entry.status, entry.fix].filter(Boolean)) {
       if (rollout.since) {
@@ -874,12 +908,11 @@ for (const [name, fields, rollout, [stage, status, fix]] of FILL_ROWS) {
   })
 }
 
-test('openLedger: stateOf of every filled row gives back the stored state', () => {
+test('openLedger: stateOf of every migrated row gives back the stored state', () => {
   for (const [name, fields, rollout] of FILL_ROWS) {
     const { entry } = openedA1(fields, rollout)
 
     assert.equal(stateOf(entry), fields.state, name)
-    assert.equal(entry.state, fields.state, name)
   }
 })
 
@@ -1018,16 +1051,20 @@ test('openLedger: on merge only the verdicts with a status of their own count, a
   }
 })
 
-test('openLedger fills an entry again when its stage disagrees with its state or its hold with held, and leaves a filled one alone', () => {
+test('the migration from version 2 fills an entry again when its stage disagrees with its state or its hold with held, and keeps one that agrees', () => {
   const manifest = loadManifest(makeRollout({ prs: { A1: { state: 'ready_claimed', ...CLAIM }, A2: { state: 'needs_fix', pr: 12 } } }))
   const ledger = openLedger(manifest)
+  const older = structuredClone(ledger.data)
 
-  ledger.prs.A1.state = 'verifying'
-  ledger.prs.A2.held = { at: at(5), by: 'maintainer', reason: null }
+  older.version = 2
+  older.prs.A1.state = 'verifying'
+  older.prs.A2.state = 'needs_fix'
+  older.prs.A2.held = { at: at(5), by: 'maintainer', reason: null }
+  older.prs.A3.state = 'pending'
 
   const kept = structuredClone(ledger.prs.A3)
 
-  ledger.save()
+  writeFileSync(join(manifest.dir, 'ledger.json'), JSON.stringify(older))
 
   const reopened = openLedger(manifest).prs
 
@@ -1036,13 +1073,179 @@ test('openLedger fills an entry again when its stage disagrees with its state or
   assert.deepEqual(reopened.A3, kept)
 })
 
-test('openLedger: a ledger it filled and saved still says version 2', () => {
+test('openLedger: a version 2 ledger it migrated and saved says version 3', () => {
   const manifest = withLedger({ version: 2, prs: { A1: { state: 'needs_fix', pr: 11 } }, runs: {}, hold: null })
   const ledger = openLedger(manifest)
 
   ledger.save()
 
-  assert.equal(stored(manifest).version, 2)
+  assert.equal(stored(manifest).version, 3)
   assert.equal(stored(manifest).prs.A1.stage, 'implement')
-  assert.match(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8'), /^\{\n {2}"version": 2,/)
+  assert.match(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8'), /^\{\n {2}"version": 3,/)
+})
+
+test('openLedger migrates a version 2 ledger: a held PR gets a hold by the maintainer, paused becomes the rollout hold, and halted goes', () => {
+  const manifest = withLedger({
+    version: 2,
+    prs: { A1: { state: 'ready_claimed', ...CLAIM, held: { at: at(5) } } },
+    runs: {},
+    paused: true,
+    halted: 'main is red',
+  })
+
+  const { data, prs } = openLedger(manifest)
+
+  assert.deepEqual(prs.A1.hold, { at: at(5), by: 'maintainer', reason: null })
+  assert.equal(Object.hasOwn(prs.A1, 'held'), false)
+  assert.deepEqual(untimed(prs.A1.status), { kind: 'waiting', code: 'held', scope: 'pr' })
+  assert.deepEqual(data.hold, { at: data.hold.at, by: 'maintainer', reason: null })
+  assert.deepEqual([Object.hasOwn(data, 'paused'), Object.hasOwn(data, 'halted')], [false, false])
+  assert.equal(stored(manifest).version, 3)
+  assert.deepEqual(stored(manifest).prs.A1.hold, prs.A1.hold)
+})
+
+test('openLedger migrates a version 1 ledger: a pending PR whose brief file exists opens on implement', () => {
+  const manifest = loadManifest(makeRollout({ legacy: true, prs: { A1: { state: 'pending' }, A2: { state: 'pending' } } }))
+  const path = manifest.all.find((pr) => pr.id === 'A1').brief
+
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, '# A1\n')
+
+  const { data, prs } = openLedger(manifest)
+
+  assert.equal(data.version, 3)
+  assert.deepEqual([prs.A1.stage, untimed(prs.A1.status), prs.A1.fix], ['implement', SLOT, null])
+  assert.deepEqual([prs.A2.stage, untimed(prs.A2.status)], ['brief', SLOT])
+})
+
+test('MIGRATIONS: the step from 2 to 3 is pure, and the ledger it is given stays as it was', () => {
+  const step = MIGRATIONS.find((candidate) => candidate.from === 2)
+  const data = {
+    version: 2,
+    prs: {
+      A1: { state: 'blocked', pr: 11, blocked: brief('needs-decision'), held: { at: at(5) } },
+      A2: { state: 'interrupted', interruptedRole: 'implement' },
+    },
+    runs: RUNS,
+    hold: null,
+  }
+
+  const before = structuredClone(data)
+  const result = step.apply(data, { events: [], briefs: new Set(['A2']), at: at(100) })
+
+  assert.deepEqual([step.from, step.to, result.version], [2, 3, 3])
+  assert.deepEqual(data, before)
+  assert.deepEqual([result.prs.A1.status.code, result.prs.A1.hold.by], ['decision', 'maintainer'])
+  assert.deepEqual([result.prs.A2.stage, result.prs.A2.fix.reason, result.prs.A2.implementCutOff], ['implement', 'no-report', true])
+
+  result.prs.A1.status.question.text = 'changed'
+  result.prs.A1.hold.at = at(6)
+  assert.deepEqual(data, before, 'the result shares nothing with its input')
+})
+
+test('openLedger migrates the mark of a parked READY report and of a cut-off implement run', () => {
+  const parked = openedA1({ state: 'interrupted', interruptedRole: 'report', ready: { status: 'READY', pr: 11, headSha: HEAD } }).entry
+
+  assert.deepEqual(
+    [parked.stage, untimed(parked.status), parked.reportUnchecked, parked.implementCutOff],
+    ['pre-verify', { kind: 'waiting', code: 'github' }, true, false],
+  )
+
+  const cut = openedA1({ state: 'interrupted', interruptedRole: 'implement' }).entry
+
+  assert.deepEqual(
+    [cut.stage, untimed(cut.status), untimed(cut.fix), cut.implementCutOff, cut.reportUnchecked],
+    ['implement', SLOT, { reason: 'no-report', note: '' }, true, false],
+  )
+
+  const fixRun = openedA1({ state: 'interrupted', pr: 11, interruptedRole: 'fix' }).entry
+
+  assert.deepEqual([untimed(fixRun.fix), fixRun.implementCutOff, fixRun.reportUnchecked], [{ reason: 'no-report', note: '' }, false, false])
+})
+
+test('openLedger migrates the question a running delegate works on into delegate.question', () => {
+  const running = { kind: 'running', code: 'delegate', question: 'needs-decision', run: 'A1-05-delegate', since: at(60) }
+  const { entry } = openedA1({
+    state: 'blocked',
+    pr: 11,
+    blocked: brief('needs-decision'),
+    stage: 'implement',
+    status: running,
+    fix: null,
+    hold: null,
+  })
+
+  assert.deepEqual([entry.stage, entry.status], ['implement', running])
+  assert.deepEqual(entry.delegate.question, asked('needs-decision'))
+  assert.equal(entry.delegate.question.text, 'Which API?')
+
+  const waiting = openedA1({ state: 'blocked', pr: 11, blocked: brief('needs-decision') }).entry
+
+  assert.equal(waiting.delegate.question, null)
+})
+
+// The guesses of the view for a block or an escalation with no stamps, made once by the migration.
+const GUESS_RUNS = {
+  'A1-01-implement': { id: 'A1', role: 'implement', startedAt: at(10), endedAt: at(20) },
+  'A1-02-verify': { id: 'A1', role: 'verify', startedAt: at(21), endedAt: at(30) },
+  'A1-03-fix': { id: 'A1', role: 'fix', startedAt: at(31), endedAt: at(40) },
+  'A1-04-delegate': { id: 'A1', role: 'delegate', startedAt: at(41), endedAt: at(45) },
+  'A2-01-implement': { id: 'A2', role: 'implement', startedAt: at(41), endedAt: at(46) },
+}
+
+const MIGRATED_AT = at(100)
+
+// The step from 2 to 3 on a version 2 ledger with A1 alone.
+function guessed(fields, events, runs = GUESS_RUNS) {
+  const step = MIGRATIONS.find((candidate) => candidate.from === 2)
+
+  return step.apply({ version: 2, prs: { A1: fields }, runs, hold: null }, { events, briefs: new Set(), at: MIGRATED_AT }).prs.A1
+}
+
+test('the migration from version 2 stamps a block with the time of its event and the run the view guessed', () => {
+  const unstamped = { state: 'blocked', pr: 11, blocked: { kind: 'needs-decision', question: 'Which API?', evidence: '' } }
+  const blockedAt = [
+    { at: at(35), id: 'A1', kind: 'blocked' },
+    { at: at(50), id: 'A2', kind: 'blocked' },
+  ]
+
+  const block = guessed(unstamped, blockedAt)
+
+  assert.deepEqual([block.status.code, block.status.since, block.status.question.run], ['decision', at(35), 'A1-01-implement'])
+
+  const stamped = guessed({ ...unstamped, blocked: brief('needs-decision', 'A1-03-fix') }, blockedAt)
+
+  assert.deepEqual([stamped.status.since, stamped.status.question.run], [at(35), 'A1-03-fix'])
+
+  const driver = guessed({ ...unstamped, blocked: brief('needs-decision', null) }, blockedAt)
+
+  assert.equal(driver.status.question.run, null)
+
+  const noEvent = guessed(unstamped, [])
+
+  assert.deepEqual([noEvent.status.since, noEvent.status.question.run], [MIGRATED_AT, 'A1-03-fix'])
+
+  const noRun = guessed(unstamped, blockedAt, {})
+
+  assert.equal(noRun.status.question.run, null)
+})
+
+test('the migration from version 2 stamps an escalation with no time of its own, and keeps the run of one that has it', () => {
+  const unstamped = { state: 'escalated', pr: 11, escalation: 'repeated errors', lastError: 'boom', escalationRun: null }
+  const escalatedAt = [
+    { at: at(42), id: 'A1', kind: 'escalated' },
+    { at: at(60), id: 'A1', kind: 'blocked' },
+  ]
+
+  const escalation = guessed(unstamped, escalatedAt)
+
+  assert.deepEqual([escalation.status.code, escalation.status.since, escalation.escalationRun], ['errors', at(42), 'A1-03-fix'])
+
+  const noEvent = guessed(unstamped, [])
+
+  assert.deepEqual([noEvent.status.since, noEvent.escalationRun], [MIGRATED_AT, 'A1-03-fix'])
+
+  const stamped = guessed({ ...unstamped, escalatedAt: at(38), escalationRun: 'A1-01-implement' }, escalatedAt)
+
+  assert.deepEqual([stamped.status.since, stamped.escalationRun], [at(38), 'A1-01-implement'])
 })

@@ -703,8 +703,8 @@ prs:
                 <td>object</td>
                 <td>implement <code>2</code>, fix <code>4</code>, verify <code>3</code>, brief <code>2</code></td>
                 <td>
-                  Runs per role before the PR becomes <a href="how-it-works.html#state-escalated">escalated</a> and waits for you. The
-                  verify count starts over once the PR is verified.
+                  Runs per role before the PR waits for you on <a href="how-it-works.html#status-attempts-exhausted">attempts-exhausted</a>.
+                  The verify count starts over once the PR is verified.
                 </td>
               </tr>
               <tr id="policy-timeouts">
@@ -858,8 +858,8 @@ prs:
                 <td>
                   The brief reviewer runs every verification and acceptance command of the draft that exists in the brief's worktree: the
                   base, with the verified heads of unmerged dependencies merged in when there are any (see
-                  <a href="how-it-works.html#state-briefing">briefing</a>). It runs them one at a time inside its own run, so they count
-                  toward <a href="#policy-timeouts"><code>policy.timeouts.brief</code></a
+                  <a href="how-it-works.html#stage-brief">brief</a>). It runs them one at a time inside its own run, so they count toward
+                  <a href="#policy-timeouts"><code>policy.timeouts.brief</code></a
                   >. It skips a command the draft marks "new in this PR" and a command that rewrites tracked files. For each command it ran,
                   it reports whether the command can pass after a change within the brief's expected files. A check that cannot pass becomes
                   a brief question, unless the reviewer asked one that quotes the command. The PR then blocks on
@@ -932,7 +932,7 @@ prs:
                   judges the reason. A PR with neither a manifest <code>scope</code> nor expected files from a brief the driver wrote is
                   never sent back. The send-back counts toward <code>policy.attempts.fix</code>. With or without <code>gates</code>, each
                   check before the verifier logs a <code>gate-check</code> event (see
-                  <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>).
+                  <a href="how-it-works.html#stage-pre-verify">pre-verify</a>).
                 </td>
               </tr>
               <tr id="gates-preVerify-required">
@@ -954,9 +954,9 @@ prs:
                   <code>pre-verify check</code>, with its exit code and the end of its output, and the commands after it do not run. A
                   failed required ready command ends the job before any pre-verify command runs. The send-back counts toward
                   <code>policy.attempts.fix</code>. The results are <code>gate-check</code> events (see
-                  <a href="how-it-works.html#state-ready_claimed">ready_claimed</a>). The implementer's prompt lists the commands, but only
-                  the driver's own run decides. A run with no failed required command lets the verifier start, and it holds for that head
-                  until the driver restarts or the ready or pre-verify commands change.
+                  <a href="how-it-works.html#stage-pre-verify">pre-verify</a>). The implementer's prompt lists the commands, but only the
+                  driver's own run decides. A run with no failed required command lets the verifier start, and it holds for that head until
+                  the driver restarts or the ready or pre-verify commands change.
                 </td>
               </tr>
               <tr id="gates-preVerify-recommended">
@@ -982,8 +982,7 @@ prs:
                   or that the verifier does not report, becomes a blocking finding such as <code>V1 (required criterion): ...</code>, after
                   the verifier's own findings. A PASS with one counts as a FAIL. The send-back counts toward
                   <code>policy.attempts.fix</code>, and the next verifier re-checks the finding like any other. The results are
-                  <code>gate-check</code> events with stage <code>verify</code> (see
-                  <a href="how-it-works.html#state-verifying">verifying</a>).
+                  <code>gate-check</code> events with stage <code>verify</code> (see <a href="how-it-works.html#stage-verify">verify</a>).
                 </td>
               </tr>
               <tr id="gates-verify-recommended">
@@ -1007,8 +1006,8 @@ prs:
                   <code>repo.path</code>, never from the PR's branch or worktree. So a PR cannot change its own criteria, and a change
                   merged into the base applies to the next verifier. The entries that apply to the PR join <code>verify.required</code> and
                   <code>verify.recommended</code>, after them, as required criteria with their own ids. They are judged like
-                  <code>verify.required</code>. A missing or invalid catalog is an error of that PR: no verifier starts, the PR stays
-                  <code>ready_claimed</code>, and five erroring ticks in a row escalate it as <code>repeated errors</code>.
+                  <code>verify.required</code>. A missing or invalid catalog is an error of that PR: no verifier starts, the PR stays on
+                  <code>pre-verify</code>, and five erroring ticks in a row escalate it as <code>repeated errors</code>.
                   <a href="commands.html#cmd-preflight">Preflight</a> reads and checks the catalog too.
                 </td>
               </tr>

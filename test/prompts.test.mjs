@@ -340,11 +340,12 @@ test('prompts: the delegate sees the question, the plan, the brief and every ear
     { at: '2026-09-01T10:00:00.000Z', by: 'maintainer', kind: 'needs-decision', question: 'Which name?', text: 'Call it --delay.' },
   ]
 
-  const blocked = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 reads --wait.' }
+  const question = { kind: 'needs-decision', text: 'Keep the old flag?', evidence: 'cli.mjs:12 reads --wait.', run: null, delegate: null }
+  const delegate = { ...STATE.delegate, question }
 
   manifest.repo.denylist = ['acme-client', 'example corp']
 
-  const text = delegatePrompt(manifest, pr, { ...STATE, blocked, noteHistory })
+  const text = delegatePrompt(manifest, pr, { ...STATE, delegate, noteHistory })
 
   for (const part of [
     'Keep the old flag?',
@@ -364,8 +365,8 @@ test('prompts: the delegate sees the question, the plan, the brief and every ear
   }
 
   assert.equal(text.includes('{{'), false)
-  assert.ok(delegatePrompt(manifest, manifest.all[2], { ...freshPr(), blocked }).includes('No brief has been written yet.'))
-  assert.ok(delegatePrompt(manifest, pr, { ...freshPr(), blocked }).includes('## Earlier answers\n\nOldest first.\n\n(none)\n'))
+  assert.ok(delegatePrompt(manifest, manifest.all[2], { ...freshPr(), delegate }).includes('No brief has been written yet.'))
+  assert.ok(delegatePrompt(manifest, pr, { ...freshPr(), delegate }).includes('## Earlier answers\n\nOldest first.\n\n(none)\n'))
 })
 
 const DELEGATE_PREFIX = "Answer from the delegate, on the maintainer's behalf, from the plan:\n\n"

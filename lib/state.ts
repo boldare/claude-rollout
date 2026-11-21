@@ -376,6 +376,8 @@ export interface MergedEntry extends EntryBase<'merged'> {
   merged: Merged
 }
 
+// Entry and Ledger are the shape the stored ledger moves to. Version 3 takes
+// only an entry's stage and status from it, so the comments on its members describe that later shape.
 export type Entry = BriefEntry | ImplementEntry | PreVerifyEntry | VerifyEntry | MergeEntry | MergedEntry
 
 // How a run ended, by role. Every result has one row in the transition table.
@@ -394,7 +396,7 @@ export interface RunRecord {
   role: Role
   startedAt: IsoTime
   endedAt: IsoTime | null
-  process: { pid: number } | { container: string } | null
+  process: { pid: number; startTime: string } | { container: string } | null
 }
 
 export const COMMANDS = ['approve', 'note', 'retry', 'hold', 'release'] as const

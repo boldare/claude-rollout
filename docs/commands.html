@@ -173,11 +173,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
             lock left by a dead process, or one without a real pid, is cleared.
           </li>
           <li>
-            On start, each run that was in progress gets its attempt back, within the five refunds of a PR, and its PR becomes
-            <a href="how-it-works.html#state-interrupted">interrupted</a>, or pending for a brief. A fix run keeps its reason and note, so
-            its PR owes that fix again. A delegate run gives its run back and hands its question back. Then it fetches
-            <code>origin</code> and creates the label <code>rollout:&lt;name&gt;</code>. A fetch or label call lost to an outage of GitHub
-            or the network logs <code>github-unavailable</code>, and the start goes on. The next start creates a label lost this way.
+            On start, each run that was in progress gets its attempt back, within the five refunds of a PR, and its PR waits for a
+            <a href="how-it-works.html#status-slot">slot</a> on the stage of its run. A fix run keeps its reason and note, so its PR owes
+            that fix again. A delegate run gives its run back and hands its question back. Then it fetches <code>origin</code> and creates
+            the label <code>rollout:&lt;name&gt;</code>. A fetch or label call lost to an outage of GitHub or the network logs
+            <code>github-unavailable</code>, and the start goes on. The next start creates a label lost this way.
           </li>
           <li>
             It ticks every <code>policy.tickSeconds</code> (60 s), and a new command in the inbox wakes it sooner. What one tick does is on
@@ -578,8 +578,8 @@ A2  verify · needs-you: dispute
             <a href="how-it-works.html#feedback">maintainer feedback</a>).
           </li>
           <li>
-            In the UI: <a href="ui.html#control-note">Note</a>, or <a href="ui.html#control-answer">Answer</a> for a blocked PR. Both
-            dialogs show the effect.
+            In the UI: <a href="ui.html#control-note">Note</a>, or <a href="ui.html#control-answer">Answer</a> for a PR whose status is a
+            question or a block, or the delegate at work on one. Both dialogs show the effect.
           </li>
         </ul>
 

@@ -198,6 +198,11 @@ export function tickDriver(
   return { manifest, driver, tools, github, gate, notices, cleaned }
 }
 
+// Where a PR is, as stage, status kind and status code.
+export function placeOf(entry) {
+  return [entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null]
+}
+
 // The step suites pin the events of a step, test/status.test.mjs pins the status events.
 export function eventsSince(manifest, from = 0) {
   return readEvents(manifest)

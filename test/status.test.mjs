@@ -5,7 +5,6 @@ import { dirname, join } from 'node:path'
 import { createDriver } from '../lib/driver.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { STAGE_STATUSES } from '../lib/state.ts'
-import { stateOf } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
 import { at, samplePrs, waitFor } from './fixtures.mjs'
@@ -82,14 +81,8 @@ const CLEAN_TREE = [
   { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
 ]
 
-// The derived state must be the one the driver wrote.
-function consistent(entry) {
-  assert.equal(stateOf(entry), entry.state)
-}
-
 function assertStatus(entry, stage, kind, code) {
   assert.deepEqual([entry.stage, entry.status?.kind ?? null, entry.status?.code ?? null], [stage, kind, code])
-  consistent(entry)
 }
 
 // One test per stage and code the driver produces. `reach` takes the PR there through the driver and returns its entry.
@@ -150,7 +143,7 @@ async function fifthError(fields, options) {
   const setup = setupFor({ A1: { ...fields, tickErrors: 4 } }, options)
 
   await setup.driver.tick()
-  assert.equal(setup.entry.escalation, 'repeated errors')
+  assert.equal(setup.entry.status.code, 'errors')
 
   return setup
 }
@@ -159,7 +152,7 @@ async function closedOnGitHub(fields) {
   const setup = setupFor({ A1: fields }, { routes: [CLOSED] })
 
   await setup.driver.tick()
-  assert.equal(setup.entry.blocked.kind, 'closed')
+  assert.equal(setup.entry.status.code, 'closed')
 
   return setup.entry
 }
@@ -195,7 +188,6 @@ pairTest('brief', 'running', 'brief-review', async () => {
 
   rmSync(setup.pr.brief)
   await setup.driver.advance(setup.pr)
-  consistent(setup.entry)
   await waitFor(() => setup.calls.length === 2, 'the reviewer')
 
   assert.equal(setup.entry.status.run, setup.calls[1].logName)
@@ -349,7 +341,7 @@ pairTest('implement', 'waiting', 'dependencies', async () => {
   await cutOff.driver.advance(cutOff.pr)
 
   assertStatus(cutOff.entry, 'implement', 'waiting', 'dependencies')
-  assert.equal(cutOff.entry.state, 'interrupted')
+  assert.equal(cutOff.entry.fix.reason, 'no-report')
 
   const { driver, pr, entry } = setupFor({ A1: { state: 'pending' } }, {}, 'A2')
 

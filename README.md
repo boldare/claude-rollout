@@ -19,6 +19,8 @@ The repository is also a Claude Code skill (`SKILL.md`), so this makes `/rollout
 
 Upgrading from a version that labelled PRs by state: the driver labels PRs `rollout-stage:<stage>` and `rollout-status:<code>`. On its next sync it removes the old `rollout-stage:<state>` and `rollout-reason:<why>` labels from each open PR. The old label definitions stay in the repository until someone deletes them.
 
+Upgrading to ledger version 3: a ledger an older driver wrote becomes version 3 at the driver's next start, and a driver from before version 3 refuses a version 3 ledger.
+
 ## Quick start
 
 ```sh

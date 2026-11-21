@@ -198,7 +198,7 @@ function depsField(pr, ctx) {
 }
 
 function renderOverview(pr, ctx) {
-  const heldField = pr.held ? [field('held', `since ${clock(pr.held.at)}`)] : []
+  const heldField = pr.hold ? [field('held', `since ${clock(pr.hold.at)}`)] : []
 
   return fields(
     statusFields(pr),

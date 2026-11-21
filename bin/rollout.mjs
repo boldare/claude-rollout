@@ -28,6 +28,7 @@ import { batteryWarning } from '../lib/machine.mjs'
 import { commandPreview, prDetail, readEvents, rolloutView, rowDriver, rowsMatching, runsOf } from '../lib/view.mjs'
 import { timeText } from '../lib/sentences.ts'
 import { STAGES } from '../lib/state.ts'
+import { verifiedOnMerge } from '../lib/transitions.ts'
 import { prsWithoutPlan } from '../lib/plan.mjs'
 import { makeEnv, sh } from '../lib/sh.mjs'
 import { clientFor, ghEnv, ghError } from '../lib/github.mjs'
@@ -370,8 +371,8 @@ function card(manifest, id) {
     console.log(`way out: ${shown.wayOut.text}`)
   }
 
-  if (entry.held) {
-    console.log(`held ${holdText(entry.held)} (rollout.mjs release ${id})`)
+  if (entry.hold) {
+    console.log(`held ${holdText(entry.hold)} (rollout.mjs release ${id})`)
   }
 
   console.log(
@@ -453,7 +454,7 @@ function card(manifest, id) {
 
   printPreVerify(entry.preVerify)
 
-  if (entry.state === 'verified') {
+  if (verifiedOnMerge({ stage: shown.stage, status: shown })) {
     console.log(`\n${approveHint(manifest, entry, id)}`)
   }
 }

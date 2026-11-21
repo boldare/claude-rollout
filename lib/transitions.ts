@@ -4,6 +4,7 @@ import type {
   BriefEntry,
   BudgetRole,
   CommitStamp,
+  Entry,
   EntryBase,
   Fix,
   FixReason,
@@ -31,34 +32,22 @@ import type {
   WaitingOf,
 } from './state.ts'
 
-// The values of STATES in kinds.mjs. tsc reads no .mjs file (no allowJs), and
-// state.ts types ledger version 3, which has stage and status in place of a
-// state. So they are spelled again here until version 3 removes both lists.
-export type State =
-  | 'pending'
-  | 'briefing'
-  | 'implementing'
-  | 'ready_claimed'
-  | 'verifying'
-  | 'verified'
-  | 'needs_fix'
-  | 'fixing'
-  | 'blocked'
-  | 'escalated'
-  | 'interrupted'
-  | 'merged'
-
-// Version 2 names the text `question`. QuestionKind has no closed or gate,
-// because version 3 makes them statuses.
+// A block as a report or the driver raises it, with its text in `question`.
+// QuestionKind has no closed or gate, because they are statuses.
 type Blocked = Pick<Question, 'evidence' | 'run'> & { kind: QuestionKind | 'closed' | 'gate'; question: string }
 
 // Version 2 records no run, and no patch id until pre-verify computed one.
 type StoredVerification = Pick<Verification, 'sha' | 'at'> & { patchId?: string | null }
 
-// A version 2 run record, as far as the fill reads it. Version 3 has no
-// step: the brief's two steps are running codes there. A record that endRun
-// made with no start has no start time.
-type StoredRun = Pick<RunRecord, 'id' | 'role'> & { step?: 'write' | 'review' | null; startedAt?: RunRecord['startedAt'] | null }
+// A stored run record, as far as the migration reads it. A record of version 3
+// still has its step. Only RunRecord in state.ts has none, because the brief's
+// two steps are running codes there. A record that endRun made with no start
+// has no start time.
+export type StoredRun = Pick<RunRecord, 'id' | 'role'> & {
+  step?: 'write' | 'review' | null
+  startedAt?: RunRecord['startedAt'] | null
+  endedAt?: RunRecord['endedAt']
+}
 
 // The gate's verdict as mergeCandidate stores it in `gate`. A queued one
 // names the PR it waits for in `after`. The codes live in judge.mjs, which
@@ -94,21 +83,13 @@ interface GateFacts {
   mainChecks: { sha?: string | null; failing: string[] }
 }
 
-// The version 2 fields this module and the commands read or write, beside
-// stage, status, fix and hold, from which the state is derived. The optional
-// ones are missing from an entry until the driver first sets them.
-export interface PrEntry {
-  state: State
-  stage: Stage
-  status: Status | null
+// The fields of a stored entry beside its stage and status, as far as this
+// module and the commands read or write them. The optional ones are missing
+// from an entry until the driver first sets them.
+interface StoredFields {
   fix: Fix | null
   hold: Hold | null
-  held: Hold | null
   attempts: EntryBase['attempts']
-  interruptedRole: BudgetRole | 'report' | null
-  blocked?: Blocked | null
-  escalation: string | null
-  escalatedAt: IsoTime | null
   escalationRun: string | null
   fixReason?: string
   fixNote?: string
@@ -116,10 +97,15 @@ export interface PrEntry {
   approved: StoredApproval | null
   pendingNote: string | null
   noteHistory?: StoredNote[]
-  delegate: { runs: number; lastQuestion: string | null; limitNotified: boolean; answers: unknown[] }
+  // `question` is the question the delegate works on. Only a running delegate reads it.
+  delegate: { runs: number; lastQuestion: string | null; limitNotified: boolean; answers: unknown[]; question: Question | null }
   refunds?: number
   findings: unknown
   ready: unknown
+  // The READY report in `ready` waits to be checked against GitHub.
+  reportUnchecked: boolean
+  // The no-report fix the PR owes comes from a first implement run, so with no session the next run is implement again.
+  implementCutOff: boolean
   pr: number | null
   sessionId: string | null
   claimedSha: string | null
@@ -144,8 +130,12 @@ export interface PrEntry {
   merged?: Merged | null
 }
 
-// An entry from a ledger that no driver of this version has filled yet.
-type UnfilledEntry = Omit<PrEntry, 'stage' | 'status' | 'fix' | 'hold'> & Partial<Pick<PrEntry, 'stage' | 'status' | 'fix' | 'hold'>>
+type Placement<Member> = Member extends Entry ? Pick<Member, 'stage' | 'status'> : never
+
+// Entry in state.ts is the shape a stored entry moves to. Version 3 takes
+// only its stage and status from it, member by member, so a status of
+// another stage does not compile.
+export type PrEntry = Placement<Entry> & StoredFields
 
 // A status as a transition decides it. The write gives it its time.
 type Unstamped<Union> = Union extends unknown ? Omit<Union, 'since'> : never
@@ -154,21 +144,26 @@ type Resting = Unstamped<WaitingOf<'backoff' | 'slot'>>
 
 export type RestingStage = (typeof RESTING_STAGES)[number]
 
-// PR states:
-//   pending → implementing → ready_claimed → verifying → verified → merged
-//   needs_fix → fixing → ready_claimed      (CI red, policy, verifier, gate, conflict)
-//   interrupted → fixing | verifying        (a run ended without a report)
-//   blocked, escalated                      (waiting for a human: /rollout note|retry)
-//   pending → briefing → pending             (no brief yet: writer + reviewer agents)
-//   held is a flag on any state: no runs, rebases, ready notices or merges until release
-export const RUNNING: Partial<Record<State, BudgetRole>> = {
-  implementing: 'implement',
-  fixing: 'fix',
-  verifying: 'verify',
-  briefing: 'brief',
+// What verifiedOnMerge reads, so a view row's stage and status can be asked too.
+interface Placed {
+  stage: string
+  status: { kind: string | null; code: string | null } | null
 }
 
 export const DISPUTE = 'disputed finding'
+
+// A block waits for the maintainer, or for GitHub to lift it.
+export const BLOCK_CODES = [
+  'brief-questions',
+  'decision',
+  'obstacle',
+  'closed',
+  'code-scanning-alerts',
+  'gate-blocked',
+] as const satisfies readonly NeedsYouCode[]
+
+// An escalation: the driver gave up on the PR until the maintainer acts.
+export const ESCALATION_CODES = ['dispute', 'attempts-exhausted', 'errors'] as const satisfies readonly NeedsYouCode[]
 
 // `satisfies` checks each against state.ts and keeps its literal types, where a cast would hide a mismatch.
 const ROLE_STAGES = {
@@ -224,7 +219,7 @@ export const FIX_REASON_CODES: ReadonlyMap<string, FixReason> = new Map([
 ])
 
 // An older driver named every fix of the merge gate "merge gate". Only the
-// fill of a ledger it wrote reads these, to name the cause by the verdict's code.
+// migration of a ledger it wrote reads these, to name the cause by the verdict's code.
 const GATE_FIX_REASONS: ReadonlyMap<string, FixReason> = new Map([
   ['policy-violations', 'policy'],
   ['ci-red', 'ci-red'],
@@ -232,7 +227,7 @@ const GATE_FIX_REASONS: ReadonlyMap<string, FixReason> = new Map([
 
 // Any other text, an older driver's or a fixture's, counts as the verifier's
 // findings. A cut-off run gets no-report from the transition itself. The gate
-// code counts only beside "merge gate", for the fill of an older ledger.
+// code counts only beside "merge gate", for the migration of an older ledger.
 export function fixReasonCode(reason: string | null | undefined, gateCode: string | null = null): FixReason {
   if (reason === 'merge gate') {
     return GATE_FIX_REASONS.get(gateCode ?? '') ?? 'verifier-findings'
@@ -241,75 +236,68 @@ export function fixReasonCode(reason: string | null | undefined, gateCode: strin
   return FIX_REASON_CODES.get(reason ?? '') ?? 'verifier-findings'
 }
 
-const RUNNING_STATES: Record<RunningCode, State> = {
-  'brief-write': 'briefing',
-  'brief-review': 'briefing',
-  implement: 'implementing',
-  fix: 'fixing',
-  verify: 'verifying',
-  commands: 'ready_claimed',
-  merge: 'verified',
-  delegate: 'blocked',
+// The detail of a status event. Its status kind is `status`, because a `kind`
+// would replace the event's own. A merged PR has neither status nor code.
+export function statusDetail(entry: PrEntry) {
+  return { stage: entry.stage ?? null, status: entry.status?.kind ?? null, code: entry.status?.code ?? null }
 }
 
-const NEEDS_YOU_STATES: Record<NeedsYouCode, State> = {
-  'brief-questions': 'blocked',
-  decision: 'blocked',
-  obstacle: 'blocked',
-  dispute: 'escalated',
-  'attempts-exhausted': 'escalated',
-  errors: 'escalated',
-  closed: 'blocked',
-  'code-scanning-alerts': 'blocked',
-  approve: 'verified',
-  review: 'verified',
-  'changes-requested': 'verified',
-  'merge-by-hand': 'verified',
-  'github-blocked': 'verified',
-  'merge-refused': 'verified',
-  'gate-blocked': 'blocked',
-}
-
-// A cut-off fix run and an owed fix both wait on implement with a fix. Only the reason tells them apart.
-function implementWaiting(entry: PrEntry): State {
-  if (entry.fix?.reason === 'no-report') {
-    return 'interrupted'
+// The question of a needs-you status that asks one.
+export function statusQuestion(status: Status | null): Question | null {
+  if (status?.kind !== 'needs-you') {
+    return null
   }
 
-  return entry.fix ? 'needs_fix' : 'pending'
-}
-
-const WAITING_STATES: Record<OpenStage, (entry: PrEntry) => State> = {
-  brief: () => 'pending',
-  implement: implementWaiting,
-  // A parked READY report waits for GitHub, under a hold too.
-  'pre-verify': (entry) => (entry.interruptedRole === 'report' ? 'interrupted' : 'ready_claimed'),
-  verify: () => 'interrupted',
-  merge: () => 'verified',
-}
-
-// The version 2 state of an entry, from its stage, status and fix.
-export function stateOf(entry: PrEntry): State {
-  const { stage, status } = entry
-
-  if (stage === 'merged') {
-    return 'merged'
+  if (status.code === 'brief-questions' || status.code === 'decision' || status.code === 'obstacle') {
+    return status.question
   }
+
+  return null
+}
+
+// A block waits for an answer or for GitHub, or the delegate works on its question.
+export function waitsOnBlock(entry: Pick<PrEntry, 'status'>): boolean {
+  const status = entry.status
 
   if (status?.kind === 'running') {
-    return RUNNING_STATES[status.code]
+    return status.code === 'delegate'
   }
 
-  if (status?.kind === 'needs-you') {
-    return NEEDS_YOU_STATES[status.code]
-  }
-
-  return WAITING_STATES[stage](entry)
+  return status?.kind === 'needs-you' && listed(BLOCK_CODES, status.code)
 }
 
-// The one write of `state`, for the readers that have not moved to stage and status yet.
-function settle(entry: PrEntry): void {
-  entry.state = stateOf(entry)
+export function waitsOnEscalation(entry: Pick<PrEntry, 'status'>): boolean {
+  return entry.status?.kind === 'needs-you' && listed(ESCALATION_CODES, entry.status.code)
+}
+
+// A claim waiting for its check: its commands run, or it waits with its report checked.
+export function claimWaits(entry: PrEntry): boolean {
+  const status = entry.status
+
+  if (entry.stage !== 'pre-verify' || !status) {
+    return false
+  }
+
+  if (status.kind === 'running') {
+    return status.code === 'commands'
+  }
+
+  return status.kind === 'waiting' && !entry.reportUnchecked
+}
+
+// A verified PR on merge. One that a block or an escalation stops there is not.
+export function verifiedOnMerge({ stage, status }: Placed): boolean {
+  if (stage !== 'merge') {
+    return false
+  }
+
+  return status?.kind !== 'needs-you' || !(listed(BLOCK_CODES, status.code) || listed(ESCALATION_CODES, status.code))
+}
+
+// What a block for new code scanning alerts asks. A note records it as the
+// question it answered, and the agents' prompts list it from there.
+export function codeScanningQuestion(pr: number | null): string {
+  return `PR #${pr} has new code scanning alerts. Dismiss a false positive on GitHub and the driver reads them again on the next tick, or send instructions with rollout note.`
 }
 
 // A write that keeps the stage, the kind and the code keeps the time the
@@ -323,7 +311,8 @@ function write<At extends OpenStage>(entry: PrEntry, stage: At, status: Unstampe
   entry.status = { ...status, since: kept ? current.since : since } as Status
 }
 
-// Only implement owes a fix.
+// Every transition that moves a PR ends here. Only implement owes a fix, and
+// a fix other than no-report replaced or used the one a cut-off implement run left.
 function place<At extends OpenStage>(
   entry: PrEntry,
   stage: At,
@@ -332,17 +321,10 @@ function place<At extends OpenStage>(
 ): void {
   write(entry, stage, status, since)
   entry.fix = stage === 'implement' ? fix : null
-}
 
-// Every transition that moves a PR ends here.
-function moveTo<At extends OpenStage>(
-  entry: PrEntry,
-  stage: At,
-  status: Unstamped<StatusAt<At>>,
-  options: { since: IsoTime; fix?: Fix | null },
-): void {
-  place(entry, stage, status, options)
-  settle(entry)
+  if (entry.fix?.reason !== 'no-report') {
+    entry.implementCutOff = false
+  }
 }
 
 // A PR with nothing else to wait for on brief, implement and verify waits out
@@ -380,7 +362,7 @@ export function toFix(entry: PrEntry, reason: string, note: string, { code, at }
   entry.fixReason = reason
   entry.fixNote = note
   entry.verified = null
-  moveTo(entry, 'implement', resting(entry, at), { since: at, fix: { reason: code, note, since: at } })
+  place(entry, 'implement', resting(entry, at), { since: at, fix: { reason: code, note, since: at } })
 }
 
 export function joinFix(entry: PrEntry, note: string): void {
@@ -394,18 +376,17 @@ export function joinFix(entry: PrEntry, note: string): void {
 export function answerBrief(entry: PrEntry, question: string | null, text: string, at: IsoTime): void {
   entry.briefAnswers = [...(entry.briefAnswers ?? []), { question, answer: text }]
   entry.attempts.brief = Math.max(0, entry.attempts.brief - 1)
-  entry.blocked = null
-  moveTo(entry, 'brief', resting(entry, at), { since: at })
+  place(entry, 'brief', resting(entry, at), { since: at })
 }
 
 export function toPending(entry: PrEntry, at: IsoTime): void {
-  moveTo(entry, 'brief', resting(entry, at), { since: at })
+  place(entry, 'brief', resting(entry, at), { since: at })
 }
 
 export function briefWaits(entry: PrEntry, key: string, { heads, at }: { heads: Head[]; at: IsoTime }): void {
   entry.attempts.brief = Math.max(0, entry.attempts.brief - 1)
   entry.previewConflict = key
-  moveTo(entry, 'brief', { kind: 'waiting', code: 'dependencies-merge', heads }, { since: at })
+  place(entry, 'brief', { kind: 'waiting', code: 'dependencies-merge', heads }, { since: at })
 }
 
 export function briefWritten(entry: PrEntry, { scope, heads, at }: { scope: string[]; heads: Head[]; at: IsoTime }): void {
@@ -415,21 +396,21 @@ export function briefWritten(entry: PrEntry, { scope, heads, at }: { scope: stri
   entry.briefAt = at
   entry.briefAnswers = []
   entry.failStreak = 0
-  moveTo(entry, 'implement', resting(entry, at), { since: at })
+  place(entry, 'implement', resting(entry, at), { since: at })
 }
 
 // The run's name follows once the driver reserved it, see runName.
 export function runStarted(entry: PrEntry, role: BudgetRole, { at, sha = '' }: { at: IsoTime; sha?: string }): void {
   if (role === 'brief') {
-    moveTo(entry, 'brief', { kind: 'running', code: 'brief-write', run: '' }, { since: at })
+    place(entry, 'brief', { kind: 'running', code: 'brief-write', run: '' }, { since: at })
   } else if (role === 'implement') {
-    moveTo(entry, 'implement', { kind: 'running', code: 'implement', run: '' }, { since: at })
+    place(entry, 'implement', { kind: 'running', code: 'implement', run: '' }, { since: at })
   } else if (role === 'fix') {
     const reason = entry.fix?.reason ?? 'no-report'
 
-    moveTo(entry, 'implement', { kind: 'running', code: 'fix', reason, run: '' }, { since: at, fix: entry.fix })
+    place(entry, 'implement', { kind: 'running', code: 'fix', reason, run: '' }, { since: at, fix: entry.fix })
   } else {
-    moveTo(entry, 'verify', { kind: 'running', code: 'verify', sha, run: '' }, { since: at })
+    place(entry, 'verify', { kind: 'running', code: 'verify', sha, run: '' }, { since: at })
   }
 }
 
@@ -451,13 +432,15 @@ export function refundAttempt(entry: PrEntry, role: BudgetRole): void {
 export function runFailed(entry: PrEntry, role: BudgetRole, at: IsoTime): void {
   const fix = entry.fix
 
+  entry.reportUnchecked = false
+
   if (role === 'fix' && fix && fix.reason !== 'no-report') {
-    entry.interruptedRole = null
+    entry.implementCutOff = false
     rest(entry, role, { at, fix })
     return
   }
 
-  entry.interruptedRole = role
+  entry.implementCutOff = role === 'implement'
   rest(entry, role, { at, fix: noReport(at) })
 }
 
@@ -465,21 +448,23 @@ export function runFailed(entry: PrEntry, role: BudgetRole, at: IsoTime): void {
 // implement it owes `fix`.
 function rest(entry: PrEntry, role: BudgetRole, { at, fix }: { at: IsoTime; fix: Fix }): void {
   if (role === 'brief') {
-    moveTo(entry, 'brief', resting(entry, at), { since: at })
+    place(entry, 'brief', resting(entry, at), { since: at })
   } else if (role === 'verify') {
-    moveTo(entry, 'verify', resting(entry, at), { since: at })
+    place(entry, 'verify', resting(entry, at), { since: at })
   } else {
-    moveTo(entry, 'implement', resting(entry, at), { since: at, fix })
+    place(entry, 'implement', resting(entry, at), { since: at, fix })
   }
 }
 
 export function reportWaits(entry: PrEntry, at: IsoTime): void {
-  entry.interruptedRole = 'report'
-  moveTo(entry, 'pre-verify', GITHUB, { since: at })
+  entry.reportUnchecked = true
+  entry.implementCutOff = false
+  place(entry, 'pre-verify', GITHUB, { since: at })
 }
 
 export function reportUsed(entry: PrEntry): void {
-  entry.interruptedRole = null
+  entry.reportUnchecked = false
+  entry.implementCutOff = false
 }
 
 function claimWait(sha: string | null): Unstamped<WaitingOf<'ci'>> {
@@ -492,7 +477,7 @@ export function toClaimed(entry: PrEntry, { pr, sha, at }: CommitStamp & { pr: n
   entry.claimedAt = at
   entry.ciPendingSince = null
   entry.verified = null
-  moveTo(entry, 'pre-verify', claimWait(sha), { since: at })
+  place(entry, 'pre-verify', claimWait(sha), { since: at })
 }
 
 // Another patch is verified and approved again from the start.
@@ -502,11 +487,11 @@ export function claimNewHead(entry: PrEntry, { sha, at }: CommitStamp): void {
   entry.claimedSha = sha
   entry.claimedAt = at
   entry.ciPendingSince = null
-  moveTo(entry, 'pre-verify', claimWait(sha), { since: at })
+  place(entry, 'pre-verify', claimWait(sha), { since: at })
 }
 
 export function verifyAgain(entry: PrEntry, at: IsoTime): void {
-  moveTo(entry, 'pre-verify', claimWait(entry.claimedSha), { since: at })
+  place(entry, 'pre-verify', claimWait(entry.claimedSha), { since: at })
 }
 
 // The gate has not judged this verification yet (decision 37).
@@ -514,7 +499,7 @@ export function toVerified(entry: PrEntry, { sha, at }: CommitStamp): void {
   entry.verified = { sha, patchId: entry.claimPatchId, at }
   entry.attempts.verify = 0
   entry.findings = null
-  moveTo(entry, 'merge', GATE_PENDING, { since: at })
+  place(entry, 'merge', GATE_PENDING, { since: at })
 }
 
 function questionOf(blocked: Blocked): Question {
@@ -529,19 +514,23 @@ function questionOf(blocked: Blocked): Question {
   }
 }
 
-// The question stays in `blocked`, and so does the fix the PR owes.
+// The question waits in `delegate.question` while the delegate works on it,
+// and so does the fix the PR owes.
 export function delegateStarted(entry: PrEntry, { run, at }: { run: string; at: IsoTime }): void {
-  const question = entry.blocked ? questionOf(entry.blocked).kind : 'unknown'
+  const asked = statusQuestion(entry.status)
+  const question = asked?.kind ?? 'unknown'
   const status = { kind: 'running', code: 'delegate', question, run } as const
 
+  entry.delegate.question = asked
+
   if (question === 'brief-questions') {
-    moveTo(entry, 'brief', status, { since: at })
+    place(entry, 'brief', status, { since: at })
   } else {
-    moveTo(entry, 'implement', status, { since: at, fix: entry.fix })
+    place(entry, 'implement', status, { since: at, fix: entry.fix })
   }
 }
 
-// The kind a running delegate names, for an entry with no block to read it from.
+// The kind a running delegate names, for an entry with no question kept.
 function delegatedKind(status: Status | null): QuestionKind {
   return status?.kind === 'running' && status.code === 'delegate' ? status.question : 'unknown'
 }
@@ -552,15 +541,17 @@ export function delegateReturned(
   entry: PrEntry,
   { outcome, reason, at }: { outcome: 'escalated' | 'failed' | null; reason: string; at: IsoTime },
 ): void {
-  const asked = entry.blocked ? questionOf(entry.blocked) : { kind: delegatedKind(entry.status), text: '', evidence: '', run: null }
+  const asked = entry.delegate.question ?? { kind: delegatedKind(entry.status), text: '', evidence: '', run: null }
   const question = { ...asked, delegate: outcome ? { outcome, reason } : null }
 
+  entry.delegate.question = null
+
   if (entry.stage === 'brief') {
-    moveTo(entry, 'brief', { kind: 'needs-you', code: 'brief-questions', question }, { since: at })
+    place(entry, 'brief', { kind: 'needs-you', code: 'brief-questions', question }, { since: at })
   } else if (listed(OBSTACLE_KINDS, question.kind)) {
-    moveTo(entry, 'implement', { kind: 'needs-you', code: 'obstacle', question }, { since: at, fix: entry.fix })
+    place(entry, 'implement', { kind: 'needs-you', code: 'obstacle', question }, { since: at, fix: entry.fix })
   } else {
-    moveTo(entry, 'implement', { kind: 'needs-you', code: 'decision', question }, { since: at, fix: entry.fix })
+    place(entry, 'implement', { kind: 'needs-you', code: 'decision', question }, { since: at, fix: entry.fix })
   }
 }
 
@@ -602,15 +593,12 @@ export function toBlocked(
 ): void {
   const stage = openStage(entry)
 
-  entry.blocked = blocked
   placeBlock(entry, blocked, {
     since: at,
     fix: entry.fix,
     closedOn: stage === 'brief' ? 'implement' : stage,
     gateBlock: { gate: gateBlockCode(gate?.code) ?? 'no-pr', reasons: gate?.reasons ?? [blocked.question] },
   })
-
-  settle(entry)
 }
 
 // A needs-you status the close replaces is kept whole, so the reopen brings
@@ -620,17 +608,6 @@ export function toClosed(entry: PrEntry, { at, text }: { at: IsoTime; text: stri
 
   entry.closedFrom = status?.kind === 'needs-you' && status.code !== 'closed' ? status : null
   toBlocked(entry, { kind: 'closed', question: text, evidence: '', run: null }, { at })
-}
-
-// Only a question has a version 2 block to write back.
-function blockOf(status: Status): Blocked | null {
-  if (status.kind !== 'needs-you' || (status.code !== 'decision' && status.code !== 'obstacle')) {
-    return null
-  }
-
-  const { kind, text, evidence, run } = status.question
-
-  return { kind, question: text, evidence, run }
 }
 
 // What the close replaced comes back unchanged. With nothing kept, or a status
@@ -643,49 +620,40 @@ export function toReopened(entry: PrEntry, at: IsoTime): void {
   entry.closedFrom = null
 
   if (!kept || !listed(STAGE_STATUSES[stage][kept.kind], kept.code)) {
-    entry.blocked = null
     waitOnStage(entry, stage, at)
     return
   }
 
-  entry.blocked = blockOf(kept)
   entry.status = kept
-  settle(entry)
 }
 
 export function escalateExhausted(
   entry: PrEntry,
   { role, limit, at, run }: { role: BudgetRole; limit: number; at: IsoTime; run: string | null },
 ): void {
-  entry.escalation = `${role} attempts exhausted`
-  entry.escalatedAt = at
   entry.escalationRun = run
   entry.lastError = `${role} attempts exhausted (${limit})`
-  moveTo(entry, ROLE_STAGES[role], { kind: 'needs-you', code: 'attempts-exhausted', role, limit }, { since: at, fix: entry.fix })
+  place(entry, ROLE_STAGES[role], { kind: 'needs-you', code: 'attempts-exhausted', role, limit }, { since: at, fix: entry.fix })
 }
 
 export function escalateDispute(
   entry: PrEntry,
   { note, text, at, run, findings }: { note: string; text: string; at: IsoTime; run: string | null; findings: string[] },
 ): void {
-  entry.escalation = DISPUTE
-  entry.escalatedAt = at
   entry.escalationRun = run
   entry.verified = null
   entry.fixReason = 'verifier findings'
   entry.fixNote = note
   entry.lastError = text
-  moveTo(entry, 'verify', { kind: 'needs-you', code: 'dispute', findings, text }, { since: at })
+  place(entry, 'verify', { kind: 'needs-you', code: 'dispute', findings, text }, { since: at })
 }
 
 export function escalateErrors(entry: PrEntry, { at, run }: { at: IsoTime; run: string | null }): void {
-  entry.escalation = 'repeated errors'
-  entry.escalatedAt = at
   entry.escalationRun = run
 
   const status = { kind: 'needs-you', code: 'errors', error: entry.lastError ?? '', count: entry.tickErrors ?? 0 } as const
 
-  moveTo(entry, openStage(entry), status, { since: at, fix: entry.fix })
+  place(entry, openStage(entry), status, { since: at, fix: entry.fix })
 }
 
 // A dependency outside the run merges with no record, and adds no key.
@@ -709,7 +677,6 @@ export function toMerged(entry: PrEntry, { mergeSha, pr, merged }: { mergeSha?: 
   entry.stage = 'merged'
   entry.status = null
   entry.fix = null
-  settle(entry)
 }
 
 // For a running status whose run is gone: the driver restarted, or its
@@ -819,22 +786,22 @@ function currentVerdict(entry: PrEntry): boolean {
 // held counts only while the PR is held, and a hold turns a waiting result into held.
 function storedRule(entry: PrEntry, at: IsoTime): { status: Unstamped<MergeStatus>; since: IsoTime } {
   const gate = entry.gate
-  const counts = gate && currentVerdict(entry) && (gate.code !== 'held' || entry.held)
+  const counts = gate && currentVerdict(entry) && (gate.code !== 'held' || entry.hold)
   const stored = counts ? verdictStatus(gate, storedFacts(gate)) : null
   const result = stored && gate?.at ? { status: stored, since: gate.at } : { status: GATE_PENDING, since: entry.verified?.at ?? at }
 
-  if (entry.held && result.status.kind === 'waiting') {
+  if (entry.hold && result.status.kind === 'waiting') {
     return { status: HELD_PR, since: result.since }
   }
 
   return result
 }
 
-// Unlike mergeStatus, it settles: a PR that leaves a needs-you status this way reaches the gate.
+// Moves the PR onto merge as the stored rule decides. mergeStatus writes the status of a PR that stays there.
 export function toMergeStatus(entry: PrEntry, at: IsoTime): void {
   const { status, since } = storedRule(entry, at)
 
-  moveTo(entry, 'merge', status, { since })
+  place(entry, 'merge', status, { since })
 }
 
 // The counts that stop a PR, as rollout retry gives them back.
@@ -852,13 +819,15 @@ export function freshAttempt(entry: PrEntry, role: BudgetRole, limit: number): v
   entry.attempts[role] = Math.min(entry.attempts[role], limit - 1)
 }
 
-// A verify that waits needs its role, or the next advance would not verify again.
+// On verify, the stage alone tells the next advance to verify again, so no
+// earlier mark of a parked report or a cut-off implement run stays.
 export function wake(entry: PrEntry, stage: RestingStage, at: IsoTime): void {
   if (stage === 'verify') {
-    entry.interruptedRole = 'verify'
+    entry.reportUnchecked = false
+    entry.implementCutOff = false
   }
 
-  moveTo(entry, stage, resting(entry, at), { since: at, fix: entry.fix })
+  place(entry, stage, resting(entry, at), { since: at, fix: entry.fix })
 }
 
 // What a stage waits for once nothing stops it. A PR with a GitHub PR or a
@@ -868,10 +837,11 @@ export function waitOnStage(entry: PrEntry, stage: OpenStage, at: IsoTime): void
   if (stage === 'merge') {
     toMergeStatus(entry, at)
   } else if (stage === 'pre-verify') {
-    moveTo(entry, 'pre-verify', parkedReport(entry) ? GITHUB : claimWait(entry.claimedSha), { since: at })
+    place(entry, 'pre-verify', parkedReport(entry) ? GITHUB : claimWait(entry.claimedSha), { since: at })
   } else {
     if (stage === 'implement' && !entry.fix && (entry.pr || entry.sessionId)) {
-      entry.interruptedRole = 'fix'
+      entry.reportUnchecked = false
+      entry.implementCutOff = false
       entry.fix = noReport(at)
     }
 
@@ -890,11 +860,11 @@ export function retryFix(entry: PrEntry, at: IsoTime): void {
   toFix(entry, 'retry', note, { code: 'retry', at })
 }
 
-// rollout retry on a refused merge. With no stored verdict, neither the stored
-// rule nor the fill brings merge-refused back, and the gate judges the PR again.
+// rollout retry on a refused merge. With no stored verdict, the stored rule
+// does not bring merge-refused back, and the gate judges the PR again.
 export function retryMerge(entry: PrEntry, at: IsoTime): void {
   entry.gate = null
-  moveTo(entry, 'merge', GATE_PENDING, { since: at })
+  place(entry, 'merge', GATE_PENDING, { since: at })
 }
 
 // A PR sent back to implement is no longer verified or approved.
@@ -906,27 +876,13 @@ export function dropVerification(entry: PrEntry): void {
 // The merge delay counts from the approval.
 export function approveInbox(entry: PrEntry, approval: StoredApproval, { until, at }: { until: IsoTime; at: IsoTime }): void {
   entry.approved = approval
-  moveTo(entry, 'merge', { kind: 'waiting', code: 'merge-delay', until }, { since: at })
+  place(entry, 'merge', { kind: 'waiting', code: 'merge-delay', until }, { since: at })
 }
 
-// The status setters below write the stage and the status only, never the
-// fix. They keep the derived state, unless they replace a block the driver
-// reads every tick: the PR then moves on, and the state follows.
-
-const READ_AGAIN = ['closed', 'gate-blocked', 'code-scanning-alerts'] as const satisfies readonly NeedsYouCode[]
-
-function leftBlock(entry: PrEntry, before: Status | null): void {
-  if (before?.kind === 'needs-you' && listed(READ_AGAIN, before.code) && entry.status?.code !== before.code) {
-    entry.blocked = null
-    settle(entry)
-  }
-}
+// The status setters below write the stage and the status only, never the fix.
 
 export function setStatus<At extends OpenStage>(entry: PrEntry, stage: At, status: Unstamped<StatusAt<At>>, at: IsoTime): void {
-  const before = entry.status
-
   write(entry, stage, status, at)
-  leftBlock(entry, before)
 }
 
 // The driver reserves a run's name after the run started.
@@ -972,20 +928,15 @@ export function gateVerdict(entry: PrEntry, verdict: StoredVerdict, facts: GateF
   })
 
   if (status) {
-    const before = entry.status
-
     write(entry, 'merge', status, at)
-    leftBlock(entry, before)
   }
 }
 
 // The stored rule of decision 37, for a PR on merge that no gate run decides.
 export function mergeStatus(entry: PrEntry, at: IsoTime): void {
   const { status, since } = storedRule(entry, at)
-  const before = entry.status
 
   write(entry, 'merge', status, since)
-  leftBlock(entry, before)
 }
 
 // A PR in back-off waits it out, on the stages that have one.
@@ -1002,16 +953,17 @@ export function heldStatus(entry: PrEntry, scope: WaitingDetails['held']['scope'
   }
 }
 
-// `held` stays for the readers that have not moved to `hold` yet.
 export function holdPr(entry: PrEntry, hold: Hold): void {
   entry.hold = hold
-  entry.held = hold
   heldStatus(entry, 'pr', hold.at)
 }
 
 export function releasePr(entry: PrEntry): void {
   entry.hold = null
-  entry.held = null
+}
+
+function parkedReport(entry: PrEntry): boolean {
+  return entry.reportUnchecked && Boolean(entry.ready)
 }
 
 // A held status that no hold covers any more goes back to what its stage
@@ -1023,18 +975,134 @@ export function unheld(entry: PrEntry, at: IsoTime): void {
 
   if (entry.stage === 'merge') {
     mergeStatus(entry, at)
-  } else if (entry.stage === 'pre-verify' && entry.interruptedRole === 'report' && entry.ready) {
+  } else if (entry.stage === 'pre-verify' && parkedReport(entry)) {
     write(entry, 'pre-verify', GITHUB, at)
   } else {
     write(entry, openStage(entry), SLOT, at)
   }
 }
 
-interface FillContext {
+// The migration from version 2. Only the code below reads the fields that version 3 removed.
+
+// The state version 2 stored beside the stage and status.
+export type VersionTwoState =
+  | 'pending'
+  | 'briefing'
+  | 'implementing'
+  | 'ready_claimed'
+  | 'verifying'
+  | 'verified'
+  | 'needs_fix'
+  | 'fixing'
+  | 'blocked'
+  | 'escalated'
+  | 'interrupted'
+  | 'merged'
+
+// The fields version 3 removed.
+interface VersionTwoFields {
+  state: VersionTwoState
+  held: Partial<Hold> | null
+  interruptedRole: BudgetRole | 'report' | null
+  blocked?: Partial<Blocked> | null
+  escalation: string | null
+  escalatedAt: IsoTime | null
+}
+
+type VersionTwoEntry = PrEntry & VersionTwoFields
+
+// A version 2 entry as stored: an older driver filled no stage, and wrote none of the fields version 3 added.
+type StoredVersionTwo = Omit<StoredFields, 'fix' | 'hold' | 'reportUnchecked' | 'implementCutOff' | 'delegate'> &
+  VersionTwoFields & {
+    stage?: Stage
+    status?: Status | null
+    fix?: Fix | null
+    hold?: Hold | null
+    delegate: Omit<StoredFields['delegate'], 'question'>
+  }
+
+// An event as the guesses read it. tsc reads no .mjs file, so the events come in as plain data.
+interface StoredEvent {
+  at?: IsoTime
+  id?: string
+  kind?: string
+}
+
+// The roles whose report can ask a question.
+const ASKING_ROLES = ['brief', 'implement', 'fix'] as const satisfies readonly Role[]
+
+interface MigrationContext {
   id: string
   briefWritten: boolean
   runs: Record<string, StoredRun> | null | undefined
+  events: readonly (StoredEvent | string)[]
   at: IsoTime
+}
+
+const RUNNING_STATES: Record<RunningCode, VersionTwoState> = {
+  'brief-write': 'briefing',
+  'brief-review': 'briefing',
+  implement: 'implementing',
+  fix: 'fixing',
+  verify: 'verifying',
+  commands: 'ready_claimed',
+  merge: 'verified',
+  delegate: 'blocked',
+}
+
+const NEEDS_YOU_STATES: Record<NeedsYouCode, VersionTwoState> = {
+  'brief-questions': 'blocked',
+  decision: 'blocked',
+  obstacle: 'blocked',
+  dispute: 'escalated',
+  'attempts-exhausted': 'escalated',
+  errors: 'escalated',
+  closed: 'blocked',
+  'code-scanning-alerts': 'blocked',
+  approve: 'verified',
+  review: 'verified',
+  'changes-requested': 'verified',
+  'merge-by-hand': 'verified',
+  'github-blocked': 'verified',
+  'merge-refused': 'verified',
+  'gate-blocked': 'blocked',
+}
+
+// A cut-off fix run and an owed fix both wait on implement with a fix. Only the reason tells them apart.
+function implementWaiting(entry: PrEntry): VersionTwoState {
+  if (entry.fix?.reason === 'no-report') {
+    return 'interrupted'
+  }
+
+  return entry.fix ? 'needs_fix' : 'pending'
+}
+
+const WAITING_STATES: Record<OpenStage, (entry: PrEntry) => VersionTwoState> = {
+  brief: () => 'pending',
+  implement: implementWaiting,
+  // A parked READY report waits for GitHub, under a hold too.
+  'pre-verify': (entry) => (entry.reportUnchecked ? 'interrupted' : 'ready_claimed'),
+  verify: () => 'interrupted',
+  merge: () => 'verified',
+}
+
+// The version 2 state of an entry, from its stage, status and fix.
+export function stateOf(entry: PrEntry): VersionTwoState {
+  const { stage, status } = entry
+
+  if (stage === 'merged') {
+    return 'merged'
+  }
+
+  if (status?.kind === 'running') {
+    return RUNNING_STATES[status.code]
+  }
+
+  if (status?.kind === 'needs-you') {
+    return NEEDS_YOU_STATES[status.code]
+  }
+
+  return WAITING_STATES[stage](entry)
 }
 
 // A hold from before holds had an author is the maintainer's.
@@ -1046,7 +1114,7 @@ function holdOf(held: Partial<Hold> | null | undefined): Hold | null {
   return { at: held.at ?? '', by: held.by ?? 'maintainer', reason: held.reason ?? null }
 }
 
-function sameHold(hold: Hold | null | undefined, held: Hold | null | undefined): boolean {
+function sameHold(hold: Hold | null | undefined, held: Partial<Hold> | null | undefined): boolean {
   const expected = holdOf(held)
 
   if (!hold || !expected) {
@@ -1057,7 +1125,7 @@ function sameHold(hold: Hold | null | undefined, held: Hold | null | undefined):
 }
 
 // The PR's last run of a role, by start.
-function lastRun(context: FillContext, role: Role): { name: string; record: StoredRun } | null {
+function lastRun(context: MigrationContext, role: Role): { name: string; record: StoredRun } | null {
   let last: { name: string; record: StoredRun } | null = null
 
   for (const [name, record] of Object.entries(context.runs ?? {})) {
@@ -1071,13 +1139,13 @@ function lastRun(context: FillContext, role: Role): { name: string; record: Stor
   return last
 }
 
-function lastRunName(context: FillContext, role: Role): string {
+function lastRunName(context: MigrationContext, role: Role): string {
   return lastRun(context, role)?.name ?? ''
 }
 
 // A held PR waits for its release, whatever else it waits for.
 function heldOr<Waiting>(entry: PrEntry, status: Waiting): Waiting | typeof HELD_PR {
-  return entry.held ? HELD_PR : status
+  return entry.hold ? HELD_PR : status
 }
 
 function waitingIn(entry: PrEntry, at: IsoTime): Resting | typeof HELD_PR {
@@ -1089,14 +1157,14 @@ function owedFix(entry: PrEntry, at: IsoTime): Fix {
   return { reason: fixReasonCode(entry.fixReason, entry.gate?.code), note: entry.fixNote ?? '', since: at }
 }
 
-function fillBriefing(entry: PrEntry, context: FillContext): void {
+function fillBriefing(entry: VersionTwoEntry, context: MigrationContext): void {
   const last = lastRun(context, 'brief')
   const code = last?.record.step === 'review' ? 'brief-review' : 'brief-write'
 
   place(entry, 'brief', { kind: 'running', code, run: last?.name ?? '' }, { since: context.at })
 }
 
-function fillFixing(entry: PrEntry, context: FillContext): void {
+function fillFixing(entry: VersionTwoEntry, context: MigrationContext): void {
   const reason = entry.fixReason ? fixReasonCode(entry.fixReason, entry.gate?.code) : 'no-report'
   const fix = { reason, note: entry.fixNote ?? '', since: context.at }
 
@@ -1111,8 +1179,14 @@ function closedStage(entry: PrEntry): Exclude<OpenStage, 'brief'> {
   return entry.claimedSha ? 'pre-verify' : 'implement'
 }
 
-function fillBlocked(entry: PrEntry, { at }: FillContext): void {
-  const blocked = entry.blocked ?? { kind: 'unknown', question: '', evidence: '', run: null }
+function storedBlock(entry: VersionTwoEntry): Blocked {
+  const blocked = entry.blocked ?? {}
+
+  return { kind: blocked.kind ?? 'unknown', question: blocked.question ?? '', evidence: blocked.evidence ?? '', run: blocked.run ?? null }
+}
+
+function fillBlocked(entry: VersionTwoEntry, { at }: MigrationContext): void {
+  const blocked = storedBlock(entry)
   const stored = gateBlockCode(entry.gate?.code) ? entry.gate : null
 
   placeBlock(entry, blocked, {
@@ -1121,10 +1195,6 @@ function fillBlocked(entry: PrEntry, { at }: FillContext): void {
     closedOn: closedStage(entry),
     gateBlock: { gate: gateBlockCode(stored?.code) ?? 'no-pr', reasons: stored?.reasons ?? [blocked.question] },
   })
-}
-
-function parkedReport(entry: PrEntry): boolean {
-  return entry.interruptedRole === 'report' && Boolean(entry.ready)
 }
 
 // Where an escalation for errors waits: as far as the PR got.
@@ -1140,9 +1210,9 @@ function errorStage(entry: PrEntry, written: boolean): OpenStage {
   return entry.pr || entry.sessionId || written ? 'implement' : 'brief'
 }
 
-function fillEscalated(entry: PrEntry, context: FillContext): void {
+function fillEscalated(entry: VersionTwoEntry, context: MigrationContext): void {
   const { at } = context
-  // As escalateExhausted spells it.
+  // As escalateExhausted spelled it in version 2.
   const role = BUDGET_ROLES.find((name) => entry.escalation === `${name} attempts exhausted`)
 
   if (role) {
@@ -1159,7 +1229,7 @@ function fillEscalated(entry: PrEntry, context: FillContext): void {
   }
 }
 
-function fillInterrupted(entry: PrEntry, { at }: FillContext): void {
+function fillInterrupted(entry: VersionTwoEntry, { at }: MigrationContext): void {
   if (entry.interruptedRole === 'verify' && entry.claimedSha) {
     place(entry, 'verify', waitingIn(entry, at), { since: at })
   } else if (parkedReport(entry)) {
@@ -1169,7 +1239,7 @@ function fillInterrupted(entry: PrEntry, { at }: FillContext): void {
   }
 }
 
-function fillMerged(entry: PrEntry): void {
+function fillMerged(entry: VersionTwoEntry): void {
   entry.stage = 'merged'
   entry.status = null
   entry.fix = null
@@ -1177,7 +1247,7 @@ function fillMerged(entry: PrEntry): void {
 
 // Each row gives back its own state through stateOf. A waiting status names
 // no more than the ledger knows: the next advance writes what the PR waits for.
-const FILLS: Record<State, (entry: PrEntry, context: FillContext) => void> = {
+const FILLS: Record<VersionTwoState, (entry: VersionTwoEntry, context: MigrationContext) => void> = {
   pending: (entry, context) =>
     place(entry, context.briefWritten ? 'implement' : 'brief', waitingIn(entry, context.at), { since: context.at }),
   briefing: fillBriefing,
@@ -1202,23 +1272,100 @@ const FILLS: Record<State, (entry: PrEntry, context: FillContext) => void> = {
   merged: fillMerged,
 }
 
-function filled(entry: UnfilledEntry): boolean {
-  return Boolean(entry.stage) && stateOf(entry as PrEntry) === entry.state && sameHold(entry.hold, entry.held)
+// A version 2 driver of this kind already wrote a stage, a status, a fix
+// and a hold. They count while they still agree with its state and held.
+function filled(entry: VersionTwoEntry): boolean {
+  return Boolean(entry.stage) && stateOf(entry) === entry.state && sameHold(entry.hold, entry.held)
 }
 
-// Stage, status, fix and hold from the version 2 fields, for an entry no
-// driver of this version filled, or one an older driver changed since. It
-// writes no version 2 field.
-export function fillFromState(entry: UnfilledEntry, context: FillContext): PrEntry {
-  if (filled(entry)) {
-    return entry as PrEntry
+// The last run of the PR, in the order of the records, that ended at or
+// before `before`, or at all with no `before`.
+function endedRun(context: MigrationContext, roles: (role: Role) => boolean, before: IsoTime | undefined): string | null {
+  let found: string | null = null
+
+  for (const [name, record] of Object.entries(context.runs ?? {})) {
+    const ended = Boolean(record.endedAt) && (!before || Date.parse(record.endedAt ?? '') <= Date.parse(before))
+
+    if (record.id === context.id && roles(record.role) && ended) {
+      found = name
+    }
   }
 
-  const target = entry as PrEntry
-  const fill = FILLS[target.state] ?? FILLS.pending
+  return found
+}
 
-  target.hold = holdOf(target.held)
-  fill(target, context)
+function lastEventAt(context: MigrationContext, kind: VersionTwoState): IsoTime | undefined {
+  const events = context.events.filter((event): event is StoredEvent => typeof event === 'object' && event !== null)
 
-  return target
+  return events.findLast((event) => event.id === context.id && event.kind === kind)?.at
+}
+
+// Version 2 stamped no block or escalation of an older driver, so the view
+// guessed since when it waits and which run asked. The guesses are made once
+// here, from the events and the run records.
+function stampAsked(entry: VersionTwoEntry, context: MigrationContext): void {
+  const status = entry.status
+
+  if (status?.kind !== 'needs-you') {
+    return
+  }
+
+  const question = statusQuestion(status)
+  const escalation = listed(ESCALATION_CODES, status.code)
+
+  if (!question && !escalation) {
+    return
+  }
+
+  const eventAt = lastEventAt(context, question ? 'blocked' : 'escalated')
+  const stamped = escalation ? entry.escalatedAt : null
+  const since = stamped ?? eventAt ?? status.since
+
+  if (question) {
+    const blocked = entry.blocked
+    const run =
+      blocked && Object.hasOwn(blocked, 'run') ? (blocked.run ?? null) : endedRun(context, (role) => listed(ASKING_ROLES, role), eventAt)
+
+    entry.status = { ...status, since, question: { ...question, run } } as Status
+    return
+  }
+
+  entry.status = { ...status, since }
+
+  if (!stamped) {
+    entry.escalationRun = endedRun(context, (role) => role !== 'delegate', eventAt)
+  }
+}
+
+// The entry of a ledger version 2, in place, as version 3 stores it. A stage,
+// status, fix and hold that agree with the stored state and held stay.
+// Otherwise they are filled from the fields version 3 removed, which then go.
+export function fromVersionTwo(stored: StoredVersionTwo, context: MigrationContext): PrEntry {
+  const entry = stored as unknown as VersionTwoEntry
+
+  entry.reportUnchecked = entry.interruptedRole === 'report'
+  entry.implementCutOff = entry.interruptedRole === 'implement'
+
+  if (!filled(entry)) {
+    const fill = FILLS[entry.state] ?? FILLS.pending
+
+    entry.hold = holdOf(entry.held)
+    fill(entry, context)
+  }
+
+  const running = entry.status?.kind === 'running' && entry.status.code === 'delegate'
+
+  entry.delegate = { ...entry.delegate, question: running && entry.blocked ? questionOf(storedBlock(entry)) : null }
+  stampAsked(entry, context)
+
+  const removed: Partial<VersionTwoFields> = entry
+
+  delete removed.state
+  delete removed.interruptedRole
+  delete removed.blocked
+  delete removed.escalation
+  delete removed.escalatedAt
+  delete removed.held
+
+  return entry
 }

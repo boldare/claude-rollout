@@ -57,7 +57,7 @@ interface FeedbackItem {
 }
 
 // The fields of an entry this module reads beside the ones transitions.ts types.
-export interface SyncEntry extends PrEntry {
+export type SyncEntry = PrEntry & {
   author?: string | null
   stageLabels?: string[]
   feedbackSeen?: string[]
@@ -309,7 +309,7 @@ function reviewWaits({ ledger, now }: SyncContext, entry: SyncEntry, lastComment
   const status = entry.status
   const over = status?.kind === 'waiting' || (status?.kind === 'needs-you' && listed(GATE_READS, status.code))
 
-  if (entry.stage === 'merge' && over && !entry.held && !ledger.data.hold) {
+  if (entry.stage === 'merge' && over && !entry.hold && !ledger.data.hold) {
     transitions.setStatus(entry, 'merge', { kind: 'waiting', code: 'review-in-progress', lastCommentAt }, now())
   }
 }
