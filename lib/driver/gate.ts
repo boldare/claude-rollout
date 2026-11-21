@@ -56,7 +56,7 @@ interface GateFacts extends ClaimFacts {
 }
 
 // The fields of an entry this module reads beside the ones claims.ts types.
-export interface GateEntry extends ClaimEntry {
+export type GateEntry = ClaimEntry & {
   notified: ClaimEntry['notified'] & {
     approval?: string | null
     githubBlocked?: string | null
@@ -195,7 +195,7 @@ function noticeGithubApproval(context: GateContext, pr: GatePr, entry: GateEntry
     return
   }
 
-  if (entry.held || !approval.approved || entry.verified?.patchId !== facts.patchId) {
+  if (entry.hold || !approval.approved || entry.verified?.patchId !== facts.patchId) {
     return
   }
 

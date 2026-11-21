@@ -761,7 +761,6 @@ ol.steps > li > strong:first-child {
   vertical-align: baseline;
 }
 
-.badge.state::before,
 .badge.stage::before,
 .badge.driver::before {
   align-self: center;
@@ -771,18 +770,6 @@ ol.steps > li > strong:first-child {
   height: 6px;
   border-radius: 50%;
   background: var(--tone, var(--skip));
-}
-
-/* Waiting is the norm, so a pending PR stays quiet: a hollow dot and no fill. */
-.badge.state-pending {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--line);
-  color: var(--ink-3);
-}
-
-.badge.state-pending::before {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--skip);
 }
 
 /* A status that needs nobody stays quiet too: no fill. */
@@ -796,7 +783,6 @@ ol.steps > li > strong:first-child {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--pass) 22%, transparent);
 }
 
-.state-pending,
 .kind-waiting,
 .driver-stopped,
 .read-only,
@@ -804,14 +790,10 @@ ol.steps > li > strong:first-child {
   --tone: var(--skip);
 }
 
-.state-briefing,
 .stage-brief {
   --tone: var(--brief);
 }
 
-.state-implementing,
-.state-verifying,
-.state-fixing,
 .stage-implement,
 .kind-running,
 .active-run,
@@ -819,32 +801,26 @@ ol.steps > li > strong:first-child {
   --tone: var(--implement);
 }
 
-.state-ready_claimed,
 .stage-pre-verify {
   --tone: var(--fix);
 }
 
-.state-verified,
 .stage-merge,
 .driver-running,
 .verdict-pass {
   --tone: var(--pass);
 }
 
-.state-needs_fix,
 .stage-verify {
   --tone: var(--verify);
 }
 
-.state-blocked,
-.state-escalated,
 .kind-needs-you,
 .verdict-fail,
 .result-error {
   --tone: var(--fail);
 }
 
-.state-interrupted,
 .held,
 .driver-held,
 .alpha,
@@ -852,7 +828,6 @@ ol.steps > li > strong:first-child {
   --tone: var(--warn);
 }
 
-.state-merged,
 .stage-merged {
   --tone: var(--merged);
 }

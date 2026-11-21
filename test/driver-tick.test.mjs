@@ -29,6 +29,7 @@ import {
   tickDriver,
   eventsSince,
   kindsSince,
+  placeOf,
 } from './driver-helpers.mjs'
 
 const FETCH_FAILS = { tool: 'git', args: 'fetch', code: 128, stderr: 'fatal: unable to access the remote' }
@@ -51,7 +52,7 @@ test('tick: a failed fetch counts against no PR, skips the gate and lets the oth
   assert.equal(events[0].count, 1)
   assert.match(events[0].error, /unable to access the remote/)
   assert.equal(gate.calls, 0)
-  assert.equal(driver.ledger.prs.A2.state, 'interrupted')
+  assert.deepEqual(placeOf(driver.ledger.prs.A2), ['implement', 'waiting', 'dependencies'])
 
   for (const pr of manifest.prs) {
     assert.equal(driver.ledger.prs[pr.id].tickErrors ?? 0, 0, pr.id)
@@ -118,8 +119,8 @@ test('tick: outside dependencies are looked up one by one, and one already merge
   const failed = events.filter((event) => event.kind === 'outside-deps-failed')
 
   assert.deepEqual(lookups(0), ['example:feat/a1', 'example:feat/a2'])
-  assert.equal(driver.ledger.prs.A1.state, 'pending')
-  assert.equal(driver.ledger.prs.A2.state, 'merged')
+  assert.deepEqual(placeOf(driver.ledger.prs.A1), ['brief', 'waiting', 'slot'])
+  assert.deepEqual(placeOf(driver.ledger.prs.A2), ['merged', null, null])
   assert.equal(driver.ledger.prs.A2.pr, 12)
   assert.deepEqual(
     events.filter((event) => event.kind === 'merged-outside-run'),
@@ -155,7 +156,7 @@ test('tick: a failed base watch notifies nothing and is tried again on the next 
   assert.equal(failed[0].id, '-')
   assert.match(failed[0].error, /fake GitHub: no route for GET repos\/example\/widgets\/commits\/f0f0f0f\w+\/check-runs$/)
   assert.ok(!kindsSince(manifest).includes('base-red'))
-  assert.equal(driver.ledger.prs.A2.state, 'interrupted')
+  assert.deepEqual(placeOf(driver.ledger.prs.A2), ['implement', 'waiting', 'dependencies'])
 
   github.answer([prRoute(), runsRoute(MERGE_SHA)])
   await driver.tick()
@@ -235,7 +236,7 @@ test('tick: a red base after a merge notifies once, and for five ticks merges, r
   assert.equal(gateWaits.length, 1)
   assert.equal(gateWaits[0].id, 'A1')
   assert.equal(gateWaits[0].code, 'base-red')
-  assert.equal(driver.ledger.prs.A1.state, 'verified')
+  assert.deepEqual(placeOf(driver.ledger.prs.A1), ['merge', 'waiting', 'base-red'])
   assert.equal(driver.ledger.prs.A1.gate.code, 'base-red')
   assert.equal(driver.ledger.data.lastMerge.checked, 'red')
 
@@ -297,7 +298,7 @@ test('tick: a held rollout starts no agent, and release --all starts the impleme
 
   assert.ok(!kindsSince(manifest).includes('implement-start'))
   assert.deepEqual(calls, [])
-  assert.equal(entry.state, 'pending')
+  assert.deepEqual(placeOf(entry), ['brief', 'waiting', 'held'])
 
   const before = eventsSince(manifest).length
 
@@ -324,8 +325,8 @@ test('start: run states a stopped driver left are recovered, the label is ensure
   const entry = driver.ledger.prs.A2
   const posts = github.requests().filter((request) => request.method === 'POST' && request.path === labels)
 
-  assert.equal(entry.state, 'interrupted')
-  assert.equal(entry.interruptedRole, 'implement')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.equal(entry.implementCutOff, true)
   assert.equal(entry.attempts.implement, 0)
   assert.deepEqual(eventsSince(manifest)[0], { id: 'A2', kind: 'recovered-interrupted', role: 'implement' })
   assert.equal(posts.length, 1)
@@ -348,7 +349,7 @@ test('tick: maintainer feedback waits for a quiet window, then sends the PR to a
   manifest.repo.maintainers = ['maint']
   await driver.tick()
 
-  assert.equal(entry.state, 'verified')
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'held'])
   assert.equal(entry.feedbackWaiting, true)
   assert.ok(!kindsSince(manifest).includes('review-feedback'))
 
@@ -357,7 +358,7 @@ test('tick: maintainer feedback waits for a quiet window, then sends the PR to a
   await driver.tick()
 
   assert.ok(kindsSince(manifest).includes('review-feedback'))
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'held'])
 })
 
 // The routes of a maintainer's conversation comment on PR 11, made `minutesAgo` minutes ago.
@@ -462,7 +463,7 @@ test('tick: a deleted manifest.yaml is rejected once, and loads again when it is
 
   assert.deepEqual(manifestKinds(), ['manifest-rejected'])
   assert.deepEqual(notices, ['-: manifest.yaml has an error; keeping the previous one'])
-  assert.equal(driver.ledger.prs.A2.state, 'interrupted')
+  assert.deepEqual(placeOf(driver.ledger.prs.A2), ['implement', 'waiting', 'dependencies'])
 
   writeFileSync(file, text)
   await driver.tick()
@@ -497,14 +498,14 @@ test('guarded: a PR counts one error per tick, a clean tick resets it, and five 
     await driver.tick()
   }
 
-  assert.equal(entry.state, 'verified')
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'held'])
   assert.equal(entry.tickErrors, 4)
   assert.deepEqual(notices, [])
 
   await driver.tick()
 
-  assert.equal(entry.state, 'escalated')
-  assert.equal(entry.escalation, 'repeated errors')
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'errors'])
+  assert.equal(entry.status.code, 'errors')
   assert.equal(kindsSince(manifest).filter((kind) => kind === 'escalated').length, 1)
   assert.equal(notices.length, 1)
   assert.ok(notices[0].startsWith('A1: repeated errors'), notices[0])
@@ -514,7 +515,7 @@ test('guarded: a PR counts one error per tick, a clean tick resets it, and five 
   await driver.tick()
 
   assert.deepEqual(errorCounts(before), [6])
-  assert.equal(entry.state, 'escalated')
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'errors'])
   assert.equal(notices.length, 1)
   assert.equal(kindsSince(manifest).filter((kind) => kind === 'escalated').length, 1)
 })
@@ -554,7 +555,7 @@ test('tick: six ticks of HTTP 502 escalate nothing, and an outage of 30 minutes 
 
   assert.deepEqual(await unavailablePerTick(manifest, driver, 6), [1, 1, 1, 1, 1, 1])
   assert.deepEqual(kindsSince(manifest), Array(6).fill('github-unavailable'))
-  assert.equal(entry.state, 'verified')
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'held'])
   assert.equal(entry.tickErrors ?? 0, 0)
   assert.equal(entry.lastError, null)
   assert.equal(gate.calls, 6)
@@ -971,7 +972,6 @@ test('tick: when the PR moves on, the old stage and status come off', async () =
 
   await driver.tick()
   github.answer([prWithLabels(REJECTED_LABELS), ...labelRoutes(REJECTED_LABELS)])
-  driver.ledger.prs.A1.state = 'verifying'
   driver.ledger.prs.A1.stage = 'verify'
   driver.ledger.prs.A1.status = { kind: 'running', code: 'verify', sha: SHA, run: 'A1-02-verify', since: at(90) }
   await driver.tick()
@@ -1168,7 +1168,7 @@ test('start, stop and a driver that died: a hard end: kill, crash, reboot', asyn
   const started = eventsSince(setup.manifest).find((event) => event.kind === 'implement-start')
   const saved = savedEntry(setup.manifest, 'A1')
 
-  assert.equal(saved.state, 'implementing')
+  assert.deepEqual(placeOf(saved), ['implement', 'running', 'implement'])
   assert.deepEqual(
     [saved.stage, saved.status.kind, saved.status.code, saved.status.run],
     ['implement', 'running', 'implement', started.run],
@@ -1214,7 +1214,7 @@ test('start, stop and a driver that died: a verifier run cut off', async () => {
   await driver.start()
 
   assert.deepEqual([entry.stage, entry.status.kind, entry.status.code], ['verify', 'waiting', 'slot'])
-  assert.deepEqual([entry.attempts.verify, entry.refunds, entry.interruptedRole], [0, 1, 'verify'])
+  assert.deepEqual([entry.attempts.verify, entry.refunds, entry.stage], [0, 1, 'verify'])
 
   const before = readEvents(manifest).length
 
@@ -1298,7 +1298,7 @@ test('start, stop and a driver that died: a command sent while the driver is dow
     ['A1'],
   )
 
-  assert.equal(driver.ledger.prs.A1.held.by, 'maintainer')
+  assert.equal(driver.ledger.prs.A1.hold.by, 'maintainer')
   assert.deepEqual(mergeCalls(tools), [])
 })
 

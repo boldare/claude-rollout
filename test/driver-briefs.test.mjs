@@ -1,8 +1,10 @@
 import { test } from 'node:test'
+import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { createDriver } from '../lib/driver.mjs'
+import { verifyAgain } from '../lib/transitions.ts'
 import { prDetail } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
 import { waitFor } from './fixtures.mjs'
@@ -55,10 +57,10 @@ test('onBriefDone: a required brief criterion that does not pass blocks on brief
 
   driver.onBriefDone(pr, agentResult({ output: briefOutput({ criteria }) }))
 
-  assert.equal(entry.state, 'blocked')
-  assert.equal(entry.blocked.kind, 'brief-questions')
-  assert.equal(entry.blocked.question, `B1 (required brief criterion, fail): ${RULE} Evidence: docs/a.md states the old rule.`)
-  assert.equal(entry.blocked.evidence, 'Checked every path.')
+  assert.deepEqual(placeOf(entry), ['brief', 'needs-you', 'brief-questions'])
+  assert.equal(entry.status.question.kind, 'brief-questions')
+  assert.equal(entry.status.question.text, `B1 (required brief criterion, fail): ${RULE} Evidence: docs/a.md states the old rule.`)
+  assert.equal(entry.status.question.evidence, 'Checked every path.')
   assert.equal(existsSync(pr.brief), false)
   assert.equal(existsSync(notes), false)
   assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'blocked'])
@@ -75,15 +77,15 @@ test("onBriefDone: a reviewer question that names the failed criterion is not do
     agentResult({ output: briefOutput({ questions: ['B1: does docs/a.md keep the old rule?'], criteria: failed }) }),
   )
 
-  assert.equal(named.entry.state, 'blocked')
-  assert.equal(named.entry.blocked.question, 'B1: does docs/a.md keep the old rule?')
+  assert.deepEqual(placeOf(named.entry), ['brief', 'needs-you', 'brief-questions'])
+  assert.equal(named.entry.status.question.text, 'B1: does docs/a.md keep the old rule?')
 
   const other = briefDoneDriver({ runChecks: false, required: [RULE], recommended: [] })
 
   other.driver.onBriefDone(other.pr, agentResult({ output: briefOutput({ questions: ['Which API?'], criteria: failed }) }))
 
   assert.equal(
-    other.entry.blocked.question,
+    other.entry.status.question.text,
     `Which API?\nB1 (required brief criterion, unverifiable): ${RULE} Evidence: The plan does not say.`,
   )
 })
@@ -97,10 +99,10 @@ test('onBriefDone: a check that cannot pass blocks, and one that can pass logs p
 
   driver.onBriefDone(pr, agentResult({ output: briefOutput({ checks }) }))
 
-  assert.equal(entry.state, 'blocked')
-  assert.equal(entry.blocked.kind, 'brief-questions')
+  assert.deepEqual(placeOf(entry), ['brief', 'needs-you', 'brief-questions'])
+  assert.equal(entry.status.question.kind, 'brief-questions')
   assert.equal(
-    entry.blocked.question,
+    entry.status.question.text,
     'The check `npm run build:docs` cannot pass after a change within the expected files (exit 1). Evidence: missing script: build:docs',
   )
 
@@ -120,7 +122,7 @@ test('onBriefDone: a recommended brief criterion that does not pass writes the b
 
   driver.onBriefDone(pr, agentResult({ output: briefOutput({ criteria }) }))
 
-  assert.equal(entry.state, 'pending')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(readFileSync(pr.brief, 'utf8'), '# A1\n\nThe brief.\n')
   assert.equal(
     readFileSync(notes, 'utf8'),
@@ -155,7 +157,7 @@ test('onBriefDone: one gate-check per check and criterion, with stage brief and 
   assert.ok(events.every((event) => !Object.hasOwn(event, 'sha')))
   assert.deepEqual(entry.notified, notified, 'the preVerify dedupe is untouched')
   assert.deepEqual(entry.briefHeads, heads)
-  assert.equal(entry.state, 'pending')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
 })
 
 test('onBriefDone: without gates.brief the brief and its notes are written as before, with no gate-check', () => {
@@ -180,7 +182,7 @@ test('onBriefDone: without gates.brief the brief and its notes are written as be
 
     driver.onBriefDone(pr, agentResult({ output }))
 
-    assert.equal(entry.state, 'pending')
+    assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
     assert.equal(readFileSync(pr.brief, 'utf8'), '# A1\n\nThe brief.\n')
     assert.equal(readFileSync(notes, 'utf8'), 'Checked every path.\n')
     assert.deepEqual(kindsSince(manifest), ['brief-written'])
@@ -221,7 +223,7 @@ test('launch: a brief keeps the gates.brief it started with when the manifest ch
   assert.equal(reviewer.prompt.includes('Every command exists.'), false)
   assert.equal(reviewer.prompt.includes('Then run every verification command'), false)
 
-  assert.equal(setup.entry.state, 'pending')
+  assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'slot'])
   assert.equal(readFileSync(setup.pr.brief, 'utf8'), '# A1\n\nThe brief.\n')
   assert.deepEqual(
     eventsSince(setup.manifest)
@@ -244,9 +246,9 @@ test('launch: both brief steps are recorded as runs, and brief questions are blo
 
   const runs = setup.driver.ledger.data.runs
 
-  assert.equal(setup.entry.state, 'blocked')
-  assert.equal(setup.entry.blocked.kind, 'brief-questions')
-  assert.equal(setup.entry.blocked.run, 'A1-01-brief-review')
+  assert.deepEqual(placeOf(setup.entry), ['brief', 'needs-you', 'brief-questions'])
+  assert.equal(setup.entry.status.question.kind, 'brief-questions')
+  assert.equal(setup.entry.status.question.run, 'A1-01-brief-review')
   assert.deepEqual(
     Object.entries(runs).map(([name, run]) => [name, run.role, run.step, run.requestedModel, run.ok, run.result, run.costUsd]),
     [
@@ -304,6 +306,11 @@ function delegateDriver(state, { policy = { delegate: {} }, results = [], brief 
   return { manifest, driver, pr, entry: driver.ledger.prs.A1, notices, calls }
 }
 
+// The hash lib/driver.mjs keeps in delegate.lastQuestion of a question the delegate took.
+function questionHash({ kind, question }) {
+  return createHash('sha256').update(`${kind}\n${question}`).digest('hex').slice(0, 16)
+}
+
 async function advanced(driver, pr) {
   await driver.advance(pr)
   await waitFor(() => driver.running.size === 0, 'the delegate to finish')
@@ -324,9 +331,31 @@ test('delegate: no run while it is off, for a kind it never answers, or with a n
     assert.deepEqual(calls, [])
     assert.deepEqual(kindsSince(manifest), [])
     assert.deepEqual(notices, [])
-    assert.equal(entry.state, 'blocked')
+    assert.equal(entry.status.kind, 'needs-you')
     assert.equal(entry.delegate.runs, 0)
   }
+})
+
+test('delegate: a question a version 2 ledger says the delegate took starts no run after the migration, and another question does', async () => {
+  const taken = { runs: 1, lastQuestion: questionHash(DECISION), limitNotified: false, answers: [] }
+  const same = delegateDriver({ pr: 11, delegate: taken })
+
+  await same.driver.advance(same.pr)
+
+  assert.deepEqual([same.calls, same.driver.running.size, same.entry.delegate.runs], [[], 0, 1])
+  assert.equal(same.entry.status.code, 'decision')
+
+  const other = delegateDriver({
+    pr: 11,
+    delegate: { ...taken, lastQuestion: questionHash({ ...DECISION, question: 'Another question?' }) },
+  })
+
+  await advanced(other.driver, other.pr)
+
+  assert.deepEqual(
+    other.calls.map((call) => call.role),
+    ['delegate'],
+  )
 })
 
 test('delegate: an answer to brief questions gives the brief attempt back and notifies', async () => {
@@ -337,8 +366,7 @@ test('delegate: an answer to brief questions gives the brief attempt back and no
 
   await advanced(driver, pr)
 
-  assert.equal(entry.state, 'pending')
-  assert.equal(entry.blocked, null)
+  assert.deepEqual(placeOf(entry), ['brief', 'waiting', 'slot'])
   assert.equal(entry.attempts.brief, 0)
   assert.deepEqual(entry.briefAnswers, [{ question: 'Which API?', answer: `${PREFIX}Keep it as an alias.` }])
   assert.deepEqual(kindsSince(manifest), ['delegate-start', 'delegate-done', 'brief-answered', 'delegate-answered'])
@@ -380,7 +408,7 @@ test('delegate: an answer to needs-decision sends the PR to a fix run with the a
 
   await advanced(driver, pr)
 
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fixReason, 'answer from the delegate')
   assert.ok(entry.fixNote.startsWith(PREFIX), entry.fixNote)
   assert.equal(entry.noteHistory.at(-1).run, null, 'a delegate run takes no note')
@@ -417,7 +445,7 @@ test('delegate: an escalation keeps the PR blocked, notifies once, and the same 
   await advanced(driver, pr)
 
   assert.equal(calls.length, 1)
-  assert.equal(entry.state, 'blocked')
+  assert.deepEqual(placeOf(entry), ['implement', 'needs-you', 'decision'])
   assert.deepEqual(eventsSince(manifest).slice(2), [
     { id: 'A1', kind: 'delegate-escalated', run: 'A1-01-delegate', blocked: 'needs-decision', reason: 'The plan is silent on the flag.' },
   ])
@@ -446,7 +474,7 @@ test('delegate: an empty answer is an escalation', async () => {
 
   await advanced(driver, pr)
 
-  assert.equal(entry.state, 'blocked')
+  assert.deepEqual(placeOf(entry), ['implement', 'needs-you', 'decision'])
   assert.equal(eventsSince(manifest).at(-1).reason, 'the delegate gave an empty answer')
 })
 
@@ -486,8 +514,15 @@ test('delegate: a BLOCKED code-scanning report never starts the delegate and not
   assert.deepEqual(kindsSince(manifest), ['fix-done', 'blocked'])
   assert.equal(notices.length, 1)
   assert.ok(notices[0].startsWith('A1: blocked (code-scanning): '), notices[0])
-  assert.equal(entry.state, 'blocked')
-  assert.deepEqual(entry.blocked, { ...blocked, run: 'A1-02-fix' })
+  assert.deepEqual(placeOf(entry), ['implement', 'needs-you', 'obstacle'])
+  assert.deepEqual(entry.status.question, {
+    kind: 'code-scanning',
+    text: blocked.question,
+    evidence: blocked.evidence,
+    run: 'A1-02-fix',
+    delegate: null,
+  })
+
   assert.equal(entry.delegate.runs, 0)
 })
 
@@ -500,7 +535,12 @@ test('onDone: a BLOCKED report is blocked on the run that sent it, also without 
 
     await driver.onDone(pr, role, blockedReport(DECISION), { run })
 
-    assert.deepEqual(entry.blocked, { ...DECISION, run }, role)
+    assert.deepEqual(
+      entry.status.question,
+      { kind: DECISION.kind, text: DECISION.question, evidence: DECISION.evidence, run, delegate: null },
+      role,
+    )
+
     assert.equal(driver.ledger.data.runs[run].result, 'BLOCKED', role)
   }
 
@@ -508,7 +548,13 @@ test('onDone: a BLOCKED report is blocked on the run that sent it, also without 
 
   await driver.onDone(pr, 'implement', blockedReport(undefined), { run: 'A1-01-implement' })
 
-  assert.deepEqual(entry.blocked, { kind: 'unknown', question: 'Blocked on a question.', evidence: '', run: 'A1-01-implement' })
+  assert.deepEqual(entry.status.question, {
+    kind: 'unknown',
+    text: 'Blocked on a question.',
+    evidence: '',
+    run: 'A1-01-implement',
+    delegate: null,
+  })
 })
 
 test('delegate: a question it takes notifies once, through its answer or escalation', async () => {
@@ -594,7 +640,7 @@ test('delegate: a maintainer note while it runs applies at once, and the late an
     { id: 'A1', kind: 'needs-fix', reason: 'answer from the maintainer' },
   ])
 
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
 
   finish(delegateReport())
   await waitFor(() => driver.running.size === 0, 'the delegate to finish')
@@ -603,9 +649,17 @@ test('delegate: a maintainer note while it runs applies at once, and the late an
 
   assert.deepEqual(kinds.slice(-2), ['delegate-done', 'delegate-dropped'])
   assert.ok(!kinds.includes('delegate-answered'))
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fixNote, 'Drop the old flag.')
-  assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'delegate-dropped', run: 'A1-01-delegate', state: 'needs_fix' })
+  assert.deepEqual(eventsSince(manifest).at(-1), {
+    id: 'A1',
+    kind: 'delegate-dropped',
+    run: 'A1-01-delegate',
+    stage: 'implement',
+    status: 'waiting',
+    code: 'slot',
+  })
+
   assert.deepEqual(
     entry.delegate.answers.map((answer) => answer.decision),
     ['dropped'],
@@ -620,7 +674,7 @@ test('delegate: a failed run escalates, backs off, and the same question starts 
 
   await advanced(driver, pr)
 
-  assert.equal(entry.state, 'blocked')
+  assert.deepEqual(placeOf(entry), ['implement', 'needs-you', 'decision'])
   assert.equal(entry.failStreak, 1)
   assert.ok(Date.parse(entry.retryAfter) > Date.now())
   assert.equal(entry.lastError, 'killed by SIGKILL')
@@ -654,7 +708,7 @@ test('delegate: a stopped run gives its run back, and a PR merged meanwhile is c
   await merged.driver.onDelegateDone(pr, delegateReport(), context)
 
   assert.deepEqual(cleaned, ['A1'])
-  assert.equal(merged.driver.ledger.prs.A1.state, 'merged')
+  assert.deepEqual(placeOf(merged.driver.ledger.prs.A1), ['merged', null, null])
   assert.deepEqual(merged.driver.ledger.prs.A1.delegate.answers, [])
 })
 
@@ -672,8 +726,11 @@ test('retry resets the delegate run count and keeps its answers, and waits while
 
   driver.running.delete('A1')
 
-  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'needs_fix' }])
-  assert.deepEqual(entry.delegate, { runs: 0, lastQuestion: 'abc', limitNotified: false, answers })
+  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [
+    { id: 'A1', kind: 'retry', stage: 'implement', status: 'waiting', code: 'slot' },
+  ])
+
+  assert.deepEqual(entry.delegate, { runs: 0, lastQuestion: 'abc', limitNotified: false, answers, question: null })
 })
 
 const STOPPED = agentResult({ ok: false, output: null, error: 'stopped', costUsd: 0, seconds: 0 })
@@ -681,7 +738,7 @@ const STOPPED = agentResult({ ok: false, output: null, error: 'stopped', costUsd
 // Stands in for the fix run that follows an answer: the PR is claimed again
 // and verified. The failed result keeps verified() and its git calls out.
 async function verifiedAgain(driver, pr, entry) {
-  entry.state = 'ready_claimed'
+  verifyAgain(entry, new Date().toISOString())
   driver.launch(pr, 'verify', { sha: SHA })
   await waitFor(() => driver.running.size === 0, 'the verifier to finish')
 }
@@ -735,7 +792,7 @@ test('delegate: its answer reaches the next verifier, after the brief', async ()
 })
 
 test('delegate: with a note pending or the question taken already, the board shows no next run and the driver starts none', async () => {
-  const board = (manifest, driver) => prDetail(manifest, driver.ledger, [], [], 'A1').waiting.delegate
+  const board = (manifest, driver) => prDetail(manifest, driver.ledger.data, [], [], 'A1').waiting.delegate
   const escalate = delegateReport({ decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent on the flag.' })
   const taken = delegateDriver({ pr: 11 }, { results: [escalate] })
 
@@ -903,7 +960,7 @@ test('delegate: the sentence of a question it handed back names what it did', as
 
     await advanced(driver, pr)
 
-    const { sentence } = prDetail(manifest, driver.ledger, [], [], 'A1').status
+    const { sentence } = prDetail(manifest, driver.ledger.data, [], [], 'A1').status
 
     assert.equal(sentence, `the implementer asks: ${DECISION.question} ${ending}`)
   }
@@ -914,7 +971,7 @@ test('delegate: a note on a PR the delegate works on shows the answer it applies
 
   await driver.advance(pr)
 
-  const row = prDetail(manifest, driver.ledger, [], [], 'A1')
+  const row = prDetail(manifest, driver.ledger.data, [], [], 'A1')
 
   assert.deepEqual(placeOf(entry), ['implement', 'running', 'delegate'])
   assert.deepEqual(row.effects.note.lines, ['implement · running: delegate', 'after note: implement · waiting: slot (maintainer-note)'])

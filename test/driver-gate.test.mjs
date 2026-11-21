@@ -54,7 +54,7 @@ test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sy
   const events = eventsSince(manifest)
 
   assert.ok(tools.calls().some((call) => call.args.join(' ').startsWith(`pr merge 11 --squash --match-head-commit ${SHA}`)))
-  assert.equal(entry.state, 'verified')
+  assert.deepEqual(placeOf(entry), ['merge', 'running', 'merge'])
   assert.equal(entry.gate.action, 'merge')
   assert.equal(entry.mergeSha, undefined)
   assert.deepEqual(driver.ledger.data.lastMerge, earlier)
@@ -70,7 +70,7 @@ test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sy
 
   await driver.tick()
 
-  assert.equal(entry.state, 'merged')
+  assert.deepEqual(placeOf(entry), ['merged', null, null])
   assert.equal(entry.mergeSha, MERGE_SHA)
   assert.equal(driver.ledger.data.lastMerge.id, 'A1')
   assert.equal(driver.ledger.data.lastMerge.sha, MERGE_SHA)
@@ -90,7 +90,7 @@ test('mergeCandidate: a merge GitHub confirms is recorded as merged, with its co
 
   assert.equal(await driver.mergeCandidate(pr), true)
   assert.equal(mergeCalls(tools).length, 1)
-  assert.equal(entry.state, 'merged')
+  assert.deepEqual(placeOf(entry), ['merged', null, null])
   assert.equal(entry.mergeSha, MERGE_SHA)
   assert.equal(driver.ledger.data.lastMerge.id, 'A1')
   assert.equal(driver.ledger.data.lastMerge.sha, MERGE_SHA)
@@ -119,7 +119,7 @@ test('mergeCandidate: a PR merged on GitHub while the gate reads it waits for sy
   gate.pr = { state: 'MERGED' }
 
   assert.equal(await driver.mergeCandidate(manifest.prs.find((item) => item.id === 'A1')), false)
-  assert.equal(driver.ledger.prs.A1.state, 'verified')
+  assert.deepEqual(placeOf(driver.ledger.prs.A1), ['merge', 'waiting', 'gate-pending'])
   assert.deepEqual(eventsSince(manifest), [
     { id: 'A1', kind: 'gate-wait', code: 'merged-on-github', reasons: ['merged on GitHub (the next sync records it)'] },
   ])
@@ -146,7 +146,7 @@ test('mergeCandidate: a merge GitHub refuses waits with the merge-refused code',
   const entry = driver.ledger.prs.A1
 
   assert.equal(await driver.mergeCandidate(manifest.prs.find((item) => item.id === 'A1')), false)
-  assert.equal(entry.state, 'verified')
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'merge-refused'])
   assert.equal(entry.gate.action, 'wait')
   assert.equal(entry.gate.code, 'merge-refused')
   assert.deepEqual(entry.gate.reasons, ['GitHub refused the merge (ruleset)'])
@@ -230,18 +230,16 @@ test('mergeCandidate: github-blocked sends the ruleset notice once per head, rul
 
 test('mergeCandidate: a block with the code scanning code blocks as code scanning, any other code as the gate', async () => {
   const cases = [
-    ['code-scanning', 'code-scanning'],
-    ['pr-not-open', 'gate'],
+    ['code-scanning', 'code-scanning-alerts'],
+    ['pr-not-open', 'gate-blocked'],
   ]
 
-  for (const [code, kind] of cases) {
+  for (const [code, blocked] of cases) {
     const { driver, pr, entry, stub } = stubbedGate()
     stub.verdict = { action: 'block', code, reasons: [PLAIN_REASON] }
 
     assert.equal(await driver.mergeCandidate(pr), false)
-    assert.equal(entry.state, 'blocked', code)
-    assert.equal(entry.blocked.kind, kind, code)
-    assert.equal(entry.blocked.run, null, code)
+    assert.deepEqual(placeOf(entry), ['merge', 'needs-you', blocked], code)
   }
 })
 
@@ -257,7 +255,7 @@ test('mergeCandidate: a fix from the gate goes back named by its cause, never as
     stub.verdict = { action: 'fix', code, reasons: [PLAIN_REASON] }
 
     assert.equal(await driver.mergeCandidate(pr), false)
-    assert.equal(entry.state, 'needs_fix', code)
+    assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'], code)
     assert.equal(entry.fixReason, reason, code)
     assert.equal(entry.fix.reason, fixCode, code)
   }
@@ -302,7 +300,7 @@ test('mergeCandidate: a verified PR whose patch id the gate no longer matches is
   const gateBefore = entry.gate
 
   assert.equal(await driver.mergeCandidate(pr), false)
-  assert.equal(entry.state, 'ready_claimed')
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'ci'])
   assert.equal(entry.verified, null)
   assert.equal(entry.approved, null)
   assert.equal(entry.claimedSha, SHA)
@@ -657,7 +655,10 @@ test("merge gate: merge-refused, the driver's code", async () => {
   assert.equal(mergeCalls(tools).length, 1)
   assert.deepEqual(notices, ['A1: GitHub refused to merge PR #11; check its ruleset requirements'])
 
-  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'verified' }])
+  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [
+    { id: 'A1', kind: 'retry', stage: 'merge', status: 'waiting', code: 'gate-pending' },
+  ])
+
   assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'gate-pending'])
   assert.equal(entry.gate, null)
 
@@ -675,7 +676,7 @@ test('merge gate: no-pr, pr-not-open, never-merge, draft, wrong-base, wrong-head
 
     assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'gate-blocked'], code)
     assert.deepEqual([entry.status.gate, entry.status.reasons], [code, [`blocked by ${code}`]], code)
-    assert.equal(entry.state, 'blocked', code)
+    assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'gate-blocked'], code)
 
     // Read again on the next gate run, with no command.
     stub.verdict = { action: 'wait', code: 'ci-pending', reasons: ['CI pending'] }
@@ -683,7 +684,6 @@ test('merge gate: no-pr, pr-not-open, never-merge, draft, wrong-base, wrong-head
 
     assert.equal(gate.calls, 2, code)
     assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'ci'], code)
-    assert.deepEqual([entry.state, entry.blocked], ['verified', null], code)
   }
 })
 
@@ -693,7 +693,7 @@ test('merge gate: code-scanning with action block', async () => {
   assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'code-scanning-alerts'])
   assert.equal(entry.status.alerts.length, 1)
   assert.deepEqual(entry.verified, samplePrs().A1.verified)
-  assert.equal(entry.state, 'blocked')
+  assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'code-scanning-alerts'])
 })
 
 test('merge gate: policy-violations', async () => {
@@ -788,7 +788,7 @@ test('merge gate: merge', async () => {
   github.answer([prRoute(MERGED_PR)])
   await driver.tick()
 
-  assert.deepEqual([entry.stage, entry.status, entry.state], ['merged', null, 'merged'])
+  assert.deepEqual([entry.stage, entry.status], ['merged', null])
   assert.deepEqual(entry.merged, { by: 'driver', at: at(90), sha: MERGE_SHA, from: 'merge', verified: true })
   assert.equal(mergeCalls(tools).length, 1)
   assert.deepEqual(cleaned, ['A1'])
@@ -810,7 +810,7 @@ test('merge gate: not-verified, merged-on-github', async () => {
   gate.pr = {}
   await driver.tick()
 
-  assert.deepEqual([entry.stage, entry.state], ['merged', 'merged'])
+  assert.equal(entry.stage, 'merged')
   assert.equal(entry.merged.by, 'github')
 })
 
@@ -818,7 +818,7 @@ test("mergeCandidate: the gate's own merge records the driver's merge, verified,
   const { entry, acted } = await judgedOnce({ rules: [MERGE_RULE], routes: [prRoute(MERGED_PR)] })
 
   assert.equal(acted, true)
-  assert.equal(entry.state, 'merged')
+  assert.deepEqual(placeOf(entry), ['merged', null, null])
   assert.deepEqual(entry.merged, { by: 'driver', at: entry.merged.at, sha: MERGE_SHA, from: 'merge', verified: true })
   assert.ok(Number.isFinite(Date.parse(entry.merged.at)))
 })
@@ -948,10 +948,10 @@ test('verified: a disputed finding the next verifier still finds open escalates 
     recheckVerdict({ F1: 'resolved', F2: 'open' }, { blocking: ['The retry flag is still not documented.', NEW_FINDING] }),
   )
 
-  assert.equal(entry.state, 'escalated')
-  assert.equal(entry.escalation, 'disputed finding')
+  assert.deepEqual(placeOf(entry), ['verify', 'needs-you', 'dispute'])
+  assert.equal(entry.status.code, 'dispute')
   assert.equal(entry.escalationRun, 'A1-04-verify')
-  assert.ok(Date.parse(entry.escalatedAt) >= Date.parse(setup.driver.ledger.data.runs['A1-04-verify'].endedAt), entry.escalatedAt)
+  assert.ok(Date.parse(entry.status.since) >= Date.parse(setup.driver.ledger.data.runs['A1-04-verify'].endedAt), entry.status.since)
   assert.deepEqual(stageLabels(entry), ['rollout-stage:verify', 'rollout-status:dispute'])
   assert.equal(
     entry.lastError,
@@ -987,9 +987,8 @@ test('verified: a disputed finding the next verifier calls wrong never escalates
 
   await rechecked(failing, recheckVerdict({ F1: 'resolved', F2: 'wrong' }))
 
-  assert.equal(failing.entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(failing.entry), ['implement', 'waiting', 'slot'])
   assert.equal(failing.entry.fixReason, 'verifier findings')
-  assert.equal(failing.entry.escalation, null)
   assert.deepEqual(kindsSince(failing.manifest), ['verify-done', 'needs-fix'])
   assert.deepEqual(failing.notices, [])
   assert.deepEqual(failing.entry.findings.items, [{ id: 'F1', text: NEW_FINDING, answer: null }])
@@ -999,7 +998,7 @@ test('verified: a disputed finding the next verifier calls wrong never escalates
 
   await rechecked(passing, recheckVerdict({ F1: 'resolved', F2: 'wrong' }, pass))
 
-  assert.equal(passing.entry.state, 'verified')
+  assert.deepEqual(placeOf(passing.entry), ['merge', 'waiting', 'gate-pending'])
   assert.equal(passing.entry.findings, null)
   assert.deepEqual(kindsSince(passing.manifest), ['verify-done', 'verified'])
   assert.deepEqual(
@@ -1023,7 +1022,7 @@ test('verified: an open finding reported fixed or left unanswered, or a dispute 
 
     await rechecked(setup, recheckVerdict(recheck))
 
-    assert.equal(setup.entry.state, 'needs_fix', name)
+    assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'slot'], name)
     assert.equal(setup.entry.fixReason, 'verifier findings', name)
     assert.equal(setup.entry.attempts.fix, 4, name)
     assert.deepEqual(kindsSince(setup.manifest), ['verify-done', 'needs-fix'], name)
@@ -1049,7 +1048,7 @@ test('verified: a PASS the driver discards, for a stale SHA or from a touched tr
   assert.deepEqual(kindsSince(stale.manifest), ['verify-done', 'verify-stale'])
   assert.deepEqual(kindsSince(touched.manifest), ['verify-done', 'verifier-touched-tree'])
 
-  assert.equal(stale.entry.state, 'ready_claimed')
+  assert.deepEqual(placeOf(stale.entry), ['pre-verify', 'waiting', 'ci'])
   assert.deepEqual([touched.entry.stage, touched.entry.status.kind, touched.entry.status.code], ['verify', 'waiting', 'slot'])
 
   for (const setup of [stale, touched]) {
@@ -1085,7 +1084,7 @@ test('verified: a verdict without recheck is recorded with an empty one', async 
   await rechecked(setup, agentResult({ output }))
 
   assert.deepEqual(setup.entry.verdict.recheck, [])
-  assert.equal(setup.entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'slot'])
   assert.deepEqual(setup.entry.findings.items, [{ id: 'F1', text: NEW_FINDING, answer: null }])
 })
 
@@ -1128,7 +1127,7 @@ test('checkClaim: the verifier starts with the project criteria fixed in the led
 
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(entry.verifyCriteria, VERIFY_CRITERIA)
   assert.equal(prompts.length, 1)
   assert.ok(prompts[0].includes('\n## Project criteria\n\n'), prompts[0])
@@ -1162,7 +1161,7 @@ test('checkClaim: a pre-verify job does not fix the criteria, the verifier after
 
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(entry.verifyCriteria, VERIFY_CRITERIA)
   assert.ok(prompts[0].includes(`- V1 (required): ${BRANCH_TEST}\n`), prompts[0])
 })
@@ -1209,7 +1208,7 @@ test('checkClaim: the catalog entries that apply follow the manifest criteria, r
 
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(criteriaIds(entry), ['V1', 'V2', 'V3', 'docs-stale', 'tests-fail-first'])
   assert.deepEqual(entry.verifyCriteria.slice(3), [
     { id: 'docs-stale', level: 'required', text: DOCS_STALE },
@@ -1241,7 +1240,7 @@ test('checkClaim: without criteriaFrom, set to null or absent, no git call reads
 
     await driver.advance(pr)
 
-    assert.equal(entry.state, 'verifying', JSON.stringify(verify))
+    assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'], JSON.stringify(verify))
     assert.deepEqual(catalogReads(tools), [], JSON.stringify(verify))
   }
 })
@@ -1263,7 +1262,7 @@ test('checkClaim: the advance that starts the pre-verify job reads no catalog, t
 
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(criteriaIds(entry), ['V1', 'V2', 'V3', 'docs-stale', 'tests-fail-first'])
   assert.equal(catalogReads(tools).length, 1)
 })
@@ -1287,7 +1286,7 @@ test('tick: a missing or invalid catalog is an error of that PR, no verifier sta
       message,
     )
 
-    assert.equal(entry.state, 'ready_claimed')
+    assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'ci'])
     assert.deepEqual(entry.attempts, CLAIMED.attempts)
     assert.equal(entry.verifyCriteria, earlier)
     assert.deepEqual(
@@ -1311,9 +1310,9 @@ test('tick: a catalog that stays missing escalates the PR after five erroring ti
   await driver.tick()
 
   assert.equal(entry.tickErrors, 5)
-  assert.equal(entry.state, 'escalated')
-  assert.equal(entry.escalation, 'repeated errors')
-  assert.ok(Number.isFinite(Date.parse(entry.escalatedAt)), entry.escalatedAt)
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'needs-you', 'errors'])
+  assert.equal(entry.status.code, 'errors')
+  assert.ok(Number.isFinite(Date.parse(entry.status.since)), entry.status.since)
   assert.equal(entry.escalationRun, null)
   assert.deepEqual(
     eventsSince(manifest).filter((event) => event.kind === 'escalated'),
@@ -1331,13 +1330,13 @@ test('checkClaim: once the catalog is fixed on the base, the next advance starts
 
   await assert.rejects(driver.advance(pr), { message: MISSING_ERROR })
 
-  assert.equal(entry.state, 'ready_claimed')
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'ci'])
   assert.deepEqual(agentCalls, [])
 
   answer([CATALOG_RULE])
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
   assert.deepEqual(criteriaIds(entry), ['V1', 'V2', 'V3', 'docs-stale', 'tests-fail-first'])
 })
@@ -1353,7 +1352,7 @@ test('verified: a PASS with a failed required criterion is recorded as a FAIL an
   assert.deepEqual(entry.verdict.blocking, [finding])
   assert.deepEqual(entry.verdict.criteria, [criterionRecord(0, 'fail'), criterionRecord(1, 'pass'), criterionRecord(2, 'pass')])
   assert.equal(entry.verdict.summary, 'A finding is still open.')
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fixReason, 'verifier findings')
   assert.equal(entry.verified, null)
   assert.deepEqual(entry.findings.items, [{ id: 'F1', text: finding, answer: null }])
@@ -1411,7 +1410,7 @@ test('verified: a required criterion the verifier left out or could not verify f
 
     assert.equal(entry.verdict.verdict, 'FAIL', name)
     assert.deepEqual(entry.verdict.criteria[0], record, name)
-    assert.equal(entry.state, 'needs_fix', name)
+    assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'], name)
     assert.equal(entry.fixReason, 'verifier findings', name)
     assert.deepEqual(entry.findings.items, [{ id: 'F1', text: finding, answer: null }], name)
     assert.deepEqual(eventsSince(manifest)[1], criterionCheckEvent(record), name)
@@ -1426,7 +1425,7 @@ test('verified: a PASS whose only failed criteria are recommended ends verified'
 
     await rechecked(setup, criteriaVerdict({ V1: 'pass', V2: 'pass', V3: result }))
 
-    assert.equal(entry.state, 'verified', result)
+    assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'gate-pending'], result)
     assert.equal(entry.verdict.verdict, 'PASS', result)
     assert.deepEqual(entry.verdict.blocking, [], result)
     assert.deepEqual(entry.verdict.criteria[2], criterionRecord(2, result), result)
@@ -1452,7 +1451,7 @@ test('verified: the criteria gate-check events come after the reset and before t
 
   await rechecked(touched, criteriaVerdict({ V1: 'fail', V2: 'pass', V3: 'pass' }))
 
-  assert.equal(touched.entry.state, 'needs_fix', 'a FAIL is honoured from a touched tree')
+  assert.deepEqual(placeOf(touched.entry), ['implement', 'waiting', 'slot'], 'a FAIL is honoured from a touched tree')
   assert.ok(touched.entry.fixNote.endsWith('(it has been reset):\n?? CLAUDE.local.md'), touched.entry.fixNote)
   assert.deepEqual(kindsSince(touched.manifest), [
     'verify-done',
@@ -1470,7 +1469,7 @@ test('verified: the criteria gate-check events come after the reset and before t
     criteriaVerdict({ V1: 'pass', V2: 'fail', V3: 'pass' }, { recheck: [{ id: 'F2', status: 'open', evidence: 'open' }] }),
   )
 
-  assert.equal(disputed.entry.state, 'escalated')
+  assert.deepEqual(placeOf(disputed.entry), ['verify', 'needs-you', 'dispute'])
   assert.equal(disputed.entry.verdict.verdict, 'FAIL')
   assert.deepEqual(kindsSince(disputed.manifest), ['verify-done', 'gate-check', 'gate-check', 'gate-check', 'escalated'])
 })
@@ -1493,7 +1492,7 @@ test('verified: a verdict without criteria is judged as before and recorded with
 
     await rechecked(passing, agentResult({ output }))
 
-    assert.equal(passing.entry.state, 'verified')
+    assert.deepEqual(placeOf(passing.entry), ['merge', 'waiting', 'gate-pending'])
     assert.deepEqual(passing.entry.verdict.criteria, [])
     assert.deepEqual(kindsSince(passing.manifest), ['verify-done', 'verified'])
   }
@@ -1505,7 +1504,7 @@ test('verified: a manifest reload while the verifier runs changes nothing, the c
 
   await removed.driver.advance(removed.pr)
 
-  assert.equal(removed.entry.state, 'verifying')
+  assert.deepEqual(placeOf(removed.entry), ['verify', 'running', 'verify'])
 
   Object.assign(removed.manifest, { gates: gatesWith() })
 
@@ -1516,7 +1515,7 @@ test('verified: a manifest reload while the verifier runs changes nothing, the c
     { sha: SHA, run: 'A1-02-verify' },
   )
 
-  assert.equal(removed.entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(removed.entry), ['implement', 'waiting', 'slot'])
   assert.equal(removed.entry.verdict.verdict, 'FAIL')
   assert.deepEqual(removed.entry.findings.items, [
     { id: 'F1', text: `V1 (required criterion): ${BRANCH_TEST} lib/a.mjs:12 adds a branch with no test.`, answer: null },
@@ -1526,13 +1525,13 @@ test('verified: a manifest reload while the verifier runs changes nothing, the c
 
   await added.driver.advance(added.pr)
 
-  assert.equal(added.entry.state, 'verifying')
+  assert.deepEqual(placeOf(added.entry), ['verify', 'running', 'verify'])
 
   Object.assign(added.manifest, { gates: gatesWith({ verify: { required: [NO_SEMICOLONS] } }) })
 
   await added.driver.onDone(added.pr, 'verify', agentResult({ output: { ...pass, criteria: [] } }), { sha: SHA, run: 'A1-02-verify' })
 
-  assert.equal(added.entry.state, 'verified')
+  assert.deepEqual(placeOf(added.entry), ['merge', 'waiting', 'gate-pending'])
   assert.deepEqual(added.entry.verdict.criteria, [])
 })
 
@@ -1561,10 +1560,10 @@ test('note: on a PR escalated over a dispute, the findings go to a fix run with 
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Document the flag in the README.' }), [
     { id: 'A1', kind: 'needs-fix', reason: 'verifier findings' },
-    { id: 'A1', kind: 'note-queued', state: 'needs_fix' },
+    { id: 'A1', kind: 'note-queued', stage: 'implement', status: 'waiting', code: 'slot' },
   ])
 
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fixReason, 'verifier findings')
   assert.equal(entry.fixNote, findings)
   assert.ok(findings.includes(`- F1: ${NEW_FINDING}`), findings)
@@ -1596,7 +1595,7 @@ test('retry: a PR escalated over a dispute is refused, and the reason names roll
   ])
 
   assert.deepEqual(entry, before)
-  assert.equal(entry.state, 'escalated')
+  assert.deepEqual(placeOf(entry), ['verify', 'needs-you', 'dispute'])
 })
 
 const RECHECKED = { F1: 'resolved', F2: 'wrong' }
@@ -1657,7 +1656,7 @@ test('verifier run: pass-discarded', async () => {
   await rechecked(setup, recheckVerdict(RECHECKED, PASS))
 
   assert.deepEqual(placeOf(setup.entry), ['verify', 'waiting', 'slot'])
-  assert.deepEqual([setup.entry.interruptedRole, setup.entry.verified], ['verify', null])
+  assert.deepEqual([setup.entry.reportUnchecked, setup.entry.implementCutOff, setup.entry.verified], [false, false, null])
 })
 
 test('verifier run: stale', async () => {
@@ -1684,7 +1683,7 @@ test('verified: a note queued while the verifier ran goes to a fix when its PASS
 
   driver.running.set('A1', 'verify')
   assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Keep the README short.' }), [
-    { id: 'A1', kind: 'note-queued', state: 'verifying' },
+    { id: 'A1', kind: 'note-queued', stage: 'verify', status: 'running', code: 'verify' },
   ])
 
   setup.tools.answer(TOUCHED_TREE)
