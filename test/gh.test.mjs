@@ -598,3 +598,186 @@ test('client: a token with a line break is refused before fetch can quote it', a
   assert.equal(error.message, "the maintainer's token holds a character an HTTP header cannot carry")
   assert.deepEqual(github.requests(), [])
 })
+
+const ARTIFACT_ZIP = 'repos/example/widgets/actions/artifacts/77/zip'
+const STORAGE_PATH = 'artifacts/77/review.zip'
+const STORAGE_URL = `https://storage.example.com/${STORAGE_PATH}?sig=synthetic-signature`
+const BYTES = Uint8Array.from({ length: 256 }, (_, i) => i)
+const MAX_BYTES = 5 * 1024 * 1024
+
+// The API's 302 to the storage host, and the storage host's answer.
+function redirected(storage = { body: BYTES }, api = {}) {
+  return [
+    { path: ARTIFACT_ZIP, status: 302, headers: { location: STORAGE_URL, [LIMIT]: '4870' }, ...api },
+    { path: STORAGE_PATH, ...storage },
+  ]
+}
+
+// A client on the fake GitHub whose fetch also records the redirect mode of each request.
+function downloadClient(routes, options = {}) {
+  const github = fakeGitHub(routes)
+  const modes = []
+  const { manifest } = rollout([])
+
+  function fetch(url, init) {
+    modes.push(init.redirect)
+
+    return github.fetch(url, init)
+  }
+
+  const client = createClient(manifest, { fetch, token: async () => MAINTAINER_TOKEN, ...options })
+
+  return { github, client, modes }
+}
+
+function leaksNothing(error) {
+  const fields = JSON.stringify({ ...error, message: error.message, stack: error.stack })
+
+  for (const text of [error.message, String(error), fields]) {
+    for (const secret of [MAINTAINER_TOKEN, 'storage.example.com', 'synthetic-signature']) {
+      assert.equal(text.includes(secret), false, text)
+    }
+  }
+}
+
+test('download: follows the API redirect to the storage host without the token, and gives the bytes as they came', async () => {
+  const { github, client, modes } = downloadClient(redirected({ body: BYTES, headers: { [LIMIT]: '12' } }))
+  const bytes = await client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES })
+
+  assert.ok(bytes instanceof Uint8Array)
+  assert.deepEqual(bytes, BYTES)
+  assert.deepEqual(modes, ['manual', 'manual'])
+
+  const [api, storage] = github.requests()
+
+  assert.equal(api.url, `https://api.github.com/${ARTIFACT_ZIP}`)
+  assert.equal(api.headers.authorization, `Bearer ${MAINTAINER_TOKEN}`)
+  assert.equal(api.headers.accept, 'application/vnd.github+json')
+  assert.equal(api.headers['if-none-match'], undefined)
+  assert.equal(storage.url, STORAGE_URL)
+  assert.deepEqual(storage.headers, { 'user-agent': 'claude-rollout' })
+  assert.deepEqual(client.stats(), { requests: 2, cached: 0, remaining: 4870 })
+})
+
+test('download: a 200 from the API is the file, and nothing is cached', async () => {
+  const { github, client, modes } = downloadClient([{ path: ARTIFACT_ZIP, body: BYTES }])
+
+  assert.deepEqual(await client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES }), BYTES)
+  assert.deepEqual(await client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES }), BYTES)
+  assert.deepEqual(modes, ['manual', 'manual'])
+  assert.deepEqual(
+    github.requests().map((request) => [request.status, request.headers['if-none-match']]),
+    [
+      [200, undefined],
+      [200, undefined],
+    ],
+  )
+})
+
+test('download: a body over maxBytes is too large, by its content-length or by its count', async () => {
+  const cases = [
+    ['counted on the storage host', redirected({ body: BYTES })],
+    ['counted from the API', [{ path: ARTIFACT_ZIP, body: BYTES }]],
+    ['a content-length that says less', redirected({ body: BYTES, headers: { 'content-length': '10' } })],
+    ['a content-length over the limit', redirected({ body: BYTES.subarray(0, 8), headers: { 'content-length': '256' } })],
+  ]
+
+  for (const [label, routes] of cases) {
+    const { client } = downloadClient(routes)
+    const error = await failure(client.download(ARTIFACT_ZIP, { maxBytes: 255 }))
+
+    assert.ok(error instanceof GitHubError, label)
+    assert.equal(error.kind, 'too-large', label)
+    assert.equal(error.status, 200, label)
+    assert.equal(error.message, `GET ${ARTIFACT_ZIP}: the answer is larger than 255 bytes`, label)
+    leaksNothing(error)
+  }
+
+  const { client } = downloadClient(redirected())
+
+  assert.deepEqual(await client.download(ARTIFACT_ZIP, { maxBytes: 256 }), BYTES)
+})
+
+test('download: an http: location, a location that is no URL and a path that leaves api.github.com are refused before any request goes there', async () => {
+  for (const location of [STORAGE_URL.replace('https:', 'http:'), 'https://[storage', 'ftp://storage.example.com/review.zip']) {
+    const { github, client } = downloadClient(redirected({ body: BYTES }, { headers: { location } }))
+    const error = await failure(client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES }))
+
+    assert.ok(!(error instanceof GitHubError), location)
+    assert.equal(error.message, `GET ${ARTIFACT_ZIP}: refused a redirect that is not an https: URL`)
+    assert.deepEqual(
+      github.requests().map((request) => request.path),
+      [ARTIFACT_ZIP],
+    )
+
+    leaksNothing(error)
+  }
+
+  const { github, client } = downloadClient([])
+
+  await assert.rejects(client.download('//elsewhere.example/review.zip', { maxBytes: MAX_BYTES }), /refused https:\/\/elsewhere\.example/)
+  assert.deepEqual(github.requests(), [])
+})
+
+test('download: an error from the storage host names the API path and its status alone, and one from the API carries its message', async () => {
+  const xml = {
+    status: 403,
+    body: '<Error>AuthenticationFailed synthetic-signature</Error>',
+    headers: { 'content-type': 'application/xml' },
+  }
+
+  const storage = downloadClient(redirected(xml))
+  const forbidden = await failure(storage.client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES }))
+
+  assert.ok(forbidden instanceof GitHubError)
+  assert.equal(forbidden.status, 403)
+  assert.equal(forbidden.path, ARTIFACT_ZIP)
+  assert.equal(forbidden.message, `GET ${ARTIFACT_ZIP}: HTTP 403: Forbidden`)
+  leaksNothing(forbidden)
+
+  const cases = [
+    [{ status: 410, body: { message: 'Artifact has expired' } }, 'HTTP 410: Artifact has expired'],
+    [{ status: 404, body: { message: 'Not Found' } }, 'HTTP 404: Not Found'],
+    [{ status: 403, body: { message: 'Resource not accessible by integration' } }, 'HTTP 403: Resource not accessible by integration'],
+    [{ status: 302, body: { message: 'Found' } }, 'HTTP 302: Found'],
+    [{ status: 304 }, 'HTTP 304: Not Modified'],
+    [{ status: 401, body: { message: 'Bad credentials' } }, 'HTTP 401: Bad credentials'],
+  ]
+
+  for (const [route, detail] of cases) {
+    const { github, client } = downloadClient([{ path: ARTIFACT_ZIP, ...route }])
+    const error = await failure(client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES }))
+
+    assert.ok(error instanceof GitHubError, detail)
+    assert.equal(error.status, route.status, detail)
+    assert.equal(error.detail, detail)
+    assert.equal(github.requests().length, 1, detail)
+  }
+
+  const limited = downloadClient([
+    { path: ARTIFACT_ZIP, status: 403, body: { message: 'API rate limit exceeded' }, headers: { [LIMIT]: '0' } },
+  ])
+
+  assert.equal((await failure(limited.client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES }))).kind, 'rate-limit')
+})
+
+test('download: a storage host that never answers is a timeout, a failed connection a network error, and no timer outlives either', async () => {
+  const timers = () => process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length
+  const before = timers()
+  const slow = downloadClient(redirected({ hang: true }), { timeoutMs: 50 })
+  const timeout = await failure(slow.client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES }))
+
+  assert.ok(timeout instanceof GitHubError)
+  assert.equal(timeout.kind, 'timeout')
+  assert.equal(timeout.status, null)
+  assert.equal(timeout.message, `GET ${ARTIFACT_ZIP}: no answer within 0.05 s`)
+  leaksNothing(timeout)
+
+  const reset = downloadClient(redirected({ error: 'ECONNRESET' }))
+  const network = await failure(reset.client.download(ARTIFACT_ZIP, { maxBytes: MAX_BYTES }))
+
+  assert.equal(network.kind, 'network')
+  assert.equal(network.message, `GET ${ARTIFACT_ZIP}: network error: ECONNRESET`)
+  assert.deepEqual(reset.client.stats(), { requests: 2, cached: 0, remaining: 4870 })
+  assert.equal(timers(), before)
+})
