@@ -394,7 +394,7 @@ export interface RunRecord {
   role: Role
   startedAt: IsoTime
   endedAt: IsoTime | null
-  process: { pid: number } | { container: string } | null
+  process: { pid: number; startTime: string } | { container: string } | null
 }
 
 export const COMMANDS = ['approve', 'note', 'retry', 'hold', 'release'] as const

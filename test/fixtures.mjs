@@ -1,5 +1,6 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { once } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -455,11 +456,12 @@ export function fakeTools(dir, rules = []) {
 // The docker client of the Docker runtime, without a daemon. run starts the
 // argv after the image as a local process in its own group, in the -w
 // directory and with the environment the entrypoint would give it. With
-// --entrypoint X the argv is X and the words after the image. stop and kill
-// signal the group of a run with --name. version and image inspect answer
-// from docker.json: the server version, null for a daemon that does not
-// answer, and the images that exist. Every call is recorded like a fakeTools
-// call.
+// --entrypoint X the argv is X and the words after the image. stop, kill and
+// rm --force signal the group of a run with --name. rm prints the name it
+// removed, or says there is no such container and exits 0, as Docker 20.10
+// to 29.0 do. version, rm and image inspect answer from docker.json: the
+// server version, null for a daemon that does not answer, and the images
+// that exist. Every call is recorded like a fakeTools call.
 const FAKE_DOCKER = `#!/usr/bin/env node
 const { spawn } = require('node:child_process')
 const { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
@@ -634,6 +636,20 @@ function version() {
   }
 }
 
+function remove() {
+  const name = rest[rest.length - 1]
+
+  if (state.server === null) {
+    version()
+  } else if (existsSync(pidFile(name))) {
+    signalGroup(Number(readFileSync(pidFile(name), 'utf8')), 'SIGKILL')
+    rmSync(pidFile(name), { force: true })
+    process.stdout.write(name + '\\n')
+  } else {
+    process.stderr.write('Error response from daemon: No such container: ' + name + '\\n')
+  }
+}
+
 function inspectImage() {
   const tag = rest[rest.length - 1]
 
@@ -655,6 +671,8 @@ if (command === 'run') {
   stop()
 } else if (command === 'kill') {
   kill()
+} else if (command === 'rm' && rest[0] === '--force') {
+  remove()
 } else if (command !== 'build') {
   process.stderr.write('fake docker: no fake for ' + command + '\\n')
   process.exitCode = 1
@@ -1191,6 +1209,36 @@ export function alive(pid) {
   } catch {
     return false
   }
+}
+
+// A shell that leads a process group of its own. After the test its group
+// gets SIGKILL, unless the shell ended, since its pid may then name another
+// process. Its stdout is a pipe, so a script can say it is ready.
+export function groupChild(context, script = 'exec sleep 30') {
+  const child = spawn('sh', ['-c', script], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+
+  context.after(() => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return
+    }
+
+    try {
+      process.kill(-child.pid, 'SIGKILL')
+    } catch {
+      // The group ended between the check and the kill.
+    }
+  })
+
+  return child
+}
+
+// The pid of a process that ended and was reaped.
+export async function gonePid() {
+  const child = spawn('sh', ['-c', 'exit 0'], { stdio: 'ignore' })
+
+  await once(child, 'close')
+
+  return child.pid
 }
 
 // Polls, so a check on a detached process or a file another process writes

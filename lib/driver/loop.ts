@@ -1,6 +1,6 @@
 import * as transitions from '../transitions.ts'
 import type { PrEntry } from '../transitions.ts'
-import type { Head, Hold, IsoTime, OpenStage, WaitingOf } from '../state.ts'
+import type { Head, Hold, IsoTime, OpenStage, RunRecord, WaitingOf } from '../state.ts'
 import { checkClaim } from './claims.ts'
 import type { ClaimPr, ClaimsContext } from './claims.ts'
 import { applyCommands } from './commands.ts'
@@ -34,6 +34,15 @@ type StoredRuns = Parameters<typeof transitions.fillFromState>[1]['runs']
 type AgentRunner = RunsContext['runAgent']
 type AgentOptions = Parameters<AgentRunner>[2]
 type AgentOutcome = Awaited<ReturnType<AgentRunner>>
+type RecordedProcess = NonNullable<RunRecord['process']>
+type LoopRun = NonNullable<StoredRuns>[string] & { endedAt?: IsoTime | null; process?: RecordedProcess | null }
+
+// What endProcess in lib/sandbox.mjs resolves with. It never rejects.
+interface ProcessEnd {
+  outcome: 'ended' | 'gone' | 'not-the-run' | 'failed'
+  found?: string
+  error?: string
+}
 
 export interface LoopPr extends ClaimPr, GatePr {
   deps: string[]
@@ -67,7 +76,7 @@ interface Outage {
 }
 
 interface LoopLedger {
-  data: { hold: Hold | null; githubUnavailable?: Outage | null; runs?: StoredRuns }
+  data: { hold: Hold | null; githubUnavailable?: Outage | null; runs?: Record<string, LoopRun> | null }
   prs: Record<string, LoopEntry>
   save: () => void
   beat: (note?: string) => void
@@ -127,9 +136,15 @@ export interface LoopContext {
   questionHash: QuestionHash
 
   // The agent runner the driver was given. stoppableAgent hands it the signal of each run.
-  runAgent: (manifest: RunManifest, pr: RunPr, options: AgentOptions & { signal: AbortSignal }) => Promise<AgentOutcome>
+  runAgent: (
+    manifest: RunManifest,
+    pr: RunPr,
+    options: AgentOptions & { signal: AbortSignal; onProcess: (recorded: RecordedProcess) => void },
+  ) => Promise<AgentOutcome>
   stopAllAgents: () => void
   liveChildren: () => number
+  recordProcess: (data: LoopLedger['data'], run: string, recorded: RecordedProcess) => void
+  endProcess: (run: string, recorded: RecordedProcess) => Promise<ProcessEnd>
   sleep: (ms: number) => Promise<unknown>
   pid: number
 
@@ -246,8 +261,20 @@ export async function stoppableAgent(context: LoopContext, manifest: RunManifest
 
   state.agentRuns.set(pr.id, controller)
 
+  // Saved at once, because a hard end can come before the next save. As at the
+  // end of a job, a failed save is only printed.
+  function onProcess(recorded: RecordedProcess): void {
+    context.recordProcess(context.ledger.data, options.logName, recorded)
+
+    try {
+      context.ledger.save()
+    } catch (error) {
+      console.error(`${pr.id} ledger not saved with the process of ${options.logName}: ${messageOf(error)}`)
+    }
+  }
+
   try {
-    return await context.runAgent(manifest, pr, { ...options, signal: controller.signal })
+    return await context.runAgent(manifest, pr, { ...options, signal: controller.signal, onProcess })
   } finally {
     if (state.agentRuns.get(pr.id) === controller) {
       state.agentRuns.delete(pr.id)
@@ -596,8 +623,48 @@ async function startStep(context: LoopContext, source: string, task: () => Promi
   }
 }
 
+function outlivedNotice(run: string, recorded: RecordedProcess, ended: ProcessEnd): string | null {
+  if (ended.outcome !== 'failed') {
+    return null
+  }
+
+  const target = 'pid' in recorded ? `pid ${recorded.pid}` : `container ${recorded.container}`
+
+  return `the driver could not end the process of run ${run} (${target}): ${ended.error}. End it by hand`
+}
+
+// A run with no end belongs to a driver that is gone, and its agent may still
+// run. It is ended before any role resumes, or it would race its own resumed
+// session. A process that could not be ended is kept for the next start.
+async function endOutlivedRuns(context: LoopContext): Promise<void> {
+  const { ledger, say } = context
+  let changed = false
+
+  for (const [run, record] of Object.entries(ledger.data.runs ?? {})) {
+    if (record.endedAt || !record.process) {
+      continue
+    }
+
+    const recorded = record.process
+    const ended = await context.endProcess(run, recorded)
+
+    say(record.id, 'outlived-process', { run, role: record.role, ...recorded, ...ended }, outlivedNotice(run, recorded, ended))
+
+    if (ended.outcome !== 'failed') {
+      record.process = null
+      changed = true
+    }
+  }
+
+  if (changed) {
+    ledger.save()
+  }
+}
+
 export async function start(context: LoopContext): Promise<void> {
   const { manifest, ledger, github, say, now } = context
+
+  await endOutlivedRuns(context)
 
   for (const pr of manifest.all) {
     const role = transitions.recoverRun(ledger.prs[pr.id], { refund: true, at: now() })
@@ -832,8 +899,8 @@ export async function finish(context: LoopContext): Promise<void> {
 // A stop ends every run as a merge on GitHub ends one: the agent processes
 // are killed, and the signal of every run is aborted, so an agent with no
 // process ends too. The ledger is saved once the runs ended, so it holds
-// their results. A run still going after the wait keeps its running status,
-// and the next start ends it the same way.
+// their results. A run still going after the wait keeps its running status.
+// The next start ends the run's process and then resumes the run.
 export async function stop(context: LoopContext): Promise<void> {
   const { ledger, running, state } = context
 

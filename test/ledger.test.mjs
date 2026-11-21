@@ -20,6 +20,7 @@ import {
   recheckedFindings,
   recordAnswers,
   recordFindings,
+  recordProcess,
   recordVerdict,
   reserveRunName,
   startRun,
@@ -587,6 +588,29 @@ test('startRun and endRun write the record of one run, and endRun without a star
   })
 
   assert.deepEqual(Object.keys(data.runs), ['A1-01-implement', 'A2-01-brief-review'])
+})
+
+test('recordProcess sets the process of an open run, and leaves an ended run and a missing one alone', () => {
+  const data = {}
+  const recorded = { pid: 4242, startTime: 'Tue Sep  1 10:00:00 2026' }
+
+  startRun(data, { run: 'A1-01-implement', id: 'A1', role: 'implement' }, at(0))
+  startRun(data, { run: 'A1-02-verify', id: 'A1', role: 'verify' }, at(1))
+  endRun(data, { id: 'A1', role: 'verify' }, doneDetail('verify', 'A1-02-verify', { ok: true, costUsd: 1 }), at(2))
+
+  const ended = structuredClone(data.runs['A1-02-verify'])
+
+  recordProcess(data, 'A1-01-implement', recorded)
+  recordProcess(data, 'A1-02-verify', { container: 'rollout-demo-A1-02-verify' })
+  recordProcess(data, 'A1-03-fix', recorded)
+
+  assert.deepEqual(data.runs['A1-01-implement'].process, recorded)
+  assert.deepEqual(data.runs['A1-02-verify'], ended)
+  assert.deepEqual(Object.keys(data.runs), ['A1-01-implement', 'A1-02-verify'])
+
+  endRun(data, { id: 'A1', role: 'implement' }, doneDetail('implement', 'A1-01-implement', { ok: true, costUsd: 1 }), at(3))
+
+  assert.deepEqual(data.runs['A1-01-implement'].process, recorded)
 })
 
 test('startRun and endRun change nothing without a run name', () => {

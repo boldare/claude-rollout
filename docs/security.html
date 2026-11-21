@@ -84,6 +84,11 @@
             The assets are the base branch, published packages, credentials, the rollout's control plane (manifest, inbox, ledger) and the
             local briefs, which may name clients.
           </li>
+          <li>
+            An agent's process can outlive a driver that was killed or crashed. The next start ends it, and never signals a process it
+            cannot prove is that run's. On the host the pid must still have the start time the run recorded. Under Docker the container must
+            have the name the rollout gave that run.
+          </li>
         </ul>
 
         <h2 id="boundaries">Hard boundaries <a class="anchor" href="#boundaries" aria-label="Link to this section">#</a></h2>

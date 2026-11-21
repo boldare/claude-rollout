@@ -7,8 +7,9 @@ import { GitHubError } from '../lib/gh.mjs'
 import { baseChecks, setFetch } from '../lib/github.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { processStartTime } from '../lib/sandbox.mjs'
 import { readEvents } from '../lib/view.mjs'
-import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
+import { alive, at, fakeDocker, fakeGitHub, fakeTools, gonePid, groupChild, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
 import {
   MAINTAINER_TOKEN,
   MERGE_SHA,
@@ -1335,6 +1336,169 @@ test('start, stop and a driver that died: start while GitHub does not answer', a
   )
 
   assert.deepEqual(agent.calls, [])
+})
+
+const OUTLIVED_RUN = 'A2-01-implement'
+
+// The sample rollout, whose A2 was implementing when its driver died, with
+// the record of that run holding `recorded` as its process. `record` changes
+// the rest of the record.
+function outlivedDriver(recorded, record = {}) {
+  const setup = tickDriver(samplePrs(), { rules: [FETCH], routes: [LABEL_POST], runAgent: recordingAgent().runAgent })
+
+  setup.driver.ledger.data.runs[OUTLIVED_RUN] = {
+    id: 'A2',
+    role: 'implement',
+    startedAt: at(70),
+    endedAt: null,
+    stopped: true,
+    process: recorded,
+    ...record,
+  }
+
+  return setup
+}
+
+function savedRun(manifest, run) {
+  return JSON.parse(readFileSync(join(manifest.dir, 'ledger.json'), 'utf8')).runs[run]
+}
+
+async function recordedProcess(child) {
+  return { pid: child.pid, startTime: await processStartTime(child.pid) }
+}
+
+// The fake git shares the log of calls with the fake docker.
+function dockerCalls(docker) {
+  return docker
+    .calls()
+    .filter((call) => call.tool === 'docker')
+    .map((call) => call.args)
+}
+
+test("start, stop and a driver that died: an agent's process outlived the driver, and the start ends it before any role resumes", async (context) => {
+  const child = groupChild(context)
+  const recorded = await recordedProcess(child)
+  const { manifest, driver } = outlivedDriver(recorded)
+
+  await driver.start()
+
+  const events = eventsSince(manifest)
+
+  assert.ok(child.exitCode !== null || child.signalCode !== null)
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ['outlived-process', 'recovered-interrupted', 'driver-start'],
+  )
+
+  assert.deepEqual(events[0], { id: 'A2', kind: 'outlived-process', run: OUTLIVED_RUN, role: 'implement', ...recorded, outcome: 'ended' })
+  assert.equal(driver.ledger.data.runs[OUTLIVED_RUN].process, null)
+  assert.equal(savedRun(manifest, OUTLIVED_RUN).process, null)
+})
+
+test("start, stop and a driver that died: an agent's process outlived the driver, and a pid with another start time is left alone", async (context) => {
+  const child = groupChild(context)
+  const recorded = await recordedProcess(child)
+  const { manifest, driver, notices } = outlivedDriver({ ...recorded, startTime: 'Thu Jan  1 00:00:00 1970' })
+
+  await driver.start()
+
+  const [event] = eventsSince(manifest)
+
+  assert.ok(alive(child.pid))
+  assert.deepEqual([child.exitCode, child.signalCode], [null, null])
+  assert.deepEqual([event.kind, event.outcome, event.found], ['outlived-process', 'not-the-run', recorded.startTime])
+  assert.equal(driver.ledger.data.runs[OUTLIVED_RUN].process, null)
+  assert.deepEqual(notices, [])
+})
+
+test("start, stop and a driver that died: an agent's process outlived the driver, and a pid that is gone lets the start go on", async () => {
+  const recorded = { pid: await gonePid(), startTime: 'Thu Jan  1 00:00:00 1970' }
+  const { manifest, driver } = outlivedDriver(recorded)
+
+  await driver.start()
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(events[0], { id: 'A2', kind: 'outlived-process', run: OUTLIVED_RUN, role: 'implement', ...recorded, outcome: 'gone' })
+  assert.equal(events.at(-1).kind, 'driver-start')
+})
+
+test("start, stop and a driver that died: an agent's process outlived the driver, and its container is removed once", async () => {
+  const container = `rollout-demo-${OUTLIVED_RUN}`
+  const { manifest, driver } = outlivedDriver({ container })
+  const docker = fakeDocker(manifest.dir)
+
+  await driver.start()
+
+  assert.deepEqual(dockerCalls(docker), [['rm', '--force', container]])
+
+  assert.deepEqual(eventsSince(manifest)[0], {
+    id: 'A2',
+    kind: 'outlived-process',
+    run: OUTLIVED_RUN,
+    role: 'implement',
+    container,
+    outcome: 'gone',
+  })
+
+  const next = createDriver(loadManifest(manifest.dir), { notify: () => {}, runAgent: recordingAgent().runAgent })
+
+  await next.start()
+
+  assert.equal(dockerCalls(docker).length, 1)
+})
+
+test("start, stop and a driver that died: an agent's process outlived the driver, and a process the start cannot end notifies", async () => {
+  const container = `rollout-demo-${OUTLIVED_RUN}`
+  const { manifest, driver, notices } = outlivedDriver({ container })
+  const docker = fakeDocker(manifest.dir, { server: null })
+
+  await driver.start()
+
+  const [event] = eventsSince(manifest)
+
+  assert.deepEqual([event.kind, event.outcome, event.error], ['outlived-process', 'failed', 'Cannot connect to the Docker daemon'])
+  assert.deepEqual(driver.ledger.data.runs[OUTLIVED_RUN].process, { container })
+  assert.equal(notices.length, 1)
+  assert.match(notices[0], new RegExp(`^A2: the driver could not end the process of run ${OUTLIVED_RUN} \\(container ${container}\\)`))
+  assert.match(notices[0], /End it by hand$/)
+  assert.equal(eventsSince(manifest).at(-1).kind, 'driver-start')
+  assert.equal(dockerCalls(docker).length, 1)
+})
+
+test("start, stop and a driver that died: an agent's process outlived the driver, but a run that ended keeps its process", async (context) => {
+  const child = groupChild(context)
+  const recorded = await recordedProcess(child)
+  const { manifest, driver } = outlivedDriver(recorded, { endedAt: at(80), stopped: false })
+
+  await driver.start()
+
+  assert.ok(alive(child.pid))
+  assert.deepEqual([child.exitCode, child.signalCode], [null, null])
+  assert.ok(!kindsSince(manifest).includes('outlived-process'))
+  assert.deepEqual(driver.ledger.data.runs[OUTLIVED_RUN].process, recorded)
+})
+
+test("start, stop and a driver that died: an agent's process outlived the driver, so a run's record holds its process once the child exists", async () => {
+  const recorded = { pid: 4242, startTime: 'synthetic' }
+  const seen = []
+  const setup = modelDriver(
+    { A1: { state: 'pending' }, A3: { state: 'merged', pr: 13 } },
+    {
+      result: (options) => {
+        options.onProcess(recorded)
+        seen.push(savedRun(setup.manifest, options.logName))
+
+        return new Promise(() => {})
+      },
+    },
+  )
+
+  await setup.driver.tick()
+  await waitFor(() => setup.calls.length === 1, 'the implement run')
+
+  assert.equal(seen.length, 1)
+  assert.deepEqual([seen[0].id, seen[0].role, seen[0].endedAt, seen[0].process], ['A1', 'implement', null, recorded])
 })
 
 test('start: a label call lost to an outage is logged with source label, and the start goes on', async () => {
