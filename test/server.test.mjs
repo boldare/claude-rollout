@@ -616,9 +616,14 @@ test('stream: state and every event on connect, then appended events and a renam
   )
 
   const ledger = JSON.parse(readFileSync(join(dir, 'ledger.json'), 'utf8'))
-  replaceLedger(dir, JSON.stringify({ ...ledger, prs: { ...ledger.prs, A3: { state: 'implementing' } } }))
+  const implementing = {
+    stage: 'implement',
+    status: { kind: 'running', code: 'implement', run: 'A3-01-implement', since: new Date().toISOString() },
+  }
 
-  const renamed = await stream.next((message) => message.event === 'state' && message.data.view.rows[2].state === 'implementing')
+  replaceLedger(dir, JSON.stringify({ ...ledger, prs: { ...ledger.prs, A3: implementing } }))
+
+  const renamed = await stream.next((message) => message.event === 'state' && message.data.view.rows[2].status.stage === 'implement')
   assert.equal(renamed.data.view.eventCount, 10)
 })
 
@@ -979,13 +984,13 @@ test('cli: hold A1 A2 posts one command for both, and a driver that applies it h
   driver.applyCommands()
 
   for (const id of ['A1', 'A2']) {
-    const held = driver.ledger.prs[id].held
+    const held = driver.ledger.prs[id].hold
 
     assert.ok(Date.parse(held?.at), `${id}: ${JSON.stringify(held)}`)
     assert.deepEqual(held, { at: held.at, by: 'maintainer', reason: null }, id)
   }
 
-  assert.equal(driver.ledger.prs.A3.held, null)
+  assert.equal(driver.ledger.prs.A3.hold, null)
   assert.equal(driver.ledger.data.hold, null)
   assert.deepEqual(inboxFiles(dir), [])
 })

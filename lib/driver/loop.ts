@@ -1,5 +1,5 @@
 import * as transitions from '../transitions.ts'
-import type { PrEntry } from '../transitions.ts'
+import type { PrEntry, StoredRun } from '../transitions.ts'
 import type { Head, Hold, IsoTime, OpenStage, RunRecord, WaitingOf } from '../state.ts'
 import { checkClaim } from './claims.ts'
 import type { ClaimPr, ClaimsContext } from './claims.ts'
@@ -29,13 +29,11 @@ type Unstamped<Union> = Union extends unknown ? Omit<Union, 'since'> : never
 type DependencyStatus = Unstamped<WaitingOf<'dependencies' | 'outside-dependency'>>
 type BriefWait = Unstamped<WaitingOf<'dependencies' | 'outside-dependency' | 'dependencies-merge' | 'slot'>>
 type QuestionHash = RunsContext['questionHash']
-type UnfilledEntry = Parameters<typeof transitions.fillFromState>[0]
-type StoredRuns = Parameters<typeof transitions.fillFromState>[1]['runs']
 type AgentRunner = RunsContext['runAgent']
 type AgentOptions = Parameters<AgentRunner>[2]
 type AgentOutcome = Awaited<ReturnType<AgentRunner>>
 type RecordedProcess = NonNullable<RunRecord['process']>
-type LoopRun = NonNullable<StoredRuns>[string] & { endedAt?: IsoTime | null; process?: RecordedProcess | null }
+type LoopRun = StoredRun & { endedAt?: IsoTime | null; process?: RecordedProcess | null }
 
 // What endProcess in lib/sandbox.mjs resolves with. It never rejects.
 interface ProcessEnd {
@@ -64,7 +62,7 @@ export interface LoopManifest {
 }
 
 // The fields of an entry this module reads beside the ones runs.ts types.
-interface LoopEntry extends RunEntry {
+type LoopEntry = RunEntry & {
   stageLabels?: string[]
   stageLabelError?: string | null
 }
@@ -151,7 +149,7 @@ export interface LoopContext {
   loadManifest: (dir: string, options: { only: string[] | null; dryRun: boolean }) => LoopManifest
   manifestMtime: () => number | null
   existsSync: (path: string) => boolean
-  freshPr: () => UnfilledEntry
+  freshPr: (stage: 'brief' | 'implement', at: IsoTime) => LoopEntry
   tickNote: (stats: TickStats) => string
   sleptMs: (gapMs: number, intervalMs: number) => number
   stageLabels: (entry: LoopEntry) => string[]
@@ -186,14 +184,8 @@ function minutesSince(iso: IsoTime | null | undefined): number {
   return iso ? (Date.now() - Date.parse(iso)) / 60_000 : Infinity
 }
 
-// The detail of a status event. Its status kind is `status`, because a `kind`
-// would replace the event's own. A merged PR has neither status nor code.
-function statusDetail(entry: PrEntry) {
-  return { stage: entry.stage ?? null, status: entry.status?.kind ?? null, code: entry.status?.code ?? null }
-}
-
 function statusKey(entry: PrEntry): string {
-  return JSON.stringify(statusDetail(entry))
+  return JSON.stringify(transitions.statusDetail(entry))
 }
 
 // The state of a driver just built. The logged statuses are seeded from the
@@ -218,13 +210,15 @@ export function freshState({ manifest, ledger }: Pick<LoopContext, 'manifest' | 
 
 export function delegateAllowed(manifest: Pick<LoopManifest, 'policy'>, entry: PrEntry, questionHash: QuestionHash): boolean {
   const policy = manifest.policy.delegate
-  const blocked = entry.blocked
+  const question = transitions.statusQuestion(entry.status)
 
-  if (!policy || !blocked) {
+  if (!policy || !question) {
     return false
   }
 
-  return policy.kinds.includes(blocked.kind) && !entry.pendingNote && questionHash(blocked) !== entry.delegate.lastQuestion
+  const hash = questionHash({ kind: question.kind, question: question.text })
+
+  return policy.kinds.includes(question.kind) && !entry.pendingNote && hash !== entry.delegate.lastQuestion
 }
 
 // A question the delegate takes notifies once, through its answer or escalation.
@@ -304,12 +298,7 @@ function reloadManifest(context: LoopContext): void {
 
     for (const pr of fresh.all) {
       // freshPr gives every field of an entry.
-      ledger.prs[pr.id] ??= transitions.fillFromState(context.freshPr(), {
-        id: pr.id,
-        briefWritten: context.existsSync(pr.brief),
-        runs: ledger.data.runs,
-        at: now(),
-      }) as LoopEntry
+      ledger.prs[pr.id] ??= context.freshPr(context.existsSync(pr.brief) ? 'implement' : 'brief', now())
     }
 
     Object.assign(manifest, fresh)
@@ -364,7 +353,7 @@ function dependencyStatus({ manifest, ledger, github }: LoopContext, pr: LoopPr)
   return { kind: 'waiting', code, on }
 }
 
-// What a pending PR waits for when nothing launches. The brief file decides its stage.
+// What a PR that waits to start waits for when nothing launches. The brief file decides its stage.
 function pendingStatus(context: LoopContext, pr: LoopPr, entry: LoopEntry, depsReady: boolean): void {
   const { now } = context
 
@@ -386,7 +375,7 @@ function briefWait(context: LoopContext, pr: LoopPr, entry: LoopEntry, depsReady
   return !depsReady && !briefAhead(context, pr, entry) ? dependencyStatus(context, pr) : SLOT
 }
 
-// What an interrupted run or an owed fix waits for when it does not launch.
+// What a cut-off run or an owed fix waits for when it does not launch.
 function idleStatus(context: LoopContext, pr: LoopPr, entry: LoopEntry, depsReady: boolean): void {
   const { now } = context
 
@@ -395,15 +384,89 @@ function idleStatus(context: LoopContext, pr: LoopPr, entry: LoopEntry, depsRead
     return
   }
 
-  // An interrupted run or an owed fix is never on merged.
+  // A cut-off run or an owed fix is never on merged.
   transitions.setStatus(entry, entry.stage as OpenStage, SLOT, now())
+}
+
+// A PR that waits to start: on brief, or on implement with no fix owed.
+function waitsToStart(entry: LoopEntry): boolean {
+  if (entry.status?.kind !== 'waiting') {
+    return false
+  }
+
+  return entry.stage === 'brief' || (entry.stage === 'implement' && !entry.fix)
+}
+
+// A run that ended without a report resumes: a cut-off run on implement or
+// verify, or a READY report not checked yet.
+function resumes(entry: LoopEntry): boolean {
+  if (entry.status?.kind !== 'waiting') {
+    return false
+  }
+
+  if (entry.stage === 'implement') {
+    return entry.fix?.reason === 'no-report'
+  }
+
+  return entry.stage === 'verify' || (entry.stage === 'pre-verify' && entry.reportUnchecked)
+}
+
+// A fix the PR owes for any cause but a cut-off run.
+function owesFix(entry: LoopEntry): boolean {
+  return entry.stage === 'implement' && entry.status?.kind === 'waiting' && Boolean(entry.fix) && entry.fix?.reason !== 'no-report'
+}
+
+function startRun(context: LoopContext, pr: LoopPr, entry: LoopEntry, depsReady: boolean): void {
+  const { running, runContext } = context
+
+  if (context.slots()) {
+    if (context.existsSync(pr.brief)) {
+      if (depsReady) {
+        launch(runContext, pr, 'implement')
+      }
+    } else if (depsReady || briefAhead(context, pr, entry)) {
+      launch(runContext, pr, 'brief')
+    }
+  }
+
+  if (waitsToStart(entry) && !running.has(pr.id)) {
+    pendingStatus(context, pr, entry, depsReady)
+  }
+}
+
+async function resume(context: LoopContext, pr: LoopPr, entry: LoopEntry, depsReady: boolean): Promise<void> {
+  const { runContext, claimContext, now } = context
+
+  // A parked READY report needs GitHub again, not a slot or an agent.
+  if (entry.reportUnchecked && entry.ready) {
+    transitions.setStatus(entry, 'pre-verify', { kind: 'waiting', code: 'github' }, now())
+    await claimReport(runContext, pr, entry, entry.ready)
+    return
+  }
+
+  if (!context.slots() || (!entry.pr && !depsReady)) {
+    idleStatus(context, pr, entry, depsReady)
+    return
+  }
+
+  if (entry.stage === 'verify' && entry.claimedSha) {
+    transitions.verifyAgain(entry, now())
+    await checkClaim(claimContext, pr)
+  } else if (entry.implementCutOff && !entry.sessionId) {
+    launch(runContext, pr, 'implement')
+  } else {
+    launch(runContext, pr, 'fix', {
+      reason: 'previous run ended without a report',
+      note: `Your previous run stopped without a final report (${entry.lastError ?? 'unknown'}). Inspect the worktree and the PR, then continue where you stopped.`,
+    })
+  }
 }
 
 export async function advance(context: LoopContext, pr: LoopPr): Promise<void> {
   const { manifest, ledger, running, runContext, claimContext, now } = context
   const entry = ledger.prs[pr.id]
 
-  if (entry.held) {
+  if (entry.hold) {
     transitions.heldStatus(entry, 'pr', now())
     return
   }
@@ -421,81 +484,30 @@ export async function advance(context: LoopContext, pr: LoopPr): Promise<void> {
     await owedCleanup(runContext, pr, entry)
   }
 
-  // A run state with no run behind it (an onDone that threw) resumes.
+  // A running status with no run behind it (an onDone that threw) resumes.
   transitions.recoverRun(entry, { refund: false, at: now() })
 
   const depsReady = context.github.depsPending(manifest, pr, ledger).length === 0
 
-  switch (entry.state) {
-    case 'pending':
-      if (context.slots()) {
-        if (context.existsSync(pr.brief)) {
-          if (depsReady) {
-            launch(runContext, pr, 'implement')
-          }
-        } else if (depsReady || briefAhead(context, pr, entry)) {
-          launch(runContext, pr, 'brief')
-        }
-      }
-
-      if (entry.state === 'pending' && !running.has(pr.id)) {
-        pendingStatus(context, pr, entry, depsReady)
-      }
-
-      break
-
-    case 'interrupted':
-      // A parked READY report needs GitHub again, not a slot or an agent.
-      if (entry.interruptedRole === 'report' && entry.ready) {
-        transitions.setStatus(entry, 'pre-verify', { kind: 'waiting', code: 'github' }, now())
-        await claimReport(runContext, pr, entry, entry.ready)
-        break
-      }
-
-      if (!context.slots() || (!entry.pr && !depsReady)) {
-        idleStatus(context, pr, entry, depsReady)
-        break
-      }
-
-      if (entry.interruptedRole === 'verify' && entry.claimedSha) {
-        transitions.verifyAgain(entry, now())
-        await checkClaim(claimContext, pr)
-      } else if (entry.interruptedRole === 'implement' && !entry.sessionId) {
-        launch(runContext, pr, 'implement')
-      } else {
-        launch(runContext, pr, 'fix', {
-          reason: 'previous run ended without a report',
-          note: `Your previous run stopped without a final report (${entry.lastError ?? 'unknown'}). Inspect the worktree and the PR, then continue where you stopped.`,
-        })
-      }
-
-      break
-
-    case 'needs_fix':
-      if (context.slots() && (entry.pr || depsReady)) {
-        launch(runContext, pr, 'fix', { reason: entry.fixReason, note: entry.fixNote })
-      } else {
-        idleStatus(context, pr, entry, depsReady)
-      }
-
-      break
-
-    case 'ready_claimed':
-      await checkClaim(claimContext, pr)
-      break
-
+  if (waitsToStart(entry)) {
+    startRun(context, pr, entry, depsReady)
+  } else if (resumes(entry)) {
+    await resume(context, pr, entry, depsReady)
+  } else if (owesFix(entry)) {
+    if (context.slots() && (entry.pr || depsReady)) {
+      launch(runContext, pr, 'fix', { reason: entry.fixReason, note: entry.fixNote })
+    } else {
+      idleStatus(context, pr, entry, depsReady)
+    }
+  } else if (transitions.claimWaits(entry)) {
+    await checkClaim(claimContext, pr)
+  } else if (transitions.waitsOnBlock(entry)) {
     // The claim check reads the alerts of its block again every tick.
-    case 'blocked':
-      if (entry.stage === 'pre-verify' && entry.status?.code === 'code-scanning-alerts') {
-        await checkClaim(claimContext, pr)
-      } else {
-        askDelegate(context, pr, entry)
-      }
-
-      break
-
-    default:
-      break
+    if (entry.stage === 'pre-verify' && entry.status?.code === 'code-scanning-alerts') {
+      await checkClaim(claimContext, pr)
+    } else {
+      askDelegate(context, pr, entry)
+    }
   }
 }
 
@@ -526,9 +538,9 @@ export async function guarded(context: LoopContext, pr: { id: string }, task: ()
     entry.lastError = lastError
     say(pr.id, 'error', { error: lastError.slice(0, 300), count: entry.tickErrors })
 
-    // sync still runs for an escalated PR. If it keeps failing, that must
+    // sync still runs for a PR on an escalation. If it keeps failing, that must
     // not escalate and notify again on every tick.
-    if ((entry.tickErrors ?? 0) >= MAX_TICK_ERRORS && !running.has(pr.id) && entry.state !== 'escalated') {
+    if ((entry.tickErrors ?? 0) >= MAX_TICK_ERRORS && !running.has(pr.id) && !transitions.waitsOnEscalation(entry)) {
       transitions.escalateErrors(entry, { at: now(), run: context.lastEndedRun(pr.id) })
       say(pr.id, 'escalated', { reason: 'repeated errors' }, `repeated errors, needs you: ${lastError.slice(0, 100)}`)
     }
@@ -681,7 +693,7 @@ export async function start(context: LoopContext): Promise<void> {
   const active = new Set(manifest.prs.map((pr) => pr.id))
 
   for (const pr of manifest.prs) {
-    for (const dep of pr.deps.filter((id) => !active.has(id) && ledger.prs[id].state !== 'merged')) {
+    for (const dep of pr.deps.filter((id) => !active.has(id) && ledger.prs[id].stage !== 'merged')) {
       say(pr.id, 'waiting-outside-dep', { dep }, `${pr.id} waits for ${dep}, which is not in this run (--only) and not merged`)
     }
   }
@@ -712,7 +724,7 @@ function noticeSleep(context: LoopContext): void {
   }
 }
 
-// The PR's labels follow its ledger state. sync reads what the PR carries,
+// The PR's labels follow its stage and status. sync reads what the PR carries,
 // so a quiet tick makes no extra GitHub call. Labels only inform people:
 // a failure is kept on the PR's row and retried next tick, never counted
 // as the PR's error or allowed to stop the tick.
@@ -744,7 +756,7 @@ function logStatusChanges({ manifest, ledger, state, say }: LoopContext): void {
 
     if (state.loggedStatus.get(pr.id) !== key) {
       state.loggedStatus.set(pr.id, key)
-      say(pr.id, 'status', statusDetail(entry))
+      say(pr.id, 'status', transitions.statusDetail(entry))
     }
   }
 }
@@ -837,7 +849,7 @@ export async function tick(context: LoopContext): Promise<void> {
     }
 
     for (const pr of manifest.prs) {
-      if (!ledger.prs[pr.id].held && !ledger.data.hold) {
+      if (!ledger.prs[pr.id].hold && !ledger.data.hold) {
         transitions.unheld(ledger.prs[pr.id], now())
       }
     }
@@ -882,7 +894,7 @@ export async function runTick(context: LoopContext): Promise<void> {
 }
 
 export function finished({ manifest, ledger, running }: LoopContext): boolean {
-  return running.size === 0 && manifest.prs.every((pr) => ledger.prs[pr.id].state === 'merged')
+  return running.size === 0 && manifest.prs.every((pr) => ledger.prs[pr.id].stage === 'merged')
 }
 
 export async function finish(context: LoopContext): Promise<void> {

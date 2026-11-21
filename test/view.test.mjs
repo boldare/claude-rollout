@@ -9,7 +9,6 @@ import { loadManifest } from '../lib/manifest.mjs'
 import { timeText } from '../lib/sentences.ts'
 import { isRunName, parseTranscript, readTranscript, succeeded, transcriptParser } from '../lib/transcript.mjs'
 import { runRecords, runsFromEvents, runsFromLedger } from '../lib/runs.mjs'
-import { stateOf } from '../lib/transitions.ts'
 import {
   commandPreview,
   costs,
@@ -371,7 +370,6 @@ test('prRows: a held PR waits for its release, and a PR missing from the ledger 
     id: 'A3',
     title: 'feat: A3',
     branch: 'feat/a3',
-    state: 'pending',
     status: {
       stage: 'brief',
       kind: 'waiting',
@@ -386,7 +384,7 @@ test('prRows: a held PR waits for its release, and a PR missing from the ledger 
       retry: { applies: true, lines: ['brief · waiting: slot', 'after retry: brief · waiting: slot'] },
       note: { applies: true, lines: ['brief · waiting: slot', 'after note: queued, the next writing agent reads it'] },
     },
-    held: null,
+    hold: null,
     pr: null,
     url: null,
     head: '-',
@@ -441,17 +439,14 @@ test('prRows: a legacy, a filled and a raw ledger give the same stage and status
 test('prRows: the marker shows the hold of a running or needs-you PR, the rollout hold before its own', () => {
   const own = { at: at(7), by: 'maintainer', reason: 'checking' }
   const rollout = { at: at(8), by: 'driver', reason: 'usage limit reached' }
-  const entry = (stage, status) => ({ stage, status: { since: at(5), ...status }, hold: own, held: own })
+  const entry = (stage, status) => ({ stage, status: { since: at(5), ...status }, hold: own })
   const ledger = {
+    version: 3,
     prs: {
       A1: entry('implement', { kind: 'running', code: 'implement', run: 'A1-01-implement' }),
       A2: entry('merge', { kind: 'needs-you', code: 'approve' }),
       A3: entry('brief', { kind: 'waiting', code: 'held', scope: 'pr' }),
     },
-  }
-
-  for (const id of Object.keys(ledger.prs)) {
-    ledger.prs[id].state = stateOf(ledger.prs[id])
   }
 
   const manifest = loadManifest(makeRollout())
@@ -464,10 +459,10 @@ test('prRows: the marker shows the hold of a running or needs-you PR, the rollou
 
 test('prRows: an approval waits for you, from the time of its status, asked by the driver', () => {
   const manifest = loadManifest(makeRollout())
-  const a1 = { stage: 'merge', status: { kind: 'needs-you', code: 'approve', since: at(40) }, pr: 11, hold: null, held: null }
-  const [row] = prRows(manifest, { prs: { A1: { ...a1, state: stateOf(a1) } } }, [], [])
+  const a1 = { stage: 'merge', status: { kind: 'needs-you', code: 'approve', since: at(40) }, pr: 11, hold: null }
+  const [row] = prRows(manifest, { version: 3, prs: { A1: a1 } }, [], [])
 
-  assert.deepEqual(row.waiting, { since: at(40), run: null, byDriver: true, escalation: null, lastError: null, delegate: null })
+  assert.deepEqual(row.waiting, { since: at(40), run: null, byDriver: true, lastError: null, delegate: null })
   assert.deepEqual(row.status.wayOut, { kind: 'approve', text: 'rollout approve A1' })
 })
 
@@ -549,7 +544,6 @@ test('prRows: a PR that needs you says since when, which run asked and what the 
     since: at(30),
     run: 'A1-01-implement',
     byDriver: false,
-    escalation: null,
     lastError: null,
     delegate: { state: 'escalate', reason: 'the plan does not decide' },
   })
@@ -568,12 +562,11 @@ test('prRows: a PR that needs you says since when, which run asked and what the 
     reason: '',
   })
 
-  // The gate's block is the driver's own: it waits since its status began, which the fill of a raw ledger sets to now.
+  // The gate's block is the driver's own: it waits since its status began, which the migration of a raw ledger sets to now.
   assert.deepEqual(waiting(prs({}), 'A2'), {
     since: new Date(now).toISOString(),
     run: null,
     byDriver: true,
-    escalation: null,
     lastError: null,
     delegate: { state: 'skips', reason: '' },
   })
@@ -582,12 +575,11 @@ test('prRows: a PR that needs you says since when, which run asked and what the 
     since: at(51),
     run: 'A3-03-fix',
     byDriver: false,
-    escalation: 'fix attempts exhausted',
     lastError: 'fix attempts exhausted (3)',
     delegate: null,
   })
 
-  assert.equal(waiting(prs({}), 'A1', [], []).since, null)
+  assert.equal(waiting(prs({}), 'A1', [], []).since, new Date(now).toISOString())
   assert.equal(prRows(loadManifest(makeRollout()), { prs: prs({}) }, events, runs)[0].waiting.delegate, null, 'no delegate policy')
 })
 
@@ -641,7 +633,7 @@ test('prRows follows the manifest order, and a merged PR has a stage and a sente
   assert.deepEqual(prDetail(manifest, ledger, [], [], 'A3').fix.reason, 'ci-red')
 })
 
-test('prRows: the question only while the status asks one, and prDetail keeps the stale block', () => {
+test('prRows: the question only while the status asks one', () => {
   const manifest = loadManifest(makeRollout())
   const blocked = { kind: 'needs-decision', question: 'Which API?', evidence: 'Both exist.' }
   const ledger = {
@@ -656,8 +648,6 @@ test('prRows: the question only while the status asks one, and prDetail keeps th
     prRows(manifest, ledger, [], []).map((row) => row.status.question),
     [{ kind: 'needs-decision', text: 'Which API?', evidence: 'Both exist.' }, null, { kind: 'brief-questions', text: '', evidence: '' }],
   )
-
-  assert.deepEqual(prDetail(manifest, ledger, [], [], 'A2').blocked, blocked)
 })
 
 function answeredRow(entry, events, driverRunning = true) {
@@ -790,15 +780,11 @@ test('prRows: a stamped block or escalation names its run and time, where the he
     since: at(40),
     run: 'A3-02-verify',
     byDriver: false,
-    escalation: 'disputed finding',
     lastError: 'F2 is open',
     delegate: null,
   })
 
-  assert.deepEqual(
-    [detail.escalation, detail.escalatedAt, detail.escalationRun, detail.noteHistory],
-    ['disputed finding', at(40), 'A3-02-verify', []],
-  )
+  assert.deepEqual([detail.escalationRun, detail.noteHistory], ['A3-02-verify', []])
 })
 
 test('prDetail on a ledger from before version 2: the runs from the events, answered and waiting from the heuristic', () => {
@@ -831,7 +817,6 @@ test('prDetail on a ledger from before version 2: the runs from the events, answ
     since: at(30),
     run: 'A1-01-implement',
     byDriver: false,
-    escalation: null,
     lastError: null,
     delegate: null,
   })
@@ -842,12 +827,11 @@ test('prDetail on a ledger from before version 2: the runs from the events, answ
     since: at(51),
     run: 'A3-03-fix',
     byDriver: false,
-    escalation: 'fix attempts exhausted',
     lastError: 'fix attempts exhausted (3)',
     delegate: null,
   })
 
-  assert.deepEqual([detail('A3').escalation, detail('A3').escalatedAt, detail('A3').escalationRun], ['fix attempts exhausted', null, null])
+  assert.equal(detail('A3').escalationRun, 'A3-03-fix')
 })
 
 test('prDetail: the merge commit, the fix reason and the last error, for the overview', () => {
@@ -1082,6 +1066,30 @@ test('rolloutView: null without a ledger, the whole model with one', () => {
   assert.deepEqual(view.costs.byRole, { brief: 1.5, implement: 4.25, fix: 0, verify: 2, delegate: 0 })
 })
 
+test('rolloutView: a version 2 ledger is migrated in memory, and ledger.json stays as it is, byte for byte', () => {
+  const dir = makeRollout()
+  const file = join(dir, 'ledger.json')
+  const blocked = { kind: 'needs-decision', question: 'Which API?', evidence: 'Both exist.', run: 'A2-01-implement' }
+  const older = { version: 2, prs: { A1: samplePrs().A1, A2: { state: 'blocked', pr: 12, blocked } }, runs: {}, hold: null }
+
+  writeFileSync(file, `${JSON.stringify(older, null, 2)}\n`)
+
+  const before = readFileSync(file)
+  const view = rolloutView(loadManifest(dir))
+
+  assert.deepEqual(
+    view.rows.map((row) => [row.id, row.status.stage, row.status.code]),
+    [
+      ['A1', 'merge', 'held'],
+      ['A2', 'implement', 'decision'],
+      ['A3', 'brief', 'slot'],
+    ],
+  )
+
+  assert.deepEqual(view.rows[1].waiting.run, 'A2-01-implement')
+  assert.deepEqual(readFileSync(file), before)
+})
+
 test('rolloutView: reads the events through the reader it is given, and only with a ledger', () => {
   const manifest = loadManifest(makeRollout())
   const events = [{ at: at(1), id: 'A1', kind: 'note' }]
@@ -1118,9 +1126,7 @@ function prLines(stdout) {
 
 // An entry as a driver of this version writes it, so the view keeps it as it is.
 function written(entry) {
-  const full = { hold: null, held: null, ...entry }
-
-  return { ...full, state: stateOf(full) }
+  return { hold: null, ...entry }
 }
 
 function minutesAgo(minutes) {
@@ -1141,7 +1147,7 @@ function needyRollout(hold = null) {
 
   return makeRollout({
     prs: {
-      A1: written({ stage: 'merge', status: status('needs-you', 'approve'), pr: 11, hold, held: hold }),
+      A1: written({ stage: 'merge', status: status('needs-you', 'approve'), pr: 11, hold }),
       A2: written({ stage: 'implement', status: status('needs-you', 'obstacle', { question: OBSTACLE }), pr: 12 }),
       A3: written({ stage: 'verify', status: status('needs-you', 'dispute', { findings: ['F1', 'F2'], text: '' }), pr: 13 }),
     },
@@ -1366,7 +1372,7 @@ test('status and card refuse a ledger a newer driver wrote, with the reason on s
     const result = cli(...args)
 
     assert.equal(result.status, 1, args[0])
-    assert.match(result.stderr, /^ledger\.json is version 99, written by a newer driver than this one \(version 2\)\./, args[0])
+    assert.match(result.stderr, /^ledger\.json is version 99, written by a newer driver than this one \(version 3\)\./, args[0])
   }
 
   assert.equal(readFileSync(file, 'utf8'), before)

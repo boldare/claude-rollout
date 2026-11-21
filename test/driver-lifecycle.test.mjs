@@ -12,7 +12,7 @@ import { loadManifest } from '../lib/manifest.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
 import { fakeGitHubRepo, makeRollout, waitFor } from './fixtures.mjs'
-import { MAINTAINER_TOKEN, agentResult, apply } from './driver-helpers.mjs'
+import { MAINTAINER_TOKEN, agentResult, apply, placeOf } from './driver-helpers.mjs'
 
 // One PR through the real driver, on real git: a bare origin, repo.path
 // cloned from it, and the driver's own clones. Only GitHub, gh and the agents
@@ -284,7 +284,7 @@ test('lifecycle: one PR goes from pending to merged, squashed into the origin, a
   const setup = lifecycle(context)
 
   await setup.driver.start()
-  await tickUntil(setup, () => setup.entry.state === 'verified', 'verification')
+  await tickUntil(setup, () => setup.entry.stage === 'merge', 'verification')
 
   const before = originMain(setup)
   const head = setup.entry.verified.sha
@@ -320,7 +320,7 @@ test('lifecycle: a head pushed after the verification is verified again, and an 
   const setup = lifecycle(context)
 
   await setup.driver.start()
-  await tickUntil(setup, () => setup.entry.state === 'verified', 'verification')
+  await tickUntil(setup, () => setup.entry.stage === 'merge', 'verification')
 
   const first = { ...setup.entry.verified }
   const pushed = pushOnTop(setup, first.sha)
@@ -348,7 +348,7 @@ test('lifecycle: a head pushed after the verification is verified again, and an 
 
   assert.deepEqual(rejections, [STALE_APPROVAL])
   assert.equal(count(setup, 'approved'), 0)
-  assert.equal(setup.entry.state, 'verified')
+  assert.deepEqual(placeOf(setup.entry), ['merge', 'needs-you', 'approve'])
   assert.equal(originMain(setup), main)
   assertNoTrouble(setup)
 })
@@ -357,7 +357,7 @@ test('lifecycle: a hold of the rollout keeps an approved PR through five ticks, 
   const setup = lifecycle(context)
 
   await setup.driver.start()
-  await tickUntil(setup, () => setup.entry.state === 'verified', 'verification')
+  await tickUntil(setup, () => setup.entry.stage === 'merge', 'verification')
 
   const before = originMain(setup)
   const head = setup.entry.verified.sha
@@ -380,11 +380,11 @@ test('lifecycle: a hold of the rollout keeps an approved PR through five ticks, 
 
   assert.equal(count(setup, 'merged'), 0)
   assert.deepEqual(setup.github.ghCalls(), [])
-  assert.equal(setup.entry.state, 'verified')
+  assert.deepEqual(placeOf(setup.entry), ['merge', 'waiting', 'held'])
   assert.equal(originMain(setup), before)
 
   postCommand(setup.manifest, { cmd: 'release', all: true })
-  await tickUntil(setup, () => setup.entry.state === 'merged', 'merge after release --all')
+  await tickUntil(setup, () => setup.entry.stage === 'merged', 'merge after release --all')
 
   assertSquashed(setup, { before, head })
   assertNoTrouble(setup)
@@ -417,13 +417,13 @@ test('lifecycle: a driver that ends between two ticks with a run in flight is re
   first.started.driver = driver
 
   await driver.start()
-  await tickUntil(setup, () => setup.entry.state === 'verified', 'verification')
+  await tickUntil(setup, () => setup.entry.stage === 'merge', 'verification')
 
   const before = originMain(setup)
   const head = setup.entry.verified.sha
 
   postCommand(setup.manifest, approve(setup.entry.verified))
-  await tickUntil(setup, () => setup.entry.state === 'merged', 'merge')
+  await tickUntil(setup, () => setup.entry.stage === 'merged', 'merge')
 
   const recovered = readEvents(setup.manifest).filter((event) => event.kind === 'recovered-interrupted')
 

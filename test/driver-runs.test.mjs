@@ -4,7 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { briefDrift, createDriver, doneDetail } from '../lib/driver.mjs'
 import { endRun, readLedger } from '../lib/ledger.mjs'
-import { toFix } from '../lib/transitions.ts'
+import { stateOf, toFix, toMerged } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { mirrorPath, previewPath, worktreePath } from '../lib/worktree.mjs'
 import { at, samplePrs, waitFor } from './fixtures.mjs'
@@ -96,7 +96,7 @@ test('launch never starts an implementer or a fixer without a brief and a GitHub
 
   assert.equal(driver.running.size, 0)
   assert.deepEqual(entry.attempts, attempts)
-  assert.equal(entry.state, 'pending')
+  assert.deepEqual(placeOf(entry), ['brief', 'waiting', 'slot'])
   assert.equal(entry.sessionId, 'session-1')
   assert.deepEqual(
     readEvents(manifest)
@@ -197,7 +197,14 @@ test('launch: one implement run is one record in the ledger, with the model it a
     [true, 'BLOCKED', 1.25, 60, 0, false],
   )
 
-  assert.deepEqual(setup.entry.blocked, { ...blocked, run })
+  assert.deepEqual(setup.entry.status.question, {
+    kind: blocked.kind,
+    text: blocked.question,
+    evidence: blocked.evidence,
+    run,
+    delegate: null,
+  })
+
   assert.deepEqual(readLedger(setup.manifest).runs[run], record, 'the job saves it')
 })
 
@@ -210,7 +217,7 @@ test('note: a note applied to a blocked PR goes into the fix run that starts fro
 
   apply(setup.manifest, setup.driver, { cmd: 'note', id: 'A1', text: 'Keep it as an alias.' })
 
-  assert.equal(setup.entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'slot'])
   assert.equal(setup.entry.noteHistory.at(-1).run, null)
 
   const fix = await launched(setup, 'fix', { reason: setup.entry.fixReason, note: setup.entry.fixNote })
@@ -270,10 +277,10 @@ test('launch: attempts exhausted after an ended run escalate with the time and t
   const before = Date.now()
   setup.driver.launch(setup.pr, 'implement')
 
-  assert.equal(setup.entry.state, 'escalated')
-  assert.equal(setup.entry.escalation, 'implement attempts exhausted')
+  assert.deepEqual(placeOf(setup.entry), ['implement', 'needs-you', 'attempts-exhausted'])
+  assert.equal(setup.entry.status.code, 'attempts-exhausted')
   assert.equal(setup.entry.escalationRun, implement.logName)
-  assert.ok(Date.parse(setup.entry.escalatedAt) >= before, setup.entry.escalatedAt)
+  assert.ok(Date.parse(setup.entry.status.since) >= before, setup.entry.status.since)
 })
 
 test('doneDetail: the model the run reported', () => {
@@ -327,7 +334,7 @@ test('advance: a held dependency holds the brief, and release lets it start', as
   const { manifest, driver, pr, entry, calls } = aheadDriver({ a1: samplePrs().A1 })
 
   await driver.advance(pr)
-  assert.equal(entry.state, 'pending')
+  assert.deepEqual(placeOf(entry), ['brief', 'waiting', 'dependencies'])
   assert.deepEqual(calls, [])
 
   apply(manifest, driver, { cmd: 'release', id: 'A1' })
@@ -339,7 +346,7 @@ test('advance: a held dependency holds the brief, and release lets it start', as
 
   apply(manifest, driver, { cmd: 'hold', id: 'A1' })
   await driver.advance(pr)
-  assert.equal(entry.state, 'briefing')
+  assert.deepEqual(placeOf(entry), ['brief', 'running', 'brief-write'])
   assert.equal(driver.running.get('A2'), 'brief')
 })
 
@@ -347,7 +354,7 @@ test('advance: a dependency neither merged nor verified holds the brief, and an 
   const unverified = aheadDriver({ a1: { state: 'needs_fix', pr: 11 } })
 
   await unverified.driver.advance(unverified.pr)
-  assert.equal(unverified.entry.state, 'pending')
+  assert.deepEqual(placeOf(unverified.entry), ['brief', 'waiting', 'dependencies'])
   assert.deepEqual(unverified.calls, [])
 
   const briefed = aheadDriver()
@@ -355,7 +362,7 @@ test('advance: a dependency neither merged nor verified holds the brief, and an 
   writeFileSync(briefed.pr.brief, '# A2\n')
 
   await briefed.driver.advance(briefed.pr)
-  assert.equal(briefed.entry.state, 'pending')
+  assert.deepEqual(placeOf(briefed.entry), ['implement', 'waiting', 'dependencies'])
   assert.deepEqual(briefed.calls, [])
 })
 
@@ -365,7 +372,7 @@ test('advance: heads that conflict in the preview give the attempt back and wait
   })
 
   await driver.advance(pr)
-  await waitFor(() => entry.state === 'pending' && !driver.running.has('A2'), 'the brief to wait')
+  await waitFor(() => entry.stage === 'brief' && entry.status.kind === 'waiting' && !driver.running.has('A2'), 'the brief to wait')
 
   assert.deepEqual(calls, [])
   assert.equal(entry.attempts.brief, 0)
@@ -382,11 +389,11 @@ test('advance: heads that conflict in the preview give the attempt back and wait
   )
 
   await driver.advance(pr)
-  assert.equal(entry.state, 'pending')
+  assert.deepEqual(placeOf(entry), ['brief', 'waiting', 'dependencies-merge'])
 
   driver.ledger.prs.A1.verified = { sha: 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', patchId: 'patch-a1-2', at: at(90) }
   await driver.advance(pr)
-  assert.equal(entry.state, 'briefing')
+  assert.deepEqual(placeOf(entry), ['brief', 'running', 'brief-write'])
 })
 
 test('briefDrift: a dependency that merged with another patch than the brief saw, or with none known', () => {
@@ -434,7 +441,7 @@ function placeOf(entry) {
 
 // Commands that pass leave the PR waiting for a slot for its verifier.
 function assertWaitsForVerifier(entry) {
-  assert.deepEqual([...placeOf(entry), entry.state], ['verify', 'waiting', 'slot', 'interrupted'])
+  assert.deepEqual(placeOf(entry), ['verify', 'waiting', 'slot'])
 }
 
 // The key of COMMANDS_GATE: its four command lists, without a head.
@@ -456,7 +463,7 @@ test('checkClaim: with pre-verify commands it runs them as a gate job in the PR 
   await driver.advance(pr)
 
   assert.equal(driver.running.get('A1'), 'gate')
-  assert.equal(entry.state, 'ready_claimed')
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'running', 'commands'])
   assert.deepEqual(agentCalls, [])
   assert.deepEqual(seam.calls, [{ id: 'A1', command: 'npm test', cwd: worktreePath(manifest, pr) }])
   assert.deepEqual(eventsSince(manifest), CLAIM_PASSES)
@@ -468,7 +475,7 @@ test('checkClaim: without ready or pre-verify commands the verifier starts at on
 
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
   assert.deepEqual(seam.calls, [])
   assert.equal(entry.preVerify, null)
@@ -485,7 +492,7 @@ test('pre-verify: a failed required command sends the PR back with its output, a
   await preVerified(setup)
 
   assert.deepEqual(seam.commands(), ['npm test'])
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fixReason, 'pre-verify check')
   assert.deepEqual(agentCalls, [])
   assert.deepEqual(eventsSince(manifest), [
@@ -530,7 +537,7 @@ test('pre-verify: a failed recommended command only informs, and the next advanc
 
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
   assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
   assert.deepEqual(kindsSince(manifest, before), ['verify-start'])
@@ -567,7 +574,7 @@ test('pre-verify: a command that leaves tracked changes fails, and the worktree 
     .filter((call) => call.tool === 'git')
     .map((call) => call.args.join(' '))
 
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(record.result, 'fail')
   assert.deepEqual(record.changes, ['M package-lock.json'])
   assert.equal(record.summary, 'exit 0, left tracked changes: M package-lock.json')
@@ -580,9 +587,9 @@ test('pre-verify: a command that leaves tracked changes fails, and the worktree 
   assert.ok(gitCalls.some((line) => line.endsWith('clean -fdq')))
 })
 
-test('pre-verify: results are dropped when the state or the claim changed meanwhile, or the job was stopped', async () => {
+test('pre-verify: results are dropped when the status or the claim changed meanwhile, or the job was stopped', async () => {
   const cases = [
-    { name: 'state changed', change: (entry) => (entry.state = 'needs_fix') },
+    { name: 'status changed', change: (entry) => toFix(entry, 'CI is red', '', { code: 'ci-red', at: at(1) }) },
     { name: 'claim moved', change: (entry) => (entry.claimedSha = NEW_HEAD) },
     { name: 'stopped', outcome: commandRun({ exitCode: null, signal: 'SIGTERM', stopped: true }) },
   ]
@@ -595,14 +602,14 @@ test('pre-verify: results are dropped when the state or the claim changed meanwh
     await driver.advance(pr)
     change(entry)
 
-    const state = entry.state
+    const state = stateOf(entry)
 
     job.resolve(outcome)
     await waitFor(() => !driver.running.has('A1'), `the job to end (${name})`)
 
     assert.deepEqual(eventsSince(manifest), CLAIM_PASSES, name)
     assert.equal(entry.preVerify, null, name)
-    assert.equal(entry.state, state, name)
+    assert.equal(stateOf(entry), state, name)
     assert.deepEqual(seam.commands(), ['npm test'], name)
   }
 })
@@ -613,7 +620,7 @@ test('pre-verify: a PR merged while its commands ran is cleaned up, with no resu
   const { manifest, driver, pr, entry, cleaned } = verifiableDriver({ gates: COMMANDS_GATE, runCommand: seam.runCommand })
 
   await driver.advance(pr)
-  entry.state = 'merged'
+  toMerged(entry)
   job.resolve(commandRun({ exitCode: 1 }))
   await waitFor(() => !driver.running.has('A1'), 'the job to end')
 
@@ -634,7 +641,7 @@ test('pre-verify: a job that throws logs on-done-error, keeps the PR ready_claim
 
   await preVerified(setup)
 
-  assert.equal(entry.state, 'ready_claimed')
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'slot'])
   assert.equal(entry.preVerify, null)
   assert.equal(entry.failStreak, 1)
   assert.ok(Date.parse(entry.retryAfter) > Date.now(), entry.retryAfter)
@@ -682,7 +689,7 @@ test('pre-verify: a pass on the ledger holds across a restart, so a new driver r
 
   assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
   assert.deepEqual(roles, ['verify'])
-  assert.equal(restarted.ledger.prs.A1.state, 'verifying')
+  assert.deepEqual(placeOf(restarted.ledger.prs.A1), ['verify', 'running', 'verify'])
 })
 
 test('pre-verify commands: passed', async () => {
@@ -691,7 +698,7 @@ test('pre-verify commands: passed', async () => {
   await preVerified(setup)
 
   assertWaitsForVerifier(setup.entry)
-  assert.equal(setup.entry.interruptedRole, 'verify')
+  assert.deepEqual([setup.entry.reportUnchecked, setup.entry.implementCutOff], [false, false])
   assert.deepEqual({ ...setup.entry.commands, at: null }, { sha: SHA, at: null, key: COMMANDS_KEY })
 })
 
@@ -748,7 +755,7 @@ test('pre-verify: a note queued while the commands run sends the PR to a fix whe
   await driver.advance(pr)
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Rename the flag.' }), [
-    { id: 'A1', kind: 'note-queued', state: 'ready_claimed' },
+    { id: 'A1', kind: 'note-queued', stage: 'pre-verify', status: 'running', code: 'commands' },
   ])
 
   manifest.policy.concurrency = 0
@@ -950,7 +957,7 @@ test('ready: the ready commands run first, required then recommended, before the
 
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
   assert.equal(seam.calls.length, 4)
 })
@@ -966,7 +973,7 @@ test('ready: a failed required ready command sends the PR back as a ready check,
   await preVerified(setup)
 
   assert.deepEqual(seam.commands(), ['npm ci'])
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fixReason, 'ready check')
   assert.deepEqual(agentCalls, [])
   assert.deepEqual(eventsSince(manifest), [
@@ -1001,7 +1008,7 @@ test('ready: a failed recommended ready command lets the pre-verify commands run
 
   await driver.advance(pr)
 
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
   assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
 
   const section = prompts[0].indexOf('\n## Recommended commands that failed\n')
@@ -1022,7 +1029,7 @@ test('ready: with ready commands only, the job runs, and the note says the READY
 
   assert.equal(entry.ready.headSha, entry.claimedSha)
   assert.deepEqual(seam.commands(), ['npm test'])
-  assert.equal(entry.state, 'needs_fix')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fixReason, 'ready check')
   assert.ok(entry.fixNote.includes('Your READY report says it exited 0 at this head.'), entry.fixNote)
   assert.ok(entry.fixNote.includes("The driver's run decides."), entry.fixNote)
@@ -1062,7 +1069,7 @@ test('ready: a change to gates.ready alone runs the commands again on the same h
   await driver.advance(pr)
 
   assert.equal(seam.calls.length, 5)
-  assert.equal(entry.state, 'verifying')
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
 })
 
 // verifiableDriver's fake git once a command left `leftover` in the
@@ -1167,7 +1174,7 @@ test('pre-verify: what a job that threw after a command left is cleaned before t
   await preVerified(setup)
 
   assert.equal(kindsSince(manifest).at(-1), 'on-done-error')
-  assert.equal(entry.state, 'ready_claimed')
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'slot'])
   assert.equal(entry.preVerifyCleanup, SHA)
 
   entry.retryAfter = null
@@ -1313,7 +1320,7 @@ test('job end: a ledger save that fails after an implement run is printed, the d
     return { ...setup, finish: () => job.resolve(FAILED_RUN) }
   })
 
-  assert.equal(stored.prs.A1.state, 'interrupted')
+  assert.deepEqual(placeOf(stored.prs.A1), ['implement', 'waiting', 'held'])
 })
 
 test('job end: a ledger save that fails after a brief is printed, the driver goes on, and the next tick counts one failed tick', async (context) => {
@@ -1375,7 +1382,7 @@ test('job end: a ledger save that fails after a pre-verify job is printed, the d
     return { ...setup, finish: () => job.resolve(commandRun({ exitCode: 1 })) }
   })
 
-  assert.equal(stored.prs.A1.state, 'needs_fix')
+  assert.deepEqual(placeOf(stored.prs.A1), ['implement', 'waiting', 'held'])
 })
 
 test('job end: an error handler that throws when the event log fails is printed, and the job still leaves running and saves the ledger', async (context) => {
@@ -1393,6 +1400,6 @@ test('job end: an error handler that throws when the event log fails is printed,
 
   assert.deepEqual(rejections, [])
   assert.equal(setup.driver.running.size, 0)
-  // onDone threw on its first event, before it moved the state on.
-  assert.equal(readLedger(setup.manifest).prs.A1.state, 'implementing')
+  // onDone threw on its first event, before it moved the status on.
+  assert.deepEqual(placeOf(readLedger(setup.manifest).prs.A1), ['implement', 'running', 'implement'])
 })

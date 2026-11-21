@@ -834,35 +834,41 @@ test('rolloutControls: hold all or release all, stop or start', () => {
 })
 
 // A row as the view builds it, as far as the controls read it.
-function controlRow({ stage = 'implement', state = 'pending', held = null, retry = false } = {}) {
+function controlRow({ stage = 'implement', kind = 'waiting', code = 'slot', hold = null, retry = false } = {}) {
   const effect = (applies) => ({ applies, lines: [`${stage} · waiting: slot`] })
 
-  return { id: 'A2', state, held, status: { stage }, effects: { retry: effect(retry), note: effect(true) } }
+  return { id: 'A2', hold, status: { stage, kind, code }, effects: { retry: effect(retry), note: effect(true) } }
 }
+
+const DECISION = { kind: 'needs-you', code: 'decision' }
+const ERRORS = { kind: 'needs-you', code: 'errors' }
+const MERGED = { stage: 'merged', kind: null, code: null }
 
 test('prControls: hold or release, note or answer, and retry where the view says it applies', () => {
   const { view } = demo()
   const [a1, a2] = view.rows
 
-  assert.ok(a1.held)
+  assert.ok(a1.hold)
   assert.equal(a1.effects.retry.applies, true)
   assert.deepEqual(prControls(a1, false), ['release', 'note', 'retry'])
   assert.equal(a2.effects.retry.applies, false)
   assert.deepEqual(prControls(a2, false), ['hold', 'note'])
-  assert.deepEqual(prControls(controlRow({ state: 'blocked', held: { at: at(1) }, retry: true }), false), ['release', 'answer', 'retry'])
-  assert.deepEqual(prControls(controlRow({ state: 'blocked' }), false), ['hold', 'answer'])
-  assert.deepEqual(prControls(controlRow({ state: 'escalated', retry: true }), false), ['hold', 'note', 'retry'])
-  assert.deepEqual(prControls(controlRow({ stage: 'merged', state: 'merged' }), false), [])
+  assert.deepEqual(prControls(controlRow({ ...DECISION, hold: { at: at(1) }, retry: true }), false), ['release', 'answer', 'retry'])
+  assert.deepEqual(prControls(controlRow(DECISION), false), ['hold', 'answer'])
+  assert.deepEqual(prControls(controlRow({ kind: 'running', code: 'delegate' }), false), ['hold', 'answer'])
+  assert.deepEqual(prControls(controlRow({ stage: 'merge', kind: 'needs-you', code: 'gate-blocked' }), false), ['hold', 'answer'])
+  assert.deepEqual(prControls(controlRow({ ...ERRORS, retry: true }), false), ['hold', 'note', 'retry'])
+  assert.deepEqual(prControls(controlRow(MERGED), false), [])
   assert.deepEqual(prControls(a1, true), [])
 })
 
 test('panelControls: release for a held row, retry where it applies, nothing read-only or merged', () => {
-  assert.deepEqual(panelControls(controlRow({ state: 'blocked', retry: true }), false), ['retry'])
-  assert.deepEqual(panelControls(controlRow({ state: 'escalated', held: { at: at(1) }, retry: true }), false), ['release', 'retry'])
-  assert.deepEqual(panelControls(controlRow({ state: 'blocked' }), false), [])
-  assert.deepEqual(panelControls(controlRow({ stage: 'merge', state: 'verified', held: { at: at(1) } }), false), ['release'])
-  assert.deepEqual(panelControls(controlRow({ stage: 'merged', state: 'merged', held: { at: at(1) }, retry: true }), false), [])
-  assert.deepEqual(panelControls(controlRow({ state: 'blocked', retry: true }), true), [])
+  assert.deepEqual(panelControls(controlRow({ ...DECISION, retry: true }), false), ['retry'])
+  assert.deepEqual(panelControls(controlRow({ ...ERRORS, hold: { at: at(1) }, retry: true }), false), ['release', 'retry'])
+  assert.deepEqual(panelControls(controlRow(DECISION), false), [])
+  assert.deepEqual(panelControls(controlRow({ stage: 'merge', code: 'gate-pending', hold: { at: at(1) } }), false), ['release'])
+  assert.deepEqual(panelControls(controlRow({ ...MERGED, hold: { at: at(1) }, retry: true }), false), [])
+  assert.deepEqual(panelControls(controlRow({ ...DECISION, retry: true }), true), [])
 })
 
 test('rowOpen: a row that needs you opens by itself, an approval too, any other on a click, and a choice sticks', () => {

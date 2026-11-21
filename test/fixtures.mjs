@@ -5,9 +5,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parse, stringify } from 'yaml'
-import { freshPr } from '../lib/ledger.mjs'
+import { freshPr, versionTwoPr } from '../lib/ledger.mjs'
 import { runRecords } from '../lib/runs.mjs'
-import { fillFromState } from '../lib/transitions.ts'
+import { fromVersionTwo } from '../lib/transitions.ts'
 
 // A synthetic rollout directory, in a fresh temp dir unless `dir` names one.
 // Every part can be overridden, and null leaves the file out.
@@ -309,24 +309,28 @@ function sampleManifest(dir, policy) {
   }
 }
 
-// A legacy ledger is one a driver from before ledger versions wrote. Any
-// other records the runs of the events, as the driver that holds the lock
-// would, unless `runs` gives them, and fills each entry's stage and status
-// from its state. Fixtures name a state, the fill does the rest.
-function ledgerOf(options, prs) {
+// A legacy ledger is one a driver from before ledger versions wrote, with
+// every entry over the version 2 defaults. Any other records the runs of the
+// events, as the driver that holds the lock would, unless `runs` gives them.
+// An entry with a stage is kept over the version 3 defaults. Any other names
+// a version 2 state, and the migration from version 2 does the rest.
+function ledgerOf(options, entries) {
   if (options.legacy) {
-    return { prs, paused: false }
+    const prs = Object.entries(entries).map(([id, fields]) => [id, { ...versionTwoPr(), ...fields }])
+
+    return { prs: Object.fromEntries(prs), paused: false }
   }
 
   const events = (options.events ?? []).filter((event) => typeof event !== 'string')
   const runs = options.runs ?? runRecords(events, { driverRunning: true })
-  const filledAt = new Date().toISOString()
+  const migratedAt = new Date().toISOString()
+  const context = (id) => ({ id, briefWritten: false, runs, events, at: migratedAt })
+  const prs = Object.entries(entries).map(([id, fields]) => [
+    id,
+    fields.stage ? { ...freshPr(), ...fields } : fromVersionTwo({ ...versionTwoPr(), ...fields }, context(id)),
+  ])
 
-  for (const [id, entry] of Object.entries(prs)) {
-    fillFromState(entry, { id, briefWritten: false, runs, at: filledAt })
-  }
-
-  return { version: 2, prs, runs, hold: options.hold }
+  return { version: 3, prs: Object.fromEntries(prs), runs, hold: options.hold }
 }
 
 export function makeRollout(overrides = {}) {
@@ -354,8 +358,7 @@ export function makeRollout(overrides = {}) {
   writeFileSync(join(dir, 'manifest.yaml'), stringify({ ...sampleManifest(dir, options.policy), ...options.manifest }))
 
   if (options.prs) {
-    const prs = Object.fromEntries(Object.entries(options.prs).map(([id, state]) => [id, { ...freshPr(), ...state }]))
-    writeFileSync(join(dir, 'ledger.json'), JSON.stringify(ledgerOf(options, prs), null, 2))
+    writeFileSync(join(dir, 'ledger.json'), JSON.stringify(ledgerOf(options, options.prs), null, 2))
   }
 
   if (options.events) {

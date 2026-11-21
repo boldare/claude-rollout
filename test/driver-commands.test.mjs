@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { applyNote, commandEffect } from '../lib/driver/commands.ts'
 import { approveRefusal } from '../lib/judge.mjs'
 import { implementPrompt } from '../lib/prompts.mjs'
-import { DISPUTE, stateOf, toBlocked } from '../lib/transitions.ts'
+import { codeScanningQuestion, DISPUTE, toBlocked } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { at, sampleStatus, samplePrs, waitFor } from './fixtures.mjs'
 import { agentResult, driverFor, apply, modelDriver, SHA } from './driver-helpers.mjs'
@@ -19,20 +19,9 @@ const HOLD = { at: at(70), by: 'maintainer', reason: null }
 const OBSTACLE_NOTE = 'Keep the old flag?\nThe plan names both.\n\nEvidence: cli.mjs:12 still reads it.'
 const NOTE = 'Rename the field to partnerId.'
 
-// An entry as a driver of this version writes it: the state follows from
-// the stage, the status and the fix. `status` adds to the sample data.
+// An entry as a driver of this version writes it. `status` adds to the sample data.
 function staged(stage, kind, code, { status = {}, ...fields } = {}) {
-  const entry = {
-    hold: null,
-    held: null,
-    fix: null,
-    interruptedRole: null,
-    ...fields,
-    stage,
-    status: { ...sampleStatus(kind, code), ...status },
-  }
-
-  return { ...entry, state: stateOf(entry) }
+  return { hold: null, fix: null, ...fields, stage, status: { ...sampleStatus(kind, code), ...status } }
 }
 
 // A1 verified and on merge, with the status of `code`.
@@ -135,41 +124,47 @@ function assertMaintainerHold(hold) {
 test('hold and release with a lone id, as an older CLI or page sends them, park a PR and lift it', () => {
   const { manifest, driver } = driverFor({ A1: { state: 'needs_fix' } })
 
-  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', id: 'A1' }), [{ id: 'A1', kind: 'held', state: 'needs_fix', running: null }])
-  assertMaintainerHold(driver.ledger.prs.A1.held)
+  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', id: 'A1' }), [
+    { id: 'A1', kind: 'held', stage: 'implement', status: 'waiting', code: 'held', running: null },
+  ])
 
-  assert.deepEqual(apply(manifest, driver, { cmd: 'release', id: 'A1' }), [{ id: 'A1', kind: 'released', state: 'needs_fix' }])
-  assert.equal(driver.ledger.prs.A1.held, null)
+  assertMaintainerHold(driver.ledger.prs.A1.hold)
+
+  assert.deepEqual(apply(manifest, driver, { cmd: 'release', id: 'A1' }), [
+    { id: 'A1', kind: 'released', stage: 'implement', status: 'waiting', code: 'held' },
+  ])
+
+  assert.equal(driver.ledger.prs.A1.hold, null)
 })
 
 test('hold <ids>: a PR that is not held is held', () => {
   const { manifest, driver } = driverFor({ A1: { state: 'needs_fix' }, A3: { state: 'pending' } })
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'hold', ids: ['A1', 'A3'] }), [
-    { id: 'A1', kind: 'held', state: 'needs_fix', running: null },
-    { id: 'A3', kind: 'held', state: 'pending', running: null },
+    { id: 'A1', kind: 'held', stage: 'implement', status: 'waiting', code: 'held', running: null },
+    { id: 'A3', kind: 'held', stage: 'brief', status: 'waiting', code: 'held', running: null },
   ])
 
-  assertMaintainerHold(driver.ledger.prs.A1.held)
-  assertMaintainerHold(driver.ledger.prs.A3.held)
-  assert.equal(driver.ledger.prs.A2.held, null)
+  assertMaintainerHold(driver.ledger.prs.A1.hold)
+  assertMaintainerHold(driver.ledger.prs.A3.hold)
+  assert.equal(driver.ledger.prs.A2.hold, null)
   assert.equal(driver.ledger.data.hold, null)
 })
 
 test('hold <ids>: a PR already held or merged is refused', () => {
   const { manifest, driver } = driverFor({ A1: { state: 'pending' }, A2: { state: 'merged' }, A3: { state: 'pending' } })
   apply(manifest, driver, { cmd: 'hold', ids: ['A1'] })
-  const before = structuredClone(driver.ledger.prs.A1.held)
+  const before = structuredClone(driver.ledger.prs.A1.hold)
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'hold', ids: ['A1', 'A2', 'A3'] }), [
     { id: 'A1', kind: 'command-rejected', command: 'hold', reason: 'already held' },
     { id: 'A2', kind: 'command-rejected', command: 'hold', reason: 'already merged' },
-    { id: 'A3', kind: 'held', state: 'pending', running: null },
+    { id: 'A3', kind: 'held', stage: 'brief', status: 'waiting', code: 'held', running: null },
   ])
 
-  assert.deepEqual(driver.ledger.prs.A1.held, before)
-  assert.equal(driver.ledger.prs.A2.held, null)
-  assertMaintainerHold(driver.ledger.prs.A3.held)
+  assert.deepEqual(driver.ledger.prs.A1.hold, before)
+  assert.equal(driver.ledger.prs.A2.hold, null)
+  assertMaintainerHold(driver.ledger.prs.A3.hold)
 })
 
 test('hold --all: a rollout that is not held is held, with author and time', () => {
@@ -185,7 +180,7 @@ test('hold --all: a rollout that is not held is held, with author and time', () 
   assert.deepEqual(hold, { at: hold.at, by: 'maintainer', reason: null })
   assert.ok(Date.parse(hold.at) >= before - 1000, hold.at)
   assert.ok(
-    manifest.all.every((pr) => driver.ledger.prs[pr.id].held === null),
+    manifest.all.every((pr) => driver.ledger.prs[pr.id].hold === null),
     'no PR is held on its own',
   )
 })
@@ -216,12 +211,12 @@ test('release <ids>: a held PR is released', () => {
   apply(manifest, driver, { cmd: 'hold', ids: ['A1', 'A3'] })
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'release', ids: ['A1', 'A3'] }), [
-    { id: 'A1', kind: 'released', state: 'needs_fix' },
-    { id: 'A3', kind: 'released', state: 'pending' },
+    { id: 'A1', kind: 'released', stage: 'implement', status: 'waiting', code: 'held' },
+    { id: 'A3', kind: 'released', stage: 'brief', status: 'waiting', code: 'held' },
   ])
 
-  assert.equal(driver.ledger.prs.A1.held, null)
-  assert.equal(driver.ledger.prs.A3.held, null)
+  assert.equal(driver.ledger.prs.A1.hold, null)
+  assert.equal(driver.ledger.prs.A3.hold, null)
 })
 
 test('release <ids>: a PR that is not held is refused, and the reason names a held rollout', () => {
@@ -246,14 +241,14 @@ test('release --all: a held rollout is released, and the event names the PRs hel
 
   apply(manifest, driver, { cmd: 'hold', id: 'A1' })
   apply(manifest, driver, { cmd: 'hold', all: true })
-  const held = structuredClone(driver.ledger.prs.A1.held)
+  const held = structuredClone(driver.ledger.prs.A1.hold)
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'release', all: true }), [
     { id: '-', kind: 'released', scope: 'rollout', stillHeld: ['A1'] },
   ])
 
   assert.equal(driver.ledger.data.hold, null)
-  assert.deepEqual(driver.ledger.prs.A1.held, held, 'A1 stays held on its own')
+  assert.deepEqual(driver.ledger.prs.A1.hold, held, 'A1 stays held on its own')
 })
 
 test('release --all: a rollout that is not held is refused', () => {
@@ -265,13 +260,13 @@ test('release --all: a rollout that is not held is refused', () => {
   ])
 
   assert.equal(driver.ledger.data.hold, null)
-  assertMaintainerHold(driver.ledger.prs.A1.held)
+  assertMaintainerHold(driver.ledger.prs.A1.hold)
 })
 
 test('hold with ids applies each id on its own: a bad or failing one is rejected, a repeat applies once', () => {
   const { manifest, driver } = driverFor({ A1: { state: 'pending' }, A3: { state: 'pending' } })
 
-  Object.defineProperty(driver.ledger.prs.A3, 'state', {
+  Object.defineProperty(driver.ledger.prs.A3, 'stage', {
     get() {
       throw new Error('boom')
     },
@@ -285,19 +280,19 @@ test('hold with ids applies each id on its own: a bad or failing one is rejected
   ])
 
   assert.deepEqual(apply(manifest, driver), [
-    { id: 'A1', kind: 'held', state: 'pending', running: null },
+    { id: 'A1', kind: 'held', stage: 'brief', status: 'waiting', code: 'held', running: null },
     { id: '-', kind: 'command-rejected', command: 'hold', reason: 'unknown PR Z9' },
     { id: '-', kind: 'command-rejected', command: 'hold', reason: 'needs a PR id' },
     { id: '-', kind: 'command-rejected', command: 'hold', reason: 'unknown PR __proto__' },
     { id: 'A3', kind: 'command-rejected', command: 'hold', reason: 'boom' },
-    { id: 'A2', kind: 'held', state: 'pending', running: null },
+    { id: 'A2', kind: 'held', stage: 'brief', status: 'waiting', code: 'held', running: null },
     { id: '-', kind: 'command-rejected', command: 'hold', reason: 'needs PR ids or all' },
     { id: '-', kind: 'command-rejected', command: 'release', reason: 'needs PR ids or all' },
   ])
 
-  assertMaintainerHold(driver.ledger.prs.A1.held)
-  assertMaintainerHold(driver.ledger.prs.A2.held)
-  assert.equal(Object.prototype.held, undefined)
+  assertMaintainerHold(driver.ledger.prs.A1.hold)
+  assertMaintainerHold(driver.ledger.prs.A2.hold)
+  assert.equal(Object.prototype.hold, undefined)
   assert.equal(driver.ledger.data.hold, null)
 })
 
@@ -308,7 +303,7 @@ test('hold --all ignores any ids, and release --all never lifts a PR hold', () =
     { id: '-', kind: 'held', scope: 'rollout', by: 'maintainer', reason: null },
   ])
 
-  assert.equal(driver.ledger.prs.A1.held, null)
+  assert.equal(driver.ledger.prs.A1.hold, null)
 
   apply(manifest, driver, { cmd: 'hold', ids: ['A1'] })
 
@@ -316,7 +311,7 @@ test('hold --all ignores any ids, and release --all never lifts a PR hold', () =
     { id: '-', kind: 'released', scope: 'rollout', stillHeld: ['A1'] },
   ])
 
-  assertMaintainerHold(driver.ledger.prs.A1.held)
+  assertMaintainerHold(driver.ledger.prs.A1.hold)
 })
 
 test('pause and resume are unknown commands and change no hold', () => {
@@ -342,7 +337,9 @@ test('hold records the agent that keeps running', () => {
   const { manifest, driver } = driverFor({ A1: { state: 'fixing' } })
   driver.running.set('A1', 'fix')
 
-  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', id: 'A1' }), [{ id: 'A1', kind: 'held', state: 'fixing', running: 'fix' }])
+  assert.deepEqual(apply(manifest, driver, { cmd: 'hold', id: 'A1' }), [
+    { id: 'A1', kind: 'held', stage: 'implement', status: 'running', code: 'fix', running: 'fix' },
+  ])
 })
 
 test('hold and release reject what they cannot do, and the rest of the batch still applies', () => {
@@ -372,15 +369,15 @@ test('hold and release reject what they cannot do, and the rest of the batch sti
     ]),
   )
 
-  assert.ok(driver.ledger.prs.A1.held)
-  assert.equal(driver.ledger.prs.A2.held, null)
-  assert.equal(driver.ledger.prs.A3.held, null)
+  assert.ok(driver.ledger.prs.A1.hold)
+  assert.equal(driver.ledger.prs.A2.hold, null)
+  assert.equal(driver.ledger.prs.A3.hold, null)
 })
 
 test('each bad command is rejected with its reason, and the rest of the batch still applies', () => {
   const { manifest, driver } = driverFor({ A1: { state: 'pending' } })
 
-  Object.defineProperty(driver.ledger.prs.A3, 'state', {
+  Object.defineProperty(driver.ledger.prs.A3, 'stage', {
     get() {
       throw new Error('boom')
     },
@@ -424,12 +421,12 @@ test('each bad command is rejected with its reason, and the rest of the batch st
     { id: '-', kind: 'command-rejected', command: 'retry', reason: 'unknown PR __proto__' },
     { id: '-', kind: 'command-rejected', command: 'launch', reason: 'unknown command' },
     { id: 'A3', kind: 'command-rejected', command: 'hold', reason: 'boom' },
-    { id: 'A1', kind: 'held', state: 'pending', running: null },
+    { id: 'A1', kind: 'held', stage: 'brief', status: 'waiting', code: 'held', running: null },
   ])
 
-  assert.ok(driver.ledger.prs.A1.held)
+  assert.ok(driver.ledger.prs.A1.hold)
   assert.equal(driver.ledger.data.hold, null)
-  assert.equal(Object.prototype.held, undefined)
+  assert.equal(Object.prototype.hold, undefined)
   assert.equal(Object.prototype.state, undefined)
   assert.equal(Object.prototype.attempts, undefined)
 })
@@ -497,7 +494,7 @@ test('retry: merged', () => {
   const { events, entry } = retried({ state: 'merged', pr: 7, attempts: SPENT })
 
   assert.deepEqual(events, [{ id: 'A1', kind: 'command-rejected', command: 'retry', reason: 'already merged' }])
-  assert.equal(entry.state, 'merged')
+  assert.equal(entry.stage, 'merged')
   assert.deepEqual(entry.attempts, SPENT)
 })
 
@@ -530,7 +527,7 @@ test('retry: a running status whose run is gone resumes first, as advance would'
   const events = apply(manifest, driver, RETRY)
   const entry = driver.ledger.prs.A1
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'interrupted' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'implement', status: 'waiting', code: 'slot' }])
   assert.deepEqual(place(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fix.reason, 'no-report')
   assert.deepEqual(entry.attempts, RESET)
@@ -559,7 +556,7 @@ test('retry: brief · needs-you: attempts-exhausted', () => {
 
   const { events, entry } = retried(exhausted)
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'pending' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'brief', status: 'waiting', code: 'slot' }])
   assert.deepEqual(place(entry), ['brief', 'waiting', 'slot'])
   assert.deepEqual(entry.briefAnswers, briefAnswers)
   assert.deepEqual(entry.attempts, RESET)
@@ -569,7 +566,7 @@ test('retry: a PR on brief whose brief file exists takes the implement row of th
   const exhausted = staged('brief', 'needs-you', 'attempts-exhausted', { status: { role: 'brief', limit: 2 }, attempts: SPENT })
   const { events, entry } = retried(exhausted, { brief: true })
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'pending' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'implement', status: 'waiting', code: 'slot' }])
   assert.deepEqual(place(entry), ['implement', 'waiting', 'slot'])
   assert.equal(entry.fix, null)
 })
@@ -579,7 +576,7 @@ test('retry: implement · needs-you: obstacle', () => {
   const { events, entry, effect } = retried(staged('implement', 'needs-you', 'obstacle', owed))
   const note = `${OBSTACLE_NOTE}\n\n<findings>`
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'needs_fix' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'implement', status: 'waiting', code: 'slot' }])
   assert.deepEqual(place(entry), ['implement', 'waiting', 'slot'])
   assert.deepEqual(untimed(entry.fix), { reason: 'retry', note })
   assert.deepEqual([entry.fixReason, entry.fixNote], ['retry', note])
@@ -618,16 +615,15 @@ test('retry: implement · needs-you: attempts-exhausted', () => {
     fix: FINDINGS_FIX,
     fixReason: 'verifier findings',
     fixNote: '<findings>',
-    interruptedRole: 'fix',
     attempts: SPENT,
   }
 
   const { events, entry } = retried(staged('implement', 'needs-you', 'attempts-exhausted', owed))
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'needs_fix' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'implement', status: 'waiting', code: 'slot' }])
   assert.deepEqual(place(entry), ['implement', 'waiting', 'slot'])
   assert.deepEqual(entry.fix, FINDINGS_FIX)
-  assert.deepEqual([entry.fixReason, entry.fixNote, entry.interruptedRole], ['verifier findings', '<findings>', 'fix'])
+  assert.deepEqual([entry.fixReason, entry.fixNote, entry.implementCutOff], ['verifier findings', '<findings>', false])
   assert.deepEqual(entry.attempts, RESET)
 })
 
@@ -635,9 +631,8 @@ test('retry: verify · needs-you: attempts-exhausted', () => {
   const claim = { status: { role: 'verify', limit: 3 }, pr: 11, claimedSha: SHA, claimPatchId: 'patch-a1', attempts: SPENT }
   const { events, entry } = retried(staged('verify', 'needs-you', 'attempts-exhausted', claim))
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'interrupted' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'verify', status: 'waiting', code: 'slot' }])
   assert.deepEqual(place(entry), ['verify', 'waiting', 'slot'])
-  assert.equal(entry.interruptedRole, 'verify')
   assert.equal(entry.claimedSha, SHA)
   assert.deepEqual(entry.attempts, RESET)
 })
@@ -645,33 +640,33 @@ test('retry: verify · needs-you: attempts-exhausted', () => {
 test('retry: any needs-you: errors', () => {
   const parked = { status: 'READY', pr: 12, headSha: SHA, summary: 'Done.' }
   const cases = [
-    [staged('brief', 'needs-you', 'errors'), ['brief', 'waiting', 'slot'], 'pending'],
-    [staged('implement', 'needs-you', 'errors', { sessionId: 'session-1' }), ['implement', 'waiting', 'slot'], 'interrupted'],
-    [staged('implement', 'needs-you', 'errors', { pr: 11, fix: FINDINGS_FIX }), ['implement', 'waiting', 'slot'], 'needs_fix'],
-    [staged('verify', 'needs-you', 'errors', { pr: 11, claimedSha: SHA }), ['verify', 'waiting', 'slot'], 'interrupted'],
-    [staged('pre-verify', 'needs-you', 'errors', { pr: 11, claimedSha: SHA }), ['pre-verify', 'waiting', 'ci'], 'ready_claimed'],
+    [staged('brief', 'needs-you', 'errors'), ['brief', 'waiting', 'slot']],
+    [staged('implement', 'needs-you', 'errors', { sessionId: 'session-1' }), ['implement', 'waiting', 'slot']],
+    [staged('implement', 'needs-you', 'errors', { pr: 11, fix: FINDINGS_FIX }), ['implement', 'waiting', 'slot']],
+    [staged('verify', 'needs-you', 'errors', { pr: 11, claimedSha: SHA }), ['verify', 'waiting', 'slot']],
+    [staged('pre-verify', 'needs-you', 'errors', { pr: 11, claimedSha: SHA }), ['pre-verify', 'waiting', 'ci']],
     [
-      staged('pre-verify', 'needs-you', 'errors', { sessionId: 'session-1', interruptedRole: 'report', ready: parked }),
+      staged('pre-verify', 'needs-you', 'errors', { sessionId: 'session-1', reportUnchecked: true, ready: parked }),
       ['pre-verify', 'waiting', 'github'],
-      'interrupted',
     ],
-    [onMerge('needs-you', 'errors'), ['merge', 'waiting', 'gate-pending'], 'verified'],
+    [onMerge('needs-you', 'errors'), ['merge', 'waiting', 'gate-pending']],
   ]
 
-  for (const [fixture, expected, state] of cases) {
+  for (const [fixture, expected] of cases) {
     const { events, entry } = retried({ ...fixture, tickErrors: 5, attempts: SPENT })
+    const [stage, status, code] = expected
 
-    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state }], expected.join(' '))
+    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage, status, code }], expected.join(' '))
     assert.deepEqual(place(entry), expected)
     assert.equal(entry.tickErrors, 0)
   }
 })
 
 test('retry: an implement PR with work and no fix owed resumes it as after a cut-off fix run', () => {
-  const { entry } = retried(staged('implement', 'needs-you', 'errors', { pr: 11, sessionId: 'session-1', interruptedRole: 'verify' }))
+  const { entry } = retried(staged('implement', 'needs-you', 'errors', { pr: 11, sessionId: 'session-1' }))
 
   assert.equal(entry.fix.reason, 'no-report')
-  assert.equal(entry.interruptedRole, 'fix')
+  assert.equal(entry.implementCutOff, false)
 })
 
 // The driver reads these on GitHub every tick, so retry only resets the budgets.
@@ -690,7 +685,7 @@ test('retry: closed, gate-blocked, code-scanning-alerts', () => {
     const { events, entry, before, effect } = retried({ ...fixture, attempts: SPENT, tickErrors: 3 })
     const where = place(before).join(' ')
 
-    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'blocked' }], where)
+    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: before.stage, status: 'needs-you', code: before.status.code }], where)
     assert.deepEqual([entry.stage, entry.status, entry.fix], [before.stage, before.status, before.fix], where)
     assert.deepEqual([entry.attempts, entry.tickErrors], [RESET, 0], where)
     assert.deepEqual(effect.drops, [], where)
@@ -701,7 +696,7 @@ test('retry: a PR closed with a note kept meanwhile stays closed, its note and v
   const approved = { sha: SHA, patchId: 'patch-a1', at: at(81), channel: 'inbox' }
   const { events, entry, before } = retried(onMerge('needs-you', 'closed', { approved, pendingNote: NOTE }))
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'blocked' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'merge', status: 'needs-you', code: 'closed' }])
   assert.deepEqual(entry.status, before.status)
   assert.deepEqual([entry.verified, entry.approved, entry.pendingNote], [VERIFIED, approved, NOTE])
 })
@@ -710,7 +705,7 @@ test('retry: merge · needs-you: merge-refused', () => {
   const refused = { action: 'wait', code: 'merge-refused', reasons: ['GitHub refused the merge (ruleset)'], sha: SHA, at: at(85) }
   const { events, entry, effect } = retried(onMerge('needs-you', 'merge-refused', { gate: refused, attempts: SPENT }))
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'verified' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'merge', status: 'waiting', code: 'gate-pending' }])
   assert.deepEqual(place(entry), ['merge', 'waiting', 'gate-pending'])
   assert.deepEqual([entry.gate, entry.verified, entry.attempts], [null, VERIFIED, RESET])
   assert.deepEqual(effect.drops, [])
@@ -720,7 +715,7 @@ test('retry: approve, review, changes-requested, merge-by-hand, github-blocked',
   for (const code of ['approve', 'review', 'changes-requested', 'merge-by-hand', 'github-blocked']) {
     const { events, entry, before } = retried(onMerge('needs-you', code, { attempts: SPENT }))
 
-    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'verified' }], code)
+    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'merge', status: 'needs-you', code }], code)
     assert.deepEqual(entry.status, before.status, code)
     assert.deepEqual(entry.attempts, RESET, code)
   }
@@ -731,7 +726,7 @@ test('retry: implement · waiting: backoff, and backoff on brief and verify', ()
   const cases = [
     staged('brief', 'waiting', 'backoff'),
     staged('implement', 'waiting', 'backoff', { pr: 11, fix: { reason: 'no-report', note: '', since: at(60) } }),
-    staged('verify', 'waiting', 'backoff', { pr: 11, claimedSha: SHA, interruptedRole: 'verify' }),
+    staged('verify', 'waiting', 'backoff', { pr: 11, claimedSha: SHA }),
   ]
 
   for (const fixture of cases) {
@@ -746,7 +741,7 @@ test('retry: implement · waiting, with or without a fix owed', () => {
   const owed = { pr: 11, claimedSha: SHA, fix: FINDINGS_FIX, fixReason: 'verifier findings', fixNote: '<findings>', attempts: SPENT }
   const { events, entry, before } = retried(staged('implement', 'waiting', 'slot', owed))
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'needs_fix' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'implement', status: 'waiting', code: 'slot' }])
   assert.deepEqual([entry.stage, entry.status], [before.stage, before.status])
   assert.deepEqual(entry.fix, FINDINGS_FIX)
   assert.deepEqual([entry.fixReason, entry.fixNote, entry.verified], ['verifier findings', '<findings>', null])
@@ -754,7 +749,7 @@ test('retry: implement · waiting, with or without a fix owed', () => {
 
   const fresh = retried(staged('implement', 'waiting', 'slot'))
 
-  assert.deepEqual(fresh.events, [{ id: 'A1', kind: 'retry', state: 'pending' }])
+  assert.deepEqual(fresh.events, [{ id: 'A1', kind: 'retry', stage: 'implement', status: 'waiting', code: 'slot' }])
   assert.deepEqual(fresh.entry.status, fresh.before.status)
   assert.equal(fresh.entry.fix, null)
 })
@@ -762,7 +757,7 @@ test('retry: implement · waiting, with or without a fix owed', () => {
 test('retry: pre-verify · waiting', () => {
   const { events, entry, before } = retried(staged('pre-verify', 'waiting', 'ci', { pr: 11, claimedSha: SHA }))
 
-  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: 'ready_claimed' }])
+  assert.deepEqual(events, [{ id: 'A1', kind: 'retry', stage: 'pre-verify', status: 'waiting', code: 'ci' }])
   assert.deepEqual(entry.status, before.status)
 })
 
@@ -774,17 +769,22 @@ test('retry: any other waiting status', () => {
   ]) {
     const { events, entry, before } = retried(fixture)
 
-    assert.deepEqual(events, [{ id: 'A1', kind: 'retry', state: fixture.state }], fixture.status.code)
+    assert.deepEqual(
+      events,
+      [{ id: 'A1', kind: 'retry', stage: fixture.stage, status: 'waiting', code: fixture.status.code }],
+      fixture.status.code,
+    )
+
     assert.deepEqual(entry.status, before.status, fixture.status.code)
   }
 })
 
 test("retry: a waiting status a row writes under a hold is held, the rollout's scope over the PR's own", () => {
-  const ownHold = retried(staged('brief', 'needs-you', 'errors', { hold: HOLD, held: HOLD }))
+  const ownHold = retried(staged('brief', 'needs-you', 'errors', { hold: HOLD }))
 
   assert.deepEqual(ownHold.entry.status, { kind: 'waiting', code: 'held', scope: 'pr', since: ownHold.entry.status.since })
 
-  const both = retried(staged('brief', 'needs-you', 'errors', { hold: HOLD, held: HOLD }), { rolloutHold: HOLD })
+  const both = retried(staged('brief', 'needs-you', 'errors', { hold: HOLD }), { rolloutHold: HOLD })
 
   assert.equal(both.entry.status.scope, 'rollout')
   assert.equal(both.effect.status.scope, 'rollout')
@@ -806,7 +806,9 @@ test('retry resets the attempts, the refunds, the failure streak, the errors and
     },
   })
 
-  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [{ id: 'A1', kind: 'retry', state: 'interrupted' }])
+  assert.deepEqual(apply(manifest, driver, { cmd: 'retry', id: 'A1' }), [
+    { id: 'A1', kind: 'retry', stage: 'implement', status: 'waiting', code: 'slot' },
+  ])
 
   const entry = driver.ledger.prs.A1
 
@@ -815,7 +817,7 @@ test('retry resets the attempts, the refunds, the failure streak, the errors and
   assert.equal(entry.failStreak, 0)
   assert.equal(entry.tickErrors, 0)
   assert.equal(entry.retryAfter, null)
-  assert.equal(entry.state, 'interrupted')
+  assert.equal(entry.fix.reason, 'no-report')
   assert.deepEqual(entry.briefAnswers, briefAnswers)
 })
 
@@ -831,7 +833,7 @@ test('note on needs_fix is queued for the fix run and keeps the reason it waits 
   })
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'Keep the old flag.' }), [
-    { id: 'A1', kind: 'note-queued', state: 'needs_fix' },
+    { id: 'A1', kind: 'note-queued', stage: 'implement', status: 'waiting', code: 'slot' },
   ])
 
   const entry = driver.ledger.prs.A1
@@ -840,7 +842,7 @@ test('note on needs_fix is queued for the fix run and keeps the reason it waits 
   assert.equal(entry.fixNote, '<findings>')
   assert.equal(entry.pendingNote, 'Keep the old flag.')
   assert.equal(entry.attempts.fix, 3)
-  assert.equal(entry.state, 'needs_fix')
+  assert.equal(entry.fix.reason, 'verifier-findings')
 
   apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'And document it.' })
 
@@ -859,7 +861,7 @@ test('note on a PR with no brief and no GitHub PR answers the brief writer', () 
 
   const entry = driver.ledger.prs.A1
 
-  assert.equal(entry.state, 'pending')
+  assert.deepEqual(place(entry), ['brief', 'waiting', 'slot'])
   assert.equal(entry.attempts.brief, 1)
   assert.deepEqual(entry.briefAnswers, [{ question: null, answer: 'Write it from the second plan.' }])
   assert.equal(entry.fixReason, undefined)
@@ -886,7 +888,7 @@ test('answers to brief questions give the attempt back and keep every round unti
   const entry = driver.ledger.prs.A1
 
   assert.deepEqual(apply(manifest, driver, { cmd: 'note', id: 'A1', text: 'A1 answer' }), [{ id: 'A1', kind: 'brief-answered' }])
-  assert.equal(entry.state, 'pending')
+  assert.deepEqual(place(entry), ['brief', 'waiting', 'slot'])
   assert.equal(entry.attempts.brief, 0)
   assert.equal(entry.pendingNote, null)
 
@@ -933,8 +935,8 @@ function noted(entry, { brief = false, running = null } = {}) {
   return { manifest, driver, ...applied(manifest, driver, NOTE_COMMAND) }
 }
 
-function assertQueued({ entry, effect, events }, state) {
-  assert.deepEqual(events, [{ id: 'A1', kind: 'note-queued', state }])
+function assertQueued({ entry, effect, events }, [stage, status, code]) {
+  assert.deepEqual(events, [{ id: 'A1', kind: 'note-queued', stage, status, code }])
   assert.equal(entry.pendingNote, NOTE)
   assert.equal(effect.queued, true)
   assert.deepEqual(
@@ -959,8 +961,7 @@ test('note: merged', () => {
 
 test('note: brief · needs-you: brief-questions', () => {
   const question = 'Keep the old flag?\nThe plan names both.'
-  const blocked = { kind: 'brief-questions', question, evidence: '', run: 'A1-01-brief-write' }
-  const result = noted(staged('brief', 'needs-you', 'brief-questions', { blocked, attempts: { ...RESET, brief: 1 } }))
+  const result = noted(staged('brief', 'needs-you', 'brief-questions', { attempts: { ...RESET, brief: 1 } }))
   const { events, entry } = result
 
   assert.deepEqual(events, [{ id: 'A1', kind: 'brief-answered' }])
@@ -975,15 +976,26 @@ test('note: brief · needs-you: brief-questions', () => {
 })
 
 test('note: any needs-you: closed', () => {
-  const blocked = { kind: 'closed', question: 'PR #11 was closed outside the driver.', evidence: '', run: null }
-
-  for (const fixture of [staged('implement', 'needs-you', 'closed', { pr: 11, blocked }), onMerge('needs-you', 'closed', { blocked })]) {
+  for (const fixture of [staged('implement', 'needs-you', 'closed', { pr: 11 }), onMerge('needs-you', 'closed')]) {
     const result = noted(fixture)
 
-    assertQueued(result, 'blocked')
+    assertQueued(result, [fixture.stage, 'needs-you', 'closed'])
     assert.deepEqual(result.entry.status, result.before.status)
     assert.deepEqual(result.entry.verified, fixture.verified ?? null)
   }
+})
+
+test('note: on a block of the gate or for code scanning, the record names what the block asks', () => {
+  const gate = noted(
+    onMerge('needs-you', 'gate-blocked', { status: { gate: 'draft', reasons: ['the PR is a draft', 'a label is missing'] } }),
+  )
+
+  const scanning = noted(staged('pre-verify', 'needs-you', 'code-scanning-alerts', { pr: 11, claimedSha: SHA }))
+  const records = (result) => result.entry.noteHistory.map(({ kind, question }) => [kind, question])
+
+  assert.deepEqual(records(gate), [['gate', 'the PR is a draft; a label is missing']])
+  assert.deepEqual(records(scanning), [['code-scanning', codeScanningQuestion(11)]])
+  assert.match(codeScanningQuestion(11), /^PR #11 has new code scanning alerts\. /)
 })
 
 test('note: on needs-you: closed, the record answers the status the close replaced', () => {
@@ -1048,16 +1060,14 @@ test('applyNote: a review comment on GitHub asks for the maintainer review where
 
 test('applyNote: a fix owed keeps its reason, a dispute gets the findings, and record: false adds no record', () => {
   const owed = { pr: 11, fix: FINDINGS_FIX, fixReason: 'verifier findings', fixNote: '<findings>' }
-  const disputed = { pr: 11, claimedSha: SHA, fixReason: 'verifier findings', fixNote: '<findings>', escalation: DISPUTE }
+  const disputed = { pr: 11, claimedSha: SHA, fixReason: 'verifier findings', fixNote: '<findings>' }
+  const queued = { id: 'A1', kind: 'note-queued', stage: 'implement', status: 'waiting', code: 'slot' }
   const cases = [
-    [staged('implement', 'waiting', 'slot', owed), 'verifier-findings', [{ id: 'A1', kind: 'note-queued', state: 'needs_fix' }]],
+    [staged('implement', 'waiting', 'slot', owed), 'verifier-findings', [queued]],
     [
       staged('verify', 'needs-you', 'dispute', disputed),
       'verifier-findings',
-      [
-        { id: 'A1', kind: 'needs-fix', reason: 'verifier findings' },
-        { id: 'A1', kind: 'note-queued', state: 'needs_fix' },
-      ],
+      [{ id: 'A1', kind: 'needs-fix', reason: 'verifier findings' }, queued],
     ],
   ]
 
@@ -1076,17 +1086,17 @@ test('applyNote: a fix owed keeps its reason, a dispute gets the findings, and r
 
 test("note: any stage while atWork is 'agent' (a brief, implement, fix or verify run, or the pre-verify commands)", () => {
   const cases = [
-    [staged('brief', 'running', 'brief-write'), 'brief', 'briefing'],
-    [staged('implement', 'running', 'implement', { sessionId: 'session-1' }), 'implement', 'implementing'],
-    [staged('implement', 'running', 'fix', { pr: 11, fix: FINDINGS_FIX }), 'fix', 'fixing'],
-    [staged('pre-verify', 'running', 'commands', { pr: 11, claimedSha: SHA }), 'gate', 'ready_claimed'],
-    [staged('verify', 'running', 'verify', { pr: 11, claimedSha: SHA }), 'verify', 'verifying'],
+    [staged('brief', 'running', 'brief-write'), 'brief'],
+    [staged('implement', 'running', 'implement', { sessionId: 'session-1' }), 'implement'],
+    [staged('implement', 'running', 'fix', { pr: 11, fix: FINDINGS_FIX }), 'fix'],
+    [staged('pre-verify', 'running', 'commands', { pr: 11, claimedSha: SHA }), 'gate'],
+    [staged('verify', 'running', 'verify', { pr: 11, claimedSha: SHA }), 'verify'],
   ]
 
-  for (const [fixture, role, state] of cases) {
+  for (const [fixture, role] of cases) {
     const result = noted(fixture, { running: role })
 
-    assertQueued(result, state)
+    assertQueued(result, place(fixture))
     assert.deepEqual(result.entry.status, result.before.status, role)
   }
 })
@@ -1094,7 +1104,7 @@ test("note: any stage while atWork is 'agent' (a brief, implement, fix or verify
 test('note: brief · waiting', () => {
   const result = noted(staged('brief', 'waiting', 'slot'))
 
-  assertQueued(result, 'pending')
+  assertQueued(result, ['brief', 'waiting', 'slot'])
   assert.deepEqual(place(result.entry), ['brief', 'waiting', 'slot'])
 })
 
@@ -1117,7 +1127,7 @@ test('note: brief · needs-you: attempts-exhausted or errors', () => {
 test('note: implement · waiting, never ran (no fix owed)', () => {
   const result = noted(staged('implement', 'waiting', 'slot'), { brief: true })
 
-  assertQueued(result, 'pending')
+  assertQueued(result, ['implement', 'waiting', 'slot'])
   assert.equal(result.entry.fix, null)
   assert.ok(implementPrompt(result.manifest, result.manifest.all[0], result.entry).includes(NOTE))
 })
@@ -1126,7 +1136,7 @@ test('note: implement · waiting, a fix owed', () => {
   const owed = { pr: 11, fix: FINDINGS_FIX, fixReason: 'verifier findings', fixNote: '<findings>', attempts: SPENT }
   const result = noted(staged('implement', 'waiting', 'slot', owed))
 
-  assertQueued(result, 'needs_fix')
+  assertQueued(result, ['implement', 'waiting', 'slot'])
   assert.deepEqual(result.entry.fix, FINDINGS_FIX)
   assert.deepEqual([result.entry.fixReason, result.entry.fixNote], ['verifier findings', '<findings>'])
   assert.equal(result.entry.attempts.fix, 3)
@@ -1145,7 +1155,7 @@ test('note: implement · needs-you: attempts-exhausted or errors', () => {
   const owed = { pr: 11, fix: FINDINGS_FIX, fixReason: 'verifier findings', fixNote: '<findings>', attempts: SPENT }
   const exhausted = noted(staged('implement', 'needs-you', 'attempts-exhausted', { ...owed, status: { role: 'fix', limit: 4 } }))
 
-  assertQueued(exhausted, 'needs_fix')
+  assertQueued(exhausted, ['implement', 'waiting', 'slot'])
   assert.deepEqual(place(exhausted.entry), ['implement', 'waiting', 'slot'])
   assert.deepEqual(exhausted.entry.fix, FINDINGS_FIX)
   assert.equal(exhausted.entry.attempts.fix, 3)
@@ -1197,7 +1207,6 @@ test('note: verify · needs-you: dispute', () => {
     claimedSha: SHA,
     fixReason: 'verifier findings',
     fixNote: '<findings>',
-    escalation: DISPUTE,
     lastError,
     attempts: SPENT,
   }
@@ -1206,7 +1215,7 @@ test('note: verify · needs-you: dispute', () => {
 
   assert.deepEqual(events, [
     { id: 'A1', kind: 'needs-fix', reason: 'verifier findings' },
-    { id: 'A1', kind: 'note-queued', state: 'needs_fix' },
+    { id: 'A1', kind: 'note-queued', stage: 'implement', status: 'waiting', code: 'slot' },
   ])
 
   assert.deepEqual(place(entry), ['implement', 'waiting', 'slot'])
@@ -1227,7 +1236,7 @@ test('note: verify · needs-you: attempts-exhausted or errors, or verify · wait
   assert.equal(exhausted.entry.attempts.verify, 2)
 
   assertNoteFix(noted(staged('verify', 'needs-you', 'errors', claimed)), 'answer from the maintainer')
-  assertNoteFix(noted(staged('verify', 'waiting', 'slot', { ...claimed, interruptedRole: 'verify' })), 'answer from the maintainer')
+  assertNoteFix(noted(staged('verify', 'waiting', 'slot', claimed)), 'answer from the maintainer')
 })
 
 test('note: merge, any status', () => {
@@ -1267,7 +1276,7 @@ test('onDone: a PR merged during the run stays merged and is cleaned up after th
       { sha: 'abc1234', run: 'A1-03-verify' },
     )
 
-    assert.equal(driver.ledger.prs.A1.state, 'merged')
+    assert.equal(driver.ledger.prs.A1.stage, 'merged')
     assert.equal(driver.ledger.prs.A1.costUsd, 3.25)
     assert.deepEqual(cleaned, ['A1'])
     assert.deepEqual(
@@ -1415,7 +1424,7 @@ test('approve: Already approved: entry.approved names the verified patch and its
 })
 
 test('approve: Under a hold of the PR or the rollout', () => {
-  const own = approvedWith(onMerge('waiting', 'held', { hold: HOLD, held: HOLD, status: { scope: 'pr' } }))
+  const own = approvedWith(onMerge('waiting', 'held', { hold: HOLD, status: { scope: 'pr' } }))
 
   assert.deepEqual(
     own.events.map((event) => event.kind),
@@ -1527,14 +1536,14 @@ test('a GitHub approval is noticed once, and the merge delay counts from when th
     }
   }
 
-  entry.held = { at: minutesAgo(1) }
+  entry.hold = { at: minutesAgo(1), by: 'maintainer', reason: null }
 
   const held = await pass()
   assert.equal(entry.approved, null)
   assert.deepEqual(held.sent, [])
   assert.ok(!held.kinds.includes('approved'), held.kinds)
 
-  entry.held = null
+  entry.hold = null
 
   const first = await pass()
   assert.deepEqual({ ...entry.approved, at: null }, { patchId, sha, at: null, by: 'maint', channel: 'github' })

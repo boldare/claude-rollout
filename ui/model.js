@@ -1,6 +1,8 @@
-// STAGES mirrors lib/state.ts and ERROR_KINDS lib/kinds.mjs, which the browser cannot import.
-// test/kinds.test.mjs keeps them equal.
+// STAGES mirrors lib/state.ts, BLOCK_CODES lib/transitions.ts and ERROR_KINDS
+// lib/kinds.mjs, which the browser cannot import. test/kinds.test.mjs keeps them equal.
 export const STAGES = ['brief', 'implement', 'pre-verify', 'verify', 'merge', 'merged']
+
+export const BLOCK_CODES = ['brief-questions', 'decision', 'obstacle', 'closed', 'code-scanning-alerts', 'gate-blocked']
 
 export const ERROR_KINDS = [
   'tick-error',
