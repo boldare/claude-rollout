@@ -3,7 +3,8 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    # A rollout can take an integration branch as its base, and the gate reads the check runs of the base's tip.
+    branches: [main, 'integration/**']
 
 permissions:
   contents: read
