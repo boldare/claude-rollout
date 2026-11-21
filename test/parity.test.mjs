@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
 import { rolloutSnapshot } from '../lib/rollouts.mjs'
 import { STAGE_STATUSES } from '../lib/state.ts'
-import { stateOf } from '../lib/transitions.ts'
 import { renderBoard } from '../ui/board.js'
 import { dialogFor, prControls } from '../ui/commands.js'
 import { renderHeader } from '../ui/header.js'
@@ -37,11 +36,9 @@ function pairs() {
   return found
 }
 
-// As a driver of this version writes it, so the view's fill keeps it as it is.
+// As a driver of this version writes it, so the view keeps it as it is.
 function written(entry) {
-  const full = { hold: null, held: null, ...entry }
-
-  return { ...full, state: stateOf(full) }
+  return { hold: null, ...entry }
 }
 
 function manifestPr(id) {
@@ -59,7 +56,7 @@ function manifestPr(id) {
 function pairEntry({ stage, kind, code }, index) {
   const hold = code === 'held' ? HOLD : null
 
-  return written({ stage, status: sampleStatus(kind, code), pr: stage === 'brief' ? null : 100 + index, hold, held: hold })
+  return written({ stage, status: sampleStatus(kind, code), pr: stage === 'brief' ? null : 100 + index, hold })
 }
 
 function rolloutWith(prs, options = {}) {
@@ -74,7 +71,7 @@ function everyStatusRollout() {
   })
 
   prs.M1 = written({ stage: 'merged', status: null, pr: 200, mergeSha: 'feedface00' })
-  prs.H1 = written({ stage: 'implement', status: sampleStatus('running', 'implement'), pr: 201, hold: HOLD, held: HOLD })
+  prs.H1 = written({ stage: 'implement', status: sampleStatus('running', 'implement'), pr: 201, hold: HOLD })
 
   return rolloutWith(prs)
 }

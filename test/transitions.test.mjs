@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { freshPr } from '../lib/ledger.mjs'
+import { versionTwoPr } from '../lib/ledger.mjs'
 import {
   answerBrief,
   approveInbox,
@@ -16,9 +16,9 @@ import {
   escalatedOverDispute,
   escalateErrors,
   escalateExhausted,
-  fillFromState,
   fixReasonCode,
   freshAttempt,
+  fromVersionTwo,
   gateVerdict,
   holdPr,
   joinFix,
@@ -58,9 +58,9 @@ const EARLIER = '2001-02-03T03:00:00.000Z'
 const OPENED = '2001-02-03T02:00:00.000Z'
 const LATER = '2001-02-03T05:00:00.000Z'
 
-// An entry as openLedger leaves it: the version 2 fields, filled at OPENED.
+// An entry as the migration leaves it: the version 2 fields, migrated at OPENED.
 function entryWith(fields = {}, { briefWritten: written = false, runs = {} } = {}) {
-  return fillFromState({ ...freshPr(), ...fields }, { id: 'P1', briefWritten: written, runs, at: OPENED })
+  return fromVersionTwo({ ...versionTwoPr(), ...fields }, { id: 'P1', briefWritten: written, runs, events: [], at: OPENED })
 }
 
 function verification(sha = SHA) {
@@ -104,7 +104,6 @@ test('transitions: toFix sends the PR to a fix and drops the verification', () =
 
   assert.deepEqual(entry, {
     ...before,
-    state: 'needs_fix',
     fixReason: 'merge gate',
     fixNote: 'CI is red',
     verified: null,
@@ -120,7 +119,7 @@ test('transitions: toFix in back-off waits it out', () => {
   toFix(entry, 'CI is red', 'fix it', { code: 'ci-red', at: AT })
 
   assert.deepEqual(entry.status, { kind: 'waiting', code: 'backoff', until: LATER, failures: 2, since: AT })
-  assert.equal(entry.state, 'needs_fix')
+  assert.equal(stateOf(entry), 'needs_fix')
 })
 
 test('transitions: joinFix adds a note under the note of the fix', () => {
@@ -161,8 +160,6 @@ test('transitions: answerBrief records the answer and sends the PR back to its b
       { question: 'Which file?', answer: 'lib/a.mjs' },
     ],
     attempts: { ...before.attempts, brief: 1 },
-    state: 'pending',
-    blocked: null,
     stage: 'brief',
     status: slot(),
   })
@@ -177,8 +174,6 @@ test('transitions: answerBrief keeps the brief attempts at 0', () => {
   assert.deepEqual(entry, {
     ...before,
     briefAnswers: [{ question: null, answer: 'write it from the plan' }],
-    state: 'pending',
-    blocked: null,
     stage: 'brief',
     status: slot(),
   })
@@ -190,7 +185,7 @@ test('transitions: toPending sends the PR back to pending', () => {
 
   toPending(entry, AT)
 
-  assert.deepEqual(entry, { ...before, state: 'pending', stage: 'brief', status: slot() })
+  assert.deepEqual(entry, { ...before, stage: 'brief', status: slot() })
 })
 
 test('transitions: briefWaits gives the brief attempt back and remembers the heads', () => {
@@ -204,7 +199,6 @@ test('transitions: briefWaits gives the brief attempt back and remembers the hea
     ...before,
     attempts: { ...before.attempts, brief: 0 },
     previewConflict: `P0@${SHA}`,
-    state: 'pending',
     stage: 'brief',
     status: { kind: 'waiting', code: 'dependencies-merge', heads, since: AT },
   })
@@ -219,7 +213,6 @@ test('transitions: briefWaits keeps the brief attempts at 0', () => {
   assert.deepEqual(entry, {
     ...before,
     previewConflict: `P0@${SHA}`,
-    state: 'pending',
     stage: 'brief',
     status: { kind: 'waiting', code: 'dependencies-merge', heads: [], since: AT },
   })
@@ -246,28 +239,27 @@ test('transitions: briefWritten records the brief and sends the PR back to pendi
     briefAt: AT,
     briefAnswers: [],
     failStreak: 0,
-    state: 'pending',
     stage: 'implement',
     status: slot(),
     fix: null,
   })
 })
 
-test('transitions: runStarted puts the PR in the run state of its role', () => {
+test('transitions: runStarted puts the PR in the running status of its role', () => {
   const started = {
-    brief: ['briefing', 'brief', { kind: 'running', code: 'brief-write', run: '', since: AT }],
-    implement: ['implementing', 'implement', { kind: 'running', code: 'implement', run: '', since: AT }],
-    fix: ['fixing', 'implement', { kind: 'running', code: 'fix', reason: 'no-report', run: '', since: AT }],
-    verify: ['verifying', 'verify', { kind: 'running', code: 'verify', sha: SHA, run: '', since: AT }],
+    brief: ['brief', { kind: 'running', code: 'brief-write', run: '', since: AT }],
+    implement: ['implement', { kind: 'running', code: 'implement', run: '', since: AT }],
+    fix: ['implement', { kind: 'running', code: 'fix', reason: 'no-report', run: '', since: AT }],
+    verify: ['verify', { kind: 'running', code: 'verify', sha: SHA, run: '', since: AT }],
   }
 
-  for (const [role, [state, stage, status]] of Object.entries(started)) {
+  for (const [role, [stage, status]] of Object.entries(started)) {
     const entry = entryWith({ state: 'pending' })
     const before = structuredClone(entry)
 
     runStarted(entry, role, { at: AT, sha: SHA })
 
-    assert.deepEqual(entry, { ...before, state, stage, status, fix: null }, role)
+    assert.deepEqual(entry, { ...before, stage, status, fix: null }, role)
   }
 })
 
@@ -279,7 +271,7 @@ test('transitions: runStarted for a fix runs under the reason of the fix and kee
 
   assert.deepEqual(entry.status, { kind: 'running', code: 'fix', reason: 'ci-red', run: '', since: AT })
   assert.deepEqual(entry.fix, fix)
-  assert.equal(entry.state, 'fixing')
+  assert.equal(entry.stage, 'implement')
 })
 
 test('transitions: runName names the run of a running status and keeps its time', () => {
@@ -304,7 +296,7 @@ test('transitions: runFailed interrupts the PR with the role of the run', () => 
 
   runFailed(entry, 'fix', AT)
 
-  assert.deepEqual(entry, { ...before, state: 'interrupted', interruptedRole: 'fix', status: slot(), fix: noReport() })
+  assert.deepEqual(entry, { ...before, status: slot(), fix: noReport() })
 })
 
 test("transitions: runFailed keeps a fix run's fix, its reason and its note, and the PR owes that fix again", () => {
@@ -313,7 +305,7 @@ test("transitions: runFailed keeps a fix run's fix, its reason and its note, and
 
   runFailed(entry, 'fix', AT)
 
-  assert.deepEqual(entry, { ...before, state: 'needs_fix', interruptedRole: null, status: slot() })
+  assert.deepEqual(entry, { ...before, status: slot() })
   assert.deepEqual(entry.fix, { reason: 'verifier-findings', note: 'F1: the flag.', since: OPENED })
 })
 
@@ -323,8 +315,8 @@ test('transitions: runFailed keeps a fix in back-off while it lasts', () => {
   runFailed(entry, 'fix', AT)
 
   assert.deepEqual(
-    [entry.state, entry.status, entry.fix.reason],
-    ['needs_fix', { kind: 'waiting', code: 'backoff', until: LATER, failures: 1, since: AT }, 'ci-red'],
+    [entry.stage, entry.status, entry.fix.reason],
+    ['implement', { kind: 'waiting', code: 'backoff', until: LATER, failures: 1, since: AT }, 'ci-red'],
   )
 })
 
@@ -333,16 +325,13 @@ test('transitions: runFailed rests a brief and a verify run on their own stage, 
 
   runFailed(brief, 'brief', AT)
 
-  assert.deepEqual([brief.state, brief.stage, brief.status, brief.fix], ['pending', 'brief', slot(), null])
+  assert.deepEqual([brief.stage, brief.status, brief.fix], ['brief', slot(), null])
 
   const verify = entryWith({ state: 'verifying', pr: 7, claimedSha: SHA, retryAfter: LATER, failStreak: 1 })
 
   runFailed(verify, 'verify', AT)
 
-  assert.deepEqual(
-    [verify.state, verify.stage, verify.status],
-    ['interrupted', 'verify', { kind: 'waiting', code: 'backoff', until: LATER, failures: 1, since: AT }],
-  )
+  assert.deepEqual([verify.stage, verify.status], ['verify', { kind: 'waiting', code: 'backoff', until: LATER, failures: 1, since: AT }])
 })
 
 test('transitions: reportWaits parks the READY report for a later tick', () => {
@@ -353,21 +342,20 @@ test('transitions: reportWaits parks the READY report for a later tick', () => {
 
   assert.deepEqual(entry, {
     ...before,
-    state: 'interrupted',
-    interruptedRole: 'report',
+    reportUnchecked: true,
     stage: 'pre-verify',
     status: { kind: 'waiting', code: 'github', since: AT },
     fix: null,
   })
 })
 
-test('transitions: reportUsed drops the report role and keeps the state', () => {
+test('transitions: reportUsed drops the mark of the parked report and keeps the status', () => {
   const entry = entryWith({ state: 'interrupted', interruptedRole: 'report', ready: { status: 'READY', pr: 7, headSha: SHA } })
   const before = structuredClone(entry)
 
   reportUsed(entry)
 
-  assert.deepEqual(entry, { ...before, interruptedRole: null })
+  assert.deepEqual(entry, { ...before, reportUnchecked: false })
 })
 
 test('transitions: toClaimed records the claim of a READY report', () => {
@@ -383,7 +371,6 @@ test('transitions: toClaimed records the claim of a READY report', () => {
     claimedAt: AT,
     ciPendingSince: null,
     verified: null,
-    state: 'ready_claimed',
     stage: 'pre-verify',
     status: ciAt(SHA),
     fix: null,
@@ -409,7 +396,6 @@ test('transitions: claimNewHead claims the new head and drops the verification a
     ...before,
     verified: null,
     approved: null,
-    state: 'ready_claimed',
     claimedSha: SHA,
     claimedAt: AT,
     ciPendingSince: null,
@@ -424,7 +410,7 @@ test('transitions: verifyAgain sends the PR back to its claim', () => {
 
   verifyAgain(entry, AT)
 
-  assert.deepEqual(entry, { ...before, state: 'ready_claimed', stage: 'pre-verify', status: ciAt(SHA) })
+  assert.deepEqual(entry, { ...before, stage: 'pre-verify', status: ciAt(SHA) })
 })
 
 test('transitions: toVerified binds the verification to the claimed patch and clears the findings', () => {
@@ -445,7 +431,6 @@ test('transitions: toVerified binds the verification to the claimed patch and cl
     ...before,
     verified: { sha: SHA, patchId: 'patch-2', at: AT },
     attempts: { ...before.attempts, verify: 0 },
-    state: 'verified',
     findings: null,
     stage: 'merge',
     status: { kind: 'waiting', code: 'gate-pending', since: AT },
@@ -461,8 +446,6 @@ test('transitions: toBlocked blocks the PR on the record it is given', () => {
 
   assert.deepEqual(entry, {
     ...before,
-    state: 'blocked',
-    blocked,
     status: {
       kind: 'needs-you',
       code: 'decision',
@@ -495,7 +478,6 @@ test('transitions: toBlocked puts each kind of question on its stage and code', 
     assert.deepEqual(entry.status, { kind: 'needs-you', code, question: asked, since: AT })
     assert.equal(entry.stage, stage, blocked.kind)
     assert.deepEqual(entry.fix, stage === 'implement' ? fix : null, blocked.kind)
-    assert.equal(entry.state, 'blocked', blocked.kind)
   }
 })
 
@@ -513,7 +495,7 @@ test('transitions: toBlocked puts the driver code scanning block on its alerts, 
   toBlocked(verified, blocked, { at: AT })
 
   assert.equal(verified.stage, 'merge')
-  assert.equal(verified.state, 'blocked')
+  assert.equal(verified.status.code, 'code-scanning-alerts')
 })
 
 test('transitions: toBlocked keeps a closed PR on its stage, and one still on its brief goes to implement', () => {
@@ -528,11 +510,7 @@ test('transitions: toBlocked keeps a closed PR on its stage, and one still on it
 
     toBlocked(entry, closed, { at: AT })
 
-    assert.deepEqual(
-      [entry.stage, entry.status, entry.state],
-      [stage, { kind: 'needs-you', code: 'closed', since: AT }, 'blocked'],
-      fields.state,
-    )
+    assert.deepEqual([entry.stage, entry.status], [stage, { kind: 'needs-you', code: 'closed', since: AT }], fields.state)
   }
 })
 
@@ -554,9 +532,6 @@ test('transitions: escalateExhausted escalates a PR out of fix attempts', () => 
 
   assert.deepEqual(entry, {
     ...before,
-    state: 'escalated',
-    escalation: 'fix attempts exhausted',
-    escalatedAt: AT,
     escalationRun: 'P1-04-fix',
     lastError: 'fix attempts exhausted (3)',
     status: { kind: 'needs-you', code: 'attempts-exhausted', role: 'fix', limit: 3, since: AT },
@@ -571,9 +546,6 @@ test('transitions: escalateExhausted escalates a PR out of brief attempts', () =
 
   assert.deepEqual(entry, {
     ...before,
-    state: 'escalated',
-    escalation: 'brief attempts exhausted',
-    escalatedAt: AT,
     escalationRun: null,
     lastError: 'brief attempts exhausted (2)',
     status: { kind: 'needs-you', code: 'attempts-exhausted', role: 'brief', limit: 2, since: AT },
@@ -594,9 +566,6 @@ test('transitions: escalateDispute escalates an upheld dispute and keeps the fin
 
   assert.deepEqual(entry, {
     ...before,
-    state: 'escalated',
-    escalation: DISPUTE,
-    escalatedAt: AT,
     escalationRun: 'P1-03-verify',
     verified: null,
     fixReason: 'verifier findings',
@@ -614,9 +583,6 @@ test('transitions: escalateErrors escalates a PR after repeated errors', () => {
 
   assert.deepEqual(entry, {
     ...before,
-    state: 'escalated',
-    escalation: 'repeated errors',
-    escalatedAt: AT,
     escalationRun: 'P1-02-implement',
     status: { kind: 'needs-you', code: 'errors', error: 'GitHub answered 502 Bad Gateway for PR #7', count: 5, since: AT },
   })
@@ -637,17 +603,11 @@ test('transitions: toClosed keeps a needs-you status whole in closedFrom, and th
 
   entry.status = QUESTION_STATUS
   entry.fix = fix
-  entry.state = stateOf(entry)
 
   toClosed(entry, CLOSE)
 
-  assert.deepEqual(
-    [entry.stage, entry.status, entry.fix, entry.state],
-    ['implement', { kind: 'needs-you', code: 'closed', since: AT }, fix, 'blocked'],
-  )
-
+  assert.deepEqual([entry.stage, entry.status, entry.fix], ['implement', { kind: 'needs-you', code: 'closed', since: AT }, fix])
   assert.deepEqual(entry.closedFrom, QUESTION_STATUS)
-  assert.deepEqual(entry.blocked, { kind: 'closed', question: CLOSE.text, evidence: '', run: null })
 })
 
 test('transitions: toClosed keeps nothing from a waiting status, and a PR on its brief closes on implement', () => {
@@ -667,25 +627,17 @@ test('transitions: toReopened brings the kept status back unchanged, with its ti
   const entry = entryWith({ state: 'needs_fix', pr: 7 })
 
   entry.status = QUESTION_STATUS
-  entry.state = stateOf(entry)
   toClosed(entry, CLOSE)
   toReopened(entry, LATER)
 
-  assert.deepEqual([entry.stage, entry.status, entry.closedFrom, entry.state], ['implement', QUESTION_STATUS, null, 'blocked'])
-  assert.deepEqual(entry.blocked, {
-    kind: 'needs-decision',
-    question: 'Keep the old flag?',
-    evidence: 'cli.mjs:12',
-    run: 'P1-01-implement',
-  })
+  assert.deepEqual([entry.stage, entry.status, entry.closedFrom], ['implement', QUESTION_STATUS, null])
 
   const disputed = entryWith({ state: 'escalated', escalation: DISPUTE, pr: 7, claimedSha: SHA })
 
   toClosed(disputed, CLOSE)
   toReopened(disputed, LATER)
 
-  assert.deepEqual([disputed.stage, disputed.status.code, disputed.status.since, disputed.blocked], ['verify', 'dispute', OPENED, null])
-  assert.equal(disputed.state, 'escalated')
+  assert.deepEqual([disputed.stage, disputed.status.code, disputed.status.since], ['verify', 'dispute', OPENED])
 })
 
 test('transitions: toReopened without a kept status waits on the stage, as a retry does', () => {
@@ -697,8 +649,8 @@ test('transitions: toReopened without a kept status waits on the stage, as a ret
     toReopened(entry, LATER)
   }
 
-  assert.deepEqual([claimed.status, claimed.state, claimed.blocked], [ciAt(SHA, LATER), 'ready_claimed', null])
-  assert.deepEqual([verified.stage, verified.status.code, verified.state], ['merge', 'gate-pending', 'verified'])
+  assert.deepEqual([claimed.stage, claimed.status], ['pre-verify', ciAt(SHA, LATER)])
+  assert.deepEqual([verified.stage, verified.status.code], ['merge', 'gate-pending'])
 })
 
 test('transitions: toMerged with a record writes it, and drops what a close kept', () => {
@@ -706,11 +658,10 @@ test('transitions: toMerged with a record writes it, and drops what a close kept
   const merged = { by: 'github', at: AT, sha: null, from: 'implement', verified: false }
 
   entry.status = QUESTION_STATUS
-  entry.state = stateOf(entry)
   toClosed(entry, CLOSE)
   toMerged(entry, { merged })
 
-  assert.deepEqual([entry.stage, entry.status, entry.state, entry.merged, entry.closedFrom], ['merged', null, 'merged', merged, null])
+  assert.deepEqual([entry.stage, entry.status, entry.merged, entry.closedFrom], ['merged', null, merged, null])
 })
 
 test('transitions: retryMerge drops the stored verdict and waits for the gate', () => {
@@ -721,13 +672,10 @@ test('transitions: retryMerge drops the stored verdict and waits for the gate', 
 
   retryMerge(entry, AT)
 
-  assert.deepEqual(
-    [entry.stage, entry.status, entry.gate, entry.state],
-    ['merge', { kind: 'waiting', code: 'gate-pending', since: AT }, null, 'verified'],
-  )
+  assert.deepEqual([entry.stage, entry.status, entry.gate], ['merge', { kind: 'waiting', code: 'gate-pending', since: AT }, null])
 })
 
-test('setStatus, gateVerdict, mergeStatus: a status that replaces closed, gate-blocked or code-scanning-alerts settles the state', () => {
+test('setStatus, gateVerdict, mergeStatus: a status that replaces closed, gate-blocked or code-scanning-alerts leaves the block', () => {
   const facts = {
     pr: { headRefOid: SHA },
     depsPending: [],
@@ -748,13 +696,11 @@ test('setStatus, gateVerdict, mergeStatus: a status that replaces closed, gate-b
       const entry = entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification() })
 
       toBlocked(entry, block, { at: AT })
-      assert.equal(entry.state, 'blocked')
+      assert.equal(stateOf(entry), 'blocked')
 
       write(entry)
 
-      assert.equal(entry.state, stateOf(entry), `${index} ${block.kind}`)
-      assert.equal(entry.state, 'verified', `${index} ${block.kind}`)
-      assert.equal(entry.blocked, null, `${index} ${block.kind}`)
+      assert.equal(stateOf(entry), 'verified', `${index} ${block.kind}`)
     }
   }
 
@@ -763,19 +709,16 @@ test('setStatus, gateVerdict, mergeStatus: a status that replaces closed, gate-b
   toClosed(closed, CLOSE)
   setStatus(closed, 'pre-verify', { kind: 'waiting', code: 'slot' }, LATER)
 
-  assert.deepEqual([closed.state, closed.blocked], ['ready_claimed', null])
+  assert.equal(stateOf(closed), 'ready_claimed')
 })
 
-test('setStatus: the same block written again keeps the state and the block', () => {
+test('setStatus: the same block written again keeps the block and its time', () => {
   const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
 
   toBlocked(entry, { kind: 'code-scanning', question: 'New alerts.', evidence: 'alert one', run: null }, { at: AT })
   setStatus(entry, 'pre-verify', { kind: 'needs-you', code: 'code-scanning-alerts', alerts: ['alert two'] }, LATER)
 
-  assert.deepEqual(
-    [entry.state, entry.blocked.kind, entry.status.since, entry.status.alerts],
-    ['blocked', 'code-scanning', AT, ['alert two']],
-  )
+  assert.deepEqual([entry.status.code, entry.status.since, entry.status.alerts], ['code-scanning-alerts', AT, ['alert two']])
 })
 
 test('transitions: toMerged with no field marks the PR merged and adds no key', () => {
@@ -784,7 +727,7 @@ test('transitions: toMerged with no field marks the PR merged and adds no key', 
 
   toMerged(entry)
 
-  assert.deepEqual(entry, { ...before, state: 'merged', stage: 'merged', status: null })
+  assert.deepEqual(entry, { ...before, stage: 'merged', status: null })
 })
 
 test('transitions: toMerged records the merge commit', () => {
@@ -793,7 +736,7 @@ test('transitions: toMerged records the merge commit', () => {
 
   toMerged(entry, { mergeSha: SHA })
 
-  assert.deepEqual(entry, { ...before, state: 'merged', mergeSha: SHA, stage: 'merged', status: null })
+  assert.deepEqual(entry, { ...before, mergeSha: SHA, stage: 'merged', status: null })
 })
 
 test('transitions: toMerged records the PR number of a merge outside the run', () => {
@@ -802,7 +745,7 @@ test('transitions: toMerged records the PR number of a merge outside the run', (
 
   toMerged(entry, { pr: 12 })
 
-  assert.deepEqual(entry, { ...before, state: 'merged', pr: 12, stage: 'merged', status: null })
+  assert.deepEqual(entry, { ...before, pr: 12, stage: 'merged', status: null })
 })
 
 test('transitions: recoverRun sends a briefing back to pending without a refund', () => {
@@ -810,7 +753,7 @@ test('transitions: recoverRun sends a briefing back to pending without a refund'
   const before = structuredClone(entry)
 
   assert.equal(recoverRun(entry, { refund: false, at: AT }), 'brief')
-  assert.deepEqual(entry, { ...before, state: 'pending', status: slot() })
+  assert.deepEqual(entry, { ...before, status: slot() })
 })
 
 test('transitions: recoverRun sends a briefing back to pending with its attempt refunded', () => {
@@ -818,7 +761,7 @@ test('transitions: recoverRun sends a briefing back to pending with its attempt 
   const before = structuredClone(entry)
 
   assert.equal(recoverRun(entry, { refund: true, at: AT }), 'brief')
-  assert.deepEqual(entry, { ...before, state: 'pending', attempts: { ...before.attempts, brief: 0 }, refunds: 1, status: slot() })
+  assert.deepEqual(entry, { ...before, attempts: { ...before.attempts, brief: 0 }, refunds: 1, status: slot() })
 })
 
 test('transitions: recoverRun interrupts a run state with its role and no refund', () => {
@@ -826,7 +769,7 @@ test('transitions: recoverRun interrupts a run state with its role and no refund
   const before = structuredClone(entry)
 
   assert.equal(recoverRun(entry, { refund: false, at: AT }), 'fix')
-  assert.deepEqual(entry, { ...before, interruptedRole: 'fix', state: 'interrupted', status: slot(), fix: noReport() })
+  assert.deepEqual(entry, { ...before, status: slot(), fix: noReport() })
 })
 
 test('transitions: recoverRun interrupts a run state with its attempt refunded', () => {
@@ -836,8 +779,6 @@ test('transitions: recoverRun interrupts a run state with its attempt refunded',
   assert.equal(recoverRun(entry, { refund: true, at: AT }), 'verify')
   assert.deepEqual(entry, {
     ...before,
-    interruptedRole: 'verify',
-    state: 'interrupted',
     attempts: { ...before.attempts, verify: 0 },
     refunds: 1,
     status: slot(),
@@ -849,7 +790,7 @@ test('transitions: recoverRun keeps a refunded attempt at 0', () => {
   const before = structuredClone(entry)
 
   assert.equal(recoverRun(entry, { refund: true, at: AT }), 'implement')
-  assert.deepEqual(entry, { ...before, interruptedRole: 'implement', state: 'interrupted', status: slot(), fix: noReport() })
+  assert.deepEqual(entry, { ...before, implementCutOff: true, status: slot(), fix: noReport() })
 })
 
 test('transitions: recoverRun leaves a PR in no run state untouched', () => {
@@ -886,7 +827,7 @@ test('recoverRun: a delegate whose run is gone hands its question back and gives
   assert.equal(recoverRun(entry, { refund: true, at: AT }), null)
   assert.deepEqual(entry, {
     ...before,
-    delegate: { ...before.delegate, runs: 0 },
+    delegate: { ...before.delegate, runs: 0, question: null },
     status: {
       kind: 'needs-you',
       code: 'decision',
@@ -947,8 +888,6 @@ test('recoverRun: a cut-off fix run keeps the fix it ran for, with its reason an
   assert.deepEqual(cut, stopped)
   assert.deepEqual(cut, {
     ...before,
-    state: 'needs_fix',
-    interruptedRole: null,
     attempts: { ...before.attempts, fix: 0 },
     refunds: 1,
     status: slot(),
@@ -1026,7 +965,7 @@ test('resetBudgets: the attempts, the refunds, the failure streak, the errors, t
     failStreak: 0,
     tickErrors: 0,
     retryAfter: null,
-    delegate: { runs: 0, lastQuestion: 'abc', limitNotified: false, answers: [] },
+    delegate: { runs: 0, lastQuestion: 'abc', limitNotified: false, answers: [], question: null },
   })
 })
 
@@ -1039,20 +978,20 @@ test('freshAttempt: a role at its limit gets one attempt back, and a role below 
   assert.deepEqual(entry.attempts, { implement: 1, fix: 1, verify: 0, brief: 0 })
 })
 
-test('wake: a PR waits on its stage with its fix, and on verify with its role', () => {
+test('wake: a PR waits on its stage with its fix, and on verify', () => {
   const fix = { reason: 'verifier-findings', note: 'F1', since: EARLIER }
   const implement = entryWith({ state: 'escalated', escalation: 'fix attempts exhausted', fixReason: 'verifier findings', fixNote: 'F1' })
 
   implement.fix = fix
   wake(implement, 'implement', AT)
 
-  assert.deepEqual([implement.state, implement.stage, implement.status, implement.fix], ['needs_fix', 'implement', slot(), fix])
+  assert.deepEqual([implement.stage, implement.status, implement.fix], ['implement', slot(), fix])
 
   const verify = entryWith({ state: 'escalated', escalation: 'verify attempts exhausted', pr: 7, claimedSha: SHA })
 
   wake(verify, 'verify', AT)
 
-  assert.deepEqual([verify.state, verify.stage, verify.status, verify.interruptedRole], ['interrupted', 'verify', slot(), 'verify'])
+  assert.deepEqual([verify.stage, verify.status], ['verify', slot()])
 })
 
 test('wake: a back-off still ahead stays', () => {
@@ -1067,43 +1006,40 @@ test('waitOnStage: each stage waits for what it waits for once nothing stops it'
   const brief = entryWith({ state: 'escalated' })
 
   waitOnStage(brief, 'brief', AT)
-  assert.deepEqual([brief.state, brief.stage, brief.status], ['pending', 'brief', slot()])
+  assert.deepEqual([brief.stage, brief.status], ['brief', slot()])
 
   const claimed = entryWith({ state: 'escalated', pr: 7, claimedSha: SHA })
 
   waitOnStage(claimed, 'pre-verify', AT)
-  assert.deepEqual([claimed.state, claimed.stage, claimed.status], ['ready_claimed', 'pre-verify', ciAt(SHA)])
+  assert.deepEqual([claimed.stage, claimed.status], ['pre-verify', ciAt(SHA)])
 
   const parked = entryWith({ state: 'escalated', sessionId: 'session-1', interruptedRole: 'report', ready: { status: 'READY' } })
 
   waitOnStage(parked, 'pre-verify', AT)
-  assert.deepEqual([parked.state, parked.status], ['interrupted', { kind: 'waiting', code: 'github', since: AT }])
+  assert.deepEqual([parked.reportUnchecked, parked.status], [true, { kind: 'waiting', code: 'github', since: AT }])
 
   const verified = entryWith({ state: 'escalated', pr: 7, claimedSha: SHA, verified: verification() })
 
   waitOnStage(verified, 'merge', AT)
-  assert.deepEqual(
-    [verified.state, verified.stage, verified.status],
-    ['verified', 'merge', { kind: 'waiting', code: 'gate-pending', since: EARLIER }],
-  )
+  assert.deepEqual([verified.stage, verified.status], ['merge', { kind: 'waiting', code: 'gate-pending', since: EARLIER }])
 })
 
 test('waitOnStage: work on implement with no fix owed resumes as a cut-off fix run, and an owed fix stays', () => {
   const session = entryWith({ state: 'escalated', sessionId: 'session-1', interruptedRole: 'verify' })
 
   waitOnStage(session, 'implement', AT)
-  assert.deepEqual([session.state, session.status, session.fix, session.interruptedRole], ['interrupted', slot(), noReport(), 'fix'])
+  assert.deepEqual([session.status, session.fix, session.implementCutOff], [slot(), noReport(), false])
 
   const owed = entryWith({ state: 'needs_fix', pr: 7, fixReason: 'CI is red', fixNote: 'red' })
   const fix = owed.fix
 
   waitOnStage(owed, 'implement', AT)
-  assert.deepEqual([owed.state, owed.fix], ['needs_fix', fix])
+  assert.deepEqual([owed.stage, owed.fix], ['implement', fix])
 
   const fresh = entryWith({ state: 'escalated' })
 
   waitOnStage(fresh, 'implement', AT)
-  assert.deepEqual([fresh.state, fresh.stage, fresh.fix], ['pending', 'implement', null])
+  assert.deepEqual([fresh.stage, fresh.fix], ['implement', null])
 })
 
 test('retryFix: the obstacle, its evidence and the note of an owed fix make the fix retry', () => {
@@ -1115,7 +1051,7 @@ test('retryFix: the obstacle, its evidence and the note of an owed fix make the 
 
   const note = 'The runner has no Docker.\n\nEvidence: docker: not found\n\nred'
 
-  assert.deepEqual([entry.state, entry.stage, entry.status], ['needs_fix', 'implement', slot()])
+  assert.deepEqual([entry.stage, entry.status], ['implement', slot()])
   assert.deepEqual(entry.fix, { reason: 'retry', note, since: AT })
   assert.deepEqual([entry.fixReason, entry.fixNote], ['retry', note])
   assert.equal(fixReasonCode(entry.fixReason), 'retry')
@@ -1147,13 +1083,10 @@ test('approveInbox: the approval, and the merge delay from it', () => {
   approveInbox(entry, approval, { until: LATER, at: AT })
 
   assert.deepEqual(entry.approved, approval)
-  assert.deepEqual(
-    [entry.state, entry.stage, entry.status],
-    ['verified', 'merge', { kind: 'waiting', code: 'merge-delay', until: LATER, since: AT }],
-  )
+  assert.deepEqual([entry.stage, entry.status], ['merge', { kind: 'waiting', code: 'merge-delay', until: LATER, since: AT }])
 })
 
-test('toMergeStatus: a PR out of a needs-you status follows the stored rule, and its state follows', () => {
+test('toMergeStatus: a PR out of a needs-you status follows the stored rule', () => {
   const entry = entryWith({
     state: 'blocked',
     blocked: { kind: 'gate', question: 'draft', evidence: '' },
@@ -1162,19 +1095,16 @@ test('toMergeStatus: a PR out of a needs-you status follows the stored rule, and
     verified: verification(),
   })
 
-  assert.equal(entry.state, 'blocked')
+  assert.equal(entry.status.code, 'gate-blocked')
 
   toMergeStatus(entry, AT)
 
-  assert.deepEqual(
-    [entry.state, entry.stage, entry.status],
-    ['verified', 'merge', { kind: 'waiting', code: 'gate-pending', since: EARLIER }],
-  )
+  assert.deepEqual([entry.stage, entry.status], ['merge', { kind: 'waiting', code: 'gate-pending', since: EARLIER }])
 })
 
-// stateOf reads only the stage, the status, the fix and a parked report's role.
-function derived(stage, status, { fix = null, interruptedRole = null } = {}) {
-  return stateOf({ stage, status: status && { since: AT, ...status }, fix, interruptedRole })
+// stateOf reads only the stage, the status, the fix and the mark of a parked report.
+function derived(stage, status, { fix = null, reportUnchecked = false } = {}) {
+  return stateOf({ stage, status: status && { since: AT, ...status }, fix, reportUnchecked })
 }
 
 test('stateOf: a merged PR is merged', () => {
@@ -1255,8 +1185,8 @@ test('stateOf: on implement a cut-off run is interrupted, an owed fix is needs_f
 })
 
 test('stateOf: on pre-verify a parked READY report is interrupted, under a hold too, and a claim is ready_claimed', () => {
-  assert.equal(derived('pre-verify', { kind: 'waiting', code: 'github' }, { interruptedRole: 'report' }), 'interrupted')
-  assert.equal(derived('pre-verify', { kind: 'waiting', code: 'held', scope: 'pr' }, { interruptedRole: 'report' }), 'interrupted')
+  assert.equal(derived('pre-verify', { kind: 'waiting', code: 'github' }, { reportUnchecked: true }), 'interrupted')
+  assert.equal(derived('pre-verify', { kind: 'waiting', code: 'held', scope: 'pr' }, { reportUnchecked: true }), 'interrupted')
   assert.equal(derived('pre-verify', { kind: 'waiting', code: 'ci', sha: SHA, missing: [], pending: [] }), 'ready_claimed')
 })
 
@@ -1279,14 +1209,14 @@ test('fixReasonCode: today texts map to their codes, the gate by its verdict, an
   assert.equal(fixReasonCode(undefined), 'verifier-findings')
 })
 
-test('holdPr: the hold goes into hold and held, and a waiting status shows it from the time of the hold', () => {
+test('holdPr: the hold goes into hold, and a waiting status shows it from the time of the hold', () => {
   const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
   const hold = { at: AT, by: 'maintainer', reason: null }
   const before = structuredClone(entry)
 
   holdPr(entry, hold)
 
-  assert.deepEqual(entry, { ...before, hold, held: hold, status: { kind: 'waiting', code: 'held', scope: 'pr', since: AT } })
+  assert.deepEqual(entry, { ...before, hold, status: { kind: 'waiting', code: 'held', scope: 'pr', since: AT } })
 })
 
 test('holdPr: a running or needs-you status stays as it is', () => {
@@ -1298,18 +1228,18 @@ test('holdPr: a running or needs-you status stays as it is', () => {
 
     holdPr(entry, hold)
 
-    assert.deepEqual(entry, { ...before, hold, held: hold }, fields.state)
+    assert.deepEqual(entry, { ...before, hold }, fields.state)
   }
 })
 
-test('releasePr: both holds go, and the status waits for the next step', () => {
+test('releasePr: the hold goes, and the status waits for the next step', () => {
   const hold = { at: AT, by: 'maintainer', reason: null }
   const entry = entryWith({ state: 'needs_fix', pr: 7, held: hold })
   const before = structuredClone(entry)
 
   releasePr(entry)
 
-  assert.deepEqual(entry, { ...before, hold: null, held: null })
+  assert.deepEqual(entry, { ...before, hold: null })
   assert.equal(entry.status.code, 'held')
 })
 
@@ -1338,7 +1268,7 @@ test('unheld: a held status no hold covers goes back to slot, a parked report to
     unheld(entry, AT)
 
     assert.deepEqual(entry.status, status, fields.state)
-    assert.equal(entry.state, fields.state)
+    assert.equal(stateOf(entry), fields.state)
   }
 })
 
@@ -1361,10 +1291,10 @@ test('setStatus: a write that keeps the stage, the kind and the code keeps the t
   setStatus(entry, 'pre-verify', { kind: 'waiting', code: 'slot' }, AT)
 
   assert.deepEqual(entry.status, slot())
-  assert.equal(entry.state, 'ready_claimed')
+  assert.equal(stateOf(entry), 'ready_claimed')
 })
 
-test('delegateStarted: the delegate runs on the stage of the question, which stays blocked, and the fix owed stays', () => {
+test('delegateStarted: the delegate runs on the stage of the question, which it keeps, and the fix owed stays', () => {
   const fix = { reason: 'verifier-findings', note: 'F1', since: EARLIER }
   const implement = entryWith({ state: 'blocked', pr: 7, blocked: DECISION })
   const brief = entryWith({ state: 'blocked', blocked: { kind: 'brief-questions', question: 'Which API?', evidence: '', run: null } })
@@ -1374,19 +1304,18 @@ test('delegateStarted: the delegate runs on the stage of the question, which sta
   delegateStarted(brief, { run: 'P1-02-delegate', at: AT })
 
   assert.deepEqual(
-    [implement.stage, implement.status, implement.fix, implement.state, implement.blocked],
+    [implement.stage, implement.status, implement.fix, implement.delegate.question],
     [
       'implement',
       { kind: 'running', code: 'delegate', question: 'needs-decision', run: 'P1-01-delegate', since: AT },
       fix,
-      'blocked',
-      DECISION,
+      question('needs-decision', 'Keep the old flag?', 'cli.mjs:12', 'P1-01-implement'),
     ],
   )
 
   assert.deepEqual(
-    [brief.stage, brief.status, brief.state],
-    ['brief', { kind: 'running', code: 'delegate', question: 'brief-questions', run: 'P1-02-delegate', since: AT }, 'blocked'],
+    [brief.stage, brief.status],
+    ['brief', { kind: 'running', code: 'delegate', question: 'brief-questions', run: 'P1-02-delegate', since: AT }],
   )
 })
 
@@ -1417,8 +1346,8 @@ test('delegateReturned: the question waits for you again with what the delegate 
     const asked = question(blocked.kind, blocked.question, blocked.evidence, blocked.run)
 
     assert.deepEqual(
-      [entry.stage, entry.status, entry.state],
-      [stage, { kind: 'needs-you', code, question: { ...asked, delegate: outcome ? { outcome, reason } : null }, since: AT }, 'blocked'],
+      [entry.stage, entry.status, entry.delegate.question],
+      [stage, { kind: 'needs-you', code, question: { ...asked, delegate: outcome ? { outcome, reason } : null }, since: AT }, null],
       code,
     )
 
@@ -1426,11 +1355,11 @@ test('delegateReturned: the question waits for you again with what the delegate 
   }
 })
 
-test('delegateReturned: an entry with no block takes the kind its status names, with an empty question', () => {
+test('delegateReturned: an entry with no question kept takes the kind its status names, with an empty question', () => {
   const entry = entryWith({ state: 'blocked', pr: 7, blocked: { ...DECISION, kind: 'environment' } })
 
   delegateStarted(entry, { run: 'P1-01-delegate', at: EARLIER })
-  entry.blocked = null
+  entry.delegate.question = null
   delegateReturned(entry, { outcome: 'escalated', reason: '', at: AT })
 
   assert.deepEqual(entry.status, {
@@ -1442,7 +1371,7 @@ test('delegateReturned: an entry with no block takes the kind its status names, 
 
   const bare = entryWith({ state: 'pending' })
 
-  bare.blocked = undefined
+  bare.delegate.question = undefined
   delegateReturned(bare, { outcome: null, reason: '', at: AT })
 
   assert.deepEqual([bare.stage, bare.status.code, bare.status.question.kind], ['brief', 'brief-questions', 'unknown'])
@@ -1455,5 +1384,5 @@ test('commandsPassed: the pass is written to the entry and the PR waits on verif
   commandsPassed(entry, { sha: SHA, key: '{"ready":[[],[]]}', at: AT })
 
   assert.deepEqual(entry.commands, { sha: SHA, at: AT, key: '{"ready":[[],[]]}' })
-  assert.deepEqual([entry.stage, entry.status, entry.state, entry.interruptedRole], ['verify', slot(), 'interrupted', 'verify'])
+  assert.deepEqual([entry.stage, entry.status, entry.reportUnchecked, entry.implementCutOff], ['verify', slot(), false, false])
 })

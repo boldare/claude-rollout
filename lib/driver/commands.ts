@@ -19,7 +19,7 @@ import type {
   Subset,
 } from '../state.ts'
 import * as transitions from '../transitions.ts'
-import type { PrEntry, State, StoredNote } from '../transitions.ts'
+import type { PrEntry, StoredNote } from '../transitions.ts'
 
 // The maintainer's commands from the inbox: approve, note, retry, hold and
 // release. retry, note and approve each follow one table keyed by the PR's
@@ -33,14 +33,14 @@ const AT_WORK = 'an agent is working on this PR'
 const STALE_APPROVAL = 'it names a different head than the one verified now; look at the card again'
 // What only the maintainer's words answer, which retry cannot give.
 const WAITS_FOR_WORDS = ['brief-questions', 'decision', 'dispute'] as const satisfies readonly NeedsYouCode[]
-// A note on these asks for a change, on any other it answers.
-const REQUEST_STATES = ['verified', 'ready_claimed'] as const satisfies readonly State[]
 const NOTES_KEPT = 20
 
 type ScopedCommand = (typeof SCOPED_COMMANDS)[number]
 type Author = NoteRecord['by']
 type Answered = Pick<StoredNote, 'kind' | 'question'>
 type Refusal = Extract<CommandEffect, { applies: false }>
+// The PR's stage and status when the event is written.
+type StatusDetail = ReturnType<typeof transitions.statusDetail>
 // What holds a PR's place in the driver's `running`: the role of its run, or
 // gate while the pre-verify commands run.
 type Job = Role | 'gate'
@@ -66,11 +66,11 @@ interface CommandEvents {
   approved: { sha: string; channel: Channel }
   'brief-answered': Record<string, never>
   'command-rejected': Rejection
-  held: { state: State; running: Job | null } | ({ scope: 'rollout' } & Pick<Hold, 'by' | 'reason'>)
+  held: (StatusDetail & { running: Job | null }) | ({ scope: 'rollout' } & Pick<Hold, 'by' | 'reason'>)
   'needs-fix': { reason: string }
-  'note-queued': { state: State }
-  released: { state: State } | { scope: 'rollout'; stillHeld: string[] }
-  retry: { state: State }
+  'note-queued': StatusDetail
+  released: StatusDetail | { scope: 'rollout'; stillHeld: string[] }
+  retry: StatusDetail
 }
 
 type Say = <Kind extends keyof CommandEvents>(id: string, kind: Kind, detail: CommandEvents[Kind], message?: string | null) => void
@@ -311,13 +311,13 @@ function execute(context: CommandsContext, command: InboxCommand): void {
 function holdPr({ ledger, running, say, now }: CommandsContext, id: string): void {
   const entry = ledger.prs[id]
 
-  if (entry.state === 'merged') {
+  if (entry.stage === 'merged') {
     say(id, 'command-rejected', { command: 'hold', reason: 'already merged' })
-  } else if (entry.held) {
+  } else if (entry.hold) {
     say(id, 'command-rejected', { command: 'hold', reason: 'already held' })
   } else {
     transitions.holdPr(entry, { at: now(), by: 'maintainer', reason: null })
-    say(id, 'held', { state: entry.state, running: running.get(id) ?? null })
+    say(id, 'held', { ...transitions.statusDetail(entry), running: running.get(id) ?? null })
   }
 }
 
@@ -325,9 +325,9 @@ function holdPr({ ledger, running, say, now }: CommandsContext, id: string): voi
 function releasePr({ ledger, say }: CommandsContext, id: string): void {
   const entry = ledger.prs[id]
 
-  if (entry.held) {
+  if (entry.hold) {
     transitions.releasePr(entry)
-    say(id, 'released', { state: entry.state })
+    say(id, 'released', transitions.statusDetail(entry))
     return
   }
 
@@ -357,7 +357,7 @@ function releaseRollout({ manifest, ledger, say }: CommandsContext): void {
 
   ledger.data.hold = null
 
-  const stillHeld = manifest.all.filter((pr) => ledger.prs[pr.id].held && ledger.prs[pr.id].state !== 'merged').map((pr) => pr.id)
+  const stillHeld = manifest.all.filter((pr) => ledger.prs[pr.id].hold && ledger.prs[pr.id].stage !== 'merged').map((pr) => pr.id)
   say('-', 'released', { scope: 'rollout', stillHeld })
 }
 
@@ -419,7 +419,7 @@ function applyTable(context: CommandsContext, table: Table, command: EffectComma
 function holdShows(entry: PrEntry, { hold, at }: RowInput): void {
   if (hold) {
     transitions.heldStatus(entry, 'rollout', at)
-  } else if (entry.held) {
+  } else if (entry.hold) {
     transitions.heldStatus(entry, 'pr', at)
   }
 }
@@ -525,7 +525,7 @@ function retry(entry: PrEntry, input: RowInput): void {
     transitions.retryMerge(entry, at)
   }
 
-  say(id, 'retry', { state: entry.state })
+  say(id, 'retry', transitions.statusDetail(entry))
 }
 
 function noteRefusal(entry: PrEntry): Refusal | null {
@@ -547,15 +547,36 @@ function answeredWhenClosed(kept: Status | null | undefined): Answered {
   return kept.code === 'dispute' ? { kind: transitions.DISPUTE, question: kept.text } : NOTHING_ASKED
 }
 
+// A block names what it asks by its question, or by the gate's reasons, or
+// by what a block for code scanning asks.
+function answeredBlock(entry: PrEntry): Answered {
+  const status = entry.status
+  const question = transitions.statusQuestion(status)
+
+  if (question) {
+    return { kind: question.kind, question: question.text }
+  }
+
+  if (status?.kind === 'needs-you' && status.code === 'gate-blocked') {
+    return { kind: 'gate', question: status.reasons.join('; ') }
+  }
+
+  if (status?.kind === 'needs-you' && status.code === 'code-scanning-alerts') {
+    return { kind: 'code-scanning', question: transitions.codeScanningQuestion(entry.pr) }
+  }
+
+  return NOTHING_ASKED
+}
+
 // What the note answers, for the prompts that list it. Finding ids change
 // on every FAIL, so a dispute is named by the escalation's text.
-function answered(entry: PrEntry, state: State): Answered {
+function answered(entry: PrEntry): Answered {
   if (entry.status?.code === 'closed') {
     return answeredWhenClosed(entry.closedFrom)
   }
 
-  if (state === 'blocked') {
-    return { kind: entry.blocked?.kind ?? null, question: entry.blocked?.question ?? null }
+  if (transitions.waitsOnBlock(entry)) {
+    return answeredBlock(entry)
   }
 
   if (transitions.escalatedOverDispute(entry)) {
@@ -571,7 +592,7 @@ function queueNote(entry: PrEntry, text: string): void {
 
 function queued(entry: PrEntry, { id, say }: RowInput, text: string): void {
   queueNote(entry, text)
-  say(id, 'note-queued', { state: entry.state })
+  say(id, 'note-queued', transitions.statusDetail(entry))
 }
 
 function answerBrief(entry: PrEntry, { id, say, at }: RowInput, question: string | null, text: string): void {
@@ -579,19 +600,25 @@ function answerBrief(entry: PrEntry, { id, say, at }: RowInput, question: string
   say(id, 'brief-answered', {})
 }
 
+// A note on a verified PR, or on a claim waiting for its check, asks for a
+// change. On any other PR it answers.
+function asksForChange(entry: PrEntry): boolean {
+  return transitions.verifiedOnMerge(entry) || transitions.claimWaits(entry)
+}
+
 // Its prose names who asked, so events keep their words.
-function noteReason({ by, channel }: RowInput, state: State): string {
+function noteReason({ by, channel }: RowInput, request: boolean): string {
   if (channel === 'github') {
     return 'maintainer review'
   }
 
-  return listed(REQUEST_STATES, state) ? `request from the ${by}` : `answer from the ${by}`
+  return request ? `request from the ${by}` : `answer from the ${by}`
 }
 
 // A fix the note asks for.
-function noteFix(entry: PrEntry, input: RowInput, state: State, text: string): void {
+function noteFix(entry: PrEntry, input: RowInput, request: boolean, text: string): void {
   const { id, say, at, limits } = input
-  const reason = noteReason(input, state)
+  const reason = noteReason(input, request)
 
   transitions.freshAttempt(entry, 'fix', limits.fix)
   transitions.dropVerification(entry)
@@ -619,7 +646,7 @@ function noteOnBrief(entry: PrEntry, input: RowInput, status: Status, text: stri
 }
 
 // A note joins a fix the PR owes, which keeps its reason.
-function noteOnImplement(entry: PrEntry, input: RowInput, status: Status, { state, text }: { state: State; text: string }): void {
+function noteOnImplement(entry: PrEntry, input: RowInput, status: Status, { request, text }: { request: boolean; text: string }): void {
   const { limits, at } = input
 
   if (status.kind === 'waiting') {
@@ -629,7 +656,7 @@ function noteOnImplement(entry: PrEntry, input: RowInput, status: Status, { stat
 
     queued(entry, input, text)
   } else if (status.code === 'decision' || status.code === 'obstacle') {
-    noteFix(entry, input, state, text)
+    noteFix(entry, input, request, text)
   } else if (status.code === 'attempts-exhausted' || status.code === 'errors') {
     if (status.code === 'attempts-exhausted') {
       transitions.freshAttempt(entry, status.role, limits[status.role])
@@ -640,7 +667,7 @@ function noteOnImplement(entry: PrEntry, input: RowInput, status: Status, { stat
       transitions.wake(entry, 'implement', at)
       queued(entry, input, text)
     } else {
-      noteFix(entry, input, state, text)
+      noteFix(entry, input, request, text)
     }
   } else {
     queued(entry, input, text)
@@ -655,16 +682,16 @@ function note(entry: PrEntry, input: RowInput, command: EffectCommand): void {
 
   const status = entry.status as Status
   const text = command.text ?? ''
-  const state = transitions.stateOf(entry)
+  const request = asksForChange(entry)
 
   if (input.record) {
-    const record = { at: input.at, by: input.by, ...answered(entry, state), text, run: null }
+    const record = { at: input.at, by: input.by, ...answered(entry), text, run: null }
 
     entry.noteHistory = [...(entry.noteHistory ?? []), record].slice(-NOTES_KEPT)
   }
 
   if (status.code === 'brief-questions') {
-    answerBrief(entry, input, entry.blocked?.question ?? status.question.text, text)
+    answerBrief(entry, input, status.question.text, text)
     return
   }
 
@@ -678,7 +705,7 @@ function note(entry: PrEntry, input: RowInput, command: EffectCommand): void {
   if (stage === 'brief') {
     noteOnBrief(entry, input, status, text)
   } else if (stage === 'implement') {
-    noteOnImplement(entry, input, status, { state, text })
+    noteOnImplement(entry, input, status, { request, text })
   } else if (status.code === 'dispute') {
     ruling(entry, input, text)
   } else {
@@ -686,7 +713,7 @@ function note(entry: PrEntry, input: RowInput, command: EffectCommand): void {
       transitions.freshAttempt(entry, status.role, input.limits[status.role])
     }
 
-    noteFix(entry, input, state, text)
+    noteFix(entry, input, request, text)
   }
 }
 

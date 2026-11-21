@@ -149,7 +149,7 @@ test('listRollouts: a ledger a newer driver wrote is the error of that rollout, 
   assert.match(broken.error, /invalid manifest/)
   assert.equal(demo.started, true)
   assert.equal(demo.rollout, null)
-  assert.match(demo.error, /^ledger\.json is version 99, written by a newer driver than this one \(version 2\)\./)
+  assert.match(demo.error, /^ledger\.json is version 99, written by a newer driver than this one \(version 3\)\./)
   assert.equal(fresh.error, null)
 })
 
@@ -193,13 +193,16 @@ test('rolloutSnapshot: the events are parsed again only when events.jsonl change
   writeFileSync(join(dir, 'heartbeat'), `${new Date().toISOString()} tick`)
   writeFileSync(
     join(dir, 'ledger.json'),
-    JSON.stringify({ ...ledger, prs: { ...ledger.prs, A2: { ...ledger.prs.A2, state: 'needs_fix' } } }),
+    JSON.stringify({
+      ...ledger,
+      prs: { ...ledger.prs, A2: { ...ledger.prs.A2, stage: 'verify', status: { kind: 'waiting', code: 'slot', since: at(85) } } },
+    }),
   )
 
   const ticked = snapshot()
 
   assert.equal(ticked.events, first.events)
-  assert.equal(ticked.state.view.rows.find((row) => row.id === 'A2').state, 'needs_fix')
+  assert.deepEqual(ticked.state.view.rows.find((row) => row.id === 'A2').status.stage, 'verify')
 
   appendFileSync(join(dir, 'events.jsonl'), `\n${JSON.stringify({ at: at(90), id: 'A2', kind: 'note' })}\n`)
 
@@ -332,7 +335,7 @@ test('rolloutPr: the detail with the brief and notes texts, with or without a le
   assert.equal(rolloutPr(findRollout(root, 'demo'), 'Z9'), null)
 
   const fresh = rolloutPr(findRollout(root, 'fresh'), 'A1')
-  assert.equal(fresh.state, 'pending')
+  assert.deepEqual([fresh.status.stage, fresh.status.kind, fresh.status.code], ['brief', 'waiting', 'slot'])
   assert.equal(fresh.briefText, null)
 })
 

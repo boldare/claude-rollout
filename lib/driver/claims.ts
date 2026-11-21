@@ -59,7 +59,7 @@ interface GateCheckMarker {
 }
 
 // The fields of an entry this module reads beside the ones runs.ts types.
-export interface ClaimEntry extends RunEntry {
+export type ClaimEntry = RunEntry & {
   notified: { gateChecks?: GateCheckMarker | null; codeScanningUnavailable?: boolean; codeScanningWait?: string | null }
   patchSinceId?: string | null
   patchSince?: IsoTime | null
@@ -181,7 +181,7 @@ export function blockForCodeScanning(
     entry,
     {
       kind: 'code-scanning',
-      question: `PR #${entry.pr} has new code scanning alerts. Dismiss a false positive on GitHub and the driver reads them again on the next tick, or send instructions with rollout note.`,
+      question: transitions.codeScanningQuestion(entry.pr),
       evidence: reasons.join('\n'),
       run: null,
     },

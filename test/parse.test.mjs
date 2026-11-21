@@ -1741,11 +1741,17 @@ test('collectFacts: a second call with the same reads asks GitHub nothing', asyn
 test('unmergedHeads: the verified heads of unmerged dependencies, none while one is held, and a merged one is skipped even when held', () => {
   const pr = { deps: ['A1', 'A3'] }
   const sha = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
-  const verified = { state: 'verified', verified: { sha, patchId: 'patch-a1' }, held: null }
+  const verified = {
+    stage: 'merge',
+    status: { kind: 'waiting', code: 'gate-pending', since: '2026-01-01T00:00:00Z' },
+    verified: { sha, patchId: 'patch-a1' },
+    hold: null,
+  }
 
-  assert.deepEqual(unmergedHeads(pr, { prs: { A1: verified, A3: { state: 'merged' } } }), [{ id: 'A1', sha, patchId: 'patch-a1' }])
-  assert.equal(unmergedHeads(pr, { prs: { A1: { ...verified, held: { at: '2026-01-01T00:00:00Z' } }, A3: { state: 'merged' } } }), null)
-  assert.deepEqual(unmergedHeads(pr, { prs: { A1: verified, A3: { state: 'merged', held: { at: '2026-01-01T00:00:00Z' } } } }), [
-    { id: 'A1', sha, patchId: 'patch-a1' },
-  ])
+  const merged = { stage: 'merged', status: null }
+  const hold = { at: '2026-01-01T00:00:00Z', by: 'maintainer', reason: null }
+
+  assert.deepEqual(unmergedHeads(pr, { prs: { A1: verified, A3: merged } }), [{ id: 'A1', sha, patchId: 'patch-a1' }])
+  assert.equal(unmergedHeads(pr, { prs: { A1: { ...verified, hold }, A3: merged } }), null)
+  assert.deepEqual(unmergedHeads(pr, { prs: { A1: verified, A3: { ...merged, hold } } }), [{ id: 'A1', sha, patchId: 'patch-a1' }])
 })

@@ -79,9 +79,9 @@
             <a href="#tick">tick</a>. <code>status</code> and the UI read its age to tell a live driver from a stuck one.
           </li>
           <li>
-            <strong>State on disk.</strong> <code>ledger.json</code> holds the state of every PR and every agent run, and is replaced
-            atomically, through a temp file and a rename. Its <code>version</code> says which shape it has. A driver migrates an older
-            ledger once, when it starts. The driver, <code>status</code> and the UI refuse a ledger that a newer driver wrote.
+            <strong>State on disk.</strong> <code>ledger.json</code> holds the stage and status of every PR and every agent run, and is
+            replaced atomically, through a temp file and a rename. Its <code>version</code> says which shape it has. A driver migrates an
+            older ledger once, when it starts. The driver, <code>status</code> and the UI refuse a ledger that a newer driver wrote.
             <code>events.jsonl</code> only grows. <code>logs/</code> keeps every agent transcript.
           </li>
           <li>
@@ -91,15 +91,20 @@
           </li>
           <li>
             <strong>Stop and resume.</strong> The first Ctrl-C, <code>SIGTERM</code> or <code>SIGHUP</code> stops every agent run (a process
-            gets SIGTERM, then SIGKILL after 5 s), waits up to 15 s for the runs to end, saves and exits. A second signal exits at once. A
-            stop and a hard end (a kill, a crash, a reboot) resume the same way, within the five refunds of a PR: every run that was in
-            progress gets its attempt back and its PR becomes <code>interrupted</code>, or <code>pending</code> for a brief. A fix run keeps
-            its fix, with its reason and note, and a delegate run gives its run back and hands its question back. A run cut off by a hard
-            end, or still going when the stop saves, is ended this way by the next <code>run</code> at its start. An implementer or fixer
-            then continues its own session, a verifier starts over and an unfinished brief is written again. A stop kills running ready and
-            pre-verify commands and their children the same way and drops their results. The next run cleans what they left in the worktree,
-            then runs them again. Commands that passed are kept in the ledger for their head and their lists, so a restart does not run them
-            again on that head.
+            gets SIGTERM, then SIGKILL after 5 s), waits up to 15 s for the runs to end, saves and exits. A second signal exits at once. On
+            the host each agent runs in a process group of its own. A stop, the timeout and the stall watchdog signal that group, so they
+            also end what the agent started, and a Ctrl-C in the terminal reaches the agents only through the driver. A stop and a hard end
+            (a kill, a crash, a reboot) resume the same way, within the five refunds of a PR: every run that was in progress gets its
+            attempt back and its PR waits on the stage of its run, with a <code>no-report</code> fix on implement. A fix run keeps its fix,
+            with its reason and note, and a delegate run gives its run back and hands its question back. A run cut off by a hard end, or
+            still going when the stop saves, is ended this way by the next <code>run</code> at its start. Before any role resumes, that
+            start ends the agent process of every run with no end. On the host it signals the run's process group, and only while the pid
+            still has the start time the run recorded. A pid with another start time is left alone. Under Docker it removes the run's
+            container with <code>docker rm --force</code>. Each such run logs <code>outlived-process</code> with its outcome, and a process
+            the start could not end notifies you. An implementer or fixer then continues its own session, a verifier starts over and an
+            unfinished brief is written again. A stop kills running ready and pre-verify commands and their children the same way and drops
+            their results. The next run cleans what they left in the worktree, then runs them again. Commands that passed are kept in the
+            ledger for their head and their lists, so a restart does not run them again on that head.
           </li>
         </ul>
 
@@ -443,203 +448,99 @@
         <h2 id="lifecycle">The PR lifecycle <a class="anchor" href="#lifecycle" aria-label="Link to this section">#</a></h2>
 
         <p>
-          Every PR in the manifest has one state in the ledger. This state flow is the driver's own. The CLI and the UI show a
-          <a href="#status">stage and a status</a> instead.
+          Every PR in the manifest has a <a href="#status">stage and a status</a> in the ledger. The stage says where the PR is, and it
+          moves forward through the six below. A fix, a new head or a block sends it back. The status names what happens on the stage, and
+          each one has a row in the table of the next section.
         </p>
-
-        <figure class="diagram">
-          <svg viewBox="-2 -2 704 478" role="img" aria-labelledby="hiw-life-title">
-            <title id="hiw-life-title">
-              A PR moves from pending through implementing, ready_claimed, verifying and verified to merged. Problems send it to needs_fix
-              and a fixing run, which reports READY again. Blocked, escalated and interrupted wait for you or for the next tick.
-            </title>
-            <defs>
-              <marker
-                id="hiw-life-arrow"
-                viewBox="0 0 8 8"
-                refX="7"
-                refY="4"
-                markerWidth="8"
-                markerHeight="8"
-                markerUnits="userSpaceOnUse"
-                orient="auto-start-reverse"
-              >
-                <path class="dg-head" d="M0,0 L8,4 L0,8 z" />
-              </marker>
-            </defs>
-
-            <g class="state-briefing">
-              <rect class="dg-node toned" x="40" y="20" width="130" height="34" rx="17" />
-              <circle class="dg-dot" cx="56" cy="37" r="4" />
-              <text class="dg-title" x="68" y="41">briefing</text>
-            </g>
-            <g class="state-pending">
-              <rect class="dg-node" x="250" y="20" width="130" height="34" rx="17" />
-              <circle class="dg-dot" cx="266" cy="37" r="4" />
-              <text class="dg-title" x="278" y="41">pending</text>
-            </g>
-            <g class="state-implementing">
-              <rect class="dg-node toned" x="250" y="100" width="130" height="34" rx="17" />
-              <circle class="dg-dot" cx="266" cy="117" r="4" />
-              <text class="dg-title" x="278" y="121">implementing</text>
-            </g>
-            <g class="state-ready_claimed">
-              <rect class="dg-node toned" x="250" y="180" width="130" height="34" rx="17" />
-              <circle class="dg-dot" cx="266" cy="197" r="4" />
-              <text class="dg-title" x="278" y="201">ready_claimed</text>
-            </g>
-            <g class="state-verifying">
-              <rect class="dg-node toned" x="250" y="260" width="130" height="34" rx="17" />
-              <circle class="dg-dot" cx="266" cy="277" r="4" />
-              <text class="dg-title" x="278" y="281">verifying</text>
-            </g>
-            <g class="state-verified">
-              <rect class="dg-node toned" x="250" y="340" width="130" height="34" rx="17" />
-              <circle class="dg-dot" cx="266" cy="357" r="4" />
-              <text class="dg-title" x="278" y="361">verified</text>
-            </g>
-            <g class="state-merged">
-              <rect class="dg-node toned" x="250" y="420" width="130" height="34" rx="17" />
-              <circle class="dg-dot" cx="266" cy="437" r="4" />
-              <text class="dg-title" x="278" y="441">merged</text>
-            </g>
-            <g class="state-fixing">
-              <rect class="dg-node toned" x="505" y="130" width="130" height="34" rx="17" />
-              <circle class="dg-dot" cx="521" cy="147" r="4" />
-              <text class="dg-title" x="533" y="151">fixing</text>
-            </g>
-            <g class="state-needs_fix">
-              <rect class="dg-node toned" x="470" y="250" width="200" height="80" rx="12" />
-              <circle class="dg-dot" cx="486" cy="267" r="4" />
-              <text class="dg-title" x="498" y="271">needs_fix</text>
-              <text class="dg-text" x="484" y="290">CI red, a policy violation,</text>
-              <text class="dg-text" x="484" y="305">verifier FAIL, gate, conflict,</text>
-              <text class="dg-text" x="484" y="320">a review or your note</text>
-            </g>
-
-            <rect class="dg-group" x="0" y="236" width="170" height="236" rx="12" />
-            <text class="dg-group-title" x="12" y="256">Waiting states</text>
-            <g class="state-interrupted">
-              <rect class="dg-node toned" x="12" y="268" width="146" height="34" rx="17" />
-              <circle class="dg-dot" cx="28" cy="285" r="4" />
-              <text class="dg-title" x="40" y="289">interrupted</text>
-            </g>
-            <text class="dg-text" x="14" y="320">resumes on a later tick</text>
-            <g class="state-blocked">
-              <rect class="dg-node toned" x="12" y="338" width="146" height="34" rx="17" />
-              <circle class="dg-dot" cx="28" cy="355" r="4" />
-              <text class="dg-title" x="40" y="359">blocked</text>
-            </g>
-            <text class="dg-text" x="14" y="390">rollout note, or retry</text>
-            <g class="state-escalated">
-              <rect class="dg-node toned" x="12" y="408" width="146" height="34" rx="17" />
-              <circle class="dg-dot" cx="28" cy="425" r="4" />
-              <text class="dg-title" x="40" y="429">escalated</text>
-            </g>
-            <text class="dg-text" x="14" y="460">rollout retry, or note</text>
-
-            <path class="dg-edge" d="M250,30 H176" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="210" y="23" text-anchor="middle">no brief</text>
-            <path class="dg-edge" d="M170,46 H244" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="210" y="67" text-anchor="middle">written</text>
-
-            <path class="dg-edge" d="M315,54 V94" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="323" y="82">deps merged, free slot</text>
-            <path class="dg-edge" d="M315,134 V174" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="307" y="161" text-anchor="end">READY report</text>
-            <path class="dg-edge" d="M315,214 V254" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="307" y="241" text-anchor="end">CI green, policy ok</text>
-            <path class="dg-edge" d="M315,294 V334" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="307" y="321" text-anchor="end">PASS</text>
-            <path class="dg-edge" d="M315,374 V414" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="307" y="401" text-anchor="end">gate: merge</text>
-
-            <path class="dg-edge" d="M380,206 C425,206 430,268 464,268" marker-end="url(#hiw-life-arrow)" />
-            <path class="dg-edge" d="M380,288 H464" marker-end="url(#hiw-life-arrow)" />
-            <path class="dg-edge" d="M380,357 C425,357 430,312 464,312" marker-end="url(#hiw-life-arrow)" />
-            <path class="dg-edge" d="M570,250 V170" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="578" y="214">free slot</text>
-            <path class="dg-edge" d="M505,147 C450,147 420,190 386,190" marker-end="url(#hiw-life-arrow)" />
-            <text class="dg-label" x="456" y="140" text-anchor="end">READY</text>
-          </svg>
-          <figcaption>
-            Any running state can end in <code>interrupted</code>, and <code>blocked</code> or <code>escalated</code> can follow almost any
-            state. <code>held</code> is a flag on a PR, not a state.
-          </figcaption>
-        </figure>
 
         <div class="scroll">
           <table>
             <thead>
               <tr>
-                <th>State</th>
+                <th>Stage</th>
                 <th>What happens</th>
-                <th>What moves it on</th>
+                <th>What comes next</th>
               </tr>
             </thead>
             <tbody>
-              <tr id="state-pending">
-                <td class="nowrap"><span class="badge state state-pending">pending</span></td>
-                <td>Waits for its dependencies and for a free slot.</td>
-                <td>
-                  Without a <a href="manifest.html#pr-brief"><code>brief</code></a> file: <code>briefing</code> once every dependency is
-                  merged, or verified and not held. With one: <code>implementing</code> once every dependency is merged.
+              <tr>
+                <td class="nowrap">
+                  <a href="#stage-brief"><span class="badge stage stage-brief">brief</span></a>
                 </td>
-              </tr>
-              <tr id="state-briefing">
-                <td class="nowrap"><span class="badge state state-briefing">briefing</span></td>
                 <td>
-                  A read-only writer drafts the brief from <a href="manifest.html#manifest-briefing"><code>briefing.sources</code></a> on a
-                  worktree of the base. A read-only reviewer checks it against the code and returns the final text. A dependency that is
-                  verified but not merged yet is merged into a preview worktree, <code>&lt;id&gt;.brief</code> next to the PR worktrees, at
-                  its verified head. So the brief is written while the dependency waits for approval. The preview is detached, refuses every
-                  push and is removed after the reviewer. The reviewer also sees your answers to earlier drafts. With
-                  <a href="manifest.html#gates-brief-required"><code>gates.brief</code></a> criteria, both see them and the reviewer reports
-                  each one. With <a href="manifest.html#gates-brief-runChecks"><code>gates.brief.runChecks</code></a
+                  The PR has no <a href="manifest.html#pr-brief"><code>brief</code></a> file. It waits for its dependencies and a free slot,
+                  then a read-only writer drafts the brief from
+                  <a href="manifest.html#manifest-briefing"><code>briefing.sources</code></a> on a worktree of the base, and a read-only
+                  reviewer checks it against the code and returns the final text (<a href="#status-brief-write"><code>brief-write</code></a
+                  >, then <a href="#status-brief-review"><code>brief-review</code></a
+                  >). A dependency that is verified but not merged yet is merged into a preview worktree, <code>&lt;id&gt;.brief</code> next
+                  to the PR worktrees, at its verified head. So the brief is written while the dependency waits for approval. The preview is
+                  detached, refuses every push and is removed after the reviewer. The reviewer also sees your answers to earlier drafts.
+                  With <a href="manifest.html#gates-brief-required"><code>gates.brief</code></a> criteria, both see them and the reviewer
+                  reports each one. With <a href="manifest.html#gates-brief-runChecks"><code>gates.brief.runChecks</code></a
                   >, the reviewer runs the draft's existing commands in that worktree and reports whether each can pass after a change
                   within the expected files. The brief keeps the <code>gates.brief</code> it started with, also when the manifest changes
                   meanwhile.
                 </td>
                 <td>
-                  The driver writes the brief file and a <code>.review-notes.md</code> file next to it, and the PR goes back to
-                  <code>pending</code>. Open questions: <code>blocked</code>, and no brief is written. With <code>gates.brief</code>, a
-                  required criterion that does not pass and a check that cannot pass each add a question, unless the reviewer asked one that
-                  names the criterion's id or quotes the command. A recommended criterion that does not pass goes into the review notes.
-                  Each check and criterion logs a <code>gate-check</code> event with stage <code>brief</code>, its item, level, result and
-                  evidence, and <code>ahead</code>, the dependency heads the brief saw (empty on the base), instead of a SHA. A failed run:
-                  <code>pending</code>, after a backoff. Heads that do not merge cleanly in the preview: <code>pending</code> with the
-                  attempt given back (<code>brief-waits</code>), until a dependency merges or is verified at another head. A dependency that
-                  merged with another patch than the brief saw is named in the implementer's prompt, and the code wins over the brief there.
+                  The driver writes the brief file and a <code>.review-notes.md</code> file next to it, and the PR moves to
+                  <code>implement</code>. Open questions:
+                  <a href="#status-brief-questions"><code>brief · needs-you: brief-questions</code></a
+                  >, and no brief is written. With <code>gates.brief</code>, a required criterion that does not pass and a check that cannot
+                  pass each add a question, unless the reviewer asked one that names the criterion's id or quotes the command. A recommended
+                  criterion that does not pass goes into the review notes. Each check and criterion logs a <code>gate-check</code> event
+                  with stage <code>brief</code>, its item, level, result and evidence, and <code>ahead</code>, the dependency heads the
+                  brief saw (empty on the base), instead of a SHA. A failed run waits on brief after a backoff. Heads that do not merge
+                  cleanly in the preview wait on <a href="#status-dependencies-merge"><code>dependencies-merge</code></a> with the attempt
+                  given back (<code>brief-waits</code>), until a dependency merges or is verified at another head. A dependency that merged
+                  with another patch than the brief saw is named in the implementer's prompt, and the code wins over the brief there.
                 </td>
               </tr>
-              <tr id="state-implementing">
-                <td class="nowrap"><span class="badge state state-implementing">implementing</span></td>
-                <td>
-                  The implementer codes in the PR's worktree, pushes, opens the PR and waits for CI. Its self-check before READY runs the
-                  <a href="manifest.html#gates-ready-required">ready commands</a> at the head it reports, and the READY report lists each
-                  one with its exit code in <code>gates</code>.
+              <tr>
+                <td class="nowrap">
+                  <a href="#stage-implement"><span class="badge stage stage-implement">implement</span></a>
                 </td>
                 <td>
-                  A READY report that names an open PR from the branch into the base: <code>ready_claimed</code>. A READY report that does
-                  not match GitHub: <code>needs_fix</code>. A READY report GitHub could not read: <code>interrupted</code>, checked again on
-                  a later tick (<code>report-unchecked</code>). BLOCKED: <code>blocked</code>. No report: <code>interrupted</code>.
+                  With a brief, the PR waits for every dependency to merge and for a free slot. The implementer then codes in the PR's
+                  worktree, pushes, opens the PR and waits for CI (<a href="#status-implement"><code>implement</code></a
+                  >). Its self-check before READY runs the <a href="manifest.html#gates-ready-required">ready commands</a> at the head it
+                  reports, and the READY report lists each one with its exit code in <code>gates</code>. A fix the PR owes waits for a slot
+                  with its reason and a note that explains it, then runs in the implementer's own session, resumed with the reason (<a
+                    href="#status-fix"
+                    ><code>fix</code></a
+                  >). Without a session, a fresh one gets the whole protocol again.
+                </td>
+                <td>
+                  A READY report that names an open PR from the branch into the base: <code>pre-verify</code>. A READY report that does not
+                  match GitHub: a fix. A READY report GitHub could not read waits on
+                  <a href="#status-github"><code>pre-verify · waiting: github</code></a> and is checked again on a later tick
+                  (<code>report-unchecked</code>), with no agent run. BLOCKED: <a href="#status-decision"><code>decision</code></a> or
+                  <a href="#status-obstacle"><code>obstacle</code></a
+                  >. A run that ends without a report (a crash, a stop, a stall, a timeout or an outage) owes a <code>no-report</code> fix,
+                  and the next tick resumes it as a fix run. A first implement run that lost its session starts again instead. A fix run
+                  that fails or is stopped keeps its reason and note, so the next fix run names them again. A PR with no brief file and no
+                  GitHub PR goes back to <code>brief</code> instead, so the brief writer runs first.
                 </td>
               </tr>
-              <tr id="state-ready_claimed">
-                <td class="nowrap"><span class="badge state state-ready_claimed">ready_claimed</span></td>
+              <tr>
+                <td class="nowrap">
+                  <a href="#stage-pre-verify"><span class="badge stage stage-pre-verify">pre-verify</span></a>
+                </td>
                 <td>
-                  The driver checks the claim itself. It re-reads the PR head, waits for CI on that exact SHA, then applies the rollout
-                  policy to the diff. Then it reads the new code scanning alerts on the head. With
+                  The driver checks the claim itself. It re-reads the PR head, waits for CI on that exact SHA (<a href="#status-ci"
+                    ><code>ci</code></a
+                  >), then applies the rollout policy to the diff. Then it reads the new code scanning alerts on the head. With
                   <a href="manifest.html#gates-preVerify-scope"><code>gates.preVerify.scope</code></a
                   >, it then checks that every changed file outside the PR's scope is listed in the READY report's <code>deviations</code>.
                   With <a href="manifest.html#gates-ready-required">ready</a> or
                   <a href="manifest.html#gates-preVerify-required">pre-verify commands</a>, it then runs them itself in a slot, in the
                   worktree at that head (under <code>sandbox.runtime: docker</code> each command in a container of its own), one at a time,
                   in this order: <code>gates.ready.required</code>, <code>gates.ready.recommended</code>,
-                  <code>gates.preVerify.required</code>, <code>gates.preVerify.recommended</code>. Only its own result for a ready command
-                  counts, whatever the READY report says. The PR stays here while they run. A failed required command of either stage ends
-                  the run. Their results stay with that head, on the card and the PR page, and a failed recommended command also reaches the
-                  verifier's prompt. A stop, or a claim that moved on while they ran, drops the results. A run that throws logs
+                  <code>gates.preVerify.required</code>, <code>gates.preVerify.recommended</code> (<a href="#status-commands"
+                    ><code>commands</code></a
+                  >). Only its own result for a ready command counts, whatever the READY report says. A failed required command of either
+                  stage ends the run. Their results stay with that head, on the card and the PR page, and a failed recommended command also
+                  reaches the verifier's prompt. A stop, or a claim that moved on while they ran, drops the results. A run that throws logs
                   <code>on-done-error</code> and backs off like a failed agent run. When a stop, a crash or an error cuts a run short, the
                   driver cleans what it left in the worktree on the PR's next step, before an agent or a command works there, so the
                   clean-tree check does not count it against the implementer. Each check with a result logs a <code>gate-check</code> event
@@ -657,126 +558,74 @@
                   clean-tree check.
                 </td>
                 <td>
-                  A note that still waits for the implementer: <code>needs_fix</code>, before any check. CI green, no policy violation, no
-                  new alert, no undeclared file out of scope and a free slot: <code>verifying</code>. With ready or pre-verify commands, the
-                  slot goes to them first, and the verifier starts on a later tick when no required command failed at that head. A failed
-                  required ready command: <code>needs_fix</code>, as <code>ready check</code>, with what the READY report claimed for it in
-                  the note. A failed required pre-verify command: <code>needs_fix</code>, as <code>pre-verify check</code>. CI red, CI still
-                  unsettled after <a href="manifest.html#policy-ciStallMinutes"><code>ciStallMinutes</code></a
-                  >, a violation or a new alert: <code>needs_fix</code>. With the scope gate on, an undeclared file out of scope:
-                  <code>needs_fix</code>. A new alert under
+                  A note that still waits for the implementer: a fix, before any check. CI green, no policy violation, no new alert, no
+                  undeclared file out of scope and a free slot: <code>verify</code>. With ready or pre-verify commands, the slot goes to
+                  them first, and the verifier starts on a later tick when no required command failed at that head. A failed required ready
+                  command: a fix, as <code>ready check</code>, with what the READY report claimed for it in the note. A failed required
+                  pre-verify command: a fix, as <code>pre-verify check</code>. CI red, CI still unsettled after
+                  <a href="manifest.html#policy-ciStallMinutes"><code>ciStallMinutes</code></a
+                  >, a violation or a new alert: a fix. With the scope gate on, an undeclared file out of scope: a fix. A new alert under
                   <a href="manifest.html#repo-codeScanning"><code>codeScanning.action: block</code></a
-                  >: <code>blocked</code>, and the claim check reads the alerts again on every tick until they are gone. An alert from an
-                  analysis of an older commit: it stays here and waits for the analysis of the head. A
+                  >: <a href="#status-code-scanning-alerts"><code>code-scanning-alerts</code></a
+                  >, and the claim check reads the alerts again on every tick until they are gone. An alert from an analysis of an older
+                  commit: it stays here and waits for the analysis of the head. A
                   <a href="manifest.html#criteria-catalog">criteria catalog</a> that is missing from <code>origin/&lt;base&gt;</code> or
-                  invalid when the verifier would start: it stays here with an <code>error</code> event, no verifier starts, and five
-                  erroring ticks in a row escalate it.
+                  invalid when the verifier would start: it stays here with an <code>error</code>
+                  event, no verifier starts, and five erroring ticks in a row escalate it.
                 </td>
               </tr>
-              <tr id="state-verifying">
-                <td class="nowrap"><span class="badge state state-verifying">verifying</span></td>
+              <tr>
+                <td class="nowrap">
+                  <a href="#stage-verify"><span class="badge stage stage-verify">verify</span></a>
+                </td>
                 <td>
-                  A fresh read-only verifier tries to refute READY for that SHA, against the brief's acceptance checklist and the
-                  <a href="commands.html#cmd-note">recorded decisions</a>. Where a decision conflicts with the brief, the decision wins.
-                  With <a href="manifest.html#gates-verify-required"><code>gates.verify</code></a
+                  A fresh read-only verifier tries to refute READY for that SHA (<a href="#status-verify"><code>verify</code></a
+                  >), against the brief's acceptance checklist and the <a href="commands.html#cmd-note">recorded decisions</a>. Where a
+                  decision conflicts with the brief, the decision wins. With
+                  <a href="manifest.html#gates-verify-required"><code>gates.verify</code></a
                   >, it also checks the project criteria, which the driver fixes when it starts the verifier, and reports each one as pass,
                   fail or unverifiable. With <a href="manifest.html#gates-verify-criteriaFrom"><code>gates.verify.criteriaFrom</code></a
                   >, the catalog entries that apply to the PR join them as required criteria. The driver reads the catalog from
                   <code>origin/&lt;base&gt;</code> each time a verifier starts. After a FAIL it also re-checks
-                  <a href="#resume">the previous findings</a> and the implementer's answers to them, as claims.
+                  <a href="#resume">the previous findings</a> and the implementer's answers to them, as claims. A PR whose commands passed,
+                  or whose verifier was cut off, waits here for a slot. The next verifier re-checks the claim first, and on the same head
+                  and command lists it starts without running the commands again.
                 </td>
                 <td>
                   The driver first judges the verdict by those criteria. A required one that does not pass, or that the verifier does not
                   report, is a finding, and a PASS with one counts as a FAIL. A recommended one never blocks. PASS from an untouched
-                  worktree for the claimed SHA: <code>verified</code>. FAIL: <code>needs_fix</code>, or <code>escalated</code> when a
-                  finding the implementer disputed is still open. A PASS from a verifier that changed the tree is discarded, and the PR
-                  waits on <code>verify · waiting: slot</code> (<code>interrupted</code>) for the next verifier, or goes to
-                  <code>needs_fix</code> when a note waits in the queue. A PASS for a stale SHA is discarded too:
-                  <code>ready_claimed</code>. When the verifier touched the tree, the driver resets it to the SHA. It first deletes the same
-                  untracked Claude Code files as before the verifier and logs <code>local-config-removed</code> when there were any. After
-                  <code>verify-done</code> and any reset, and before the event of the outcome, each criterion logs a
-                  <code>gate-check</code> event with stage <code>verify</code>, its id as the item, its level and its result: pass, fail or
-                  unverifiable. As before the verifier, a result other than fail is logged once per claim and head.
-                  <code>verify-done</code> keeps the verifier's own verdict.
+                  worktree for the claimed SHA: <code>merge</code>. FAIL: a fix, or
+                  <a href="#status-dispute"><code>verify · needs-you: dispute</code></a> when a finding the implementer disputed is still
+                  open. A PASS from a verifier that changed the tree is discarded, and the PR waits on
+                  <a href="#status-slot"><code>verify · waiting: slot</code></a> for the next verifier, or goes to a fix when a note waits
+                  in the queue. A PASS for a stale SHA is discarded too: <code>pre-verify</code>. When the verifier touched the tree, the
+                  driver resets it to the SHA. It first deletes the same untracked Claude Code files as before the verifier and logs
+                  <code>local-config-removed</code> when there were any. After <code>verify-done</code> and any reset, and before the event
+                  of the outcome, each criterion logs a <code>gate-check</code> event with stage <code>verify</code>, its id as the item,
+                  its level and its result: pass, fail or unverifiable. As before the verifier, a result other than fail is logged once per
+                  claim and head. <code>verify-done</code> keeps the verifier's own verdict.
                 </td>
               </tr>
-              <tr id="state-verified">
-                <td class="nowrap"><span class="badge state state-verified">verified</span></td>
-                <td>The verification is bound to the head SHA and the patch id. The gate runs on every tick.</td>
+              <tr>
+                <td class="nowrap">
+                  <a href="#stage-merge"><span class="badge stage stage-merge">merge</span></a>
+                </td>
                 <td>
-                  Gate merge: <code>merged</code>. Rebase: the driver rebases the branch itself. Fix, a conflict or a maintainer review:
-                  <code>needs_fix</code>. Block: <code>blocked</code>. A new head with a different patch: <code>ready_claimed</code>. A
-                  patch id the gate no longer matches, on the same head too (<a href="#gate-not-verified"><code>not-verified</code></a
-                  >): <code>ready_claimed</code>.
+                  The verification is bound to the head SHA and the patch id. The gate runs on every tick, and its verdict sets the status
+                  (<a href="#gate">the merge gate</a>).
+                </td>
+                <td>
+                  Gate merge: <code>merged</code>. Rebase: the driver rebases the branch itself. Fix, a conflict or a maintainer review: a
+                  fix. Block: <a href="#status-gate-blocked"><code>gate-blocked</code></a
+                  >. A new head with a different patch: <code>pre-verify</code>. A patch id the gate no longer matches, on the same head too
+                  (<a href="#gate-not-verified"><code>not-verified</code></a
+                  >): <code>pre-verify</code>.
                 </td>
               </tr>
-              <tr id="state-needs_fix">
-                <td class="nowrap"><span class="badge state state-needs_fix">needs_fix</span></td>
-                <td>Waits for a slot, with a reason and a note that explains it.</td>
-                <td>A free slot: <code>fixing</code>.</td>
-              </tr>
-              <tr id="state-fixing">
-                <td class="nowrap"><span class="badge state state-fixing">fixing</span></td>
-                <td>
-                  The implementer's own session, resumed with the reason. Without a session, a fresh one gets the whole protocol again.
+              <tr>
+                <td class="nowrap">
+                  <a href="#stage-merged"><span class="badge stage stage-merged">merged</span></a>
                 </td>
-                <td>The same as <code>implementing</code>.</td>
-              </tr>
-              <tr id="state-blocked">
-                <td class="nowrap"><span class="badge state state-blocked">blocked</span></td>
-                <td>
-                  Waits for you: a question from the agent, open questions about the brief, a gate block (for example the release PR or a
-                  draft), a code scanning block, or a PR closed on GitHub.
-                </td>
-                <td>
-                  <a href="commands.html#cmd-note"><code>rollout note</code></a> answers it. An answer to brief questions gives the brief
-                  attempt back. A question from the agent or about the brief waits for your words, so
-                  <a href="commands.html#cmd-retry"><code>rollout retry</code></a> is refused there. On an obstacle, retry sends the PR to a
-                  fix run with the reason <code>retry</code> and fresh attempts. With
-                  <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, <a href="#delegate">the delegate</a> may
-                  answer first. An agent sure that a code scanning alert is a false positive blocks with kind <code>code-scanning</code>,
-                  which never goes to the delegate. After that report, dismiss a false positive on GitHub and retry. A code scanning block
-                  of the driver's, a gate block and a PR closed on GitHub need no command. The driver reads them again on every tick, and
-                  the PR moves on once the alert is dismissed, the gate passes or the PR is open again. A code scanning block keeps the
-                  verification. <code>rollout retry</code> on them only resets the budgets. A reopened PR gets back the status the close
-                  replaced, a question or a dispute with its time included, or else the waiting status of its stage. A note on a closed PR
-                  is kept, and after the reopen it applies as a note on the status the PR has again.
-                </td>
-              </tr>
-              <tr id="state-escalated">
-                <td class="nowrap"><span class="badge state state-escalated">escalated</span></td>
-                <td>
-                  The attempts of a role ran out, the PR had an error in five ticks in a row, or the verifier still finds open a finding the
-                  implementer disputed, which is yours to decide (reason <code>disputed finding</code>). An
-                  <a href="#outage">outage</a> never counts toward the five.
-                </td>
-                <td>
-                  <code>rollout retry</code> resets the attempts. Exhausted attempts wait for a slot on their stage, with any fix the PR
-                  owed, and errors go back to what the stage waits for. A PR on brief whose brief file exists moves on to implement instead.
-                  A PR whose verification still holds goes back to <code>verified</code>. <code>rollout note</code> sends an answer to a fix
-                  run, with one fresh attempt. A fix the PR owed keeps its reason, and the note joins it. On a PR still on brief with no
-                  brief file, the note goes to the brief writer instead. After a disputed finding only a note decides: it sends the PR to
-                  <code>needs_fix</code> with the findings, recorded as your decision on the dispute. Retry is refused there.
-                </td>
-              </tr>
-              <tr id="state-interrupted">
-                <td class="nowrap"><span class="badge state state-interrupted">interrupted</span></td>
-                <td>
-                  A run ended without a report: a crash, a stop, a stall, a timeout or an outage. A fix run that fails or is stopped keeps
-                  its reason and note and goes back to <code>needs_fix</code> instead, so the next fix run names them again. A fix run cut
-                  off by a hard end (a kill, a crash, a reboot) keeps its fix too, on the next start. A READY report also waits here when
-                  GitHub could not be read to check it. A PR whose commands passed waits here for its verifier, on
-                  <code>verify · waiting: slot</code>.
-                </td>
-                <td>
-                  A later tick resumes it. A parked READY report is checked again, with no agent run. An interrupted verifier re-checks the
-                  claim, and so does a PR whose commands passed. On the same head and command lists it then starts the verifier without
-                  running the commands again. An implementer with no session starts again, and anything else continues as a fix run. A PR
-                  with no brief file and no GitHub PR goes back to <code>pending</code> instead, so the brief writer runs first.
-                </td>
-              </tr>
-              <tr id="state-merged">
-                <td class="nowrap"><span class="badge state state-merged">merged</span></td>
                 <td>
                   Merged by the driver, or on GitHub by you. The PR's clone and the remote branch are removed. When an agent still runs,
                   that waits until its run ends, and its report is ignored.
@@ -788,7 +637,45 @@
         </div>
 
         <p>
-          One hold sits next to the states, in two scopes. <a href="commands.html#cmd-hold"><code>hold</code></a> sets it and
+          A <code>needs-you</code> status waits for you on any stage. A question from the agent (<a href="#status-decision"
+            ><code>decision</code></a
+          >, <a href="#status-obstacle"><code>obstacle</code></a
+          >) or about the brief (<a href="#status-brief-questions"><code>brief-questions</code></a
+          >) waits for <a href="commands.html#cmd-note"><code>rollout note</code></a
+          >. An answer to brief questions gives the brief attempt back. A question waits for your words, so
+          <a href="commands.html#cmd-retry"><code>rollout retry</code></a> is refused there. On an obstacle, retry sends the PR to a fix run
+          with the reason <code>retry</code> and fresh attempts. With
+          <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> on, <a href="#delegate">the delegate</a> may answer
+          first. An agent sure that a code scanning alert is a false positive blocks with kind <code>code-scanning</code>, which never goes
+          to the delegate. After that report, dismiss a false positive on GitHub and retry.
+        </p>
+
+        <p>
+          A code scanning block of the driver's (<a href="#status-code-scanning-alerts"><code>code-scanning-alerts</code></a
+          >), a gate block (<a href="#status-gate-blocked"><code>gate-blocked</code></a
+          >, for example the release PR or a draft) and a PR closed on GitHub (<a href="#status-closed"><code>closed</code></a
+          >) need no command. The driver reads them again on every tick, and the PR moves on once the alert is dismissed, the gate passes or
+          the PR is open again. A code scanning block keeps the verification. <code>rollout retry</code> on them only resets the budgets. A
+          reopened PR gets back the status the close replaced, a question or a dispute with its time included, or else the waiting status of
+          its stage. A note on a closed PR is kept, and after the reopen it applies as a note on the status the PR has again.
+        </p>
+
+        <p>
+          The driver gives up on a PR until you act when the attempts of a role ran out (<a href="#status-attempts-exhausted"
+            ><code>attempts-exhausted</code></a
+          >), when the PR had an error in five ticks in a row (<a href="#status-errors"><code>errors</code></a
+          >), or when the verifier still finds open a finding the implementer disputed, which is yours to decide (<a href="#status-dispute"
+            ><code>dispute</code></a
+          >). An <a href="#outage">outage</a> never counts toward the five. <code>rollout retry</code> resets the attempts. Exhausted
+          attempts wait for a slot on their stage, with any fix the PR owed, and errors go back to what the stage waits for. A PR on brief
+          whose brief file exists moves on to implement instead. A PR whose verification still holds goes back to <code>merge</code>.
+          <code>rollout note</code> sends an answer to a fix run, with one fresh attempt. A fix the PR owed keeps its reason, and the note
+          joins it. On a PR still on brief with no brief file, the note goes to the brief writer instead. After a disputed finding only a
+          note decides: it sends the PR to a fix with the findings, recorded as your decision on the dispute. Retry is refused there.
+        </p>
+
+        <p>
+          One hold sits beside the stage and status, in two scopes. <a href="commands.html#cmd-hold"><code>hold</code></a> sets it and
           <a href="commands.html#cmd-release"><code>release</code></a> lifts it. Each hold records who set it (<code>maintainer</code> or
           <code>driver</code>), since when, and a reason when there is one.
         </p>
@@ -815,10 +702,10 @@
         <p>
           What <a href="commands.html#cmd-status"><code>rollout status</code></a
           >, <a href="commands.html#cmd-card"><code>rollout card</code></a
-          >, the board and the PR page show is a stage and a status. The driver writes both into the ledger. For a ledger an older driver
-          wrote, the CLI and the UI derive them from the state as they read it, and never write the file. The stage says where the PR is.
-          The status says what happens there, in one of three kinds: <code>running</code> (an agent or the driver works on it),
-          <code>waiting</code> (it waits for something that needs nobody) and <code>needs-you</code> (it waits for you).
+          >, the board and the PR page show is a stage and a status. The driver writes both into the ledger. The CLI and the UI migrate an
+          older ledger in memory as they read it, and never write the file. The stage says where the PR is. The status says what happens
+          there, in one of three kinds: <code>running</code> (an agent or the driver works on it), <code>waiting</code> (it waits for
+          something that needs nobody) and <code>needs-you</code> (it waits for you).
         </p>
 
         <div class="scroll">
@@ -1306,7 +1193,7 @@
         <p>
           The delegate is off unless <a href="manifest.html#policy-delegate"><code>policy.delegate</code></a> is set. When a PR blocks on a
           question of an allowed kind, brief questions and <code>needs-decision</code> by default, the driver starts it in a free slot. The
-          PR shows <code>running: delegate</code> on the question's stage while it runs, and stays <code>blocked</code>.
+          PR shows <code>running: delegate</code> on the question's stage while it runs.
         </p>
 
         <p>
@@ -1620,8 +1507,8 @@
           <code>addressed</code>: fixed, with the evidence, or disputed, with its reason. The driver keeps the answers of every READY report
           until the next verdict, so a CI fix in between loses none. The next verifier gets the findings and the answers after the brief and
           the decisions, as claims to check. It reports each one as resolved, open or wrong, and an open one blocks a PASS. When a finding
-          the implementer disputed is still open, the PR goes to <a href="#state-escalated">escalated</a> instead of another fix round.
-          Every FAIL numbers its own findings from F1.
+          the implementer disputed is still open, the PR waits for you on <a href="#status-dispute">dispute</a> instead of another fix
+          round. Every FAIL numbers its own findings from F1.
         </p>
 
         <h2 id="gate">The merge gate <a class="anchor" href="#gate" aria-label="Link to this section">#</a></h2>
@@ -1769,8 +1656,8 @@
                 <td class="nowrap"><code>not-verified</code></td>
                 <td>wait</td>
                 <td>
-                  No verification of the current patch. For a PR in <code>verified</code> the driver drops the verification and sends the PR
-                  back to <code>ready_claimed</code>, and logs <code>head-moved-reverify</code> with reason <code>not-verified</code>. Under
+                  No verification of the current patch. For a PR on <code>merge</code> the driver drops the verification and sends the PR
+                  back to <code>pre-verify</code>, and logs <code>head-moved-reverify</code> with reason <code>not-verified</code>. Under
                   <code>merge: human</code> the approval was for the old patch id, so it is asked for again after the next PASS.
                 </td>
               </tr>
@@ -2017,11 +1904,11 @@
               <tr>
                 <td>A READY report GitHub could not read</td>
                 <td>
-                  The PR becomes <code>interrupted</code> with a <code>report-unchecked</code> event, and the report waits. A later tick
-                  checks it again with no agent run and no attempt spent. A report that names a PR GitHub does not know still goes back to
-                  the implementer: the PR read answers 404 while the repository still reads. A 404 for both waits like any other error,
-                  because a token that lost access to a private repository gets one for each. A waiting report counts as an error of the PR
-                  on each later tick that fails, unless it is an <a href="#outage">outage</a>.
+                  The PR waits on <code>pre-verify · waiting: github</code> with a <code>report-unchecked</code> event, and the report
+                  waits. A later tick checks it again with no agent run and no attempt spent. A report that names a PR GitHub does not know
+                  still goes back to the implementer: the PR read answers 404 while the repository still reads. A 404 for both waits like
+                  any other error, because a token that lost access to a private repository gets one for each. A waiting report counts as an
+                  error of the PR on each later tick that fails, unless it is an <a href="#outage">outage</a>.
                 </td>
               </tr>
               <tr>
@@ -2034,11 +1921,11 @@
               <tr>
                 <td>A run ended without a report</td>
                 <td>
-                  The PR becomes <code>interrupted</code> and resumes on a later tick. So does every run in progress when the driver stops.
-                  A fix run that fails, is stopped or is cut off by a hard end keeps its fix instead: the PR goes back to
-                  <code>needs_fix</code>, and the next fix run gets the same reason and note. It also gets the run's error, unless a hard
-                  end cut the run off. A brief run goes back to <code>pending</code>, and a delegate run hands the question back as its
-                  <code>needs-you</code> status.
+                  The PR waits on the stage of its run, with a <code>no-report</code> fix on implement, and resumes on a later tick. So does
+                  every run in progress when the driver stops. A fix run that fails, is stopped or is cut off by a hard end keeps its fix
+                  instead: the PR waits on implement with that fix, and the next fix run gets the same reason and note. It also gets the
+                  run's error, unless a hard end cut the run off. A brief run waits on brief again, and a delegate run hands the question
+                  back as its <code>needs-you</code> status.
                 </td>
               </tr>
               <tr>
@@ -2048,8 +1935,8 @@
               <tr>
                 <td>No output, or too long</td>
                 <td>
-                  The stall watchdog and the role's timeout, both in awake time, kill the run. It ends as failed and the PR becomes
-                  <code>interrupted</code>. Stderr from before the kill still counts, so a rate limit there gives the attempt back.
+                  The stall watchdog and the role's timeout, both in awake time, kill the run. It ends as failed and the PR waits to resume
+                  on the stage of its run. Stderr from before the kill still counts, so a rate limit there gives the attempt back.
                 </td>
               </tr>
               <tr>

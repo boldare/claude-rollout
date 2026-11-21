@@ -1,4 +1,5 @@
 import { sentence, serverAnswered } from './format.js'
+import { BLOCK_CODES } from './model.js'
 
 const BODIES = {
   'hold-all': () => ({ cmd: 'hold', all: true }),
@@ -27,12 +28,21 @@ function retries(row) {
   return row.effects?.retry?.applies === true
 }
 
+// A block waits for an answer, or the delegate works on its question.
+function answers({ status }) {
+  if (status.kind === 'running') {
+    return status.code === 'delegate'
+  }
+
+  return status.kind === 'needs-you' && BLOCK_CODES.includes(status.code)
+}
+
 export function prControls(pr, readOnly) {
   if (readOnly || pr.status.stage === 'merged') {
     return []
   }
 
-  const controls = [pr.held ? 'release' : 'hold', pr.state === 'blocked' ? 'answer' : 'note']
+  const controls = [pr.hold ? 'release' : 'hold', answers(pr) ? 'answer' : 'note']
 
   if (retries(pr)) {
     controls.push('retry')
@@ -47,7 +57,7 @@ export function panelControls(row, readOnly) {
     return []
   }
 
-  const controls = row.held ? ['release'] : []
+  const controls = row.hold ? ['release'] : []
 
   if (retries(row)) {
     controls.push('retry')

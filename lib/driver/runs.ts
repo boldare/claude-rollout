@@ -1,6 +1,6 @@
 import * as transitions from '../transitions.ts'
 import type { PrEntry } from '../transitions.ts'
-import type { BudgetRole, Finding, Head, Hold, IsoTime, QuestionKind, Role } from '../state.ts'
+import type { BudgetRole, Finding, Head, Hold, IsoTime, QuestionKind, Role, RunningCode } from '../state.ts'
 import { applyNote } from './commands.ts'
 import type { CommandsContext } from './commands.ts'
 
@@ -11,6 +11,7 @@ import type { CommandsContext } from './commands.ts'
 // or GitHub itself: the context brings it, as lib/driver.mjs builds it.
 
 export const EVIDENCE_CHARS = 300
+const AGENT_RUNS: ReadonlySet<RunningCode> = new Set(['brief-write', 'brief-review', 'implement', 'fix', 'verify'] as const)
 
 type Effort = string
 type BriefStep = 'write' | 'review'
@@ -236,7 +237,7 @@ interface StoredRun {
 }
 
 // The fields of an entry this module reads beside the ones transitions.ts types.
-export interface RunEntry extends PrEntry {
+export type RunEntry = PrEntry & {
   costUsd: number
   modelRaised?: boolean
   briefDrift?: { id: string; sha: string }[]
@@ -559,6 +560,13 @@ function logFailed({ say }: RunsContext, pr: RunPr, run: string, result: AgentRe
   }
 }
 
+// A brief, implement, fix or verify run still holds the PR.
+function agentAtWork(entry: RunEntry): boolean {
+  const status = entry.status
+
+  return status?.kind === 'running' && AGENT_RUNS.has(status.code)
+}
+
 export interface LaunchOptions {
   reason?: string
   note?: string
@@ -662,7 +670,7 @@ export function launch(context: RunsContext, pr: RunPr, role: BudgetRole, { reas
     (error) => {
       say(pr.id, 'on-done-error', { error: String(error).slice(0, 300) })
 
-      if (transitions.RUNNING[ledger.prs[pr.id].state]) {
+      if (agentAtWork(ledger.prs[pr.id])) {
         transitions.runFailed(ledger.prs[pr.id], role, now())
         ledger.prs[pr.id].lastError = String(error)
       }
@@ -911,13 +919,14 @@ export function launchDelegate(context: RunsContext, pr: RunPr): void {
   const { manifest, ledger, say, now, records } = context
   const entry = ledger.prs[pr.id]
   const policy = manifest.policy.delegate
+  const asked = transitions.statusQuestion(entry.status)
 
-  if (context.isStopping() || !policy || !entry.blocked) {
+  if (context.isStopping() || !policy || !asked) {
     return
   }
 
-  const question = context.questionHash(entry.blocked)
-  const blocked = { ...entry.blocked }
+  const blocked = { kind: asked.kind, question: asked.text, evidence: asked.evidence }
+  const question = context.questionHash({ kind: asked.kind, question: asked.text })
   const effort = policy.effort
   const model = manifest.model
 
@@ -957,7 +966,11 @@ export function launchDelegate(context: RunsContext, pr: RunPr): void {
   )
 }
 
-type DelegatedQuestion = NonNullable<PrEntry['blocked']>
+interface DelegatedQuestion {
+  kind: QuestionKind
+  question: string
+  evidence: string
+}
 
 export async function onDelegateDone(
   context: RunsContext,
@@ -975,7 +988,7 @@ export async function onDelegateDone(
   context.records.endRun(ledger.data, { id: pr.id, role: 'delegate' }, detail)
   logFailed(context, pr, run, result)
 
-  if (entry.state === 'merged') {
+  if (entry.stage === 'merged') {
     await context.cleanup(pr)
     return
   }
@@ -1007,7 +1020,7 @@ export async function onDelegateDone(
   // A maintainer's note applied while the delegate ran. The note wins.
   if (!delegating(entry, run)) {
     recordAnswer('dropped')
-    say(pr.id, 'delegate-dropped', { run, state: entry.state })
+    say(pr.id, 'delegate-dropped', { run, ...transitions.statusDetail(entry) })
     return
   }
 
@@ -1141,7 +1154,7 @@ export async function onDone(
   context.records.endRun(ledger.data, { id: pr.id, role }, detail)
   logFailed(context, pr, run, result)
 
-  if (entry.state === 'merged') {
+  if (entry.stage === 'merged') {
     await context.cleanup(pr)
     return
   }
@@ -1530,12 +1543,12 @@ async function onPreVerifyDone(context: RunsContext, pr: RunPr, { sha, key }: Co
   const { now } = context
   const entry = context.ledger.prs[pr.id]
 
-  if (entry.state === 'merged') {
+  if (entry.stage === 'merged') {
     await context.cleanup(pr)
     return
   }
 
-  if (outcome.stopped || context.isStopping() || entry.state !== 'ready_claimed' || entry.claimedSha !== sha) {
+  if (outcome.stopped || context.isStopping() || !transitions.claimWaits(entry) || entry.claimedSha !== sha) {
     transitions.commandsEnded(entry, now())
     return
   }

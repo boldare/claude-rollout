@@ -4,8 +4,9 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentEnv } from '../lib/identity.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { processStartTime } from '../lib/sandbox.mjs'
 import { children, failureReason, failureSignals, runAgent, streamError } from '../lib/spawn.mjs'
-import { jsonLines, makeRollout, readEnvFile, sampleTranscript, withProcessEnv } from './fixtures.mjs'
+import { jsonLines, makeRollout, readEnvFile, sampleTranscript, waitFor, withProcessEnv } from './fixtures.mjs'
 
 // What claude prints for `--resume` of a session that never reached disk.
 const RESUME_MISSING = {
@@ -38,9 +39,10 @@ test('failureSignals: the agent answer never counts, only stderr', () => {
   assert.deepEqual(failureSignals(result, ''), { transient: false, account: false, sessionMissing: false })
 })
 
-test('runAgent: a missing claude binary fails the run instead of throwing', async () => {
+test('runAgent: a missing claude binary fails the run instead of throwing, and records no process', async () => {
   const manifest = loadManifest(makeRollout())
   const pr = manifest.all[0]
+  const recorded = []
 
   manifest.claudeBin = join(manifest.dir, 'no-such-claude')
 
@@ -52,10 +54,12 @@ test('runAgent: a missing claude binary fails the run instead of throwing', asyn
     resume: false,
     cwd: manifest.repo.path,
     logName: 'A1-01-implement',
+    onProcess: (value) => recorded.push(value),
   })
 
   assert.equal(result.ok, false)
   assert.match(result.error, /ENOENT/)
+  assert.deepEqual(recorded, [])
 })
 
 const TRANSIENT_KINDS = ['rate_limit', 'overloaded', 'server_error']
@@ -288,6 +292,41 @@ test('runAgent: aborting its signal stops the run as a stop of the driver does',
   assert.equal(result.stopped, true)
   assert.equal(child.stopReason, 'driver-stop')
   assert.equal(children.size, before)
+})
+
+test('runAgent: on the host the agent leads a group of its own, and onProcess gets its pid and start time once', async (context) => {
+  const manifest = loadManifest(makeRollout())
+  const before = children.size
+  const recorded = []
+
+  fakeClaude(manifest, 'exec sleep 30')
+
+  const running = runAgent(manifest, manifest.all[0], {
+    role: 'implement',
+    prompt: 'unused',
+    effort: 'high',
+    sessionId: '00000000-0000-4000-8000-000000000000',
+    resume: false,
+    cwd: manifest.repo.path,
+    logName: 'A1-01-process',
+    onProcess: (value) => recorded.push(value),
+  })
+
+  const [child] = [...children].slice(before)
+
+  context.after(() => child.kill('SIGKILL'))
+
+  await waitFor(() => recorded.length > 0, 'the process to be recorded')
+
+  assert.doesNotThrow(() => process.kill(-child.pid, 0))
+  assert.deepEqual(recorded, [{ pid: child.pid, startTime: await processStartTime(child.pid) }])
+
+  child.kill('SIGTERM')
+
+  const result = await running
+
+  assert.equal(result.error, 'killed by SIGTERM')
+  assert.equal(recorded.length, 1)
 })
 
 test('runAgent: a signal aborted before the run starts no process', async () => {

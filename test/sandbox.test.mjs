@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,16 +16,18 @@ import {
   dockerArgs,
   dockerEnv,
   dockerRuntime,
+  endProcess,
   homePath,
   hostRuntime,
   imageFor,
+  processStartTime,
   runtimeFor,
   runtimeLine,
   runtimeSummary,
 } from '../lib/sandbox.mjs'
 import { runAgent, stopAllAgents } from '../lib/spawn.mjs'
 import { mirrorPath } from '../lib/worktree.mjs'
-import { fakeDocker, jsonLines, makeRollout, readEnvFile, waitFor, withProcessEnv } from './fixtures.mjs'
+import { alive, fakeDocker, gonePid, groupChild, jsonLines, makeRollout, readEnvFile, waitFor, withProcessEnv } from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
 const IMAGE = 'rollout-agent:test'
@@ -84,7 +86,7 @@ function fakeClaude(docker, script) {
   writeFileSync(join(docker.bin, 'claude'), `#!/bin/sh\n${script}\n`, { mode: 0o755 })
 }
 
-function agentRun(manifest, role, logName) {
+function agentRun(manifest, role, logName, options = {}) {
   return runAgent(manifest, manifest.all[0], {
     role,
     prompt: 'unused',
@@ -93,6 +95,7 @@ function agentRun(manifest, role, logName) {
     resume: false,
     cwd: join(manifest.wtRoot, 'A1'),
     logName,
+    ...options,
   })
 }
 
@@ -154,7 +157,7 @@ test('runtimeFor: the host for the default and for a manifest without sandbox, d
   assert.equal(runtimeFor(docker).claude, 'claude')
 })
 
-test('the host runtime spawns an agent and a command exactly as runAgent and runCommand did', () => {
+test('the host runtime spawns an agent and a command each in a group of its own, with stdin piped for the agent alone', () => {
   const manifest = loadManifest(makeRollout())
   const pr = manifest.all[0]
   const calls = []
@@ -177,6 +180,7 @@ test('the host runtime spawns an agent and a command exactly as runAgent and run
     pr,
     run: 'A1-01-implement',
     stdin: 'pipe',
+    group: true,
   })
 
   const command = runtime.start({
@@ -192,12 +196,115 @@ test('the host runtime spawns an agent and a command exactly as runAgent and run
   })
 
   assert.deepEqual(calls, [
-    [manifest.claudeBin, ['-p'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] }],
+    [manifest.claudeBin, ['-p'], { cwd, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] }],
     ['sh', ['-c', 'npm test'], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }],
   ])
 
-  assert.ok(agent instanceof EventEmitter)
+  assert.equal(agent.pid, 4242)
   assert.equal(command.pid, 4242)
+})
+
+test('a grouped handle: a kill signals the group and sets killed, until close, after which a kill sends nothing', (context) => {
+  const manifest = loadManifest(makeRollout())
+  const child = Object.assign(new EventEmitter(), { pid: 4242, stdin: null, stdout: null, stderr: null })
+  const kill = context.mock.method(process, 'kill', () => true)
+  const spec = { command: 'sh', args: ['-c', 'npm test'], cwd: manifest.dir, env: {}, stdin: 'ignore', group: true }
+  const handle = hostRuntime(manifest, { spawn: () => child }).start(spec)
+
+  assert.equal(handle.killed, false)
+
+  handle.kill('SIGTERM')
+
+  assert.equal(handle.killed, true)
+
+  child.emit('exit', null, 'SIGTERM')
+  handle.kill('SIGKILL')
+  child.emit('close', null, 'SIGTERM')
+  handle.kill('SIGKILL')
+
+  assert.deepEqual(
+    kill.mock.calls.map((call) => call.arguments),
+    [
+      [-4242, 'SIGTERM'],
+      [-4242, 'SIGKILL'],
+    ],
+  )
+})
+
+// Resolves once the script prints ready, so a trap it sets is in place.
+async function ready(child) {
+  let seen = ''
+
+  for await (const chunk of child.stdout) {
+    seen += chunk
+
+    if (seen.includes('ready')) {
+      return
+    }
+  }
+}
+
+async function recordedProcess(child) {
+  return { pid: child.pid, startTime: await processStartTime(child.pid) }
+}
+
+test('processStartTime: one live process gives the same time twice, and a pid that is gone gives null', async (context) => {
+  const child = groupChild(context)
+  const first = await processStartTime(child.pid)
+
+  assert.equal(typeof first, 'string')
+  assert.notEqual(first, '')
+  assert.equal(await processStartTime(child.pid), first)
+  assert.equal(await processStartTime(await gonePid()), null)
+})
+
+test('endProcess on the host: a pid with the start time the run recorded ends with its group', async (context) => {
+  const manifest = loadManifest(makeRollout())
+  const child = groupChild(context, 'sleep 30 & wait')
+  const exited = once(child, 'exit')
+
+  assert.deepEqual(await endProcess(manifest, 'A1-01-implement', await recordedProcess(child)), { outcome: 'ended' })
+  assert.deepEqual(await exited, [null, 'SIGTERM'])
+  assert.throws(() => process.kill(-child.pid, 0), { code: 'ESRCH' })
+})
+
+test('endProcess on the host: a pid with another start time is not the run, and gets no signal', async (context) => {
+  const manifest = loadManifest(makeRollout())
+  const child = groupChild(context)
+  const recorded = await recordedProcess(child)
+  const ended = await endProcess(manifest, 'A1-01-implement', { ...recorded, startTime: 'Thu Jan  1 00:00:00 1970' })
+
+  assert.deepEqual(ended, { outcome: 'not-the-run', found: recorded.startTime })
+  assert.deepEqual([child.exitCode, child.signalCode], [null, null])
+  assert.ok(alive(child.pid))
+})
+
+test('endProcess on the host: a pid that is gone, and a record of any other shape, get no signal', async (context) => {
+  const manifest = loadManifest(makeRollout())
+  const kill = context.mock.method(process, 'kill', () => true)
+  const pid = await gonePid()
+
+  assert.deepEqual(await endProcess(manifest, 'A1-01-implement', { pid, startTime: 'Thu Jan  1 00:00:00 1970' }), { outcome: 'gone' })
+
+  for (const recorded of [{ pid }, { pid: 1, startTime: 'synthetic' }, { pid: 0, startTime: 'synthetic' }, { pid: '42' }, null]) {
+    assert.deepEqual(await endProcess(manifest, 'A1-01-implement', recorded), { outcome: 'not-the-run' }, JSON.stringify(recorded))
+  }
+
+  assert.equal(kill.mock.calls.length, 0)
+})
+
+test('endProcess on the host: a group that ignores SIGTERM ends by SIGKILL after graceMs', async (context) => {
+  const manifest = loadManifest(makeRollout())
+  const child = groupChild(context, "trap '' TERM\necho ready\nwhile true; do sleep 1; done")
+
+  await ready(child)
+
+  const exited = once(child, 'exit')
+  const started = Date.now()
+
+  assert.deepEqual(await endProcess(manifest, 'A1-01-implement', await recordedProcess(child), { graceMs: 300 }), { outcome: 'ended' })
+  assert.deepEqual(await exited, [null, 'SIGKILL'])
+  assert.ok(Date.now() - started >= 300, `${Date.now() - started} ms`)
 })
 
 test('dockerArgs for an implement run: the clone, the skill read-only and the kept home, limits, and no value on the command line', async () => {
@@ -943,6 +1050,99 @@ test('liveGuardTest under Docker: a throw is a problem, and the scratch clone is
   assert.deepEqual(problems, [`live guard test: repo.agentToken ${manifest.repo.agentToken} does not exist`])
   assert.deepEqual(runs(docker), [])
   assert.deepEqual(scratchClones(manifest), [])
+})
+
+function removals(docker) {
+  return docker.calls().filter((call) => call.tool === 'docker' && call.args[0] === 'rm')
+}
+
+test('endProcess under Docker: the container of a run whose client died is removed, once, and its process is gone', async (context) => {
+  const { docker, manifest, pr, clone } = dockerRollout()
+  const name = 'rollout-demo-A1-01-implement'
+  const pidFile = join(docker.bin, 'containers', `${name}.pid`)
+
+  fakeClaude(docker, 'exec sleep 30')
+
+  const handle = dockerRuntime(manifest).start({
+    command: 'claude',
+    args: [],
+    cwd: clone,
+    env: {},
+    role: 'implement',
+    pr,
+    run: 'A1-01-implement',
+    stdin: 'ignore',
+  })
+
+  // The container holds the client's pipes, so the handle closes only once it ends.
+  const exited = once(handle, 'exit')
+
+  await waitFor(() => existsSync(pidFile), 'the container to start', 10_000)
+
+  const pid = Number(readFileSync(pidFile, 'utf8'))
+
+  context.after(() => {
+    if (existsSync(pidFile) && alive(pid)) {
+      process.kill(-pid, 'SIGKILL')
+    }
+  })
+
+  // The handle's own kill goes through docker stop.
+  process.kill(handle.pid, 'SIGKILL')
+  await exited
+
+  assert.ok(alive(pid))
+  assert.deepEqual(await endProcess(manifest, 'A1-01-implement', { container: name }), { outcome: 'ended' })
+  await waitFor(() => !alive(pid), 'the container process to be gone')
+  assert.deepEqual(
+    removals(docker).map((call) => call.args),
+    [['rm', '--force', name]],
+  )
+})
+
+test('endProcess under Docker: no such container is gone, and a daemon that does not answer fails with its error, each after one rm', async () => {
+  const { docker, manifest } = dockerRollout()
+  const name = 'rollout-demo-A1-02-verify'
+
+  assert.deepEqual(await endProcess(manifest, 'A1-02-verify', { container: name }), { outcome: 'gone' })
+  assert.equal(removals(docker).length, 1)
+
+  docker.setState({ server: null })
+
+  assert.deepEqual(await endProcess(manifest, 'A1-02-verify', { container: name }), {
+    outcome: 'failed',
+    error: 'Cannot connect to the Docker daemon',
+  })
+
+  assert.deepEqual(
+    removals(docker).map((call) => call.args),
+    [
+      ['rm', '--force', name],
+      ['rm', '--force', name],
+    ],
+  )
+})
+
+test('endProcess under Docker: a container whose name is not the run is left alone, and docker never runs', async () => {
+  const { docker, manifest } = dockerRollout()
+  const other = 'rollout-demo-A1-02-verify'
+
+  assert.deepEqual(await endProcess(manifest, 'A1-01-implement', { container: other }), { outcome: 'not-the-run', found: other })
+  assert.deepEqual(docker.calls(), [])
+})
+
+test('runAgent under Docker records the container by the --name of its docker run, once', async () => {
+  const { docker, manifest } = dockerRollout()
+  const recorded = []
+
+  fakeClaude(docker, 'exit 0')
+
+  await agentRun(manifest, 'implement', 'A1-06-implement', { onProcess: (value) => recorded.push(value) })
+
+  const [run] = runs(docker)
+
+  assert.deepEqual(values(run.args, '--name'), ['rollout-demo-A1-06-implement'])
+  assert.deepEqual(recorded, [{ container: 'rollout-demo-A1-06-implement' }])
 })
 
 // Last: stopAllAgents also stops every runAgent this process would start.
