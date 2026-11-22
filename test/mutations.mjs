@@ -230,6 +230,13 @@ const MUTATIONS = [
     tests: ['test/checks.test.mjs'],
   },
   {
+    id: 'confirmed-candidate-adds-no-finding',
+    file: 'lib/checks.mjs',
+    find: 'findings: confirmed.map(candidateFinding)',
+    replace: 'findings: []',
+    tests: ['test/checks.test.mjs', 'test/driver-gate.test.mjs'],
+  },
+  {
     id: 'outlived-start-time-ignored',
     file: 'lib/sandbox.mjs',
     find: 'found !== startTime',

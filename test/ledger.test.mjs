@@ -146,6 +146,33 @@ test('recordFindings numbers the findings from F1 in order and replaces the earl
   assert.deepEqual(entry.findings, { at: FAILED_AT, items: [] })
 })
 
+test('recordFindings: an item gets fromReview only for a string lined up with it', () => {
+  const entry = freshPr()
+  const key = 'review.correctness\nsrc/orders/total.ts\nthe total ignores a refunded line'
+
+  recordFindings(entry, ['own', 'criterion', 'confirmed', 'past the keys'], FAILED_AT, [null, undefined, key])
+
+  assert.deepEqual(entry.findings.items, [
+    { id: 'F1', text: 'own', answer: null },
+    { id: 'F2', text: 'criterion', answer: null },
+    { id: 'F3', text: 'confirmed', answer: null, fromReview: key },
+    { id: 'F4', text: 'past the keys', answer: null },
+  ])
+
+  recordAnswers(entry, [{ id: 'F3', action: 'Skipped a refunded line.', outcome: 'fixed' }])
+
+  assert.deepEqual(entry.findings.items[2], {
+    id: 'F3',
+    text: 'confirmed',
+    answer: { outcome: 'fixed', action: 'Skipped a refunded line.' },
+    fromReview: key,
+  })
+
+  recordFindings(entry, ['own'], FAILED_AT, [])
+
+  assert.deepEqual(entry.findings.items, [{ id: 'F1', text: 'own', answer: null }])
+})
+
 test('recordAnswers: a later answer wins, an answer without a known outcome counts as fixed, unknown ids are ignored', () => {
   const entry = freshPr()
 

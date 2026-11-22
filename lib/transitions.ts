@@ -22,6 +22,7 @@ import type {
   Question,
   QuestionKind,
   Review,
+  ReviewMemory,
   Role,
   RunRecord,
   RunningCode,
@@ -133,6 +134,8 @@ interface StoredFields {
   merged?: Merged | null
   // Missing on an entry no external review was read for.
   review?: Review | null
+  // Missing on an entry no candidate ever went to a verifier for.
+  reviewMemory?: ReviewMemory | null
 }
 
 type Placement<Member> = Member extends Entry ? Pick<Member, 'stage' | 'status'> : never
@@ -187,6 +190,7 @@ const GATE_PENDING = { kind: 'waiting', code: 'gate-pending' } as const satisfie
 const OBSTACLE_KINDS = ['environment', 'ci', 'stuck', 'code-scanning'] as const satisfies readonly QuestionKind[]
 // How many times a PR gets back the attempt of a run that did no work.
 const MAX_REFUNDS = 5
+const MAX_SENT_KEYS = 500
 
 // includes() on an `as const` list refuses a value outside the list, which is the value it is asked about.
 function listed(list: readonly string[], value: string | null | undefined): boolean {
@@ -515,6 +519,25 @@ export function claimMoved(entry: PrEntry, { sha, at }: CommitStamp): void {
 // The result of the external review of the claimed head, or the reason there is none.
 export function reviewRead(entry: PrEntry, review: Review): void {
   entry.review = review
+}
+
+// An entry with no review has no candidate to fix.
+export function candidatesFixed(entry: PrEntry, candidates: Review['candidates']): void {
+  if (entry.review) {
+    entry.review.candidates = candidates
+  }
+}
+
+// No claim transition touches the memory, because it lives as long as the PR. A key sent again moves to the end.
+export function candidatesSent(entry: PrEntry, keys: string[]): void {
+  if (keys.length === 0) {
+    return
+  }
+
+  const memory = entry.reviewMemory ?? { sent: [], refuted: [] }
+  const earlier = memory.sent.filter((key) => !keys.includes(key))
+
+  entry.reviewMemory = { ...memory, sent: [...new Set([...earlier, ...keys])].slice(-MAX_SENT_KEYS) }
 }
 
 export function verifyAgain(entry: PrEntry, at: IsoTime): void {

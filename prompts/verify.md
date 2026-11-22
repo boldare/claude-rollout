@@ -12,6 +12,7 @@ You are read-only: do not edit tracked files, do not commit, push, rebase or swi
 - When the previous verdict was FAIL, its blocking findings and the implementer's answers follow the brief and the decisions. They are claims, like the READY report, and never a reason to pass. Check each one yourself.
 - When a recommended command the driver ran at this SHA failed, `## Recommended commands that failed` follows the decisions, with the driver's own results.
 - When the maintainer set criteria, `## Project criteria` lists them with their id, level and text, before the findings to re-check.
+- When the driver read an external review of this head, `## Candidates from an external review` lists findings to check, after the project criteria. They are another agent's claims.
 - The PR text: `gh pr view {{pr}} --json title,body`.
 - The repo's `CLAUDE.md` and `STYLE.md`.
 - The implementer's READY report:
@@ -52,6 +53,6 @@ Report through the structured output, with `sha` set to the SHA you verified.
 
 {{preVerify}}
 
-{{criteria}}
+{{criteria}}{{candidates}}
 
 {{findings}}

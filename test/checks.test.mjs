@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   briefGates,
   briefOutcome,
+  candidatesOutcome,
   commandResult,
   criteriaOutcome,
   inheritsParent,
@@ -793,6 +794,107 @@ test('criteriaOutcome: a finding adds a period only to a criterion text without 
     'V2 (required criterion): A new branch in the code has a test that fails without it. lib/a.mjs:3',
     'V3 (required criterion): Does every export have a test? lib/a.mjs:3',
   ])
+})
+
+// Candidates as sentCandidates in lib/review.ts gives them: the fields of a review finding with an id and a key.
+function sentCandidate(id, severity, title, extra = {}) {
+  const file = 'src/orders/total.ts'
+
+  return {
+    severity,
+    criterion: 'review.correctness',
+    title,
+    file,
+    line: 42,
+    failureScenario: 'An order with one refunded line shows the full price.',
+    fix: 'Skip a line whose refund is settled.',
+    status: 'new',
+    ...extra,
+    id,
+    key: `review.correctness\n${file}\n${title.toLowerCase()}`,
+  }
+}
+
+const CANDIDATES = [
+  sentCandidate('X1', 'high', 'The total ignores a refunded line'),
+  sentCandidate('X2', 'medium', 'A refused refund is dropped'),
+  sentCandidate('X3', 'medium', 'The discount is applied twice'),
+  sentCandidate('X4', 'medium', 'A failed read is retried forever'),
+]
+
+const CONFIRMED_TEXT =
+  'External review finding (high, review.correctness) at src/orders/total.ts:42: The total ignores a refunded line. Failure scenario: An order with one refunded line shows the full price. Proposed fix: Skip a line whose refund is settled. The verifier confirmed it: src/orders/total.ts:44 adds every line.'
+
+test('candidatesOutcome: one record per sent candidate in the order sent, and a finding for each confirmed one', () => {
+  const outcome = candidatesOutcome(CANDIDATES, [
+    { id: 'X3', result: 'unverifiable', evidence: 'The tests do not run here.' },
+    { id: 'X2', result: 'refuted', evidence: 'src/orders/refund.ts:20 keeps the order open.' },
+    { id: 'X1', result: 'confirmed', evidence: 'src/orders/total.ts:44 adds every line.' },
+  ])
+
+  assert.deepEqual(outcome.results, [
+    { ...CANDIDATES[0], result: 'confirmed', evidence: 'src/orders/total.ts:44 adds every line.' },
+    { ...CANDIDATES[1], result: 'refuted', evidence: 'src/orders/refund.ts:20 keeps the order open.' },
+    { ...CANDIDATES[2], result: 'unverifiable', evidence: 'The tests do not run here.' },
+    { ...CANDIDATES[3], result: 'unanswered', evidence: '' },
+  ])
+
+  assert.deepEqual(outcome.confirmed, outcome.results.slice(0, 1))
+  assert.deepEqual(outcome.findings, [{ text: CONFIRMED_TEXT, key: CANDIDATES[0].key }])
+  assert.deepEqual(candidatesOutcome([], [{ id: 'X1', result: 'confirmed', evidence: 'made up' }]), {
+    results: [],
+    confirmed: [],
+    findings: [],
+  })
+})
+
+test('candidatesOutcome: a made-up id counts for nothing, an unknown result is unanswered and the first entry of an id counts', () => {
+  const outcome = candidatesOutcome(CANDIDATES.slice(0, 3), [
+    { id: 'X9', result: 'confirmed', evidence: 'made up' },
+    { id: 'F1', result: 'confirmed', evidence: 'a finding id' },
+    { id: 'X1', result: 'fail', evidence: 'a criterion result' },
+    { id: 'X1', result: 'confirmed', evidence: 'a second opinion' },
+    { id: 'X2', result: 'refuted' },
+    { id: 'X2', result: 'confirmed', evidence: 'a second opinion' },
+    { id: 'X3', result: 'open', evidence: 'a re-check status' },
+  ])
+
+  assert.deepEqual(
+    outcome.results.map((record) => [record.id, record.result, record.evidence]),
+    [
+      ['X1', 'unanswered', ''],
+      ['X2', 'refuted', ''],
+      ['X3', 'unanswered', ''],
+    ],
+  )
+
+  assert.deepEqual(outcome.confirmed, [])
+  assert.deepEqual(outcome.findings, [])
+})
+
+test('candidatesOutcome: a finding is one line, leaves out the X id and an empty text of the review', () => {
+  const sent = [
+    sentCandidate('X1', 'high', 'The total ignores a refunded line'),
+    sentCandidate('X2', 'medium', 'A title\nwith a line break', { failureScenario: '', fix: ' ' }),
+  ]
+
+  const outcome = candidatesOutcome(sent, [
+    { id: 'X1', result: 'confirmed', evidence: 'src/orders/total.ts:44 adds every line.' },
+    { id: 'X2', result: 'confirmed', evidence: 'Run:\n\nnpm test\r\n\nnot ok 3' },
+  ])
+
+  assert.deepEqual(
+    outcome.findings.map((finding) => finding.text),
+    [
+      CONFIRMED_TEXT,
+      'External review finding (medium, review.correctness) at src/orders/total.ts:42: A title with a line break. The verifier confirmed it: Run: npm test not ok 3',
+    ],
+  )
+
+  const silent = candidatesOutcome(sent.slice(0, 1), [{ id: 'X1', result: 'confirmed', evidence: '' }])
+
+  assert.ok(silent.findings[0].text.endsWith('Proposed fix: Skip a line whose refund is settled. The verifier confirmed it.'))
+  assert.equal(silent.findings[0].text.includes('X1'), false)
 })
 
 const DOCS_STALE = 'Unchanged text in an edited doc agrees with the change.'
