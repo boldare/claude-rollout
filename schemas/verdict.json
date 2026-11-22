@@ -19,7 +19,7 @@
     "blocking": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Real defects or unmet checklist items, each with file:line or command evidence. A project criterion that does not pass goes into criteria only."
+      "description": "Real defects or unmet checklist items, each with file:line or command evidence. A project criterion that does not pass goes into criteria only. A confirmed candidate of an external review goes into external only."
     },
     "nonBlocking": { "type": "array", "items": { "type": "string" } },
     "recheck": {
@@ -47,7 +47,20 @@
         },
         "required": ["id", "result", "evidence"]
       }
+    },
+    "external": {
+      "type": "array",
+      "description": "One entry per candidate listed under \"Candidates from an external review\", empty when the prompt lists none. A confirmed candidate goes here only, never also into blocking.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "result": { "type": "string", "enum": ["confirmed", "refuted", "unverifiable"] },
+          "evidence": { "type": "string" }
+        },
+        "required": ["id", "result", "evidence"]
+      }
     }
   },
-  "required": ["verdict", "sha", "summary", "checklist", "blocking", "nonBlocking", "recheck", "criteria"]
+  "required": ["verdict", "sha", "summary", "checklist", "blocking", "nonBlocking", "recheck", "criteria", "external"]
 }

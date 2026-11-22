@@ -12,7 +12,7 @@ import { dialogFor, prControls } from '../ui/commands.js'
 import { renderDetail } from '../ui/detail.js'
 import { renderHeader } from '../ui/header.js'
 import { installDocument } from './fake-dom.mjs'
-import { REVIEW_MANIFEST, at, makeRollout, samplePrs, sampleReview, sampleStatus } from './fixtures.mjs'
+import { REVIEW_MANIFEST, answeredReview, at, makeRollout, samplePrs, sampleReview, sampleStatus } from './fixtures.mjs'
 
 // The CLI and the board print one model. One PR per stage and code of
 // STAGE_STATUSES, a merged one and a held running one: each status line of
@@ -412,4 +412,38 @@ test('parity: the review section of rollout card reads as the external review on
   }
 
   assert.deepEqual(rowCounts, [4, 0])
+})
+
+test('parity: with an answered review, rollout card and the verifier tab note the same outcome of each finding, row for row', () => {
+  const answered = answeredReview()
+  // The high finding is already F1, so the next launch fixed the medium one alone.
+  const waiting = {
+    ...answered,
+    review: { ...answered.review, candidates: [{ id: 'X1', key: answered.review.candidates[1].key }] },
+    verdict: samplePrs().A1.verdict,
+    verdicts: [samplePrs().A1.verdict],
+  }
+
+  const cases = [
+    [answered, ['X1 confirmed', 'X2 refuted: src/orders/load.ts:9 caps the retries at three.', 'shown only, below medium', 'fixed']],
+    [waiting, ['not sent, already finding F1', 'X1 sent, no answer yet', 'shown only, below medium', 'fixed']],
+  ]
+
+  for (const [fields, notes] of cases) {
+    const dir = makeRollout({ manifest: REVIEW_MANIFEST, prs: { A1: { ...samplePrs().A1, ...fields } } })
+    const lines = cardReview(cli('card', 'A1', '--dir', dir)).filter((line) => line.startsWith('  ['))
+    const rows = pageReview(dir).querySelector('tbody').children
+    const cells = rows.map((row) => row.querySelectorAll('td').map((cell) => cell.textContent))
+
+    assert.deepEqual(
+      cells.map((row) => row.at(-1)),
+      notes,
+    )
+
+    assert.equal(lines.length, rows.length)
+    lines.forEach((line, i) => {
+      assertInOrder(line, cells[i], `row ${i}`)
+      assert.ok(line.endsWith(` (${notes[i]})`), line)
+    })
+  }
 })

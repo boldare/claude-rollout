@@ -6,6 +6,8 @@ import {
   approveInbox,
   briefWaits,
   briefWritten,
+  candidatesFixed,
+  candidatesSent,
   claimMoved,
   claimNewHead,
   commandsPassed,
@@ -459,6 +461,105 @@ test('transitions: toClaimed and claimNewHead drop a review of another head, and
 
     assert.equal(other.review, null, name)
     assert.deepEqual(same.review, reviewOf(SHA), name)
+  }
+})
+
+const FIXED_CANDIDATES = [
+  { id: 'X1', key: 'review.correctness\nsrc/orders/total.ts\nthe total ignores a refunded line' },
+  { id: 'X2', key: 'review.errors\nsrc/orders/refund.ts\na refused refund is dropped' },
+]
+
+test('transitions: candidatesFixed sets the candidates of the stored review and changes nothing else', () => {
+  const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
+
+  entry.review = reviewOf(SHA, { candidates: [{ id: 'X1', key: 'an earlier launch' }] })
+
+  const before = structuredClone(entry)
+
+  candidatesFixed(entry, FIXED_CANDIDATES)
+
+  assert.deepEqual(entry, { ...before, review: { ...before.review, candidates: FIXED_CANDIDATES } })
+
+  candidatesFixed(entry, [])
+
+  assert.deepEqual(entry.review.candidates, [])
+})
+
+test('transitions: candidatesFixed leaves an entry with no review without one', () => {
+  for (const review of [undefined, null]) {
+    const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
+
+    if (review === null) {
+      entry.review = null
+    }
+
+    const before = structuredClone(entry)
+
+    candidatesFixed(entry, FIXED_CANDIDATES)
+
+    assert.deepEqual(entry, before, String(review))
+  }
+})
+
+test('transitions: candidatesSent creates the memory, moves a key sent again to the end and changes nothing else', () => {
+  const entry = entryWith({ state: 'verifying', pr: 7, claimedSha: SHA })
+  const before = structuredClone(entry)
+
+  candidatesSent(entry, ['first', 'second'])
+
+  assert.deepEqual(entry, { ...before, reviewMemory: { sent: ['first', 'second'], refuted: [] } })
+
+  candidatesSent(entry, ['third', 'first'])
+
+  assert.deepEqual(entry.reviewMemory, { sent: ['second', 'third', 'first'], refuted: [] })
+})
+
+test('transitions: candidatesSent keeps the refuted list and the last 500 keys', () => {
+  const entry = entryWith({ state: 'verifying', pr: 7, claimedSha: SHA })
+  const refuted = [{ key: 'old', blob: null, evidence: 'Gone at a1a1a1a.', run: 'P1-02-verify', at: EARLIER }]
+  const keys = Array.from({ length: 499 }, (_, i) => `key ${i + 1}`)
+
+  entry.reviewMemory = { sent: keys, refuted }
+  candidatesSent(entry, ['key 1', 'key 500', 'key 501'])
+
+  assert.equal(entry.reviewMemory.sent.length, 500)
+  assert.deepEqual(entry.reviewMemory.sent.slice(0, 2), ['key 3', 'key 4'])
+  assert.deepEqual(entry.reviewMemory.sent.slice(-3), ['key 1', 'key 500', 'key 501'])
+  assert.deepEqual(entry.reviewMemory.refuted, refuted)
+})
+
+test('transitions: candidatesSent with no key writes nothing', () => {
+  const entry = entryWith({ state: 'verifying', pr: 7, claimedSha: SHA })
+  const before = structuredClone(entry)
+
+  candidatesSent(entry, [])
+
+  assert.deepEqual(entry, before)
+  assert.equal(Object.hasOwn(entry, 'reviewMemory'), false)
+
+  entry.reviewMemory = { sent: ['first'], refuted: [] }
+  candidatesSent(entry, [])
+
+  assert.deepEqual(entry.reviewMemory, { sent: ['first'], refuted: [] })
+})
+
+test('transitions: a claim that moves keeps the review memory, which lives as long as the PR', () => {
+  const memory = { sent: ['first', 'second'], refuted: [] }
+  const claims = {
+    toClaimed: (entry) => toClaimed(entry, { pr: 7, sha: SHA, at: AT }),
+    claimNewHead: (entry) => claimNewHead(entry, { sha: SHA, at: AT }),
+    claimMoved: (entry) => claimMoved(entry, { sha: SHA, at: AT }),
+  }
+
+  for (const [name, claim] of Object.entries(claims)) {
+    const entry = entryWith({ state: 'verified', pr: 7, claimedSha: OLD_SHA, verified: verification(OLD_SHA) })
+
+    entry.review = reviewOf(OLD_SHA)
+    entry.reviewMemory = structuredClone(memory)
+    claim(entry)
+
+    assert.equal(entry.review, null, name)
+    assert.deepEqual(entry.reviewMemory, memory, name)
   }
 })
 

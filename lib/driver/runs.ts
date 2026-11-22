@@ -1,6 +1,7 @@
 import * as transitions from '../transitions.ts'
 import type { PrEntry } from '../transitions.ts'
-import type { BudgetRole, Finding, Head, Hold, IsoTime, QuestionKind, Role, RunningCode } from '../state.ts'
+import { sentCandidates } from '../review.ts'
+import type { BudgetRole, CandidateAnswer, Finding, Head, Hold, IsoTime, QuestionKind, Role, RunningCode, SentCandidate } from '../state.ts'
 import { applyNote } from './commands.ts'
 import type { CommandsContext } from './commands.ts'
 
@@ -82,6 +83,7 @@ interface Verdict {
   nonBlocking?: string[]
   recheck?: Recheck[]
   criteria?: unknown[]
+  external?: unknown[]
 }
 
 interface BriefReport {
@@ -220,6 +222,12 @@ interface CriteriaOutcome {
   findings: string[]
 }
 
+interface CandidatesOutcome {
+  results: CandidateAnswer[]
+  confirmed: CandidateAnswer[]
+  findings: { text: string; key: string }[]
+}
+
 interface FeedbackItem {
   id: string
   commentId: number | string | null
@@ -350,7 +358,7 @@ export interface RunsContext {
     endRun: (data: RunLedger['data'], run: { id: string; role: Role; step?: BriefStep }, detail: DoneDetail) => void
     recordAnswers: (entry: RunEntry, addressed: Addressed[]) => void
     recordVerdict: (entry: RunEntry, verdict: object) => void
-    recordFindings: (entry: RunEntry, blocking: string[], at: IsoTime) => void
+    recordFindings: (entry: RunEntry, blocking: string[], at: IsoTime, fromReview?: (string | null)[]) => void
     recheckedFindings: (entry: RunEntry, recheck: Recheck[]) => unknown[]
   }
 
@@ -359,6 +367,7 @@ export interface RunsContext {
     briefOutcome: (gates: BriefGates, report: BriefReport) => BriefOutcome
     commandResult: (step: CommandStep, run: CommandRun, tree: Tree, sha: string) => CommandRecord
     criteriaOutcome: (sent: unknown[], reported: unknown[]) => CriteriaOutcome
+    candidatesOutcome: (sent: SentCandidate[], reported: unknown[]) => CandidatesOutcome
     preVerifyOutcome: (results: CommandRecord[]) => { failedRequired: CommandRecord[]; reason: string | null }
   }
 
@@ -1335,15 +1344,24 @@ async function verified(context: RunsContext, pr: RunPr, entry: RunEntry, out: V
   }
 
   const criteria = context.checks.criteriaOutcome(entry.verifyCriteria ?? [], out.criteria ?? [])
-  // The verifier's own findings come first, so they keep their numbers.
+  // The candidates fixed at the launch of this verifier. A review of another head listed none in its prompt.
+  const sent = entry.review?.sha === sha ? sentCandidates(entry.review) : []
+  const external = context.checks.candidatesOutcome(sent, out.external ?? [])
+  // The verifier's own findings come first, so they keep their numbers. Only the confirmed candidates carry a review key.
+  const unkeyed = [...(out.blocking ?? []), ...criteria.findings]
   const judged = {
     ...out,
-    verdict: criteria.failedRequired.length > 0 ? 'FAIL' : out.verdict,
-    blocking: [...(out.blocking ?? []), ...criteria.findings],
+    verdict: criteria.failedRequired.length > 0 || external.confirmed.length > 0 ? 'FAIL' : out.verdict,
+    blocking: [...unkeyed, ...external.findings.map((finding) => finding.text)],
     criteria: criteria.results,
+    external: external.results,
   }
 
+  const fromReview = [...unkeyed.map(() => null), ...external.findings.map((finding) => finding.key)]
+  const sentKeys = sent.map((candidate) => candidate.key)
+
   records.recordVerdict(entry, { ...judged, recheck: records.recheckedFindings(entry, out.recheck ?? []), at: now(), run })
+  transitions.candidatesSent(entry, sentKeys)
 
   for (const record of criteria.results) {
     context.gateCheck(pr, entry, {
@@ -1358,7 +1376,7 @@ async function verified(context: RunsContext, pr: RunPr, entry: RunEntry, out: V
   // A FAIL is honoured even from a verifier that touched the tree: trusting
   // it cannot cause a merge. A PASS must come from an untouched tree.
   if (judged.verdict === 'FAIL') {
-    rejected(context, pr, entry, judged, touched ? tree.status : '')
+    rejected(context, pr, entry, judged, touched ? tree.status : '', fromReview)
     return
   }
 
@@ -1391,11 +1409,19 @@ async function verified(context: RunsContext, pr: RunPr, entry: RunEntry, out: V
 
 // The upheld disputes are read before the FAIL's own findings replace them.
 // They go to the maintainer, so no fix attempt is spent on them.
-function rejected(context: RunsContext, pr: RunPr, entry: RunEntry, out: Verdict & { blocking: string[] }, leftovers: string): void {
+// `fromReview` lines up with `out.blocking`.
+function rejected(
+  context: RunsContext,
+  pr: RunPr,
+  entry: RunEntry,
+  out: Verdict & { blocking: string[] },
+  leftovers: string,
+  fromReview: (string | null)[],
+): void {
   const { say, now } = context
   const upheld = upheldDisputes(entry, out.recheck ?? [])
 
-  context.records.recordFindings(entry, out.blocking, now())
+  context.records.recordFindings(entry, out.blocking, now(), fromReview)
 
   const note = context.prompts.findingsNote(entry.findings?.items ?? [], out.checklist, leftovers)
 

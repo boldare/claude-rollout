@@ -1,5 +1,5 @@
 import * as transitions from '../transitions.ts'
-import { candidates } from '../review.ts'
+import { candidates, selectCandidates } from '../review.ts'
 import type { ReviewRead } from '../review.ts'
 import { REVIEW_SEVERITIES } from '../state.ts'
 import type { IsoTime, PreVerifyStatus, Review, ReviewFinding, ReviewSeverity } from '../state.ts'
@@ -435,9 +435,22 @@ async function startVerification(context: ClaimsContext, pr: ClaimPr, facts: Cla
     return
   }
 
-  // Fixed at launch: the verifier's prompt and the judgment of its verdict read this list, never a reloaded manifest or catalog.
+  // Fixed at launch: the verifier's prompt and the judgment of its verdict read these lists, never a reloaded manifest, catalog or review.
   entry.verifyCriteria = [...context.checks.verifyCriteria(manifest.gates.verify), ...(await catalogCriteria(context, pr, facts))]
+  transitions.candidatesFixed(entry, candidateList(context, entry, sha))
   launch(runContext, pr, 'verify', { sha })
+}
+
+function candidateList(context: ClaimsContext, entry: ClaimEntry, sha: string): Review['candidates'] {
+  const external = context.manifest.gates.verify.externalFindings ?? null
+
+  if (!external || !entry.review || entry.review.sha !== sha) {
+    return []
+  }
+
+  const recheck = (entry.findings?.items ?? []).flatMap((item) => (item.fromReview === undefined ? [] : [item.fromReview]))
+
+  return selectCandidates(entry.review, external.minSeverity, recheck)
 }
 
 // The last step before the verifier, so the pre-verify commands run while the

@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readLedger } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { matchKey } from '../lib/review.ts'
 import { timeText } from '../lib/sentences.ts'
 import { isRunName, parseTranscript, readTranscript, succeeded, transcriptParser } from '../lib/transcript.mjs'
 import { runRecords, runsFromEvents, runsFromLedger } from '../lib/runs.mjs'
@@ -25,6 +26,7 @@ import {
 import {
   REVIEW_MANIFEST,
   START,
+  answeredReview,
   at,
   interruptedTranscript,
   jsonLines,
@@ -1731,6 +1733,143 @@ test('prDetail: a review text with a line break or a terminal escape comes out w
     shown.filter((text) => /\p{Cc}/u.test(text)),
     [],
   )
+})
+
+// The note of each finding of A1's review as [line, note], with `fields` in A1's entry.
+function reviewNotes(fields) {
+  return shownReview(reviewRollout(fields.review, fields)).findings.map((row) => [row.line, row.note])
+}
+
+// sampleReview() with only its medium finding fixed as X1, as when its high one was a finding to re-check.
+function mediumOnly() {
+  const review = sampleReview()
+  const [, high, medium] = review.findings
+
+  return { review: { ...review, candidates: [{ id: 'X1', key: matchKey(medium) }] }, high }
+}
+
+test("prDetail: a candidate notes the latest verdict's answer for the review's head, its evidence on one line", () => {
+  const answered = answeredReview()
+  const [confirmed, refuted] = answered.verdict.external
+  const review = shownReview(reviewRollout(answered.review, answered))
+
+  assert.deepEqual(reviewNotes(answered), [
+    [42, 'X1 confirmed'],
+    [7, 'X2 refuted: src/orders/load.ts:9 caps the retries at three.'],
+    [12, 'shown only, below medium'],
+  ])
+
+  assert.equal(review.summary, '3 findings (1 high, 1 medium, 1 low), 1 fixed')
+  assert.deepEqual(
+    review.fixed.map((row) => row.note),
+    ['fixed'],
+  )
+
+  const others = [
+    { ...confirmed, result: 'unverifiable', evidence: 'The tests do not run here.' },
+    { ...refuted, result: 'unanswered', evidence: '' },
+  ]
+
+  assert.deepEqual(reviewNotes({ ...answered, verdict: { ...answered.verdict, external: others } }).slice(0, 2), [
+    [42, 'X1 unverifiable'],
+    [7, 'X2 unanswered'],
+  ])
+})
+
+test('prDetail: a candidate with no answer of the latest verdict for its head and its key is sent, with no answer yet', () => {
+  const answered = answeredReview()
+  const [confirmed, refuted] = answered.verdict.external
+  const verdicts = {
+    'of another head': { ...answered.verdict, sha: OLDER_HEAD },
+    'with no external': samplePrs().A1.verdict,
+    'of another launch': {
+      ...answered.verdict,
+      external: [
+        { ...confirmed, key: 'another key' },
+        { ...refuted, id: 'X3' },
+      ],
+    },
+    none: null,
+  }
+
+  for (const [name, verdict] of Object.entries(verdicts)) {
+    assert.deepEqual(
+      reviewNotes({ ...answered, verdict, verdicts: verdict ? [verdict] : [] }).slice(0, 2),
+      [
+        [42, 'X1 sent, no answer yet'],
+        [7, 'X2 sent, no answer yet'],
+      ],
+      name,
+    )
+  }
+})
+
+test('prDetail: a finding left out at launch notes the finding it already is, and after a PASS that it was re-checked as one', () => {
+  const { review, high } = mediumOnly()
+  const findings = {
+    at: at(80),
+    items: [
+      { id: 'F1', text: 'README.md:3 still names the old flag.', answer: null },
+      { id: 'F2', text: 'External review finding (high).', answer: null, fromReview: matchKey(high) },
+    ],
+  }
+
+  assert.deepEqual(reviewNotes({ review, findings }).slice(0, 2), [
+    [42, 'not sent, already finding F2'],
+    [7, 'X1 sent, no answer yet'],
+  ])
+
+  assert.deepEqual(reviewNotes({ review, findings: null }).slice(0, 2), [
+    [42, 'not sent, re-checked as a finding'],
+    [7, 'X1 sent, no answer yet'],
+  ])
+
+  assert.deepEqual(reviewNotes({ review: sampleReview(), findings }), [
+    [42, 'not sent, already finding F2'],
+    [7, ''],
+    [12, 'shown only, below medium'],
+  ])
+})
+
+test('prDetail: with 20 candidates, a finding after the 20th is over 20, and one before it was re-checked as a finding', () => {
+  const [, high] = sampleReview().findings
+  const findings = Array.from({ length: 22 }, (_, i) => ({ ...high, title: `High finding ${i + 1}`, line: i + 1 }))
+  const firstTwenty = findings.slice(0, 20).map((finding, i) => ({ id: `X${i + 1}`, key: matchKey(finding) }))
+  const notes = reviewNotes({ review: { ...sampleReview(), findings, candidates: firstTwenty } })
+
+  assert.deepEqual(notes.slice(18), [
+    [19, 'X19 sent, no answer yet'],
+    [20, 'X20 sent, no answer yet'],
+    [21, 'not sent, over 20'],
+    [22, 'not sent, over 20'],
+  ])
+
+  const laterTwenty = findings.slice(1, 21).map((finding, i) => ({ id: `X${i + 1}`, key: matchKey(finding) }))
+  const rechecked = reviewNotes({ review: { ...sampleReview(), findings, candidates: laterTwenty }, findings: null })
+
+  assert.deepEqual(rechecked[0], [1, 'not sent, re-checked as a finding'])
+  assert.deepEqual(rechecked.slice(19), [
+    [20, 'X19 sent, no answer yet'],
+    [21, 'X20 sent, no answer yet'],
+    [22, 'not sent, over 20'],
+  ])
+})
+
+test('card: each finding of the external review notes what became of it', () => {
+  const answered = answeredReview()
+  const card = cli('card', 'A1', '--dir', reviewRollout(answered.review, answered))
+  const block = [
+    'external review of a1a1a1a: 3 findings (1 high, 1 medium, 1 low), 1 fixed',
+    '  line numbers refer to 9f8e7d6, the commit the review read',
+    '  [high] review.correctness src/orders/total.ts:42: The total ignores a refunded line (X1 confirmed)',
+    '  [medium] review.errors src/orders/load.ts:7: A failed read is retried forever (X2 refuted: src/orders/load.ts:9 caps the retries at three.)',
+    '  [low] review.naming src/orders/total.ts:12: A flag named tmp (shown only, below medium)',
+    '  [medium] review.correctness src/orders/total.ts:30: The discount is applied twice (fixed)',
+    '',
+  ]
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.ok(card.stdout.includes(block.join('\n')), card.stdout)
 })
 
 test('card: the external review of the claimed head after the commands the driver ran, and before the approve hint', () => {
