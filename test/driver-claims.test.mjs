@@ -9,7 +9,7 @@ import { verifyPrompt } from '../lib/prompts.mjs'
 import { runStarted, verifyAgain } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
-import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
+import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor, zipArchive } from './fixtures.mjs'
 import {
   agentResult,
   apply,
@@ -35,6 +35,9 @@ import {
   FIRST_ROUND,
   UNANSWERED,
   modelDriver,
+  COMMANDS_GATE,
+  commandSeam,
+  preVerified,
 } from './driver-helpers.mjs'
 
 const IMPLEMENTING = { state: 'implementing', sessionId: 'session-1', attempts: { implement: 1, fix: 0, verify: 0, brief: 0 } }
@@ -1185,6 +1188,406 @@ test('checkClaim: every gate-check event is short and names the stage and the le
   assert.equal(event.sha, SHA.slice(0, 7))
   assert.equal(event.evidence.length, 300)
   assert.match(event.evidence, /^failing: job-0: failure, job-1: failure/)
+})
+
+// The external review: a check run named `agent review` and the artifact review-11 it uploads.
+const REVIEW_CHECK = 'agent review'
+const EXTERNAL_FINDINGS = { check: REVIEW_CHECK, artifact: 'review-{pr}', minSeverity: 'medium' }
+const REVIEW_GATE = gatesWith({ verify: { externalFindings: EXTERNAL_FINDINGS } })
+const ARTIFACTS = 'repos/example/widgets/actions/artifacts'
+const TESTED = { id: 1, name: 'test', status: 'completed', conclusion: 'success' }
+const PASSES = [
+  gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
+  gateCheckEvent('policy', 'pass', 'no violations'),
+  gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium'),
+]
+
+const HIGH = {
+  severity: 'high',
+  criterion: 'review.correctness',
+  title: 'The total ignores a refunded line',
+  file: 'src/orders/total.ts',
+  line: 42,
+  failure_scenario: 'An order with one refunded line shows the full price.',
+  fix: 'Skip a line whose refund is settled.',
+  status: 'new',
+}
+
+const MEDIUM = {
+  severity: 'medium',
+  criterion: 'review.errors',
+  title: 'A refused refund is dropped',
+  file: 'src/orders/refund.ts',
+  line: 18,
+  failure_scenario: 'A refund the bank refuses leaves the order marked as refunded.',
+  fix: 'Keep the order open until the bank confirms.',
+  status: 'open',
+}
+
+const LOW = {
+  severity: 'low',
+  criterion: 'review.naming',
+  title: 'A flag named tmp',
+  file: 'src/orders/total.ts',
+  line: 12,
+  failure_scenario: 'The next reader cannot tell what it guards.',
+  fix: 'Name it after the condition.',
+  status: 'open',
+}
+
+function minutesAgo(minutes) {
+  return new Date(Date.now() - minutes * 60_000).toISOString()
+}
+
+function reviewRun(status, conclusion = null, { id = 2, started = minutesAgo(1) } = {}) {
+  return { id, name: REVIEW_CHECK, status, conclusion, started_at: started }
+}
+
+// A finding as the driver stores it.
+function storedFinding({ failure_scenario: failureScenario, ...finding }) {
+  return { ...finding, failureScenario }
+}
+
+function reviewJson(changes = {}) {
+  return JSON.stringify({
+    schema_version: 1,
+    revision: SHA,
+    input_digest: '9b2d',
+    findings: [LOW, HIGH, MEDIUM],
+    fixed: [],
+    dropped: [],
+    ...changes,
+  })
+}
+
+function artifactJson(id, sha) {
+  return {
+    id,
+    name: 'review-11',
+    size_in_bytes: 900,
+    expired: false,
+    created_at: '2026-10-01T10:00:00Z',
+    workflow_run: { id: id * 10, head_sha: sha },
+  }
+}
+
+function listRoute(artifacts) {
+  return { path: ARTIFACTS, query: { name: 'review-11' }, body: { total_count: artifacts.length, artifacts }, items: 'artifacts' }
+}
+
+// The API's 302 for one artifact, and the storage host's answer.
+function zipRoutes(id, storage) {
+  return [
+    { path: `${ARTIFACTS}/${id}/zip`, status: 302, headers: { location: `https://storage.example.com/artifacts/${id}.zip?sig=synthetic` } },
+    { path: `artifacts/${id}.zip`, ...storage },
+  ]
+}
+
+// A1's PR at SHA with `runs` on its head, and the review's artifact for that head.
+function reviewRoutes(runs, { json = reviewJson(), artifacts = [artifactJson(7, SHA)] } = {}) {
+  return [
+    prRoute(),
+    runsRoute(SHA, { check_runs: runs }),
+    listRoute(artifacts),
+    ...zipRoutes(7, { body: zipArchive([{ name: 'review.json', data: json }]) }),
+  ]
+}
+
+// A claimed A1 that can start its verifier, with the external review on and `runs` on its head.
+function reviewDriver(runs, { gates = REVIEW_GATE, routes = {}, ...options } = {}) {
+  const setup = verifiableDriver({ gates, ...options })
+
+  setup.github.answer(reviewRoutes(runs, routes))
+
+  return setup
+}
+
+function artifactRequests(github) {
+  return github.requests().filter((request) => request.path.startsWith(ARTIFACTS))
+}
+
+// A skip goes on to the verifier: one gate-check, a stored reason and no fix.
+async function assertSkips(setup, reason, run = 2) {
+  const { manifest, driver, pr, entry, agentCalls } = setup
+
+  await driver.advance(pr)
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(events.slice(0, 4), [...PASSES, gateCheckEvent('external-review', 'skip', reason)], reason)
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ['gate-check', 'gate-check', 'gate-check', 'gate-check', 'verify-start'],
+    reason,
+  )
+
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'], reason)
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }], reason)
+  assert.equal(entry.fix, null, reason)
+  assert.deepEqual(
+    { ...entry.review, at: null },
+    { sha: SHA, at: null, run, reusedFrom: null, skipped: reason, findings: [], fixed: [], leftOut: 0, candidates: [] },
+    reason,
+  )
+}
+
+test('checkClaim: with no review run, a claim younger than 2 minutes waits, and an older one skips the review and starts the verifier', async () => {
+  const { manifest, driver, github, pr, entry, agentCalls } = reviewDriver([TESTED])
+
+  entry.claimedAt = minutesAgo(1)
+  await driver.advance(pr)
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'external-review'])
+  assert.equal(entry.status.sha, SHA)
+  assert.equal(entry.review, undefined)
+  assert.deepEqual(agentCalls, [])
+  assert.deepEqual(eventsSince(manifest), PASSES)
+
+  const before = readEvents(manifest).length
+
+  entry.claimedAt = minutesAgo(3)
+  await driver.advance(pr)
+
+  const later = eventsSince(manifest, before)
+
+  assert.deepEqual(
+    later.filter((event) => event.item === 'external-review'),
+    [gateCheckEvent('external-review', 'skip', 'no review run on the head')],
+  )
+
+  assert.equal(later.at(-1).kind, 'verify-start')
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
+  assert.equal(entry.review.run, null)
+  assert.deepEqual(artifactRequests(github), [])
+})
+
+test('checkClaim: with no review run and no claimedAt, the review is a skip at once', async () => {
+  const setup = reviewDriver([TESTED])
+
+  assert.equal(setup.entry.claimedAt, null)
+  await assertSkips(setup, 'no review run on the head', null)
+})
+
+test('checkClaim: a review run in progress within ciStallMinutes waits on the head, with no fix, no agent and no read', async () => {
+  const cases = [
+    ['started a minute ago', reviewRun('in_progress'), null],
+    ['queued with no start, on a claim a minute old', reviewRun('queued', null, { started: null }), minutesAgo(1)],
+  ]
+
+  for (const [name, run, claimedAt] of cases) {
+    const { manifest, driver, github, pr, entry, agentCalls } = reviewDriver([TESTED, run])
+
+    entry.claimedAt = claimedAt
+    await driver.advance(pr)
+    await driver.advance(pr)
+
+    assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'external-review'], name)
+    assert.equal(entry.status.sha, SHA, name)
+    assert.equal(entry.review, undefined, name)
+    assert.deepEqual(agentCalls, [], name)
+    assert.deepEqual(eventsSince(manifest), PASSES, name)
+    assert.deepEqual(artifactRequests(github), [], name)
+  }
+})
+
+test('checkClaim: a review run in progress for longer than ciStallMinutes is a skip', async () => {
+  await assertSkips(
+    reviewDriver([TESTED, reviewRun('in_progress', null, { started: minutesAgo(30) })]),
+    'the review has run for more than 20 minutes',
+  )
+
+  const unstarted = reviewDriver([TESTED, reviewRun('queued', null, { started: null })])
+
+  unstarted.entry.claimedAt = minutesAgo(30)
+  await assertSkips(unstarted, 'the review has run for more than 20 minutes')
+})
+
+test('checkClaim: a review run that failed, was cancelled or was skipped is a skip, never CI is red', async () => {
+  for (const conclusion of ['failure', 'cancelled', 'skipped']) {
+    await assertSkips(reviewDriver([TESTED, reviewRun('completed', conclusion)]), `the review run ended as ${conclusion}`)
+  }
+})
+
+test('checkClaim: a successful review run with no artifact for the head, or a review.json of another revision, is a skip', async () => {
+  await assertSkips(
+    reviewDriver([TESTED, reviewRun('completed', 'success')], { routes: { artifacts: [artifactJson(7, NEW_HEAD)] } }),
+    'the review left no artifact for this head',
+  )
+
+  await assertSkips(
+    reviewDriver([TESTED, reviewRun('completed', 'success')], { routes: { json: reviewJson({ revision: NEW_HEAD }) } }),
+    'revision b2b2b2b is not the head',
+  )
+})
+
+test('checkClaim: a review read for the head logs its counts, is stored, and a claim that moves drops it', async () => {
+  const { manifest, driver, pr, entry, agentCalls } = reviewDriver([TESTED, reviewRun('completed', 'success')])
+
+  await driver.advance(pr)
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(events.slice(0, 4), [
+    ...PASSES,
+    gateCheckEvent('external-review', 'pass', '2 candidates (1 high, 1 medium), 1 below medium'),
+  ])
+
+  assert.equal(events[4].kind, 'verify-start')
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
+  assert.equal(typeof entry.review.at, 'string')
+  assert.deepEqual(
+    { ...entry.review, at: null },
+    {
+      sha: SHA,
+      at: null,
+      run: 2,
+      reusedFrom: null,
+      skipped: null,
+      findings: [HIGH, MEDIUM, LOW].map(storedFinding),
+      fixed: [],
+      leftOut: 0,
+      candidates: [],
+    },
+  )
+
+  // GitHub's view of the PR shows another head before CI is read, the gate's facts after its pass.
+  const moves = { viewPr: ['claim-moved'], facts: ['gate-check', 'claim-moved'] }
+
+  for (const [where, kinds] of Object.entries(moves)) {
+    const moved = claimDriver({})
+
+    moved.entry.review = structuredClone(entry.review)
+
+    if (where === 'viewPr') {
+      moved.github.answer([prRoute({ head: { sha: NEW_HEAD } }), runsRoute(NEW_HEAD, { check_runs: [reviewRun('in_progress')] })])
+    } else {
+      moved.gate.pr = { headRefOid: NEW_HEAD }
+    }
+
+    await moved.driver.advance(moved.pr)
+
+    assert.equal(moved.entry.claimedSha, NEW_HEAD, where)
+    assert.equal(moved.entry.review, null, where)
+    assert.deepEqual(placeOf(moved.entry), ['pre-verify', 'waiting', 'ci'], where)
+    assert.deepEqual(kindsSince(moved.manifest), kinds, where)
+  }
+})
+
+test('checkClaim: a stored result of the head and its run is used with no read, and a new run of the head is read again', async () => {
+  const stored = {
+    sha: SHA,
+    at: at(1),
+    run: 2,
+    reusedFrom: null,
+    skipped: null,
+    findings: [storedFinding(HIGH)],
+    fixed: [],
+    leftOut: 0,
+    candidates: [],
+  }
+
+  const reused = reviewDriver([TESTED, reviewRun('completed', 'success')])
+
+  reused.entry.review = structuredClone(stored)
+  await reused.driver.advance(reused.pr)
+
+  assert.deepEqual(eventsSince(reused.manifest)[3], gateCheckEvent('external-review', 'pass', '1 candidate (1 high)'))
+  assert.deepEqual(artifactRequests(reused.github), [])
+  assert.deepEqual(reused.entry.review, stored)
+  assert.deepEqual(reused.agentCalls, [{ id: 'A1', role: 'verify' }])
+
+  const rerun = reviewDriver([TESTED, reviewRun('completed', 'success', { id: 3 })])
+
+  rerun.entry.review = structuredClone(stored)
+  await rerun.driver.advance(rerun.pr)
+
+  assert.deepEqual(
+    eventsSince(rerun.manifest)[3],
+    gateCheckEvent('external-review', 'pass', '2 candidates (1 high, 1 medium), 1 below medium'),
+  )
+
+  assert.equal(rerun.entry.review.run, 3)
+  assert.equal(rerun.entry.review.findings.length, 3)
+})
+
+test('checkClaim: a review with no finding at or above minSeverity and findings left out says so', async () => {
+  const findings = Array.from({ length: 52 }, (_, i) => ({ ...LOW, line: i + 1 }))
+  const { manifest, driver, pr, entry } = reviewDriver([TESTED, reviewRun('completed', 'success')], {
+    routes: { json: reviewJson({ findings }) },
+  })
+
+  await driver.advance(pr)
+
+  assert.deepEqual(eventsSince(manifest)[3], gateCheckEvent('external-review', 'pass', 'no candidates, 50 below medium, 2 left out'))
+  assert.equal(entry.review.leftOut, 2)
+})
+
+test('checkClaim: an outage while reading the review is an error of the PR, never a skip', async () => {
+  const { manifest, driver, github, pr, entry, agentCalls } = reviewDriver([TESTED, reviewRun('completed', 'success')])
+
+  github.answer([
+    prRoute(),
+    runsRoute(SHA, { check_runs: [TESTED, reviewRun('completed', 'success')] }),
+    { path: ARTIFACTS, status: 500, body: { message: 'Server Error' } },
+  ])
+
+  await assert.rejects(driver.advance(pr), /HTTP 500: Server Error/)
+
+  assert.equal(entry.review, undefined)
+  assert.deepEqual(agentCalls, [])
+  assert.deepEqual(eventsSince(manifest), PASSES)
+})
+
+test('checkClaim: with the external review on, a failed run of another check still sends CI is red', async () => {
+  const { manifest, driver, pr, entry, agentCalls } = reviewDriver([
+    TESTED,
+    { id: 3, name: 'lint', status: 'completed', conclusion: 'failure' },
+    reviewRun('completed', 'success'),
+  ])
+
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.equal(entry.fix.reason, 'ci-red')
+  assert.deepEqual(agentCalls, [])
+  assert.deepEqual(eventsSince(manifest), [
+    gateCheckEvent('ci', 'fail', 'failing: lint: failure'),
+    { id: 'A1', kind: 'needs-fix', reason: 'CI is red' },
+  ])
+})
+
+test('checkClaim: the pre-verify commands run while the review runs, and the wait comes after them', async () => {
+  const seam = commandSeam()
+  const gates = gatesWith({ preVerify: COMMANDS_GATE.preVerify, verify: { externalFindings: EXTERNAL_FINDINGS } })
+  const setup = reviewDriver([TESTED, reviewRun('in_progress')], { gates, runCommand: seam.runCommand })
+  const { manifest, driver, github, pr, entry, agentCalls } = setup
+
+  await preVerified(setup)
+
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
+  assert.deepEqual(kindsSince(manifest), ['gate-check', 'gate-check', 'gate-check', 'gate-check', 'gate-check'])
+
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'external-review'])
+  assert.deepEqual(agentCalls, [])
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
+  assert.equal(
+    eventsSince(manifest).some((event) => event.item === 'external-review'),
+    false,
+  )
+
+  github.answer(reviewRoutes([TESTED, reviewRun('completed', 'success')]))
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['verify', 'running', 'verify'])
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
+  assert.deepEqual(seam.commands(), ['npm test', 'npm run lint'])
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.item === 'external-review'),
+    [gateCheckEvent('external-review', 'pass', '2 candidates (1 high, 1 medium), 1 below medium')],
+  )
 })
 
 test('mergeCandidate: a new code scanning alert drops the verification and goes back to the implementer', async () => {

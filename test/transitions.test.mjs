@@ -6,6 +6,7 @@ import {
   approveInbox,
   briefWaits,
   briefWritten,
+  claimMoved,
   claimNewHead,
   commandsPassed,
   delegateReturned,
@@ -31,6 +32,7 @@ import {
   resetBudgets,
   retryFix,
   retryMerge,
+  reviewRead,
   runFailed,
   runName,
   runStarted,
@@ -402,6 +404,62 @@ test('transitions: claimNewHead claims the new head and drops the verification a
     stage: 'pre-verify',
     status: ciAt(SHA),
   })
+})
+
+function reviewOf(sha, fields = {}) {
+  return { sha, at: EARLIER, run: 41, reusedFrom: null, skipped: null, findings: [], fixed: [], leftOut: 0, candidates: [], ...fields }
+}
+
+test('transitions: claimMoved claims the new head, drops the review of the old one and writes no status', () => {
+  const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: OLD_SHA, claimedAt: EARLIER, ciPendingSince: EARLIER })
+
+  entry.review = reviewOf(OLD_SHA)
+
+  const before = structuredClone(entry)
+
+  claimMoved(entry, { sha: SHA, at: AT })
+
+  assert.deepEqual(entry, { ...before, claimedSha: SHA, claimedAt: AT, ciPendingSince: null, review: null })
+})
+
+test('transitions: claimMoved leaves an entry with no review without one', () => {
+  const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: OLD_SHA, claimedAt: EARLIER })
+  const before = structuredClone(entry)
+
+  claimMoved(entry, { sha: SHA, at: AT })
+
+  assert.deepEqual(entry, { ...before, claimedSha: SHA, claimedAt: AT, ciPendingSince: null })
+  assert.equal(Object.hasOwn(entry, 'review'), false)
+})
+
+test('transitions: reviewRead stores the review of the head and changes nothing else', () => {
+  const entry = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: SHA })
+  const before = structuredClone(entry)
+  const review = reviewOf(SHA, { run: null, skipped: 'no review run on the head' })
+
+  reviewRead(entry, review)
+
+  assert.deepEqual(entry, { ...before, review })
+})
+
+test('transitions: toClaimed and claimNewHead drop a review of another head, and keep one of the claimed head', () => {
+  const claims = {
+    toClaimed: (entry) => toClaimed(entry, { pr: 7, sha: SHA, at: AT }),
+    claimNewHead: (entry) => claimNewHead(entry, { sha: SHA, at: AT }),
+  }
+
+  for (const [name, claim] of Object.entries(claims)) {
+    const other = entryWith({ state: 'verified', pr: 7, claimedSha: OLD_SHA, verified: verification(OLD_SHA) })
+    const same = entryWith({ state: 'verified', pr: 7, claimedSha: OLD_SHA, verified: verification(OLD_SHA) })
+
+    other.review = reviewOf(OLD_SHA)
+    same.review = reviewOf(SHA)
+    claim(other)
+    claim(same)
+
+    assert.equal(other.review, null, name)
+    assert.deepEqual(same.review, reviewOf(SHA), name)
+  }
 })
 
 test('transitions: verifyAgain sends the PR back to its claim', () => {

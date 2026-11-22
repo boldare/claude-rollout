@@ -114,6 +114,7 @@ const SENTENCES: Sentences = {
   github: () => 'the READY report waits: GitHub does not answer',
   ci: ciSentence,
   'code-scanning-pending': (status) => `code scanning has not analysed ${shortSha(status.sha)} yet`,
+  'external-review': (status) => `the review of ${shortSha(status.sha)} has not finished yet`,
   'base-red': (status, facts) =>
     `${facts.base} is red${part(' at ', status.sha && shortSha(status.sha))}${part(': ', joined(status.failing))}. Merges wait until it is green`,
   'base-pending': (status, facts) => `${facts.base} is not green yet${part(' at ', status.sha && shortSha(status.sha))}`,

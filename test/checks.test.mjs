@@ -112,6 +112,75 @@ test('a failed run that no ignored glob matches still makes the commit red', () 
   assert.deepEqual(summary.failing, ['CodeQL: failure'])
 })
 
+const REVIEW_CHECK = 'agent review'
+const TESTED = run(1, 'test', 'completed', 'success')
+
+test('a failed review run leaves the commit green, and a running one does not keep it pending', () => {
+  for (const review of [run(2, REVIEW_CHECK, 'completed', 'failure'), run(2, REVIEW_CHECK, 'in_progress')]) {
+    const summary = summarizeChecks([TESTED, review], ['test'], [], REVIEW_CHECK)
+
+    assert.equal(summary.state, 'green', review.status)
+    assert.deepEqual([summary.failing, summary.pending], [[], []], review.status)
+    assert.deepEqual(summary.runs, [{ name: 'test', status: 'completed', conclusion: 'success' }], review.status)
+  }
+})
+
+test('a required glob that only the review run matches is missing', () => {
+  const summary = summarizeChecks([TESTED, run(2, REVIEW_CHECK, 'completed', 'success')], ['test', 'agent*'], [], REVIEW_CHECK)
+
+  assert.equal(summary.state, 'pending')
+  assert.deepEqual(summary.missing, ['agent*'])
+})
+
+test('a commit whose only run is the review has no runs and is pending', () => {
+  const summary = summarizeChecks([run(2, REVIEW_CHECK, 'completed', 'failure')], ['test'], [], REVIEW_CHECK)
+
+  assert.equal(summary.state, 'pending')
+  assert.deepEqual(summary.runs, [])
+})
+
+test('reviewRun is the run that speaks for the review check, an uncancelled one first, or null without one', () => {
+  const started = '2026-10-01T10:05:00Z'
+  const runs = [
+    TESTED,
+    run(2, REVIEW_CHECK, 'completed', 'failure'),
+    { ...run(3, REVIEW_CHECK, 'completed', 'success'), startedAt: started },
+    run(5, REVIEW_CHECK, 'completed', 'cancelled'),
+  ]
+
+  assert.deepEqual(summarizeChecks(runs, ['test'], [], REVIEW_CHECK).reviewRun, {
+    id: 3,
+    status: 'completed',
+    conclusion: 'success',
+    startedAt: started,
+  })
+
+  assert.deepEqual(summarizeChecks([TESTED, run(4, REVIEW_CHECK, 'queued')], ['test'], [], REVIEW_CHECK).reviewRun, {
+    id: 4,
+    status: 'queued',
+    conclusion: null,
+    startedAt: null,
+  })
+
+  assert.equal(summarizeChecks([TESTED, run(4, 'agent review (comment)', 'queued')], ['test'], [], REVIEW_CHECK).reviewRun, null)
+})
+
+test('with a review check name, a failed run of another check is still red', () => {
+  const runs = [TESTED, run(2, 'lint', 'completed', 'failure'), run(3, REVIEW_CHECK, 'completed', 'success')]
+  const summary = summarizeChecks(runs, ['test'], [], REVIEW_CHECK)
+
+  assert.equal(summary.state, 'red')
+  assert.deepEqual(summary.failing, ['lint: failure'])
+})
+
+test('without a review check name, the summary has no reviewRun and a failed review run is red', () => {
+  const summary = summarizeChecks([TESTED, run(2, REVIEW_CHECK, 'completed', 'failure')], ['test'])
+
+  assert.deepEqual(Object.keys(summary), ['state', 'missing', 'pending', 'failing', 'runs'])
+  assert.equal(summary.state, 'red')
+  assert.deepEqual(summary.failing, ['agent review: failure'])
+})
+
 const quiet = (overrides = {}) => ({
   runs: [],
   requiredGlobs: ['test*'],

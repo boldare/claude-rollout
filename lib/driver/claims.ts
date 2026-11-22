@@ -1,33 +1,53 @@
 import * as transitions from '../transitions.ts'
-import type { IsoTime, PreVerifyStatus } from '../state.ts'
+import { candidates } from '../review.ts'
+import type { ReviewRead } from '../review.ts'
+import { REVIEW_SEVERITIES } from '../state.ts'
+import type { IsoTime, PreVerifyStatus, Review, ReviewFinding, ReviewSeverity } from '../state.ts'
 import { EVIDENCE_CHARS, launch, launchPreVerify, passHolds, preVerifyJob } from './runs.ts'
 import type { RunEntry, RunPr, RunsContext } from './runs.ts'
 
 // The claim check after READY: CI on the claimed head, the rollout's rules,
-// code scanning and the scope, then a slot for the pre-verify commands and
-// the verifier. Each outcome sets the PR's stage and status through
-// lib/transitions.ts. Nothing here reads the clock, the disk or GitHub
-// itself: the context brings it, as lib/driver.mjs builds it.
+// code scanning and the scope, then a slot for the pre-verify commands, the
+// wait for the external review of the head and the verifier. Each outcome
+// sets the PR's stage and status through lib/transitions.ts. Nothing here
+// reads the clock, the disk or GitHub itself: the context brings it, as
+// lib/driver.mjs builds it.
 
 type Say = (id: string, kind: string, detail?: object, message?: string | null) => void
 type Unstamped<Union> = Union extends unknown ? Omit<Union, 'since'> : never
 
 const SLOT = { kind: 'waiting', code: 'slot' } as const
 
+// A head with no review run yet gets this long for the review's workflow to start.
+const REVIEW_START_MINUTES = 2
+
 export interface ClaimPr extends RunPr {
   briefTags?: string[]
+}
+
+export interface ExternalFindings {
+  check: string
+  artifact: string
+  minSeverity: ReviewSeverity
 }
 
 export interface ClaimManifest {
   repo: { requiredChecks: string[]; codeScanning: { action: string; minSeverity: string } }
   policy: { ciStallMinutes: number }
-  gates: { preVerify: { scope: boolean }; verify: { criteriaFrom?: string | null } }
+  gates: { preVerify: { scope: boolean }; verify: { criteriaFrom?: string | null; externalFindings?: ExternalFindings | null } }
 }
 
 interface CheckRun {
   name: string
   status: string
   conclusion: string | null
+}
+
+interface ReviewRun {
+  id: number
+  status: string
+  conclusion: string | null
+  startedAt: string | null
 }
 
 // The check runs on a commit, as checksFor in lib/github.mjs returns them.
@@ -37,6 +57,7 @@ interface Checks {
   pending: string[]
   failing: string[]
   runs: CheckRun[]
+  reviewRun?: ReviewRun | null
 }
 
 // What the claim check reads of the facts the gate collects.
@@ -108,6 +129,7 @@ export interface ClaimsContext {
     ) => Promise<{ state: string; headRefOid: string; author: string | null }>
     checksFor: (manifest: ClaimManifest, sha: string, options: { reads: unknown }) => Promise<Checks>
     readCatalog: (manifest: ClaimManifest) => Promise<unknown[]>
+    reviewFor: (manifest: ClaimManifest, number: number, sha: string, options: { artifact: string; reads: unknown }) => Promise<ReviewRead>
   }
   judge: {
     policyViolations: (manifest: ClaimManifest, pr: ClaimPr, facts: ClaimFacts) => string[]
@@ -250,9 +272,7 @@ export async function checkClaim(context: ClaimsContext, pr: ClaimPr): Promise<v
 
   if (githubPr.headRefOid !== entry.claimedSha) {
     say(pr.id, 'claim-moved', { claimed: entry.claimedSha?.slice(0, 7), head: githubPr.headRefOid.slice(0, 7) })
-    entry.claimedSha = githubPr.headRefOid
-    entry.claimedAt = now()
-    entry.ciPendingSince = null
+    transitions.claimMoved(entry, { sha: githubPr.headRefOid, at: now() })
   }
 
   const sha = githubPr.headRefOid
@@ -287,8 +307,7 @@ export async function checkClaim(context: ClaimsContext, pr: ClaimPr): Promise<v
 
   if (facts.pr.headRefOid !== entry.claimedSha) {
     say(pr.id, 'claim-moved', { claimed: entry.claimedSha?.slice(0, 7), head: facts.pr.headRefOid.slice(0, 7) })
-    entry.claimedSha = facts.pr.headRefOid
-    entry.claimedAt = now()
+    transitions.claimMoved(entry, { sha: facts.pr.headRefOid, at: now() })
     claimStatus(context, entry, { kind: 'waiting', code: 'ci', sha: facts.pr.headRefOid, missing: [], pending: [] })
     return
   }
@@ -310,7 +329,7 @@ export async function checkClaim(context: ClaimsContext, pr: ClaimPr): Promise<v
     return
   }
 
-  await startVerification(context, pr, facts)
+  await startVerification(context, pr, facts, ci)
 }
 
 function ciPending(context: ClaimsContext, pr: ClaimPr, ci: Checks): void {
@@ -384,8 +403,9 @@ function rulesHold(context: ClaimsContext, pr: ClaimPr, facts: ClaimFacts): bool
   return true
 }
 
-// A slot, a worktree at the head, then the pre-verify commands or the verifier.
-async function startVerification(context: ClaimsContext, pr: ClaimPr, facts: ClaimFacts): Promise<void> {
+// A slot, a worktree at the head, then the pre-verify commands or the
+// verifier. `ci` is the claim check's read of the head, with the review's run.
+async function startVerification(context: ClaimsContext, pr: ClaimPr, facts: ClaimFacts, ci: Checks): Promise<void> {
   const { manifest, ledger, runContext } = context
   const entry = ledger.prs[pr.id]
   const sha = entry.claimedSha ?? ''
@@ -411,9 +431,133 @@ async function startVerification(context: ClaimsContext, pr: ClaimPr, facts: Cla
     return
   }
 
+  if (!(await reviewSettled(context, pr, ci))) {
+    return
+  }
+
   // Fixed at launch: the verifier's prompt and the judgment of its verdict read this list, never a reloaded manifest or catalog.
   entry.verifyCriteria = [...context.checks.verifyCriteria(manifest.gates.verify), ...(await catalogCriteria(context, pr, facts))]
   launch(runContext, pr, 'verify', { sha })
+}
+
+// The last step before the verifier, so the pre-verify commands run while the
+// review runs. A review that gives no result is a skip, which never stops the
+// PR. False while the claim waits. A result of this head and this run is used
+// again, so only a new run of the head, a re-run say, is decided again.
+async function reviewSettled(context: ClaimsContext, pr: ClaimPr, ci: Checks): Promise<boolean> {
+  const external = context.manifest.gates.verify.externalFindings ?? null
+
+  if (!external) {
+    return true
+  }
+
+  const entry = context.ledger.prs[pr.id]
+  const sha = entry.claimedSha ?? ''
+  const run = ci.reviewRun ?? null
+  const stored = entry.review
+
+  if (stored && stored.sha === sha && stored.run === (run?.id ?? null)) {
+    preVerifyCheck(context, pr, entry, { item: 'external-review', ...reviewCheck(stored, external.minSeverity) })
+    return true
+  }
+
+  const result = await reviewResult(context, entry, run, external)
+
+  if (!result) {
+    claimStatus(context, entry, { kind: 'waiting', code: 'external-review', sha })
+    return false
+  }
+
+  const review = storedReview(context, sha, run, result)
+
+  transitions.reviewRead(entry, review)
+  preVerifyCheck(context, pr, entry, { item: 'external-review', ...reviewCheck(review, external.minSeverity) })
+
+  return true
+}
+
+function skip(reason: string): ReviewRead {
+  return { available: false, reason }
+}
+
+// Null while the review may still give a result. reviewFor throws on an
+// outage, never a skip: guarded() records it, and the next tick reads again.
+async function reviewResult(
+  context: ClaimsContext,
+  entry: ClaimEntry,
+  run: ReviewRun | null,
+  external: ExternalFindings,
+): Promise<ReviewRead | null> {
+  const stall = context.manifest.policy.ciStallMinutes
+
+  if (!run) {
+    return minutesSince(context, entry.claimedAt) < REVIEW_START_MINUTES ? null : skip('no review run on the head')
+  }
+
+  if (run.status !== 'completed') {
+    return minutesSince(context, run.startedAt ?? entry.claimedAt) <= stall
+      ? null
+      : skip(`the review has run for more than ${stall} minutes`)
+  }
+
+  if (run.conclusion !== 'success') {
+    return skip(`the review run ended as ${run.conclusion ?? 'unknown'}`)
+  }
+
+  return context.github.reviewFor(context.manifest, entry.pr ?? 0, entry.claimedSha ?? '', {
+    artifact: external.artifact,
+    reads: context.reads(),
+  })
+}
+
+function storedReview(context: ClaimsContext, sha: string, run: ReviewRun | null, result: ReviewRead): Review {
+  const file = result.available ? result.review : { reusedFrom: null, findings: [], fixed: [], leftOut: 0 }
+
+  return {
+    sha,
+    at: context.now(),
+    run: run?.id ?? null,
+    reusedFrom: file.reusedFrom,
+    skipped: result.available ? null : result.reason,
+    findings: file.findings,
+    fixed: file.fixed,
+    leftOut: file.leftOut,
+    candidates: [],
+  }
+}
+
+function reviewCheck(review: Review, minSeverity: ReviewSeverity): { result: string; evidence: string } {
+  if (review.skipped !== null) {
+    return { result: 'skip', evidence: review.skipped }
+  }
+
+  const split = candidates(review, minSeverity)
+  const parts = [candidateCount(split.candidates)]
+
+  if (split.below.length > 0) {
+    parts.push(`${split.below.length} below ${minSeverity}`)
+  }
+
+  if (review.leftOut > 0) {
+    parts.push(`${review.leftOut} left out`)
+  }
+
+  return { result: 'pass', evidence: parts.join(', ') }
+}
+
+function candidateCount(found: ReviewFinding[]): string {
+  if (found.length === 0) {
+    return 'no candidates'
+  }
+
+  const noun = found.length === 1 ? 'candidate' : 'candidates'
+  const severities = REVIEW_SEVERITIES.flatMap((severity) => {
+    const count = found.filter((finding) => finding.severity === severity).length
+
+    return count > 0 ? [`${count} ${severity}`] : []
+  })
+
+  return `${found.length} ${noun} (${severities.join(', ')})`
 }
 
 // Read at every launch, so a catalog change merged into the base applies to the next verifier. A missing or

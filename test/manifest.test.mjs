@@ -644,6 +644,91 @@ test('loadManifest: each default list is a new array', () => {
   }
 })
 
+const REVIEW_CHECK = 'agent review'
+
+test('validateManifest: gates.verify.externalFindings, when set, is a mapping with check, and optionally artifact and minSeverity', () => {
+  const mapping = 'gates.verify.externalFindings must be a mapping with check, and optionally artifact and minSeverity'
+  const check = "gates.verify.externalFindings.check must be the exact name of the review's check run"
+  const artifact = 'gates.verify.externalFindings.artifact must be an artifact name, with {pr} for the PR number'
+  const severity = 'gates.verify.externalFindings.minSeverity must be low, medium or high'
+  const cases = [
+    [null, [mapping]],
+    [REVIEW_CHECK, [mapping]],
+    [[REVIEW_CHECK], [mapping]],
+    [{}, [check]],
+    [{ check: '' }, [check]],
+    [{ check: '  ' }, [check]],
+    [{ check: 7 }, [check]],
+    [{ check: REVIEW_CHECK, comment: true }, ['gates.verify.externalFindings: unknown key comment']],
+    [{ check: REVIEW_CHECK, artifact: '' }, [artifact]],
+    [{ check: REVIEW_CHECK, artifact: null }, [artifact]],
+    [{ check: REVIEW_CHECK, artifact: ['review-{pr}'] }, [artifact]],
+    [{ check: REVIEW_CHECK, minSeverity: 'critical' }, [severity]],
+    [{ check: REVIEW_CHECK, minSeverity: null }, [severity]],
+    [{ artifact: '', minSeverity: 'info' }, [artifact, severity, check]],
+    [{ check: REVIEW_CHECK }, []],
+    [{ check: REVIEW_CHECK, artifact: 'findings-{pr}', minSeverity: 'low' }, []],
+  ]
+
+  for (const [externalFindings, errors] of cases) {
+    assert.deepEqual(gatesErrors({ verify: { externalFindings } }), errors, JSON.stringify(externalFindings))
+  }
+
+  assert.deepEqual(gatesErrors({ verify: 'agent review' }), ['gates.verify must be a mapping'])
+  assert.deepEqual(gatesErrors('agent review'), ['gates must be a mapping'])
+})
+
+test('validateManifest: gates.verify.externalFindings.check is neither a required check nor an ignored one', () => {
+  const required = "gates.verify.externalFindings.check: check is also in repo.requiredChecks, and the review's run never counts toward CI"
+  const ignored = (name) =>
+    `gates.verify.externalFindings.check: ${name} matches repo.ignoredChecks, which would drop the review's run before the driver reads it`
+
+  const cases = [
+    ['check', {}, [required]],
+    [REVIEW_CHECK, { ignoredChecks: ['agent *'] }, [ignored(REVIEW_CHECK)]],
+    [REVIEW_CHECK, { ignoredChecks: [REVIEW_CHECK] }, [ignored(REVIEW_CHECK)]],
+    ['check', { ignoredChecks: ['ch*'] }, [required, ignored('check')]],
+    [REVIEW_CHECK, { requiredChecks: ['check', 'agent*'] }, []],
+    [REVIEW_CHECK, { ignoredChecks: ['Dependabot'] }, []],
+    [
+      REVIEW_CHECK,
+      { requiredChecks: REVIEW_CHECK },
+      ['repo.requiredChecks must name the CI jobs a PR needs (globs), e.g. [check, smoke*]'],
+    ],
+    [REVIEW_CHECK, { ignoredChecks: REVIEW_CHECK }, ['repo.ignoredChecks must be a list of check run names (globs), e.g. [Dependabot]']],
+  ]
+
+  for (const [name, repo, errors] of cases) {
+    const raw = structuredClone(base)
+
+    Object.assign(raw.repo, repo)
+    raw.gates = { verify: { externalFindings: { check: name } } }
+    assert.deepEqual(validateManifest(raw), errors, JSON.stringify([name, repo]))
+  }
+})
+
+test('loadManifest: gates.verify.externalFindings gets its defaults, keeps set values, and is missing without the key', () => {
+  const verifyWith = (verify) => loadManifest(makeRollout({ manifest: { gates: { verify } } })).gates.verify
+  const set = { check: REVIEW_CHECK, artifact: 'findings-{pr}', minSeverity: 'high' }
+
+  assert.deepEqual(verifyWith({ externalFindings: { check: REVIEW_CHECK } }), {
+    required: [],
+    recommended: [],
+    criteriaFrom: null,
+    externalFindings: { check: REVIEW_CHECK, artifact: 'review-{pr}', minSeverity: 'medium' },
+  })
+
+  assert.deepEqual(verifyWith({ externalFindings: set }).externalFindings, set)
+  assert.deepEqual(verifyWith({ externalFindings: { check: REVIEW_CHECK, minSeverity: 'low' } }).externalFindings, {
+    check: REVIEW_CHECK,
+    artifact: 'review-{pr}',
+    minSeverity: 'low',
+  })
+
+  assert.equal(Object.hasOwn(loadManifest(makeRollout()).gates.verify, 'externalFindings'), false)
+  assert.equal(Object.hasOwn(verifyWith({ required: ['A test per branch.'] }), 'externalFindings'), false)
+})
+
 function named(rollout, edit) {
   const raw = structuredClone(base)
 

@@ -309,7 +309,7 @@ test('needsYou: every needs-you code waits for the maintainer, approvals and mer
     }
   }
 
-  assert.equal(counted, 65)
+  assert.equal(counted, 66)
   assert.equal(needsYou({ id: 'A1', status: { stage: 'merge', kind: 'needs-you', code: 'approve' } }), true)
   assert.equal(needsYou({ id: 'A1', status: { stage: 'merge', kind: 'needs-you', code: 'merge-by-hand' } }), true)
   assert.equal(needsYou({ id: 'A1', status: { stage: 'implement', kind: 'waiting', code: 'driver-stopped' } }), false)

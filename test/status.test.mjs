@@ -17,6 +17,8 @@ import {
   FETCH,
   FIRST_ROUND,
   gateFacts,
+  gatesWith,
+  GREEN_RUNS,
   launched,
   MERGE_SHA,
   modelDriver,
@@ -469,6 +471,20 @@ pairTest('pre-verify', 'waiting', 'code-scanning-pending', async () => {
 
   gate.facts = scanned(NEW_HEAD)
   await driver.advance(pr)
+
+  return entry
+})
+
+// The review's run is in progress on the head the claim checks.
+pairTest('pre-verify', 'waiting', 'external-review', async () => {
+  const review = { id: 2, name: 'agent review', status: 'in_progress', conclusion: null, started_at: new Date().toISOString() }
+  const externalFindings = { check: 'agent review', artifact: 'review-{pr}', minSeverity: 'medium' }
+  const { driver, github, pr, entry } = verifiableDriver({ gates: gatesWith({ verify: { externalFindings } }) })
+
+  github.answer([prRoute(), runsRoute(SHA, { check_runs: [...GREEN_RUNS.check_runs, review] })])
+  await driver.advance(pr)
+
+  assert.equal(entry.status.sha, SHA)
 
   return entry
 })

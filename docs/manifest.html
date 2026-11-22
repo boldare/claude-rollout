@@ -151,6 +151,11 @@ policy:
 <span class="dim">#       - Every new option has its row in the docs.</span>
 <span class="dim">#     # Read from the base branch at every verifier launch. Every entry that applies is required.</span>
 <span class="dim">#     criteriaFrom: docs/criteria.yaml</span>
+<span class="dim">#     # The claim waits for this check run of the review workflow, then reads review.json from its artifact.</span>
+<span class="dim">#     externalFindings:</span>
+<span class="dim">#       check: agent review</span>
+<span class="dim">#       artifact: review-{pr}</span>
+<span class="dim">#       minSeverity: medium</span>
 
 <span class="dim"># Where agents, repo.install and the ready and pre-verify commands run. host, the default, runs agents as you.</span>
 <span class="dim"># sandbox:</span>
@@ -416,7 +421,9 @@ prs:
                 <td>
                   Check run names a PR needs. Every glob must match a run that succeeded, and every run on the commit, apart from those
                   <a href="#repo-ignoredChecks"><code>ignoredChecks</code></a> names, must finish as success, skipped or neutral. Only the
-                  latest run of each name counts, and a cancelled run only when the name has no other run.
+                  latest run of each name counts, and a cancelled run only when the name has no other run. The review's run that
+                  <a href="#gates-verify-externalFindings"><code>gates.verify.externalFindings</code></a> names is set aside too, so a glob
+                  that only it matches never finds a run.
                 </td>
               </tr>
               <tr id="repo-ignoredChecks">
@@ -428,7 +435,9 @@ prs:
                   A run these globs match counts for no commit's state: on a PR head, on the base or after a merge. It cannot fail a commit,
                   keep it pending or satisfy a <code>requiredChecks</code> glob. List runs that say nothing about the code, such as
                   <code>Dependabot</code>, the update job GitHub puts on the head of the base branch. A name may not be in both lists. An
-                  edit applies on the next tick.
+                  edit applies on the next tick. The review's run that
+                  <a href="#gates-verify-externalFindings"><code>gates.verify.externalFindings</code></a> names is set aside the same way,
+                  and the driver reads it itself, so no glob here may match it.
                 </td>
               </tr>
               <tr id="repo-baseQuietPaths">
@@ -730,7 +739,7 @@ prs:
                 <td><code>20</code></td>
                 <td>
                   CI on a claimed commit still pending after this long sends the PR back to the implementer, with the missing and running
-                  checks.
+                  checks. A run of the <a href="#external-review">external review</a> that runs longer than this is a skip.
                 </td>
               </tr>
               <tr id="policy-budgetUsd">
@@ -836,8 +845,10 @@ prs:
           brief reviewer makes for the driver on each brief the driver writes. <code>gates.ready</code> lists commands the implementer runs
           in its self-check and the driver runs again. <code>gates.preVerify</code> holds checks only the driver runs: the scope check,
           which runs before the ready commands, and the pre-verify commands, which run after them. <code>gates.verify</code> lists criteria
-          the verifier checks, and can name a catalog of more criteria in the repository. Any other key under <code>gates</code>,
-          <code>gates.brief</code>, <code>gates.ready</code>, <code>gates.preVerify</code> or <code>gates.verify</code> fails validation.
+          the verifier checks, and can name a catalog of more criteria in the repository. Its <code>externalFindings</code> makes the claim
+          wait for an <a href="#external-review">external review</a> of the head and read its result. Any other key under
+          <code>gates</code>, <code>gates.brief</code>, <code>gates.ready</code>, <code>gates.preVerify</code> or
+          <code>gates.verify</code> fails validation.
         </p>
 
         <div class="scroll">
@@ -1011,6 +1022,17 @@ prs:
                   <a href="commands.html#cmd-preflight">Preflight</a> reads and checks the catalog too.
                 </td>
               </tr>
+              <tr id="gates-verify-externalFindings">
+                <td>verify.externalFindings</td>
+                <td>mapping</td>
+                <td>–</td>
+                <td>
+                  An agent review that runs on every PR in a workflow of the repository: <code>check</code>, the exact name of its check
+                  run, and optionally <code>artifact</code>, the name of the artifact that holds its <code>review.json</code>, and
+                  <code>minSeverity</code>. The driver sets that run aside from CI, waits for it as the last step before the verifier and
+                  reads its result. See <a href="#external-review">The external review</a>.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -1062,6 +1084,255 @@ prs:
             The catalog must be on <code>origin/&lt;base&gt;</code>. A file only in your local clone or on another branch counts as missing.
           </li>
         </ul>
+
+        <h3 id="external-review">The external review <a class="anchor" href="#external-review" aria-label="Link to this section">#</a></h3>
+
+        <p>
+          A project can run an agent review on every PR: a job of the review workflow that uploads its findings as
+          <code>review.json</code> in an artifact.
+          <a href="#gates-verify-externalFindings"><code>gates.verify.externalFindings</code></a> names the job's check run and the
+          artifact:
+        </p>
+
+        <pre><code>gates:
+  verify:
+    externalFindings:
+      check: agent review      <span class="dim"># the exact name of the review's check run, never a glob</span>
+      artifact: review-{pr}    <span class="dim"># optional, the default. {pr} is the PR number</span>
+      minSeverity: medium      <span class="dim"># optional, the default: high, medium or low</span></code></pre>
+
+        <ul>
+          <li>
+            The run <code>check</code> names is set aside from the head's CI state at the claim check, at the merge gate and on the base. It
+            never makes a commit red or pending, so a failed review run never sends "CI is red". A
+            <a href="#repo-requiredChecks"><code>repo.requiredChecks</code></a> glob that only the review's run matches never finds a run.
+          </li>
+          <li>
+            Only the run <code>check</code> names is set aside. Another job of the same workflow, such as one that posts a comment, stays an
+            ordinary check. <a href="#repo-ignoredChecks"><code>repo.ignoredChecks</code></a> is the place for it.
+          </li>
+          <li>
+            The claim waits for the review as its last step before the verifier, after the pre-verify commands, so the commands run while
+            the review runs. It waits on <a href="how-it-works.html#status-external-review"><code>external-review</code></a
+            >.
+          </li>
+          <li>
+            The driver reads the artifact with the token it reads GitHub with, your own <code>gh</code> login. That token must be allowed to
+            read Actions artifacts. A fine-grained token needs read access to Actions. A 403 is a skip.
+          </li>
+          <li>A skip never sends the PR back, never blocks it and never holds it. The verifier starts as it would without the key.</li>
+          <li>
+            The driver keeps the result, or the reason for the skip, on the PR's ledger entry. It belongs to one head, so a claim of a new
+            head drops it. A new run of the same head, such as a re-run, is decided again.
+          </li>
+          <li>
+            The findings are counted in the <code>gate-check</code> event, such as
+            <code>2 candidates (1 high, 1 medium), 1 below medium</code>. A candidate is a finding at or above <code>minSeverity</code>.
+          </li>
+        </ul>
+
+        <p>When the claim reaches the review, the review's latest run on the head decides:</p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>the review's run</th>
+                <th>the driver</th>
+                <th><code>gate-check</code>, item <code>external-review</code></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>none, and the claim is less than 2 minutes old</td>
+                <td>waits</td>
+                <td>none</td>
+              </tr>
+              <tr>
+                <td>none, and the claim is older</td>
+                <td>skips and goes on to the verifier</td>
+                <td><code>skip</code>: <code>no review run on the head</code></td>
+              </tr>
+              <tr>
+                <td>
+                  not finished, for at most <a href="#policy-ciStallMinutes"><code>policy.ciStallMinutes</code></a> since it started, or
+                  since the claim when GitHub gives no start
+                </td>
+                <td>waits</td>
+                <td>none</td>
+              </tr>
+              <tr>
+                <td>not finished, for longer</td>
+                <td>skips and goes on to the verifier</td>
+                <td><code>skip</code>: <code>the review has run for more than &lt;ciStallMinutes&gt; minutes</code></td>
+              </tr>
+              <tr>
+                <td>finished with a conclusion other than <code>success</code></td>
+                <td>skips and goes on to the verifier</td>
+                <td><code>skip</code>: <code>the review run ended as &lt;conclusion&gt;</code></td>
+              </tr>
+              <tr>
+                <td>finished with <code>success</code></td>
+                <td>
+                  reads <code>review.json</code> from the newest artifact of the head that has not expired, and goes on to the verifier
+                </td>
+                <td><code>pass</code> with the counts, or <code>skip</code> with the reason below</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>A successful run gives no result, and the claim skips with the reason, when:</p>
+
+        <ul>
+          <li>no artifact of that name belongs to the head: <code>the review left no artifact for this head</code></li>
+          <li>every one has expired: <code>the review's artifact has expired</code></li>
+          <li>the artifact is over 5 MB, or its <code>review.json</code> over 1 MB: <code>the review's artifact is too large</code></li>
+          <li>the archive has no <code>review.json</code>: <code>the artifact has no review.json</code></li>
+          <li>the archive cannot be read: <code>the review's artifact is not a zip archive the driver can read: …</code></li>
+          <li>
+            GitHub answers 404, 410, or 403 for another cause than a rate limit:
+            <code>the driver cannot read the review's artifact: …</code>, with GitHub's message
+          </li>
+          <li>the contract below refuses the file: the reason names the field, such as <code>revision 9b2d4e1 is not the head</code></li>
+        </ul>
+
+        <p>
+          Any other error, such as a server error or a rate limit, is no skip. It counts as an error of the PR, like any failed GitHub read,
+          and the next tick reads again.
+        </p>
+
+        <p>The driver checks <code>review.json</code> against this contract. The file:</p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>rule</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>schema_version</code></td>
+                <td><code>1</code>. Any other value refuses the file.</td>
+              </tr>
+              <tr>
+                <td><code>revision</code></td>
+                <td>A string of 7 characters or more. The head must start with it, or the file is refused.</td>
+              </tr>
+              <tr>
+                <td><code>reused_from</code></td>
+                <td>Optional. It is kept, cut to 64 characters. Line numbers refer to that commit.</td>
+              </tr>
+              <tr>
+                <td><code>input_digest</code></td>
+                <td>Not read.</td>
+              </tr>
+              <tr>
+                <td><code>findings</code></td>
+                <td>
+                  A list of findings, each with a <code>status</code> of <code>new</code> or <code>open</code>. At most 50 are kept, highest
+                  severity first, and the rest are counted.
+                </td>
+              </tr>
+              <tr>
+                <td><code>fixed</code></td>
+                <td>A list of findings with no <code>status</code>. It is checked, and at most 50 are kept, highest severity first.</td>
+              </tr>
+              <tr>
+                <td><code>dropped</code></td>
+                <td>Not read.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>A finding:</p>
+
+        <div class="scroll">
+          <table class="fields">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>rule</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>severity</code></td>
+                <td><code>high</code>, <code>medium</code> or <code>low</code>. Any other value refuses the file.</td>
+              </tr>
+              <tr>
+                <td><code>criterion</code></td>
+                <td>Cut at 100 characters.</td>
+              </tr>
+              <tr>
+                <td><code>title</code></td>
+                <td>Cut at 200 characters.</td>
+              </tr>
+              <tr>
+                <td><code>file</code></td>
+                <td>Cut at 300 characters.</td>
+              </tr>
+              <tr>
+                <td><code>line</code></td>
+                <td>A whole number of 1 or more.</td>
+              </tr>
+              <tr>
+                <td><code>failure_scenario</code></td>
+                <td>Cut at 1000 characters.</td>
+              </tr>
+              <tr>
+                <td><code>fix</code></td>
+                <td>Cut at 1000 characters.</td>
+              </tr>
+              <tr>
+                <td><code>refutation</code></td>
+                <td>Not read.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          A text over its limit is cut to the limit, and its last character becomes <code>…</code>. A file that is not JSON, lacks a field
+          or has a field of the wrong type is a skip whose reason names the field. A synthetic example:
+        </p>
+
+        <pre><code>{
+  "schema_version": 1,
+  "revision": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+  "input_digest": "9b2d",
+  "findings": [
+    {
+      "severity": "high",
+      "criterion": "review.correctness",
+      "title": "The total ignores a refunded line",
+      "file": "src/orders/total.ts",
+      "line": 42,
+      "failure_scenario": "An order with one refunded line shows the full price.",
+      "fix": "Skip a line whose refund is settled.",
+      "status": "new"
+    },
+    {
+      "severity": "low",
+      "criterion": "review.naming",
+      "title": "A flag named tmp",
+      "file": "src/orders/total.ts",
+      "line": 12,
+      "failure_scenario": "The next reader cannot tell what it guards.",
+      "fix": "Name it after the condition.",
+      "status": "open"
+    }
+  ],
+  "fixed": [],
+  "dropped": []
+}</code></pre>
+
+        <p>
+          With <code>minSeverity: medium</code>, a read of this file for its head logs <code>1 candidate (1 high), 1 below medium</code>.
+        </p>
 
         <h2 id="sandbox">sandbox <a class="anchor" href="#sandbox" aria-label="Link to this section">#</a></h2>
 
@@ -1467,8 +1738,11 @@ prs:
             a list of non-empty strings. <code>gates.preVerify</code>, when set, is a mapping with at most these keys: <code>scope</code>, a
             boolean, and <code>required</code> and <code>recommended</code>, each a list of non-empty strings. <code>gates.verify</code>,
             when set, is a mapping with at most these keys: <code>required</code> and <code>recommended</code>, each a list of non-empty
-            strings, and <code>criteriaFrom</code>, a path relative to the repository root with no <code>..</code> segment and no leading
-            <code>/</code> or <code>~</code>.
+            strings, <code>criteriaFrom</code>, a path relative to the repository root with no <code>..</code> segment and no leading
+            <code>/</code> or <code>~</code>, and <code>externalFindings</code>. <code>gates.verify.externalFindings</code>, when set, is a
+            mapping with <code>check</code>, a non-empty string, and at most these other keys: <code>artifact</code>, a non-empty string,
+            and <code>minSeverity</code>, <code>high</code>, <code>medium</code> or <code>low</code>. Its <code>check</code> is not in
+            <code>repo.requiredChecks</code>, and no <code>repo.ignoredChecks</code> glob matches it.
           </li>
           <li>
             <code>sandbox</code>, when set, is a mapping with at most these keys: <code>runtime</code>, <code>host</code> or

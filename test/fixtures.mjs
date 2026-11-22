@@ -53,6 +53,7 @@ export const STATUS_SAMPLES = {
   github: {},
   ci: { sha: SHA, missing: ['lint'], pending: ['test'] },
   'code-scanning-pending': { sha: SHA },
+  'external-review': { sha: SHA },
   'base-red': { sha: BASE_SHA, failing: ['test', 'lint'] },
   'base-pending': { sha: BASE_SHA },
   'gate-pending': {},
