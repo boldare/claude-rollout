@@ -345,6 +345,22 @@ function printPreVerify(preVerify) {
   }
 }
 
+function printReview(review) {
+  if (!review) {
+    return
+  }
+
+  console.log(`\nexternal review of ${review.sha.slice(0, 7)}: ${review.summary}`)
+
+  if (review.reusedFrom) {
+    console.log(`  line numbers refer to ${review.reusedFrom.slice(0, 7)}, the commit the review read`)
+  }
+
+  for (const row of [...review.findings, ...review.fixed]) {
+    console.log(`  [${row.severity}] ${row.criterion} ${row.file}:${row.line}: ${row.title}${row.note ? ` (${row.note})` : ''}`)
+  }
+}
+
 function card(manifest, id) {
   const ledger = readLedger(manifest)
 
@@ -453,6 +469,7 @@ function card(manifest, id) {
   }
 
   printPreVerify(entry.preVerify)
+  printReview(entry.review)
 
   if (verifiedOnMerge({ stage: shown.stage, status: shown })) {
     console.log(`\n${approveHint(manifest, entry, id)}`)

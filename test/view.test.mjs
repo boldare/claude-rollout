@@ -22,7 +22,18 @@ import {
   rowsMatching,
   runsOf,
 } from '../lib/view.mjs'
-import { START, at, interruptedTranscript, jsonLines, makeRollout, sampleEvents, samplePrs, sampleTranscript } from './fixtures.mjs'
+import {
+  REVIEW_MANIFEST,
+  START,
+  at,
+  interruptedTranscript,
+  jsonLines,
+  makeRollout,
+  sampleEvents,
+  samplePrs,
+  sampleReview,
+  sampleTranscript,
+} from './fixtures.mjs'
 
 const BIN = fileURLToPath(new URL('../bin/rollout.mjs', import.meta.url))
 
@@ -1581,6 +1592,209 @@ test('card: the commands the driver ran after the verifier, each with its stage,
 
   assert.doesNotMatch(cli('card', 'A1', '--dir', moved).stdout, /commands the driver ran/)
   assert.doesNotMatch(cli('card', 'A1', '--dir', makeRollout()).stdout, /commands the driver ran/)
+})
+
+const OLDER_HEAD = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2'
+const SKIP_REASON = 'the review run ended as failure'
+const ESCAPED_TITLE = 'A flag named tmp\n\u001b[31mred'
+
+function skippedReview(reason = SKIP_REASON) {
+  return { ...sampleReview(), reusedFrom: null, skipped: reason, findings: [], fixed: [] }
+}
+
+function reviewRollout(review, { manifest = REVIEW_MANIFEST, ...entry } = {}) {
+  return makeRollout({ manifest, prs: { A1: { ...samplePrs().A1, review, ...entry } } })
+}
+
+function shownReview(dir) {
+  const manifest = loadManifest(dir)
+
+  return prDetail(manifest, readLedger(manifest), [], [], 'A1').review
+}
+
+test('prDetail: the review of the claimed head, its findings by severity, the ones below minSeverity noted, then the fixed ones', () => {
+  assert.deepEqual(shownReview(reviewRollout(sampleReview())), {
+    sha: samplePrs().A1.claimedSha,
+    reusedFrom: sampleReview().reusedFrom,
+    skipped: null,
+    minSeverity: 'medium',
+    counts: { high: 1, medium: 1, low: 1 },
+    leftOut: 0,
+    summary: '3 findings (1 high, 1 medium, 1 low), 1 fixed',
+    findings: [
+      {
+        severity: 'high',
+        criterion: 'review.correctness',
+        file: 'src/orders/total.ts',
+        line: 42,
+        title: 'The total ignores a refunded line',
+        note: '',
+      },
+      {
+        severity: 'medium',
+        criterion: 'review.errors',
+        file: 'src/orders/load.ts',
+        line: 7,
+        title: 'A failed read is retried forever',
+        note: '',
+      },
+      {
+        severity: 'low',
+        criterion: 'review.naming',
+        file: 'src/orders/total.ts',
+        line: 12,
+        title: 'A flag named tmp',
+        note: 'shown only, below medium',
+      },
+    ],
+    fixed: [
+      {
+        severity: 'medium',
+        criterion: 'review.correctness',
+        file: 'src/orders/total.ts',
+        line: 30,
+        title: 'The discount is applied twice',
+        note: 'fixed',
+      },
+    ],
+  })
+})
+
+test('prDetail: no review without the manifest key, without a stored review, or for a review of another head', () => {
+  assert.equal(shownReview(reviewRollout(sampleReview(), { manifest: {} })), null)
+  assert.equal(shownReview(makeRollout({ manifest: REVIEW_MANIFEST })), null)
+  assert.equal(shownReview(reviewRollout(null)), null)
+  assert.equal(shownReview(reviewRollout({ ...sampleReview(), sha: OLDER_HEAD })), null)
+  assert.equal(shownReview(reviewRollout(sampleReview(), { claimedSha: OLDER_HEAD })), null)
+})
+
+test('prDetail: a skipped review gives its reason as the summary, with no rows', () => {
+  const review = shownReview(reviewRollout(skippedReview()))
+
+  assert.equal(review.skipped, SKIP_REASON)
+  assert.equal(review.summary, `skipped: ${SKIP_REASON}`)
+  assert.equal(review.reusedFrom, null)
+  assert.deepEqual([review.findings, review.fixed], [[], []])
+  assert.deepEqual(review.counts, { high: 0, medium: 0, low: 0 })
+})
+
+test('prDetail: the review summary names what was left out and fixed, and one finding is singular', () => {
+  const [low, high, medium] = sampleReview().findings
+  const summary = (fields) => shownReview(reviewRollout({ ...sampleReview(), ...fields })).summary
+
+  assert.equal(summary({ leftOut: 2 }), '3 findings (1 high, 1 medium, 1 low), 2 left out, 1 fixed')
+  assert.equal(summary({ findings: [high], fixed: [] }), '1 finding (1 high)')
+  assert.equal(summary({ findings: [low, medium, medium], fixed: [] }), '3 findings (2 medium, 1 low)')
+  assert.equal(summary({ findings: [] }), 'no findings, 1 fixed')
+  assert.equal(summary({ findings: [], fixed: [] }), 'no findings')
+})
+
+test("prDetail: the review splits at the manifest's minSeverity, and one severity keeps the file's order", () => {
+  const [low, high, medium] = sampleReview().findings
+  const second = { ...high, line: 50, title: 'A second high one' }
+
+  function rows(minSeverity) {
+    const manifest = { gates: { verify: { externalFindings: { check: 'agent review', minSeverity } } } }
+    const review = shownReview(reviewRollout({ ...sampleReview(), findings: [low, high, medium, second] }, { manifest }))
+
+    return review.findings.map((row) => [row.line, row.note])
+  }
+
+  assert.deepEqual(rows('low'), [
+    [42, ''],
+    [50, ''],
+    [7, ''],
+    [12, ''],
+  ])
+
+  assert.deepEqual(rows('high'), [
+    [42, ''],
+    [50, ''],
+    [7, 'shown only, below high'],
+    [12, 'shown only, below high'],
+  ])
+})
+
+test('prDetail: a review text with a line break or a terminal escape comes out with no control character', () => {
+  const [low] = sampleReview().findings
+  const found = shownReview(
+    reviewRollout({ ...sampleReview(), findings: [{ ...low, title: ESCAPED_TITLE, criterion: 'review.\tnaming' }] }),
+  )
+
+  const skipped = shownReview(reviewRollout(skippedReview('the review run\r\nended as failure')))
+  const shown = [found.summary, skipped.summary, ...found.findings.flatMap((row) => [row.criterion, row.file, row.title])]
+
+  assert.equal(found.findings[0].title, 'A flag named tmp [31mred')
+  assert.equal(found.findings[0].criterion, 'review. naming')
+  assert.equal(skipped.summary, `skipped: ${SKIP_REASON}`)
+  assert.deepEqual(
+    shown.filter((text) => /\p{Cc}/u.test(text)),
+    [],
+  )
+})
+
+test('card: the external review of the claimed head after the commands the driver ran, and before the approve hint', () => {
+  const card = cli('card', 'A1', '--dir', reviewRollout(sampleReview(), { preVerify: PRE_VERIFY }))
+  const block = [
+    'commands the driver ran at a1a1a1a:',
+    '  [pass] ready required: npm ci (exit 0)',
+    '  [pass] preVerify required: npm test (exit 0)',
+    '  [fail] preVerify recommended: npm run lint (exit 1)',
+    '    line 2',
+    '    line 3',
+    '    line 4',
+    '    line 5',
+    '    line 6',
+    '',
+    'external review of a1a1a1a: 3 findings (1 high, 1 medium, 1 low), 1 fixed',
+    '  line numbers refer to 9f8e7d6, the commit the review read',
+    '  [high] review.correctness src/orders/total.ts:42: The total ignores a refunded line',
+    '  [medium] review.errors src/orders/load.ts:7: A failed read is retried forever',
+    '  [low] review.naming src/orders/total.ts:12: A flag named tmp (shown only, below medium)',
+    '  [medium] review.correctness src/orders/total.ts:30: The discount is applied twice (fixed)',
+    '',
+    'Approve with: ',
+  ]
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.ok(card.stdout.includes(block.join('\n')), card.stdout)
+})
+
+test('card: a skipped review prints its heading line only', () => {
+  const card = cli('card', 'A1', '--dir', reviewRollout(skippedReview()))
+  const lines = card.stdout.split('\n')
+  const heading = lines.findIndex((line) => line.startsWith('external review'))
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.deepEqual(lines.slice(heading - 1, heading + 2), ['', `external review of a1a1a1a: skipped: ${SKIP_REASON}`, ''])
+})
+
+test('card: no external review without the manifest key, without a stored review, or for a review of an older head', () => {
+  const dirs = [
+    reviewRollout(sampleReview(), { manifest: {} }),
+    makeRollout({ manifest: REVIEW_MANIFEST }),
+    reviewRollout(sampleReview(), { claimedSha: OLDER_HEAD }),
+  ]
+
+  for (const dir of dirs) {
+    const card = cli('card', 'A1', '--dir', dir)
+
+    assert.equal(card.status, 0, card.stderr)
+    assert.doesNotMatch(card.stdout, /^external review/m)
+  }
+})
+
+test('card: a review title with a line break or a terminal escape prints on one line', () => {
+  const [low] = sampleReview().findings
+  const card = cli('card', 'A1', '--dir', reviewRollout({ ...sampleReview(), findings: [{ ...low, title: ESCAPED_TITLE }], fixed: [] }))
+
+  assert.equal(card.status, 0, card.stderr)
+  assert.ok(
+    card.stdout.includes('\n  [low] review.naming src/orders/total.ts:12: A flag named tmp [31mred (shown only, below medium)\n'),
+    card.stdout,
+  )
+
+  assert.ok(!card.stdout.includes('\u001b'), card.stdout)
 })
 
 const DECISION = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: '' }

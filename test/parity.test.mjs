@@ -5,13 +5,14 @@ import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
-import { rolloutSnapshot } from '../lib/rollouts.mjs'
+import { rolloutPr, rolloutSnapshot } from '../lib/rollouts.mjs'
 import { STAGE_STATUSES } from '../lib/state.ts'
 import { renderBoard } from '../ui/board.js'
 import { dialogFor, prControls } from '../ui/commands.js'
+import { renderDetail } from '../ui/detail.js'
 import { renderHeader } from '../ui/header.js'
 import { installDocument } from './fake-dom.mjs'
-import { at, makeRollout, sampleStatus } from './fixtures.mjs'
+import { REVIEW_MANIFEST, at, makeRollout, samplePrs, sampleReview, sampleStatus } from './fixtures.mjs'
 
 // The CLI and the board print one model. One PR per stage and code of
 // STAGE_STATUSES, a merged one and a held running one: each status line of
@@ -348,4 +349,67 @@ test('parity: with no driver, a running status reads waiting: driver-stopped in 
   assertInOrder(line, row.parts, 'A1')
   assert.match(stdout, /^rollout demo {2}driver: NOT RUNNING since \d{4}-\d\d-\d\d \d\d:\d\d UTC\. Statuses are from its last tick\./)
   assert.match(textOf(renderHeader(boardContext(view)), 'p.stopped-since'), /^Not running since .+\. Statuses are from its last tick\.$/)
+})
+
+// The card's review section only: its heading, then the lines up to the next blank one.
+// Other sections, such as the verdict's checklist, also have lines that start with "  [".
+function cardReview(stdout) {
+  const lines = stdout.split('\n')
+  const start = lines.findIndex((line) => line.startsWith('external review of'))
+
+  assert.ok(start >= 0, stdout)
+
+  const end = lines.indexOf('', start)
+
+  return lines.slice(start, end === -1 ? lines.length : end)
+}
+
+// The verifier tab of A1, from the same model the page fetches.
+function pageReview(dir) {
+  const body = JSON.parse(JSON.stringify(rolloutPr(loadManifest(dir), 'A1')))
+  const ctx = {
+    ...boardContext(viewOf(dir)),
+    route: { r: 'demo', view: 'board', pr: 'A1', tab: 'verifier' },
+    detail: { status: 200, body },
+  }
+
+  const section = renderDetail(ctx).querySelector('div.external-review')
+
+  assert.ok(section, 'the verifier tab shows the external review')
+
+  return section
+}
+
+test('parity: the review section of rollout card reads as the external review on the verifier tab, row for row', () => {
+  const skip = { ...sampleReview(), reusedFrom: null, skipped: 'the review run ended as failure', findings: [], fixed: [] }
+  const rowCounts = []
+
+  for (const review of [sampleReview(), skip]) {
+    const dir = makeRollout({ manifest: REVIEW_MANIFEST, prs: { A1: { ...samplePrs().A1, review } } })
+    const [heading, ...rest] = cardReview(cli('card', 'A1', '--dir', dir))
+    const section = pageReview(dir)
+    const reused = rest.filter((line) => line.startsWith('  line numbers refer to ')).map((line) => line.trim())
+    const lines = rest.filter((line) => line.startsWith('  ['))
+    const rows = section.querySelector('tbody')?.children ?? []
+
+    assert.equal(`${textOf(section, 'h3')}: ${textOf(section, 'p.text')}`, heading)
+    assert.deepEqual(
+      reused,
+      section.querySelectorAll('p.muted').map((node) => node.textContent),
+    )
+
+    assert.equal(rows.length, lines.length, heading)
+
+    rows.forEach((row, i) => {
+      assertInOrder(
+        lines[i],
+        row.querySelectorAll('td').map((cell) => cell.textContent),
+        `row ${i}`,
+      )
+    })
+
+    rowCounts.push(rows.length)
+  }
+
+  assert.deepEqual(rowCounts, [4, 0])
 })

@@ -9,7 +9,7 @@ import { clock } from '../ui/format.js'
 import { renderHeader } from '../ui/header.js'
 import { renderTranscript } from '../ui/transcript.js'
 import { installDocument } from './fake-dom.mjs'
-import { START, at, makeRollout, samplePrs } from './fixtures.mjs'
+import { REVIEW_MANIFEST, START, at, makeRollout, samplePrs, sampleReview } from './fixtures.mjs'
 
 const fakeDocument = installDocument()
 const NOW = START + 100 * 60_000
@@ -304,6 +304,95 @@ test('detail verifier: the verdict badge, summary and checklist', () => {
 
   assert.ok(check, 'the checklist has the tests pass item')
   assert.equal(one(check, 'td.check-pass').textContent, 'pass')
+})
+
+const COMMANDS = {
+  sha: samplePrs().A1.claimedSha,
+  at: at(79),
+  results: [
+    {
+      command: 'npm test',
+      stage: 'preVerify',
+      level: 'required',
+      result: 'pass',
+      summary: 'exit 0',
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      seconds: 30,
+      tail: '',
+      changes: [],
+    },
+  ],
+}
+
+// The PR page of A1 with the external review on and the given review stored.
+function reviewBody(review, manifestFields = REVIEW_MANIFEST) {
+  const reviewDir = makeRollout({ manifest: manifestFields, prs: { A1: { ...samplePrs().A1, review, preVerify: COMMANDS } } })
+  const body = overJson(rolloutPr(loadManifest(reviewDir), 'A1'))
+
+  rmSync(reviewDir, { recursive: true, force: true })
+
+  return body
+}
+
+function verifierTab(body) {
+  return renderDetail(viewContext({ route: { pr: 'A1', tab: 'verifier' }, detail: { status: 200, body } }))
+}
+
+test('detail verifier: the external review of the claimed head after the commands the driver ran, with and without a verdict', () => {
+  const body = reviewBody(sampleReview())
+  const headings = {
+    verdict: ['latest verdict', 'commands the driver ran', 'external review of a1a1a1a', 'history'],
+    none: ['commands the driver ran', 'external review of a1a1a1a'],
+  }
+
+  for (const [shown, pr] of [
+    ['verdict', body],
+    ['none', { ...body, verdict: null, verdicts: [] }],
+  ]) {
+    const tab = verifierTab(pr)
+    const section = one(tab, 'div.external-review')
+
+    assert.deepEqual(texts(tab, 'h3'), headings[shown], shown)
+    assert.equal(one(section, 'h3').textContent, 'external review of a1a1a1a', shown)
+    assert.equal(one(section, 'p.text').textContent, '3 findings (1 high, 1 medium, 1 low), 1 fixed', shown)
+    assert.equal(one(section, 'p.muted').textContent, 'line numbers refer to 9f8e7d6, the commit the review read', shown)
+    assert.deepEqual(
+      section.querySelector('tbody').children.map((row) => texts(row, 'td')),
+      [
+        ['high', 'review.correctness', 'src/orders/total.ts:42', 'The total ignores a refunded line', ''],
+        ['medium', 'review.errors', 'src/orders/load.ts:7', 'A failed read is retried forever', ''],
+        ['low', 'review.naming', 'src/orders/total.ts:12', 'A flag named tmp', 'shown only, below medium'],
+        ['medium', 'review.correctness', 'src/orders/total.ts:30', 'The discount is applied twice', 'fixed'],
+      ],
+      shown,
+    )
+  }
+})
+
+test('detail verifier: a skipped review shows its summary and no table', () => {
+  const body = reviewBody({ ...sampleReview(), reusedFrom: null, skipped: 'the review run ended as failure', findings: [], fixed: [] })
+
+  for (const pr of [body, { ...body, verdict: null, verdicts: [] }]) {
+    const section = one(verifierTab(pr), 'div.external-review')
+
+    assert.equal(one(section, 'h3').textContent, 'external review of a1a1a1a')
+    assert.equal(one(section, 'p.text').textContent, 'skipped: the review run ended as failure')
+    assert.equal(section.querySelector('p.muted'), null)
+    assert.equal(section.querySelector('table'), null)
+  }
+})
+
+test('detail verifier: no external review section when the PR has no review to show', () => {
+  const bodies = [prBody, reviewBody(sampleReview(), {}), reviewBody(null), reviewBody({ ...sampleReview(), sha: 'b2b2b2b2' })]
+
+  for (const body of bodies) {
+    for (const pr of [body, { ...body, verdict: null, verdicts: [] }]) {
+      assert.equal(pr.review, null)
+      assert.equal(verifierTab(pr).querySelector('div.external-review'), null)
+    }
+  }
 })
 
 test('detail: an unknown PR shows an error', () => {
