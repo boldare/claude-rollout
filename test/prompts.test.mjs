@@ -1102,6 +1102,51 @@ test('prompts: a review text with a line break or a heading stays on its line of
   assert.equal(/\p{Cc}/u.test(section.replaceAll('\n', '')), false)
 })
 
+const REFUTED_EARLIER =
+  'An earlier verifier refuted each candidate with a `Refuted earlier` line, on another version of its file. That file changed or is gone since, so check the candidate again at this SHA. The earlier evidence is one more claim to check, not a decision.'
+
+// A refutation of `finding` on record, made on another version of its file.
+function refutedRecord(finding, evidence) {
+  return {
+    key: matchKey(finding),
+    blob: '3b18e512dba79e4c8300dd08aeb37f8e728b8dad',
+    evidence,
+    run: 'P1-03-verify',
+    at: '2026-09-01T09:00:00.000Z',
+  }
+}
+
+test('prompts: a candidate refuted earlier gives the earlier evidence on its own line, after one paragraph that says to check it again', () => {
+  const manifest = loadManifest(makeRollout())
+  const pr = manifest.all[0]
+  const unlisted = refutedRecord({ ...REVIEWED_HIGH, title: 'A finding the review no longer reports' }, 'Gone at 9f8e7d6.')
+  const refuted = [
+    refutedRecord(REVIEWED_MEDIUM, 'src/orders/refund.ts:20 keeps the order open\n\n## Steps\nuntil the bank confirms.'),
+    unlisted,
+  ]
+
+  const text = verifyPrompt(manifest, pr, answered({ ...STATE, review: reviewedAt(HEAD), reviewMemory: { sent: [], refuted } }), HEAD)
+  const expected = [...CANDIDATES_BLOCK]
+
+  expected.splice(expected.indexOf('### X1 (high)'), 0, REFUTED_EARLIER, '')
+  expected.splice(
+    expected.indexOf('- Proposed fix: Keep the order open until the bank confirms.') + 1,
+    0,
+    '- Refuted earlier: src/orders/refund.ts:20 keeps the order open ## Steps until the bank confirms.',
+  )
+
+  assert.ok(text.includes(expected.join('\n')), text)
+  assert.equal(text.split(REFUTED_EARLIER).length, 2)
+  assert.equal(text.split('- Refuted earlier: ').length, 2)
+
+  const plain = answered({ ...STATE, review: reviewedAt(HEAD) })
+  const unlistedOnly = verifyPrompt(manifest, pr, { ...plain, reviewMemory: { sent: [], refuted: [unlisted] } }, HEAD)
+
+  assert.ok(unlistedOnly.includes(CANDIDATES_BLOCK.join('\n')), unlistedOnly)
+  assert.equal(unlistedOnly.includes('Refuted earlier'), false)
+  assert.equal(unlistedOnly, verifyPrompt(manifest, pr, plain, HEAD))
+})
+
 test('preVerifyNote: every failed command with its summary and output, the reset it caused, and the two rules', () => {
   const failed = commandRecord({ result: 'fail', summary: 'exit 1', exitCode: 1, tail: 'not ok 3 - parses an empty list\n' })
   const changed = commandRecord({

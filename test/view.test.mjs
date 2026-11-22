@@ -1831,6 +1831,50 @@ test('prDetail: a finding left out at launch notes the finding it already is, an
   ])
 })
 
+test('prDetail: a remembered refutation of a finding not sent notes its evidence on one line, before and after a launch', () => {
+  const answered = answeredReview()
+  const [, high, medium] = answered.review.findings
+  const refutation = (finding, evidence) => ({
+    key: matchKey(finding),
+    blob: '3b18e512dba79e4c8300dd08aeb37f8e728b8dad',
+    evidence,
+    run: 'A1-03-verify',
+    at: at(60),
+  })
+
+  const reviewMemory = {
+    sent: [matchKey(high), matchKey(medium)],
+    refuted: [refutation(medium, 'src/orders/load.ts:9 caps the retries\nat three.'), refutation(high, 'Total.ts:44 skips it.')],
+  }
+
+  const held = { ...answered, reviewMemory, review: { ...answered.review, candidates: [] } }
+
+  assert.deepEqual(reviewNotes(held), [
+    [42, 'not sent, already finding F1'],
+    [7, 'refuted earlier: src/orders/load.ts:9 caps the retries at three.'],
+    [12, 'shown only, below medium'],
+  ])
+
+  const beforeLaunch = { review: sampleReview(), reviewMemory, findings: null }
+
+  assert.deepEqual(reviewNotes(beforeLaunch).slice(0, 2), [
+    [42, 'refuted earlier: Total.ts:44 skips it.'],
+    [7, 'refuted earlier: src/orders/load.ts:9 caps the retries at three.'],
+  ])
+
+  const noEvidence = { ...reviewMemory, refuted: [refutation(medium, '')] }
+
+  assert.deepEqual(reviewNotes({ ...beforeLaunch, reviewMemory: noEvidence }).slice(0, 2), [
+    [42, ''],
+    [7, 'refuted earlier'],
+  ])
+
+  assert.deepEqual(reviewNotes({ ...answered, reviewMemory }).slice(0, 2), [
+    [42, 'X1 confirmed'],
+    [7, 'X2 refuted: src/orders/load.ts:9 caps the retries at three.'],
+  ])
+})
+
 test('prDetail: with 20 candidates, a finding after the 20th is over 20, and one before it was re-checked as a finding', () => {
   const [, high] = sampleReview().findings
   const findings = Array.from({ length: 22 }, (_, i) => ({ ...high, title: `High finding ${i + 1}`, line: i + 1 }))

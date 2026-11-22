@@ -7,6 +7,7 @@ import {
   briefWaits,
   briefWritten,
   candidatesFixed,
+  candidatesRefuted,
   candidatesSent,
   claimMoved,
   claimNewHead,
@@ -541,6 +542,72 @@ test('transitions: candidatesSent with no key writes nothing', () => {
   candidatesSent(entry, [])
 
   assert.deepEqual(entry.reviewMemory, { sent: ['first'], refuted: [] })
+})
+
+function refutation(key, fields = {}) {
+  return {
+    key,
+    blob: '3b18e512dba79e4c8300dd08aeb37f8e728b8dad',
+    evidence: `${key} is refuted at a1a1a1a.`,
+    run: 'P1-04-verify',
+    at: AT,
+    ...fields,
+  }
+}
+
+test('transitions: candidatesRefuted creates the memory, moves a key refuted again to the end with its new record and changes nothing else', () => {
+  const entry = entryWith({ state: 'verifying', pr: 7, claimedSha: SHA })
+  const before = structuredClone(entry)
+  const first = refutation('first')
+  const second = refutation('second', { blob: null })
+
+  candidatesRefuted(entry, [first, second])
+
+  assert.deepEqual(entry, { ...before, reviewMemory: { sent: [], refuted: [first, second] } })
+
+  const again = refutation('first', { evidence: 'Still refuted at b2b2b2b.', run: 'P1-05-verify', at: LATER })
+  const third = refutation('third')
+
+  candidatesRefuted(entry, [again, third])
+
+  assert.deepEqual(entry.reviewMemory, { sent: [], refuted: [second, again, third] })
+
+  const last = refutation('second', { evidence: 'The last record of the call.' })
+
+  candidatesRefuted(entry, [refutation('second'), last])
+
+  assert.deepEqual(entry.reviewMemory.refuted, [again, third, last])
+})
+
+test('transitions: candidatesRefuted keeps the sent keys and the last 200 records', () => {
+  const entry = entryWith({ state: 'verifying', pr: 7, claimedSha: SHA })
+  const records = Array.from({ length: 199 }, (_, i) => refutation(`key ${i + 1}`))
+
+  entry.reviewMemory = { sent: ['first', 'second'], refuted: records }
+  candidatesRefuted(entry, [refutation('key 1', { at: LATER }), refutation('key 200'), refutation('key 201')])
+
+  const keys = entry.reviewMemory.refuted.map((record) => record.key)
+
+  assert.equal(keys.length, 200)
+  assert.deepEqual(keys.slice(0, 2), ['key 3', 'key 4'])
+  assert.deepEqual(keys.slice(-3), ['key 1', 'key 200', 'key 201'])
+  assert.equal(entry.reviewMemory.refuted.at(-3).at, LATER)
+  assert.deepEqual(entry.reviewMemory.sent, ['first', 'second'])
+})
+
+test('transitions: candidatesRefuted with no record writes nothing', () => {
+  const entry = entryWith({ state: 'verifying', pr: 7, claimedSha: SHA })
+  const before = structuredClone(entry)
+
+  candidatesRefuted(entry, [])
+
+  assert.deepEqual(entry, before)
+  assert.equal(Object.hasOwn(entry, 'reviewMemory'), false)
+
+  entry.reviewMemory = { sent: ['first'], refuted: [refutation('first')] }
+  candidatesRefuted(entry, [])
+
+  assert.deepEqual(entry.reviewMemory, { sent: ['first'], refuted: [refutation('first')] })
 })
 
 test('transitions: a claim that moves keeps the review memory, which lives as long as the PR', () => {

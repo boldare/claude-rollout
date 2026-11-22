@@ -352,10 +352,12 @@ P3   implement · running: implement  the implementer is working · 34m</code></
             fixed one <code>fixed</code>. Each other finding notes what became of it. A candidate of the last verifier notes its answer in
             the latest verdict, <code>X1 confirmed</code>, <code>X1 refuted: &lt;evidence&gt;</code>, <code>X1 unverifiable</code> or
             <code>X1 unanswered</code>, and <code>X1 sent, no answer yet</code> until then. A finding to re-check notes
-            <code>not sent, already finding F2</code>. Any other one notes <code>not sent, over 20</code> after the 20th candidate, or
-            <code>not sent, re-checked as a finding</code> for one left out as a finding to re-check that a PASS has cleared since. It has
-            no note while no verifier has had the review's candidates. A reused review names the commit its line numbers refer to. A skip
-            shows its reason. A review of an older head does not show.
+            <code>not sent, already finding F2</code>. A finding a verifier refuted earlier notes
+            <code>refuted earlier: &lt;evidence&gt;</code>, before a launch too. Any other one notes <code>not sent, over 20</code> after
+            the 20th candidate, or <code>not sent, re-checked as a finding</code> for one left out as a finding to re-check that a PASS has
+            cleared since. While no verifier has had the review's candidates, only a finding to re-check and one refuted earlier have a
+            note. A reused review names the commit its line numbers refer to. A skip shows its reason. A review of an older head does not
+            show.
           </li>
           <li>
             For a verified PR, how to approve it: the GitHub link or the <code>approve</code> command. Under <code>merge: manual</code> and
