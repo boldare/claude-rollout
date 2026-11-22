@@ -1783,6 +1783,30 @@ test('checksFor finds a required check on the second page', async () => {
   assert.deepEqual(checks.missing, [])
 })
 
+test('checksFor sets aside the run gates.verify.externalFindings names, and counts it without the key', async () => {
+  const reviewRun = { id: 2, name: 'agent review', status: 'completed', conclusion: 'failure', started_at: '2026-10-01T10:02:00Z' }
+  const routes = [runsRoute(HEAD, [GREEN_RUN, reviewRun])]
+  const keyed = scanningRollout([], routes)
+
+  keyed.manifest.gates.verify.externalFindings = { check: 'agent review', artifact: 'review-{pr}', minSeverity: 'medium' }
+
+  assert.deepEqual(await checksFor(keyed.manifest, HEAD), {
+    state: 'green',
+    missing: [],
+    pending: [],
+    failing: [],
+    runs: [{ name: 'test', status: 'completed', conclusion: 'success' }],
+    reviewRun: { id: 2, status: 'completed', conclusion: 'failure', startedAt: '2026-10-01T10:02:00Z' },
+  })
+
+  const plain = scanningRollout([], routes)
+  const counted = await checksFor(plain.manifest, HEAD)
+
+  assert.equal(counted.state, 'red')
+  assert.deepEqual(counted.failing, ['agent review: failure'])
+  assert.equal(Object.hasOwn(counted, 'reviewRun'), false)
+})
+
 test('reviewsFor reads a maintainer approval on the second page', async () => {
   const others = Array.from({ length: 99 }, (_, i) => review(i + 1, 'demo-bot', '2026-10-01T09:00:00Z', 'COMMENTED', 'ok'))
   const { manifest } = scanningRollout(

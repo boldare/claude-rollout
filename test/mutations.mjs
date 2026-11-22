@@ -223,6 +223,13 @@ const MUTATIONS = [
     tests: ['test/checks.test.mjs'],
   },
   {
+    id: 'review-check-sets-aside-every-run',
+    file: 'lib/checks.mjs',
+    find: '.filter((run) => run.name !== reviewCheck)',
+    replace: '.filter(() => reviewCheck === null)',
+    tests: ['test/checks.test.mjs'],
+  },
+  {
     id: 'outlived-start-time-ignored',
     file: 'lib/sandbox.mjs',
     find: 'found !== startTime',

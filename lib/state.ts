@@ -122,6 +122,7 @@ export interface WaitingDetails {
   github: { code: 'github' }
   ci: { code: 'ci'; sha: string; missing: string[]; pending: string[] }
   'code-scanning-pending': { code: 'code-scanning-pending'; sha: string }
+  'external-review': { code: 'external-review'; sha: string }
   'base-red': { code: 'base-red'; sha: string; failing: string[] }
   'base-pending': { code: 'base-pending'; sha: string }
   'gate-pending': { code: 'gate-pending' }
@@ -206,7 +207,7 @@ export const STAGE_STATUSES = {
   },
   'pre-verify': {
     running: ['commands'],
-    waiting: ['github', 'ci', 'code-scanning-pending', 'slot', 'held'],
+    waiting: ['github', 'ci', 'code-scanning-pending', 'external-review', 'slot', 'held'],
     'needs-you': ['code-scanning-alerts', 'errors', 'closed'],
   },
   verify: {
