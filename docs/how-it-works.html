@@ -1098,7 +1098,9 @@
         <p>
           A hold turns a <code>waiting</code> status into <code>waiting: held</code>. A <code>running</code> or
           <code>needs-you</code> status stays as it is and carries a held marker: <code>[held]</code> after the status in the CLI, a held
-          badge in the UI. The rollout's hold wins over the PR's own, as in the driver's tick.
+          badge in the UI. The rollout's hold wins over the PR's own, as in the driver's tick. A verified PR whose review was read after the
+          verification, with findings no verifier got, carries a second marker on any status: <code>[review: N new]</code> after the status
+          and after <code>[held]</code> in the CLI, a badge with the same words in the UI. See <a href="#gate">the merge gate</a>.
         </p>
 
         <p>
@@ -1837,6 +1839,22 @@
             conflicting files. When the patch id stays the same, the verification and the approval carry over to the new head. Under the
             Docker runtime the rebase and its push run in a container over the clone, with the bot's token, like every git command the
             driver runs in a PR's clone once the clone is set up.
+          </li>
+          <li>
+            <strong>A review after the verification</strong> is only shown, and the gate never waits for one. With
+            <a href="manifest.html#external-review"><code>gates.verify.externalFindings</code></a
+            >, the gate reads the review of a verified PR's head once the review's run has finished, when it holds no result of that run
+            yet. That happens when the head moved with the same patch, or when the read before the verifier was a skip, say of a run that
+            ran too long and finished later. A run that did not succeed is a skip, with no request for its artifact. The gate keeps the
+            result for that head and run, so it reads each run once. The result is a <code>gate-check</code> with stage <code>merge</code>,
+            item <code>external-review</code> and level <code>recommended</code>, logged once per claim and head like every pass or skip. A
+            pass ends with <code>N new since the verification</code> when there is a new finding. An outage of the read changes nothing: the
+            gate stores nothing, judges the PR as before, and the next tick reads again. A finding at or above <code>minSeverity</code> is
+            new when its key never went to a verifier and no verifier refuted it. With at least one, the status carries
+            <code>[review: N new]</code> in the CLI and a badge in the UI, the card notes each one as
+            <code>new since the verification</code> and its summary ends with the count. The verification and the gate's verdict stay as
+            they are. A later review never verifies again, adds no check and holds no merge. Under <code>merge: auto</code> the PR merges as
+            before, with nobody looking at the new finding.
           </li>
           <li>
             <strong>The release PR</strong> ("chore: version packages" by default) is never merged, because merging it publishes. After the

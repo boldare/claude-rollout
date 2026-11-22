@@ -274,9 +274,11 @@ node $R status --dir ~/.rollouts/my-lib-1.2.0</code></pre>
           <li>
             One row per PR, in three columns: the id, the <a href="how-it-works.html#status">stage and status</a> as in
             <code>merge · needs-you: approve</code>, and the info. A held PR whose status is running or needs you gets
-            <code>[held]</code> after it, and a merged PR shows <code>merged</code> alone. The info is the status sentence, then
-            <code>· &lt;age&gt;</code>, how long the status has held, then the way out in brackets when there is one. A merged PR's info is
-            its merge commit, with no age.
+            <code>[held]</code> after it, and a merged PR shows <code>merged</code> alone. A verified PR whose review was read after the
+            verification, with findings no verifier got, gets <code>[review: N new]</code> after the status and after <code>[held]</code>,
+            as in <code>merge · waiting: held [review: 2 new]</code> (see <a href="how-it-works.html#gate">the merge gate</a>). The info is
+            the status sentence, then <code>· &lt;age&gt;</code>, how long the status has held, then the way out in brackets when there is
+            one. A merged PR's info is its merge commit, with no age.
           </li>
           <li>The last 8 events.</li>
         </ul>
@@ -314,8 +316,9 @@ P3   implement · running: implement  the implementer is working · 34m</code></
         <ul>
           <li>Title and branch.</li>
           <li>
-            The stage and status as <code>status</code> prints them, with <code>[held]</code> when that applies, the PR link and the cost.
-            Then the whole status sentence, <code>since &lt;time&gt;</code> and <code>way out: &lt;text&gt;</code> when there is one.
+            The stage and status as <code>status</code> prints them, with <code>[held]</code> and <code>[review: N new]</code> when they
+            apply, the PR link and the cost. Then the whole status sentence, <code>since &lt;time&gt;</code> and
+            <code>way out: &lt;text&gt;</code> when there is one.
           </li>
           <li>Since when and by whom it is held, and the reason.</li>
           <li>The verified head and patch id, the approved head, the author and how approval works for it.</li>
@@ -355,9 +358,11 @@ P3   implement · running: implement  the implementer is working · 34m</code></
             <code>not sent, already finding F2</code>. A finding a verifier refuted earlier notes
             <code>refuted earlier: &lt;evidence&gt;</code>, before a launch too. Any other one notes <code>not sent, over 20</code> after
             the 20th candidate, or <code>not sent, re-checked as a finding</code> for one left out as a finding to re-check that a PASS has
-            cleared since. While no verifier has had the review's candidates, only a finding to re-check and one refuted earlier have a
-            note. A reused review names the commit its line numbers refer to. A skip shows its reason. A review of an older head does not
-            show.
+            cleared since. A review the merge gate read after the verification went to no verifier. Each other finding of it notes
+            <code>new since the verification</code>, or <code>went to a verifier earlier</code> when its key went to one in an earlier
+            round, and the summary ends with <code>, N new since the verification</code> when a finding is new. While no verifier has had
+            the candidates of a review read before the verification, only a finding to re-check and one refuted earlier have a note. A
+            reused review names the commit its line numbers refer to. A skip shows its reason. A review of an older head does not show.
           </li>
           <li>
             For a verified PR, how to approve it: the GitHub link or the <code>approve</code> command. Under <code>merge: manual</code> and

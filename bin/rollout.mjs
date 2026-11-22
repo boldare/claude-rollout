@@ -193,7 +193,10 @@ function stageStatus(shown) {
     return shown.stage
   }
 
-  return `${shown.stage} · ${shown.kind}: ${shown.code}${shown.marker ? ' [held]' : ''}`
+  const held = shown.marker ? ' [held]' : ''
+  const review = shown.reviewMarker ? ` [${shown.reviewMarker}]` : ''
+
+  return `${shown.stage} · ${shown.kind}: ${shown.code}${held}${review}`
 }
 
 // At the last space that fits, or inside the word when no space does.

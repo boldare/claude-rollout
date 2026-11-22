@@ -7,8 +7,10 @@ import {
   matchKey,
   MAX_CANDIDATES,
   MAX_FINDINGS,
+  newFindings,
   oneLine,
   parseReview,
+  readAfterVerification,
   REVIEW_ARTIFACT,
   REVIEW_FILE,
   selectCandidates,
@@ -442,4 +444,51 @@ test('oneLine: each run of control characters, line breaks included, becomes one
   assert.equal(oneLine('A flag\r\n\tnamed tmp\n\u001b[31mred'), 'A flag named tmp [31mred')
   assert.equal(oneLine('plain text'), 'plain text')
   assert.equal(oneLine(''), '')
+})
+
+const OTHER_REVISION = '9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b'
+const VERIFIED = { sha: REVISION, at: '2026-09-01T11:20:00.000Z' }
+
+test('readAfterVerification: true only for a read of the verified head after the verification', () => {
+  const later = '2026-09-01T11:21:00.000Z'
+
+  assert.equal(readAfterVerification({ sha: REVISION, at: later }, VERIFIED), true)
+  assert.equal(readAfterVerification({ sha: OTHER_REVISION, at: later }, VERIFIED), false)
+  assert.equal(readAfterVerification({ sha: REVISION, at: VERIFIED.at }, VERIFIED), false)
+  assert.equal(readAfterVerification({ sha: REVISION, at: '2026-09-01T11:19:00.000Z' }, VERIFIED), false)
+  assert.equal(readAfterVerification({ sha: REVISION }, VERIFIED), false)
+  assert.equal(readAfterVerification({ sha: REVISION, at: 'not a time' }, VERIFIED), false)
+  assert.equal(readAfterVerification({ sha: REVISION, at: later }, { ...VERIFIED, at: 'not a time' }), false)
+  assert.equal(readAfterVerification({ sha: REVISION, at: later }, null), false)
+  assert.equal(readAfterVerification({ sha: REVISION, at: later }, undefined), false)
+})
+
+test('newFindings: the findings at or above minSeverity in the order of candidates(), less every key sent or refuted', () => {
+  const findings = [
+    mapped(finding('low', 'low 1')),
+    mapped(finding('medium', 'medium 1')),
+    mapped(finding('high', 'sent')),
+    mapped(finding('medium', 'refuted on a blob')),
+    mapped(finding('high', 'refuted where no file was')),
+    mapped(finding('high', 'twice', { line: 3 })),
+    mapped(finding('high', 'twice', { line: 9 })),
+    mapped(finding('high', 'high 1')),
+  ]
+
+  const memory = {
+    sent: [keyOf('high', 'sent'), 'a key of no finding'],
+    refuted: [refutation(keyOf('medium', 'refuted on a blob'), BLOB), refutation(keyOf('high', 'refuted where no file was'), null)],
+  }
+
+  const shown = (list) => list.map((item) => `${item.title}:${item.line}`)
+
+  assert.deepEqual(shown(newFindings({ findings }, 'medium', memory)), ['twice:3', 'twice:9', 'high 1:12', 'medium 1:12'])
+  assert.deepEqual(shown(newFindings({ findings }, 'high', memory)), ['twice:3', 'twice:9', 'high 1:12'])
+  assert.deepEqual(shown(newFindings({ findings }, 'low', memory)), ['twice:3', 'twice:9', 'high 1:12', 'medium 1:12', 'low 1:12'])
+
+  for (const none of [null, undefined, { sent: [], refuted: [] }]) {
+    assert.deepEqual(newFindings({ findings }, 'medium', none), candidates({ findings }, 'medium').candidates, String(none))
+  }
+
+  assert.deepEqual(newFindings({ findings: [] }, 'low', memory), [])
 })

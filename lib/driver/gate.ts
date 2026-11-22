@@ -1,8 +1,10 @@
 import * as transitions from '../transitions.ts'
 import type { PrEntry } from '../transitions.ts'
+import { newFindings, readAfterVerification } from '../review.ts'
+import type { ReviewRead } from '../review.ts'
 import type { Hold, IsoTime, NeedsYouCode } from '../state.ts'
-import { blockForCodeScanning, noticeCodeScanning } from './claims.ts'
-import type { ClaimEntry, ClaimFacts } from './claims.ts'
+import { blockForCodeScanning, gateCheck, noticeCodeScanning, reviewCheck, storedReview, unsuccessfulRun } from './claims.ts'
+import type { ClaimEntry, ClaimFacts, ExternalFindings, ReviewRun } from './claims.ts'
 import type { RunPr } from './runs.ts'
 import { reverify } from './sync.ts'
 
@@ -39,6 +41,7 @@ export interface GateManifest {
   prs: GatePr[]
   repo: { base: string }
   policy: { merge: string; mergeDelaySeconds: number }
+  gates: { verify: { externalFindings?: ExternalFindings | null } }
 }
 
 interface Verdict {
@@ -51,7 +54,7 @@ interface Verdict {
 interface GateFacts extends ClaimFacts {
   pr: { state: string; headRefOid: string; author: string | null; mergeStateStatus?: string } | null
   depsPending: string[]
-  checks: { missing: string[]; pending: string[] }
+  checks: { missing: string[]; pending: string[]; reviewRun?: ReviewRun | null }
   mainChecks: { sha?: string | null; failing: string[] }
 }
 
@@ -113,6 +116,8 @@ export interface GateContext {
     merge: (manifest: GateManifest, pr: GatePr, entry: GateEntry, facts: GateFacts) => Promise<string | null>
     mergeRefusal: (error: unknown) => boolean
     checksFor: (manifest: GateManifest, sha: string, options: { reads: unknown }) => Promise<{ state: string; failing: string[] }>
+    reviewFor: (manifest: GateManifest, number: number, sha: string, options: { artifact: string; reads: unknown }) => Promise<ReviewRead>
+    githubUnavailable: (error: unknown) => boolean
   }
   worktree: {
     rebaseWorktree: (
@@ -214,6 +219,69 @@ function noticeGithubApproval(context: GateContext, pr: GatePr, entry: GateEntry
   )
 }
 
+// A review of the verified head that no verifier read: the head moved with the
+// same patch, or the read before the verifier was a skip. Each run is read
+// once and only shown. The verdict runs on the same facts, so the gate never
+// waits for a review.
+async function reviewAfterVerification(context: GateContext, pr: GatePr, entry: GateEntry, facts: GateFacts): Promise<void> {
+  const external = context.manifest.gates.verify.externalFindings ?? null
+  const run = facts.checks.reviewRun ?? null
+  const { verified } = entry
+
+  if (!external || facts.pr?.state !== 'OPEN' || !verified || run?.status !== 'completed') {
+    return
+  }
+
+  const head = facts.pr.headRefOid
+
+  if (head !== verified.sha || facts.patchId !== verified.patchId) {
+    return
+  }
+
+  const stored = entry.review?.sha === head && entry.review.run === run.id ? entry.review : null
+
+  if (stored && (stored.skipped === null || readAfterVerification(stored, verified))) {
+    return
+  }
+
+  const result = await reviewAtGate(context, entry, run, { head, artifact: external.artifact })
+
+  if (!result) {
+    return
+  }
+
+  const review = storedReview(context, head, run, result)
+  const check = reviewCheck(review, external.minSeverity)
+  const fresh = newFindings(review, external.minSeverity, entry.reviewMemory).length
+  const evidence = fresh > 0 ? `${check.evidence}, ${fresh} new since the verification` : check.evidence
+
+  transitions.reviewRead(entry, review)
+  gateCheck(context, pr, entry, { stage: 'merge', level: 'recommended', item: 'external-review', result: check.result, evidence })
+}
+
+// Null on an outage. An outage of the artifact storage alone must not hold a
+// merge, so nothing is stored and the next tick reads again.
+async function reviewAtGate(
+  context: GateContext,
+  entry: GateEntry,
+  run: ReviewRun,
+  { head, artifact }: { head: string; artifact: string },
+): Promise<ReviewRead | null> {
+  if (run.conclusion !== 'success') {
+    return unsuccessfulRun(run)
+  }
+
+  try {
+    return await context.github.reviewFor(context.manifest, entry.pr ?? 0, head, { artifact, reads: context.reads() })
+  } catch (error) {
+    if (context.github.githubUnavailable(error)) {
+      return null
+    }
+
+    throw error
+  }
+}
+
 // readyTaken: the PR number another candidate holds "ready" with this tick
 // (merge: manual). This one then waits for it, see mergeNext.
 export async function mergeCandidate(
@@ -226,6 +294,7 @@ export async function mergeCandidate(
   const facts = await context.collectFacts(manifest, pr, entry, ledger, { reads: context.reads() })
   noticeCodeScanning(context, pr, entry, facts)
   noticeGithubApproval(context, pr, entry, facts)
+  await reviewAfterVerification(context, pr, entry, facts)
 
   const judged = context.judge(manifest, pr, entry, facts)
 

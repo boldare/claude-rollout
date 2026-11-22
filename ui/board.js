@@ -36,6 +36,10 @@ function statusCell(row) {
     node.append(badge('held', 'held'))
   }
 
+  if (status.reviewMarker) {
+    node.append(badge(status.reviewMarker, 'review-new'))
+  }
+
   if (row.activeRun) {
     node.append(badge(row.activeRun, 'active-run'))
   }
