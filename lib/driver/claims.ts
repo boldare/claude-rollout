@@ -1,5 +1,5 @@
 import * as transitions from '../transitions.ts'
-import { candidates, selectCandidates } from '../review.ts'
+import { candidates, heldRefutations, matchKey, selectCandidates } from '../review.ts'
 import type { ReviewRead } from '../review.ts'
 import { REVIEW_SEVERITIES } from '../state.ts'
 import type { IsoTime, PreVerifyStatus, Review, ReviewFinding, ReviewSeverity } from '../state.ts'
@@ -130,6 +130,7 @@ export interface ClaimsContext {
     checksFor: (manifest: ClaimManifest, sha: string, options: { reads: unknown }) => Promise<Checks>
     readCatalog: (manifest: ClaimManifest) => Promise<unknown[]>
     reviewFor: (manifest: ClaimManifest, number: number, sha: string, options: { artifact: string; reads: unknown }) => Promise<ReviewRead>
+    blobAt: (manifest: ClaimManifest, sha: string, path: string) => Promise<string | null>
   }
   judge: {
     policyViolations: (manifest: ClaimManifest, pr: ClaimPr, facts: ClaimFacts) => string[]
@@ -435,13 +436,16 @@ async function startVerification(context: ClaimsContext, pr: ClaimPr, facts: Cla
     return
   }
 
+  // Read first, so a blob read that throws leaves the entry as it was.
+  const candidateKeys = await candidateList(context, entry, sha)
+
   // Fixed at launch: the verifier's prompt and the judgment of its verdict read these lists, never a reloaded manifest, catalog or review.
   entry.verifyCriteria = [...context.checks.verifyCriteria(manifest.gates.verify), ...(await catalogCriteria(context, pr, facts))]
-  transitions.candidatesFixed(entry, candidateList(context, entry, sha))
+  transitions.candidatesFixed(entry, candidateKeys)
   launch(runContext, pr, 'verify', { sha })
 }
 
-function candidateList(context: ClaimsContext, entry: ClaimEntry, sha: string): Review['candidates'] {
+async function candidateList(context: ClaimsContext, entry: ClaimEntry, sha: string): Promise<Review['candidates']> {
   const external = context.manifest.gates.verify.externalFindings ?? null
 
   if (!external || !entry.review || entry.review.sha !== sha) {
@@ -449,8 +453,37 @@ function candidateList(context: ClaimsContext, entry: ClaimEntry, sha: string): 
   }
 
   const recheck = (entry.findings?.items ?? []).flatMap((item) => (item.fromReview === undefined ? [] : [item.fromReview]))
+  const held = await heldKeys(context, entry, { review: entry.review, minSeverity: external.minSeverity, recheck, sha })
 
-  return selectCandidates(entry.review, external.minSeverity, recheck)
+  return selectCandidates(entry.review, external.minSeverity, recheck, held)
+}
+
+// The keys of the refutations whose file has the same blob at the head. Only a key with a refutation on record
+// costs a git read. A read that throws goes to guarded(), as the reads of collectFacts, which fetched the head.
+async function heldKeys(
+  context: ClaimsContext,
+  entry: ClaimEntry,
+  { review, minSeverity, recheck, sha }: { review: Review; minSeverity: ReviewSeverity; recheck: string[]; sha: string },
+): Promise<string[]> {
+  const refuted = entry.reviewMemory?.refuted ?? []
+  const firsts = new Map<string, ReviewFinding>()
+
+  // The first finding of each key, the one sentCandidates gives the verifier.
+  for (const finding of candidates(review, minSeverity).candidates) {
+    const key = matchKey(finding)
+
+    if (!firsts.has(key) && !recheck.includes(key) && refuted.some((record) => record.key === key)) {
+      firsts.set(key, finding)
+    }
+  }
+
+  const blobs = new Map<string, string | null>()
+
+  for (const [key, finding] of firsts) {
+    blobs.set(key, await context.github.blobAt(context.manifest, sha, finding.file))
+  }
+
+  return heldRefutations(refuted, blobs)
 }
 
 // The last step before the verifier, so the pre-verify commands run while the

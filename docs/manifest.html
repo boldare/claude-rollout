@@ -1131,8 +1131,10 @@ prs:
           </li>
           <li>
             The findings at or above <code>minSeverity</code> become the verifier's candidates, at most 20, without one that is already a
-            finding to re-check. The verifier answers each one, and only a confirmed one blocks, as a verifier finding. See
-            <a href="how-it-works.html#stage-verify">the verify stage</a>.
+            finding to re-check. A candidate a verifier refuted is left out too, while its file has the same blob id at the head. One whose
+            file changed or is gone since goes to the verifier again, with the earlier evidence. The driver remembers the last 200
+            refutations, a review finding that a re-check calls wrong included. The verifier answers each candidate, and only a confirmed
+            one blocks, as a verifier finding. See <a href="how-it-works.html#stage-verify">the verify stage</a>.
           </li>
         </ul>
 

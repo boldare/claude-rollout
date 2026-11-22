@@ -191,6 +191,7 @@ const OBSTACLE_KINDS = ['environment', 'ci', 'stuck', 'code-scanning'] as const 
 // How many times a PR gets back the attempt of a run that did no work.
 const MAX_REFUNDS = 5
 const MAX_SENT_KEYS = 500
+const MAX_REFUTED = 200
 
 // includes() on an `as const` list refuses a value outside the list, which is the value it is asked about.
 function listed(list: readonly string[], value: string | null | undefined): boolean {
@@ -538,6 +539,23 @@ export function candidatesSent(entry: PrEntry, keys: string[]): void {
   const earlier = memory.sent.filter((key) => !keys.includes(key))
 
   entry.reviewMemory = { ...memory, sent: [...new Set([...earlier, ...keys])].slice(-MAX_SENT_KEYS) }
+}
+
+// A key refuted again replaces its earlier record and moves to the end, so the last 200 are the latest ones.
+export function candidatesRefuted(entry: PrEntry, refuted: ReviewMemory['refuted']): void {
+  if (refuted.length === 0) {
+    return
+  }
+
+  const memory = entry.reviewMemory ?? { sent: [], refuted: [] }
+  const latest = new Map<string, ReviewMemory['refuted'][number]>()
+
+  for (const record of [...memory.refuted, ...refuted]) {
+    latest.delete(record.key)
+    latest.set(record.key, record)
+  }
+
+  entry.reviewMemory = { ...memory, refuted: [...latest.values()].slice(-MAX_REFUTED) }
 }
 
 export function verifyAgain(entry: PrEntry, at: IsoTime): void {

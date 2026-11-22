@@ -1661,6 +1661,133 @@ test('checkClaim: the verifier gets at most 20 candidates, so the 21st finding r
   assert.equal(prompts[0].includes('High finding 21'), false)
 })
 
+const MEDIUM_BLOB = '3b18e512dba79e4c8300dd08aeb37f8e728b8dad'
+const CHANGED_BLOB = '9daeafb9864cf43055ae93beb0afd6c7d144bfa4'
+const REFUTED_EVIDENCE = 'src/orders/refund.ts:20 keeps the order open until the bank confirms.'
+const REFUTED_PARAGRAPH = 'An earlier verifier refuted each candidate with a `Refuted earlier` line, on another version of its file.'
+
+// An earlier verifier refuted MEDIUM when src/orders/refund.ts had MEDIUM_BLOB.
+function refutedMedium() {
+  return {
+    sent: [matchKey(HIGH), matchKey(MEDIUM)],
+    refuted: [{ key: matchKey(MEDIUM), blob: MEDIUM_BLOB, evidence: REFUTED_EVIDENCE, run: 'A1-03-verify', at: at(2) }],
+  }
+}
+
+function blobRule(fields) {
+  return { tool: 'git', args: `rev-parse --verify --quiet ${SHA}:src/orders/refund.ts`, ...fields }
+}
+
+// The <sha>:<path> of each blob the driver read. The worktree's own `rev-parse --verify` reads a ref.
+function blobReads(tools) {
+  return tools
+    .calls()
+    .filter((call) => call.tool === 'git' && call.args.includes('rev-parse') && call.args.includes('--verify'))
+    .map((call) => call.args.at(-1))
+    .filter((name) => name.includes(':'))
+}
+
+test('checkClaim: a candidate refuted earlier is not sent while its file has the same blob at the head', async () => {
+  const { driver, pr, entry, prompts, tools } = reviewDriver([TESTED, reviewRun('completed', 'success')], {
+    rules: [blobRule({ stdout: `${MEDIUM_BLOB}\n` })],
+  })
+
+  entry.reviewMemory = refutedMedium()
+  await driver.advance(pr)
+
+  assert.deepEqual(entry.review.candidates, [{ id: 'X1', key: matchKey(HIGH) }])
+  assert.deepEqual(blobReads(tools), [`${SHA}:src/orders/refund.ts`])
+  assert.equal(prompts.length, 1)
+  assert.equal(prompts[0].includes(MEDIUM.title), false)
+  assert.equal(prompts[0].includes('Refuted earlier'), false)
+  assert.deepEqual(entry.reviewMemory, refutedMedium())
+})
+
+test('checkClaim: a candidate refuted earlier whose file changed or is gone goes to the verifier again, with the earlier evidence', async () => {
+  const heads = { changed: { stdout: `${CHANGED_BLOB}\n` }, gone: { stdout: '', code: 1 } }
+
+  for (const [name, answer] of Object.entries(heads)) {
+    const { driver, pr, entry, prompts } = reviewDriver([TESTED, reviewRun('completed', 'success')], { rules: [blobRule(answer)] })
+
+    entry.reviewMemory = refutedMedium()
+    await driver.advance(pr)
+
+    assert.deepEqual(
+      entry.review.candidates,
+      [
+        { id: 'X1', key: matchKey(HIGH) },
+        { id: 'X2', key: matchKey(MEDIUM) },
+      ],
+      name,
+    )
+
+    const section = candidatesSection(prompts[0])
+
+    assert.ok(section.includes('\n### X2 (medium)\n\n- Criterion: review.errors\n'), section)
+    assert.ok(
+      section.includes(`\n- Proposed fix: Keep the order open until the bank confirms.\n- Refuted earlier: ${REFUTED_EVIDENCE}\n`),
+      section,
+    )
+
+    assert.equal(section.split('- Refuted earlier: ').length, 2, name)
+    assert.equal(section.split(REFUTED_PARAGRAPH).length, 2, name)
+  }
+})
+
+test('checkClaim: a finding with the criterion and title of one refuted earlier, in another file, is a new candidate', async () => {
+  const moved = { ...MEDIUM, file: 'src/payments/refund.ts' }
+  const { driver, pr, entry, prompts, tools } = reviewDriver([TESTED, reviewRun('completed', 'success')], {
+    rules: [blobRule({ stdout: `${MEDIUM_BLOB}\n` })],
+    routes: { json: reviewJson({ findings: [LOW, HIGH, moved] }) },
+  })
+
+  entry.reviewMemory = refutedMedium()
+  await driver.advance(pr)
+
+  assert.deepEqual(entry.review.candidates, [
+    { id: 'X1', key: matchKey(HIGH) },
+    { id: 'X2', key: matchKey(moved) },
+  ])
+
+  const section = candidatesSection(prompts[0])
+
+  assert.ok(section.includes('\n- Location: src/payments/refund.ts:18\n'), section)
+  assert.equal(section.includes('Refuted earlier'), false)
+  assert.deepEqual(blobReads(tools), [])
+})
+
+test('checkClaim: without a refutation on record the launch reads no blob', async () => {
+  const memories = { none: undefined, 'only sent keys': { sent: [matchKey(MEDIUM)], refuted: [] } }
+
+  for (const [name, memory] of Object.entries(memories)) {
+    const { driver, pr, entry, tools } = reviewDriver([TESTED, reviewRun('completed', 'success')])
+
+    if (memory) {
+      entry.reviewMemory = memory
+    }
+
+    await driver.advance(pr)
+
+    assert.equal(entry.review.candidates.length, 2, name)
+    assert.deepEqual(blobReads(tools), [], name)
+  }
+})
+
+test('checkClaim: a blob read that fails at launch throws, and the entry keeps its criteria and candidates', async () => {
+  const { driver, pr, entry, agentCalls } = reviewDriver([TESTED, reviewRun('completed', 'success')], {
+    rules: [blobRule({ stderr: 'fatal: unable to read tree', code: 128 })],
+  })
+
+  entry.reviewMemory = refutedMedium()
+  entry.verifyCriteria = null
+
+  await assert.rejects(driver.advance(pr), /^Error: cannot read a blob at a1a1a1a\w+: fatal: unable to read tree$/)
+
+  assert.equal(entry.verifyCriteria, null)
+  assert.deepEqual(entry.review.candidates, [])
+  assert.deepEqual(agentCalls, [])
+})
+
 test('checkClaim: without the key the launch fixes no candidate, and the prompt lists none', async () => {
   const { driver, pr, entry, prompts } = verifiableDriver()
 

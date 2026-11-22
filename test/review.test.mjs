@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   artifactName,
   candidates,
+  heldRefutations,
   matchKey,
   MAX_CANDIDATES,
   MAX_FINDINGS,
@@ -368,6 +369,52 @@ test('selectCandidates: the first 20, so the 21st finding is left out', () => {
   const recheck = [keyOf('high', 'high 2')]
 
   assert.deepEqual(selectCandidates({ findings }, 'medium', recheck).at(-1), { id: 'X20', key: keyOf('high', 'high 21') })
+})
+
+test('selectCandidates: a held key is left out before the cap, so with one of 21 findings held the 21st is X20', () => {
+  const findings = Array.from({ length: 21 }, (_, i) => mapped(finding('high', `high ${i + 1}`)))
+  const held = [keyOf('high', 'high 5')]
+  const selected = selectCandidates({ findings }, 'medium', [], held)
+
+  assert.equal(selected.length, 20)
+  assert.deepEqual(selected[4], { id: 'X5', key: keyOf('high', 'high 6') })
+  assert.deepEqual(selected.at(-1), { id: 'X20', key: keyOf('high', 'high 21') })
+  assert.equal(
+    selected.some((candidate) => candidate.key === held[0]),
+    false,
+  )
+
+  assert.deepEqual(selectCandidates({ findings }, 'medium', [], ['a key of no finding']), selectCandidates({ findings }, 'medium', []))
+})
+
+const BLOB = '3b18e512dba79e4c8300dd08aeb37f8e728b8dad'
+const OTHER_BLOB = '9daeafb9864cf43055ae93beb0afd6c7d144bfa4'
+
+function refutation(key, blob) {
+  return { key, blob, evidence: 'src/orders/refund.ts:20 keeps the order open.', run: 'A1-04-verify', at: '2026-09-01T10:00:00.000Z' }
+}
+
+test('heldRefutations: a key holds only while the blob read at the head is the one it was refuted on', () => {
+  const refuted = [
+    refutation('same blob', BLOB),
+    refutation('another blob', BLOB),
+    refutation('gone at the head', BLOB),
+    refutation('not there when refuted', null),
+    refutation('null on both sides', null),
+    refutation('not read', BLOB),
+  ]
+
+  const blobs = new Map([
+    ['same blob', BLOB],
+    ['another blob', OTHER_BLOB],
+    ['gone at the head', null],
+    ['not there when refuted', OTHER_BLOB],
+    ['null on both sides', null],
+  ])
+
+  assert.deepEqual(heldRefutations(refuted, blobs), ['same blob'])
+  assert.deepEqual(heldRefutations([], blobs), [])
+  assert.deepEqual(heldRefutations(refuted, new Map()), [])
 })
 
 test('sentCandidates: each candidate with the fields of the first finding of its key, in the order fixed', () => {
