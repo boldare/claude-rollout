@@ -1119,12 +1119,13 @@ const CONFIRMED_FINDING = `External review finding (high, review.correctness) at
 const REFUND_BLOB = '3b18e512dba79e4c8300dd08aeb37f8e728b8dad'
 const TOTAL_BLOB = '9daeafb9864cf43055ae93beb0afd6c7d144bfa4'
 
-// The review memory with each refutation's time checked against `since` and left out.
-function memorySince(memory, since) {
+// The review memory with each refutation's time checked to be an ISO time and left out. No order against a time the
+// test read: the wall clock can step back between two reads.
+function memoryTimed(memory) {
   return {
     ...memory,
     refuted: memory.refuted.map(({ at: recorded, ...record }) => {
-      assert.ok(Date.parse(recorded) >= Date.parse(since), recorded)
+      assert.equal(new Date(recorded).toISOString(), recorded)
 
       return record
     }),
@@ -1192,7 +1193,6 @@ test('verified: a PASS that confirms a candidate of the external review is a FAI
   const setup = reviewedDriver()
   const { manifest, entry } = setup
   const confirmed = { id: 'X1', result: 'confirmed', evidence: CONFIRMED_EVIDENCE }
-  const since = new Date().toISOString()
 
   await rechecked(setup, candidatesVerdict({}, { external: [confirmed, { id: 'X2', result: 'refuted', evidence: 'refund.ts:20' }] }))
 
@@ -1210,7 +1210,7 @@ test('verified: a PASS that confirms a candidate of the external review is a FAI
   ])
 
   // recheckDriver's git answers no rule with exit 1, as for a file that is not there.
-  assert.deepEqual(memorySince(entry.reviewMemory, since), {
+  assert.deepEqual(memoryTimed(entry.reviewMemory), {
     sent: SENT_KEYS,
     refuted: [{ key: SENT_KEYS[1], blob: null, evidence: 'refund.ts:20', run: 'A1-04-verify' }],
   })
@@ -1266,7 +1266,6 @@ test('verified: a PASS with every candidate refuted, left out or answered with a
   for (const [name, { external, results, remembered }] of Object.entries(cases)) {
     const setup = reviewedDriver()
     const { manifest, entry } = setup
-    const since = new Date().toISOString()
 
     await rechecked(setup, candidatesVerdict(external))
 
@@ -1284,7 +1283,7 @@ test('verified: a PASS with every candidate refuted, left out or answered with a
       name,
     )
 
-    assert.deepEqual(memorySince(entry.reviewMemory, since), { sent: SENT_KEYS, refuted: remembered }, name)
+    assert.deepEqual(memoryTimed(entry.reviewMemory), { sent: SENT_KEYS, refuted: remembered }, name)
   }
 })
 
@@ -1314,7 +1313,6 @@ test('verified: a verdict without external, or a review of another head, blocks 
 test('verified: a refuted candidate is remembered with the blob of its file at the verified head, its evidence and the run', async () => {
   const setup = reviewedDriver()
   const { entry, tools } = setup
-  const since = new Date().toISOString()
   const evidence = `src/orders/refund.ts:20 keeps the order open. ${'The bank answers later. '.repeat(50)}`
 
   answerBlobs(setup, { 'src/orders/refund.ts': { stdout: `${REFUND_BLOB}\n` } })
@@ -1332,7 +1330,7 @@ test('verified: a refuted candidate is remembered with the blob of its file at t
   )
 
   assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'gate-pending'])
-  assert.deepEqual(memorySince(entry.reviewMemory, since), {
+  assert.deepEqual(memoryTimed(entry.reviewMemory), {
     sent: SENT_KEYS,
     refuted: [{ key: SENT_KEYS[1], blob: REFUND_BLOB, evidence: evidence.slice(0, 1000), run: 'A1-04-verify' }],
   })
@@ -1372,7 +1370,6 @@ test('verified: a re-check that calls a finding from the review wrong is remembe
 
   for (const [name, { findings, verdicts, reads }] of Object.entries(cases)) {
     const setup = reviewedDriver(SHA, { findings: { at: at(60), items }, verdicts })
-    const since = new Date().toISOString()
 
     setup.entry.review = { ...setup.entry.review, findings, candidates: [{ id: 'X1', key: SENT_KEYS[1] }] }
     answerBlobs(setup, { 'src/Orders/Total.ts': { stdout: `${TOTAL_BLOB}\n` } })
@@ -1380,7 +1377,7 @@ test('verified: a re-check that calls a finding from the review wrong is remembe
 
     const remembered = reads.length === 0 ? [] : [{ key, blob: TOTAL_BLOB, evidence: recheck[0].evidence, run: 'A1-04-verify' }]
 
-    assert.deepEqual(memorySince(setup.entry.reviewMemory, since), { sent: [SENT_KEYS[1]], refuted: remembered }, name)
+    assert.deepEqual(memoryTimed(setup.entry.reviewMemory), { sent: [SENT_KEYS[1]], refuted: remembered }, name)
     assert.deepEqual(blobReads(setup.tools), reads, name)
   }
 })
