@@ -125,6 +125,42 @@ export function samplePrs() {
   }
 }
 
+// Sets the external review on, so the view shows a stored review. The check is not one of repo.requiredChecks.
+export const REVIEW_MANIFEST = { gates: { verify: { externalFindings: { check: 'agent review' } } } }
+
+function reviewFinding(severity, criterion, file, line, title, status) {
+  return {
+    severity,
+    criterion,
+    title,
+    file,
+    line,
+    failureScenario: `When ${file} runs, ${title.toLowerCase()}.`,
+    fix: `Change ${file} around line ${line}.`,
+    status,
+  }
+}
+
+// What the driver read of the review workflow's review.json for A1's claimed head, carried from an older commit.
+// The findings are stored low, high, medium, so a test sees the view sort them.
+export function sampleReview() {
+  return {
+    sha: SHA,
+    at: at(78),
+    run: 7,
+    reusedFrom: '9f8e7d6c5b4a3928170f6e5d4c3b2a1908f7e6d5',
+    skipped: null,
+    findings: [
+      reviewFinding('low', 'review.naming', 'src/orders/total.ts', 12, 'A flag named tmp', 'open'),
+      reviewFinding('high', 'review.correctness', 'src/orders/total.ts', 42, 'The total ignores a refunded line', 'new'),
+      reviewFinding('medium', 'review.errors', 'src/orders/load.ts', 7, 'A failed read is retried forever', 'new'),
+    ],
+    fixed: [reviewFinding('medium', 'review.correctness', 'src/orders/total.ts', 30, 'The discount is applied twice', null)],
+    leftOut: 0,
+    candidates: [],
+  }
+}
+
 export function sampleEvents() {
   return [
     { at: at(0), id: '-', kind: 'driver-start', prs: ['A1', 'A2', 'A3'], dryRun: false, merge: 'human', pid: 1 },

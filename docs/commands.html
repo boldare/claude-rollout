@@ -345,6 +345,14 @@ P3   implement · running: implement  the implementer is working · 34m</code></
             of output of a failed one.
           </li>
           <li>
+            With <a href="manifest.html#external-review"><code>gates.verify.externalFindings</code></a> set, what the driver read of the
+            review of the claimed head, under <code>external review of &lt;sha&gt;</code>. It shows the findings counted by severity, how
+            many it left out and how many the review reports as fixed. Then it shows one line per finding with its severity, criterion, file
+            and line and title, highest severity first. A finding below <code>minSeverity</code> is marked <code>shown only</code>, and a
+            fixed one <code>fixed</code>. A reused review names the commit its line numbers refer to. A skip shows its reason. A review of
+            an older head does not show.
+          </li>
+          <li>
             For a verified PR, how to approve it: the GitHub link or the <code>approve</code> command. Under <code>merge: manual</code> and
             <code>merge: auto</code> the card says no approval is needed and what happens instead.
           </li>
