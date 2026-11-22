@@ -713,7 +713,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
             <strong>stage · status</strong> shows the PR's <a href="how-it-works.html#status">stage and status</a>, as
             <code>rollout status</code> prints them: a stage badge, then a status badge that reads <q>kind: code</q>. A merged PR has only
             its stage. A <span class="badge held">held</span> badge marks a held PR whose status is running or needs you. A held PR that
-            waits says <q>waiting: held</q> itself. A mono badge names the agent run in progress.
+            waits says <q>waiting: held</q> itself. After it, a <span class="badge">review: N new</span> badge marks a verified PR whose
+            review was read after the verification, with findings no verifier got, as <code>[review: N new]</code> does in
+            <code>rollout status</code>. A mono badge names the agent run in progress.
           </li>
           <li>
             A tinted row waits for you: every <code>needs-you</code> status, approvals and merges by hand included. The
@@ -999,8 +1001,8 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
 
         <p>
           Click a PR anywhere to open its page: a back link, the id and title with the PR controls at the end of the line, the stage and
-          status badges with the held marker, the PR's facts, and six tabs. A PR whose status is a question or a block, or the delegate at
-          work on one, shows <a href="#control-answer">Answer</a> in place of Note.
+          status badges with the held marker and the review marker, the PR's facts, and six tabs. A PR whose status is a question or a
+          block, or the delegate at work on one, shows <a href="#control-answer">Answer</a> in place of Note.
         </p>
 
         <div class="mock" role="img" aria-label="Mockup of a PR page">
@@ -1096,8 +1098,9 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                   of its output. A failed recommended command shows as a warning. The table also shows before the first verdict. With the
                   <a href="manifest.html#external-review">external review</a> on, a table under
                   <code>external review of &lt;sha&gt;</code> shows the same summary and rows as the
-                  <a href="commands.html#cmd-card">card</a> does, before the first verdict too. Below it, the history lists every verdict,
-                  newest first, as collapsed entries.
+                  <a href="commands.html#cmd-card">card</a> does, before the first verdict too. For a review the merge gate read after the
+                  verification, that includes the notes <code>new since the verification</code> and <code>went to a verifier earlier</code>,
+                  and the summary's count of new findings. Below it, the history lists every verdict, newest first, as collapsed entries.
                 </td>
               </tr>
               <tr>

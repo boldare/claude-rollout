@@ -75,6 +75,10 @@ function detailHeader(pr, ctx) {
     facts.append(badge('held', 'held'))
   }
 
+  if (pr.status.reviewMarker) {
+    facts.append(badge(pr.status.reviewMarker, 'review-new'))
+  }
+
   facts.append(prLink(pr), element('span', `Branch ${pr.branch}`), element('span', `Head ${pr.head}`))
 
   if (pr.activeRun) {

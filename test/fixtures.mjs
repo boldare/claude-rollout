@@ -162,6 +162,11 @@ export function sampleReview() {
   }
 }
 
+// sampleReview() as the merge gate read it at at(85), after A1's verification at at(80), so no verifier got it.
+export function laterReview() {
+  return { ...sampleReview(), at: at(85) }
+}
+
 // A1 after a verifier of its head got sampleReview()'s high finding as X1 and its medium one as X2. It confirmed X1, which
 // became finding F1, and refuted X2. The fields go into an entry of samplePrs().
 export function answeredReview() {

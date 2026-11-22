@@ -1136,6 +1136,11 @@ prs:
             refutations, a review finding that a re-check calls wrong included. The verifier answers each candidate, and only a confirmed
             one blocks, as a verifier finding. See <a href="how-it-works.html#stage-verify">the verify stage</a>.
           </li>
+          <li>
+            Once the PR is verified, the merge gate reads a finished review that no verifier got: the head moved with the same patch, or the
+            read before the verifier was a skip. It only shows the new findings, as <code>[review: N new]</code> and on the card. It never
+            waits for the review and never holds a merge. See <a href="how-it-works.html#gate">the merge gate</a>.
+          </li>
         </ul>
 
         <p>When the claim reaches the review, the review's latest run on the head decides:</p>

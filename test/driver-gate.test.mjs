@@ -9,7 +9,7 @@ import { stageLabels } from '../lib/stage.mjs'
 import { toMerged, toVerified } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
-import { at, samplePrs } from './fixtures.mjs'
+import { at, samplePrs, zipArchive } from './fixtures.mjs'
 import {
   agentResult,
   apply,
@@ -33,6 +33,17 @@ import {
   preVerified,
   FIRST_ROUND,
   UNANSWERED,
+  EXTERNAL_FINDINGS,
+  ARTIFACTS,
+  HIGH,
+  MEDIUM,
+  LOW,
+  storedFinding,
+  reviewJson,
+  artifactJson,
+  listRoute,
+  zipRoutes,
+  artifactRequests,
 } from './driver-helpers.mjs'
 
 test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sync sees it merged', async () => {
@@ -495,12 +506,17 @@ async function judgedOnce({
   routes = [],
   readyTaken = null,
   codeScanning,
+  externalFindings,
 } = {}) {
   const setup = tickDriver({ A1: { ...samplePrs().A1, held: null, ...fields } }, { policy: { merge: 'auto', ...policy }, rules, routes })
   const manifestPr = setup.manifest.prs.find((item) => item.id === 'A1')
 
   if (codeScanning) {
     setup.manifest.repo.codeScanning = codeScanning
+  }
+
+  if (externalFindings) {
+    withReviewKey(setup.manifest, externalFindings)
   }
 
   setup.gate.facts = facts
@@ -822,6 +838,259 @@ test("mergeCandidate: the gate's own merge records the driver's merge, verified,
   assert.deepEqual(placeOf(entry), ['merged', null, null])
   assert.deepEqual(entry.merged, { by: 'driver', at: entry.merged.at, sha: MERGE_SHA, from: 'merge', verified: true })
   assert.ok(Number.isFinite(Date.parse(entry.merged.at)))
+})
+
+const HELD = { held: samplePrs().A1.held }
+const GREEN_CHECKS = { state: 'green', missing: [], pending: [], failing: [], runs: [] }
+// The medium finding of reviewJson() went to a verifier in an earlier round. Its high one went to none.
+const EARLIER_MEMORY = { sent: [matchKey(MEDIUM)], refuted: [] }
+const ONE_NEW = '2 candidates (1 high, 1 medium), 1 below medium, 1 new since the verification'
+
+// A skip of the review's run 5 on SHA, read by the claim check at at(78), before the verification at at(80).
+const SKIPPED_BEFORE = {
+  sha: SHA,
+  at: at(78),
+  run: 5,
+  reusedFrom: null,
+  skipped: 'the review has run for more than 20 minutes',
+  findings: [],
+  fixed: [],
+  leftOut: 0,
+  candidates: [],
+}
+
+function withReviewKey(manifest, externalFindings = EXTERNAL_FINDINGS) {
+  manifest.gates = { ...manifest.gates, verify: { ...manifest.gates.verify, externalFindings } }
+}
+
+// The checks of gateFacts with the review's run 5, in the shape summarizeChecks gives it.
+function reviewChecks(status = 'completed', conclusion = 'success') {
+  return { ...GREEN_CHECKS, reviewRun: { id: 5, status, conclusion, startedAt: at(83) } }
+}
+
+// The review's artifact 7, made for `made` and holding reviewJson() of `sha`.
+function reviewArtifact(sha, made = sha) {
+  return [
+    listRoute([artifactJson(7, made)]),
+    ...zipRoutes(7, { body: zipArchive([{ name: 'review.json', data: reviewJson({ revision: sha }) }]) }),
+  ]
+}
+
+function listRequests(github) {
+  return artifactRequests(github).filter((request) => request.path === ARTIFACTS)
+}
+
+function mergeChecks(manifest) {
+  return eventsSince(manifest).filter((event) => event.kind === 'gate-check' && event.stage === 'merge')
+}
+
+function mergeCheck(result, evidence, sha = SHA) {
+  return {
+    id: 'A1',
+    kind: 'gate-check',
+    stage: 'merge',
+    item: 'external-review',
+    level: 'recommended',
+    result,
+    sha: sha.slice(0, 7),
+    evidence,
+  }
+}
+
+function gateOutcome(entry) {
+  return [...placeOf(entry), entry.gate.action, entry.gate.code]
+}
+
+// A1 verified at SHA, whose head moved to NEW_HEAD with the same patch. The review's run on NEW_HEAD
+// succeeded. One tick syncs the move, then the gate judges A1.
+async function movedAndTicked({ key = true, fields = {}, policy = {}, rules = [] } = {}) {
+  const setup = tickDriver(
+    { A1: { ...samplePrs().A1, reviewMemory: EARLIER_MEMORY, ...fields } },
+    { policy, rules: [FETCH, ...rules], routes: [prRoute({ head: { sha: NEW_HEAD } }), ...reviewArtifact(NEW_HEAD)] },
+  )
+
+  if (key) {
+    withReviewKey(setup.manifest)
+  }
+
+  setup.gate.pr = { headRefOid: NEW_HEAD }
+  setup.gate.facts = { checks: reviewChecks() }
+  await setup.driver.tick()
+
+  return { ...setup, entry: setup.driver.ledger.prs.A1 }
+}
+
+test('merge gate: the review of a head that moved with the same patch is read once its run has finished, and the verdict stays', async () => {
+  const { manifest, entry } = await movedAndTicked()
+
+  assert.deepEqual(entry.verified, { ...samplePrs().A1.verified, sha: NEW_HEAD })
+  assert.equal(entry.verified.patchId, samplePrs().A1.verified.patchId)
+  assert.deepEqual(
+    { ...entry.review, at: null },
+    {
+      sha: NEW_HEAD,
+      at: null,
+      run: 5,
+      reusedFrom: null,
+      skipped: null,
+      findings: [HIGH, MEDIUM, LOW].map(storedFinding),
+      fixed: [],
+      leftOut: 0,
+      candidates: [],
+    },
+  )
+
+  assert.deepEqual(mergeChecks(manifest), [mergeCheck('pass', ONE_NEW, NEW_HEAD)])
+  assert.deepEqual(gateOutcome(entry), ['merge', 'waiting', 'held', 'wait', 'held'])
+
+  const without = await movedAndTicked({ key: false })
+
+  assert.deepEqual(gateOutcome(without.entry), gateOutcome(entry))
+  assert.deepEqual(without.entry.verified, entry.verified)
+  assert.deepEqual(artifactRequests(without.github), [])
+  assert.deepEqual(mergeChecks(without.manifest), [])
+})
+
+test('merge gate: under merge auto, a PR whose review the gate read merges in the same tick', async () => {
+  const { manifest, entry, tools } = await movedAndTicked({ fields: { held: null }, policy: { merge: 'auto' }, rules: [MERGE_RULE] })
+
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(placeOf(entry), ['merge', 'running', 'merge'])
+  assert.deepEqual(mergeChecks(manifest), [mergeCheck('pass', ONE_NEW, NEW_HEAD)])
+})
+
+test('merge gate: a review run still going, no review run, no manifest key or a pass the verifier got reads nothing, stores nothing and logs nothing', async () => {
+  const passBefore = { ...SKIPPED_BEFORE, skipped: null, findings: [HIGH].map(storedFinding) }
+  const cases = {
+    'a run in progress': { externalFindings: EXTERNAL_FINDINGS, checks: reviewChecks('in_progress', null) },
+    'a queued run': { externalFindings: EXTERNAL_FINDINGS, checks: reviewChecks('queued', null) },
+    'no review run': { externalFindings: EXTERNAL_FINDINGS, checks: { ...GREEN_CHECKS, reviewRun: null } },
+    'checks without a review run': { externalFindings: EXTERNAL_FINDINGS, checks: GREEN_CHECKS },
+    'no manifest key': { externalFindings: undefined, checks: reviewChecks() },
+    'a pass of the run read before the verification': { externalFindings: EXTERNAL_FINDINGS, checks: reviewChecks(), review: passBefore },
+  }
+
+  for (const [name, { externalFindings, checks, review = SKIPPED_BEFORE }] of Object.entries(cases)) {
+    const { manifest, github, entry } = await judgedOnce({
+      externalFindings,
+      facts: { checks },
+      fields: { ...HELD, review },
+      routes: reviewArtifact(SHA),
+    })
+
+    assert.deepEqual(artifactRequests(github), [], name)
+    assert.deepEqual(entry.review, review, name)
+    assert.deepEqual(mergeChecks(manifest), [], name)
+    assert.deepEqual(gateOutcome(entry), ['merge', 'waiting', 'held', 'wait', 'held'], name)
+  }
+})
+
+test('merge gate: a review run that failed is a skip with no request, stored and logged, and the verdict stays', async () => {
+  const { manifest, github, entry } = await judgedOnce({
+    externalFindings: EXTERNAL_FINDINGS,
+    facts: { checks: reviewChecks('completed', 'failure') },
+    fields: HELD,
+    routes: reviewArtifact(SHA),
+  })
+
+  assert.deepEqual(artifactRequests(github), [])
+  assert.deepEqual({ ...entry.review, at: null }, { ...SKIPPED_BEFORE, at: null, skipped: 'the review run ended as failure' })
+
+  assert.deepEqual(mergeChecks(manifest), [mergeCheck('skip', 'the review run ended as failure')])
+  assert.deepEqual(gateOutcome(entry), ['merge', 'waiting', 'held', 'wait', 'held'])
+})
+
+test('merge gate: a review run that succeeded with no artifact for the head is a skip, read once, and the verdict stays', async () => {
+  const { manifest, github, driver, pr, entry } = await judgedOnce({
+    externalFindings: EXTERNAL_FINDINGS,
+    facts: { checks: reviewChecks() },
+    fields: HELD,
+    routes: reviewArtifact(SHA, NEW_HEAD),
+  })
+
+  assert.equal(listRequests(github).length, 1)
+  assert.deepEqual({ ...entry.review, at: null }, { ...SKIPPED_BEFORE, at: null, skipped: 'the review left no artifact for this head' })
+
+  assert.deepEqual(mergeChecks(manifest), [mergeCheck('skip', 'the review left no artifact for this head')])
+  assert.deepEqual(gateOutcome(entry), ['merge', 'waiting', 'held', 'wait', 'held'])
+
+  // The gate's own skip was read after the verification, so the same run is not read again.
+  const events = readEvents(manifest).length
+
+  await driver.mergeCandidate(pr)
+
+  assert.equal(listRequests(github).length, 1)
+  assert.equal(readEvents(manifest).length, events)
+})
+
+test('merge gate: an outage of the artifact list stores nothing and logs nothing, and under merge auto the PR merges in that tick', async () => {
+  const { manifest, driver, tools, gate, github } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    {
+      policy: { merge: 'auto' },
+      rules: [FETCH, MERGE_RULE],
+      routes: [prRoute(), { path: ARTIFACTS, status: 500, body: { message: 'Server Error' } }],
+    },
+  )
+
+  const entry = driver.ledger.prs.A1
+  const review = entry.review
+
+  withReviewKey(manifest)
+  gate.facts = { checks: reviewChecks() }
+  await driver.tick()
+
+  assert.ok(listRequests(github).length > 0)
+  assert.equal(entry.review, review)
+  assert.deepEqual(mergeChecks(manifest), [])
+  assert.equal(kindsSince(manifest).includes('error'), false)
+  assert.equal(mergeCalls(tools).length, 1)
+})
+
+test('merge gate: a second pass on the same run reads nothing and logs nothing', async () => {
+  const { manifest, github, driver, pr, entry } = await judgedOnce({
+    externalFindings: EXTERNAL_FINDINGS,
+    facts: { checks: reviewChecks() },
+    fields: HELD,
+    routes: reviewArtifact(SHA),
+  })
+
+  const requests = artifactRequests(github).length
+  const events = readEvents(manifest).length
+  const stored = structuredClone(entry.review)
+
+  assert.equal(listRequests(github).length, 1)
+  assert.equal(entry.review.skipped, null)
+
+  await driver.mergeCandidate(pr)
+
+  assert.equal(artifactRequests(github).length, requests)
+  assert.equal(readEvents(manifest).length, events)
+  assert.deepEqual(entry.review, stored)
+})
+
+test('merge gate: a skip read before the verification is read again once its run has succeeded, and only once', async () => {
+  const { manifest, github, driver, pr, entry } = await judgedOnce({
+    externalFindings: EXTERNAL_FINDINGS,
+    facts: { checks: reviewChecks() },
+    fields: { ...HELD, review: SKIPPED_BEFORE, reviewMemory: EARLIER_MEMORY },
+    routes: reviewArtifact(SHA),
+  })
+
+  assert.equal(listRequests(github).length, 1)
+  assert.deepEqual(
+    { ...entry.review, at: null },
+    { ...SKIPPED_BEFORE, at: null, skipped: null, findings: [HIGH, MEDIUM, LOW].map(storedFinding) },
+  )
+
+  assert.deepEqual(mergeChecks(manifest), [mergeCheck('pass', ONE_NEW)])
+  assert.deepEqual(gateOutcome(entry), ['merge', 'waiting', 'held', 'wait', 'held'])
+
+  const requests = artifactRequests(github).length
+
+  await driver.mergeCandidate(pr)
+
+  assert.equal(artifactRequests(github).length, requests)
 })
 
 test('mergeNext: a draft made ready merges on the next tick, with one merge call and no command', async () => {

@@ -43,7 +43,7 @@ interface CheckRun {
   conclusion: string | null
 }
 
-interface ReviewRun {
+export interface ReviewRun {
   id: number
   status: string
   conclusion: string | null
@@ -547,7 +547,7 @@ async function reviewResult(
   }
 
   if (run.conclusion !== 'success') {
-    return skip(`the review run ended as ${run.conclusion ?? 'unknown'}`)
+    return unsuccessfulRun(run)
   }
 
   return context.github.reviewFor(context.manifest, entry.pr ?? 0, entry.claimedSha ?? '', {
@@ -556,12 +556,17 @@ async function reviewResult(
   })
 }
 
-function storedReview(context: ClaimsContext, sha: string, run: ReviewRun | null, result: ReviewRead): Review {
+// The skip of a finished run that did not succeed. The gate gives the same reason.
+export function unsuccessfulRun(run: ReviewRun): ReviewRead {
+  return skip(`the review run ended as ${run.conclusion ?? 'unknown'}`)
+}
+
+export function storedReview({ now }: { now: () => IsoTime }, sha: string, run: ReviewRun | null, result: ReviewRead): Review {
   const file = result.available ? result.review : { reusedFrom: null, findings: [], fixed: [], leftOut: 0 }
 
   return {
     sha,
-    at: context.now(),
+    at: now(),
     run: run?.id ?? null,
     reusedFrom: file.reusedFrom,
     skipped: result.available ? null : result.reason,
@@ -572,7 +577,7 @@ function storedReview(context: ClaimsContext, sha: string, run: ReviewRun | null
   }
 }
 
-function reviewCheck(review: Review, minSeverity: ReviewSeverity): { result: string; evidence: string } {
+export function reviewCheck(review: Review, minSeverity: ReviewSeverity): { result: string; evidence: string } {
   if (review.skipped !== null) {
     return { result: 'skip', evidence: review.skipped }
   }

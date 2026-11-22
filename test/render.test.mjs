@@ -9,7 +9,7 @@ import { clock } from '../ui/format.js'
 import { renderHeader } from '../ui/header.js'
 import { renderTranscript } from '../ui/transcript.js'
 import { installDocument } from './fake-dom.mjs'
-import { REVIEW_MANIFEST, START, at, makeRollout, samplePrs, sampleReview } from './fixtures.mjs'
+import { REVIEW_MANIFEST, START, at, laterReview, makeRollout, samplePrs, sampleReview } from './fixtures.mjs'
 
 const fakeDocument = installDocument()
 const NOW = START + 100 * 60_000
@@ -182,6 +182,40 @@ test('board: a held running PR shows the held marker next to its status', () => 
 
   assert.equal(one(cell, 'span.badge.status').textContent, 'running: implement')
   assert.equal(one(cell, 'span.badge.held').textContent, 'held')
+})
+
+test('board and detail: a review read after the verification shows a badge after the status, in the words the CLI prints', () => {
+  const reviewDir = makeRollout({ manifest: REVIEW_MANIFEST, prs: { ...samplePrs(), A1: { ...samplePrs().A1, review: laterReview() } } })
+  const loaded = loadManifest(reviewDir)
+  const view = overJson(rolloutSnapshot(loaded, 'demo', NOW)).state.view
+  const body = overJson(rolloutPr(loaded, 'A1'))
+
+  rmSync(reviewDir, { recursive: true, force: true })
+
+  const cell = renderBoard(viewContext({ view })).querySelectorAll('tr.clickable')[0].children[3]
+  const detail = renderDetail(viewContext({ view, route: { pr: 'A1', tab: 'overview' }, detail: { status: 200, body } }))
+  const facts = one(one(detail, 'div.detail-header'), 'div.facts')
+  const badges = ['badge stage stage-merge', 'badge status kind-waiting', 'badge review-new']
+
+  assert.deepEqual(
+    cell.children.map((child) => child.className),
+    badges,
+  )
+
+  assert.deepEqual(
+    facts.children.slice(0, 3).map((child) => child.className),
+    badges,
+  )
+
+  assert.equal(one(cell, 'span.badge.review-new').textContent, 'review: 2 new')
+  assert.equal(one(facts, 'span.badge.review-new').textContent, 'review: 2 new')
+  assert.equal(renderBoard(viewContext()).querySelectorAll('span.badge.review-new').length, 0)
+  assert.equal(
+    renderDetail(viewContext({ route: { pr: 'A1', tab: 'overview' }, detail: { status: 200, body: prBody } })).querySelectorAll(
+      'span.badge.review-new',
+    ).length,
+    0,
+  )
 })
 
 test('board: the chips filter by needs you and by stage, and say so when nothing is left', () => {

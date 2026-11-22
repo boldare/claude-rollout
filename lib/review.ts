@@ -1,10 +1,11 @@
 import { REVIEW_SEVERITIES } from './state.ts'
-import type { Review, ReviewFinding, ReviewMemory, ReviewSeverity, SentCandidate } from './state.ts'
+import type { CommitStamp, Review, ReviewFinding, ReviewMemory, ReviewSeverity, SentCandidate } from './state.ts'
 
 // The result of an external review: the review.json its workflow uploads as an
 // artifact. This module checks the file against its contract and cuts its
-// texts. It also keys a finding, splits the findings at a severity and picks
-// the candidates a verifier gets. Pure: no I/O and no clock.
+// texts. It also keys a finding, splits the findings at a severity, picks
+// the candidates a verifier gets and finds the ones no verifier got. Pure: no
+// I/O and no clock.
 
 export const REVIEW_FILE = 'review.json'
 export const REVIEW_ARTIFACT = 'review-{pr}'
@@ -229,6 +230,27 @@ export function selectCandidates(
 // blob read at the head. A file that is gone, or was not there, has no id to match.
 export function heldRefutations(refuted: ReviewMemory['refuted'], blobs: ReadonlyMap<string, string | null>): string[] {
   return refuted.filter((record) => record.blob !== null && record.blob === blobs.get(record.key)).map((record) => record.key)
+}
+
+// The claim check reads the review before it launches the verifier. So only a read of the verified head after the
+// verification fed no verifier.
+export function readAfterVerification(review: Pick<Review, 'sha' | 'at'>, verified: CommitStamp | null | undefined): boolean {
+  if (!verified || verified.sha !== review.sha) {
+    return false
+  }
+
+  return Date.parse(review.at) > Date.parse(verified.at)
+}
+
+// The findings at or above minSeverity whose key never went to a verifier. A refuted key went to one, so no blob is compared.
+export function newFindings(
+  review: Pick<Review, 'findings'>,
+  minSeverity: ReviewSeverity,
+  memory: ReviewMemory | null | undefined,
+): ReviewFinding[] {
+  const seen = new Set([...(memory?.sent ?? []), ...(memory?.refuted ?? []).map((record) => record.key)])
+
+  return candidates(review, minSeverity).candidates.filter((finding) => !seen.has(matchKey(finding)))
 }
 
 // The prompt and the judgment of the verdict both read this, so they never disagree.
