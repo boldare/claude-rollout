@@ -237,6 +237,13 @@ const MUTATIONS = [
     tests: ['test/checks.test.mjs', 'test/driver-gate.test.mjs'],
   },
   {
+    id: 'refutation-holds-after-file-changed',
+    file: 'lib/review.ts',
+    find: 'record.blob !== null && record.blob === blobs.get(record.key)',
+    replace: 'blobs.has(record.key)',
+    tests: ['test/review.test.mjs', 'test/driver-claims.test.mjs'],
+  },
+  {
     id: 'outlived-start-time-ignored',
     file: 'lib/sandbox.mjs',
     find: 'found !== startTime',

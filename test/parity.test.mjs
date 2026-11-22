@@ -424,9 +424,37 @@ test('parity: with an answered review, rollout card and the verifier tab note th
     verdicts: [samplePrs().A1.verdict],
   }
 
+  // The medium one was refuted earlier, and its file kept its blob, so the next launch fixed no candidate.
+  const [, refutedFinding] = answered.verdict.external
+  const held = {
+    ...waiting,
+    review: { ...answered.review, candidates: [] },
+    reviewMemory: {
+      sent: answered.review.candidates.map((candidate) => candidate.key),
+      refuted: [
+        {
+          key: refutedFinding.key,
+          blob: '3b18e512dba79e4c8300dd08aeb37f8e728b8dad',
+          evidence: refutedFinding.evidence,
+          run: 'A1-03-verify',
+          at: at(81),
+        },
+      ],
+    },
+  }
+
   const cases = [
     [answered, ['X1 confirmed', 'X2 refuted: src/orders/load.ts:9 caps the retries at three.', 'shown only, below medium', 'fixed']],
     [waiting, ['not sent, already finding F1', 'X1 sent, no answer yet', 'shown only, below medium', 'fixed']],
+    [
+      held,
+      [
+        'not sent, already finding F1',
+        'refuted earlier: src/orders/load.ts:9 caps the retries at three.',
+        'shown only, below medium',
+        'fixed',
+      ],
+    ],
   ]
 
   for (const [fields, notes] of cases) {

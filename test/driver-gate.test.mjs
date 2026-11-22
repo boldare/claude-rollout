@@ -1116,6 +1116,38 @@ const SENT_KEYS = [matchKey(REVIEW_HIGH), matchKey(REVIEW_MEDIUM)]
 const CONFIRMED_EVIDENCE = 'src/orders/total.ts:44 adds every line.'
 const CONFIRMED_FINDING = `External review finding (high, review.correctness) at src/orders/total.ts:42: The total ignores a refunded line. Failure scenario: An order with one refunded line shows the full price. Proposed fix: Skip a line whose refund is settled. The verifier confirmed it: ${CONFIRMED_EVIDENCE}`
 
+const REFUND_BLOB = '3b18e512dba79e4c8300dd08aeb37f8e728b8dad'
+const TOTAL_BLOB = '9daeafb9864cf43055ae93beb0afd6c7d144bfa4'
+
+// The review memory with each refutation's time checked against `since` and left out.
+function memorySince(memory, since) {
+  return {
+    ...memory,
+    refuted: memory.refuted.map(({ at: recorded, ...record }) => {
+      assert.ok(Date.parse(recorded) >= Date.parse(since), recorded)
+
+      return record
+    }),
+  }
+}
+
+// The <sha>:<path> of each blob the driver read.
+function blobReads(tools) {
+  return tools
+    .calls()
+    .filter((call) => call.tool === 'git' && call.args.includes('rev-parse') && call.args.includes('--verify'))
+    .map((call) => call.args.at(-1))
+}
+
+// recheckDriver's clean worktree at SHA, and the answer to the blob read of each path at SHA.
+function answerBlobs(setup, blobs) {
+  setup.tools.answer([
+    ...Object.entries(blobs).map(([path, answer]) => ({ tool: 'git', args: `rev-parse --verify --quiet ${SHA}:${path}`, ...answer })),
+    { tool: 'git', args: 'status --porcelain', stdout: '' },
+    { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+  ])
+}
+
 // A1 under verification of SHA with no findings to re-check, and the review of `sha` whose launch fixed X1 and X2.
 function reviewedDriver(sha = SHA, state = {}) {
   const setup = recheckDriver({ findings: null, ...state })
@@ -1160,6 +1192,7 @@ test('verified: a PASS that confirms a candidate of the external review is a FAI
   const setup = reviewedDriver()
   const { manifest, entry } = setup
   const confirmed = { id: 'X1', result: 'confirmed', evidence: CONFIRMED_EVIDENCE }
+  const since = new Date().toISOString()
 
   await rechecked(setup, candidatesVerdict({}, { external: [confirmed, { id: 'X2', result: 'refuted', evidence: 'refund.ts:20' }] }))
 
@@ -1176,7 +1209,11 @@ test('verified: a PASS that confirms a candidate of the external review is a FAI
     { ...REVIEW_MEDIUM, id: 'X2', key: SENT_KEYS[1], result: 'refuted', evidence: 'refund.ts:20' },
   ])
 
-  assert.deepEqual(entry.reviewMemory, { sent: SENT_KEYS, refuted: [] })
+  // recheckDriver's git answers no rule with exit 1, as for a file that is not there.
+  assert.deepEqual(memorySince(entry.reviewMemory, since), {
+    sent: SENT_KEYS,
+    refuted: [{ key: SENT_KEYS[1], blob: null, evidence: 'refund.ts:20', run: 'A1-04-verify' }],
+  })
 })
 
 test("verified: the verifier's own findings come first, then the criteria's, then the confirmed candidates", async () => {
@@ -1211,15 +1248,25 @@ test("verified: the verifier's own findings come first, then the criteria's, the
 })
 
 test('verified: a PASS with every candidate refuted, left out or answered with a made-up id ends on the gate', async () => {
+  const refutedAs = (key, id) => ({ key, blob: null, evidence: `${id} is refuted: ${CONFIRMED_EVIDENCE}`, run: 'A1-04-verify' })
   const cases = {
-    refuted: { external: { X1: 'refuted', X2: 'refuted' }, results: ['refuted', 'refuted'] },
-    unverifiable: { external: { X2: 'unverifiable', X1: 'refuted' }, results: ['refuted', 'unverifiable'] },
-    'left out and made up': { external: { X9: 'confirmed', F1: 'confirmed' }, results: ['unanswered', 'unanswered'] },
+    refuted: {
+      external: { X1: 'refuted', X2: 'refuted' },
+      results: ['refuted', 'refuted'],
+      remembered: [refutedAs(SENT_KEYS[0], 'X1'), refutedAs(SENT_KEYS[1], 'X2')],
+    },
+    unverifiable: {
+      external: { X2: 'unverifiable', X1: 'refuted' },
+      results: ['refuted', 'unverifiable'],
+      remembered: [refutedAs(SENT_KEYS[0], 'X1')],
+    },
+    'left out and made up': { external: { X9: 'confirmed', F1: 'confirmed' }, results: ['unanswered', 'unanswered'], remembered: [] },
   }
 
-  for (const [name, { external, results }] of Object.entries(cases)) {
+  for (const [name, { external, results, remembered }] of Object.entries(cases)) {
     const setup = reviewedDriver()
     const { manifest, entry } = setup
+    const since = new Date().toISOString()
 
     await rechecked(setup, candidatesVerdict(external))
 
@@ -1237,7 +1284,7 @@ test('verified: a PASS with every candidate refuted, left out or answered with a
       name,
     )
 
-    assert.deepEqual(entry.reviewMemory, { sent: SENT_KEYS, refuted: [] }, name)
+    assert.deepEqual(memorySince(entry.reviewMemory, since), { sent: SENT_KEYS, refuted: remembered }, name)
   }
 })
 
@@ -1262,6 +1309,140 @@ test('verified: a verdict without external, or a review of another head, blocks 
   assert.deepEqual(placeOf(older.entry), ['merge', 'waiting', 'gate-pending'])
   assert.deepEqual(older.entry.verdict.external, [])
   assert.equal(Object.hasOwn(older.entry, 'reviewMemory'), false)
+})
+
+test('verified: a refuted candidate is remembered with the blob of its file at the verified head, its evidence and the run', async () => {
+  const setup = reviewedDriver()
+  const { entry, tools } = setup
+  const since = new Date().toISOString()
+  const evidence = `src/orders/refund.ts:20 keeps the order open. ${'The bank answers later. '.repeat(50)}`
+
+  answerBlobs(setup, { 'src/orders/refund.ts': { stdout: `${REFUND_BLOB}\n` } })
+  await rechecked(
+    setup,
+    candidatesVerdict(
+      {},
+      {
+        external: [
+          { id: 'X1', result: 'unverifiable', evidence: 'No test covers it.' },
+          { id: 'X2', result: 'refuted', evidence },
+        ],
+      },
+    ),
+  )
+
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'gate-pending'])
+  assert.deepEqual(memorySince(entry.reviewMemory, since), {
+    sent: SENT_KEYS,
+    refuted: [{ key: SENT_KEYS[1], blob: REFUND_BLOB, evidence: evidence.slice(0, 1000), run: 'A1-04-verify' }],
+  })
+
+  assert.ok(evidence.length > 1000)
+  assert.deepEqual(blobReads(tools), [`${SHA}:src/orders/refund.ts`])
+})
+
+test('verified: a re-check that calls a finding from the review wrong is remembered with its file in its real case, any other one is not', async () => {
+  const total = { ...REVIEW_HIGH, file: 'src/Orders/Total.ts' }
+  const key = matchKey(total)
+  const items = [
+    {
+      id: 'F1',
+      text: 'External review finding (high).',
+      answer: { outcome: 'disputed', action: 'Total.ts:40 skips it.' },
+      fromReview: key,
+    },
+    { id: 'F2', text: NEW_FINDING, answer: { outcome: 'disputed', action: 'README.md:3 names the new flag.' } },
+  ]
+
+  const answeredIn = (file) => ({ external: [{ ...total, file, id: 'X1', key, result: 'confirmed', evidence: 'Total.ts:44 adds it.' }] })
+  const cases = {
+    'from the review': { findings: [total, REVIEW_MEDIUM], verdicts: [], reads: [`${SHA}:src/Orders/Total.ts`] },
+    'from the newest verdict that answered it': {
+      findings: [REVIEW_MEDIUM],
+      verdicts: [answeredIn('src/Orders/Older.ts'), answeredIn('src/Orders/Total.ts'), { external: [] }, {}],
+      reads: [`${SHA}:src/Orders/Total.ts`],
+    },
+    'from neither': { findings: [REVIEW_MEDIUM], verdicts: [], reads: [] },
+  }
+
+  const recheck = [
+    { id: 'F1', status: 'wrong', evidence: 'F1 is wrong: Total.ts:40 skips a refunded line.' },
+    { id: 'F2', status: 'wrong', evidence: 'F2 is wrong: README.md:3 names the new flag.' },
+  ]
+
+  for (const [name, { findings, verdicts, reads }] of Object.entries(cases)) {
+    const setup = reviewedDriver(SHA, { findings: { at: at(60), items }, verdicts })
+    const since = new Date().toISOString()
+
+    setup.entry.review = { ...setup.entry.review, findings, candidates: [{ id: 'X1', key: SENT_KEYS[1] }] }
+    answerBlobs(setup, { 'src/Orders/Total.ts': { stdout: `${TOTAL_BLOB}\n` } })
+    await rechecked(setup, candidatesVerdict({ X1: 'unverifiable' }, { recheck }))
+
+    const remembered = reads.length === 0 ? [] : [{ key, blob: TOTAL_BLOB, evidence: recheck[0].evidence, run: 'A1-04-verify' }]
+
+    assert.deepEqual(memorySince(setup.entry.reviewMemory, since), { sent: [SENT_KEYS[1]], refuted: remembered }, name)
+    assert.deepEqual(blobReads(setup.tools), reads, name)
+  }
+})
+
+test('verified: a verifier that touched the tree or reported another SHA remembers no refutation', async () => {
+  const stale = reviewedDriver()
+  const touched = reviewedDriver()
+  const blob = { tool: 'git', args: `rev-parse --verify --quiet ${SHA}:`, stdout: `${REFUND_BLOB}\n` }
+
+  answerBlobs(stale, { 'src/orders/refund.ts': { stdout: `${REFUND_BLOB}\n` } })
+  touched.tools.answer([
+    blob,
+    { tool: 'git', args: 'status --porcelain', stdout: ' M lib/a.mjs' },
+    { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+    { tool: 'git', args: 'reset', stdout: '' },
+    { tool: 'git', args: 'clean', stdout: '' },
+  ])
+
+  await rechecked(stale, candidatesVerdict({ X1: 'refuted', X2: 'refuted' }, { sha: NEW_HEAD }))
+  await rechecked(touched, candidatesVerdict({ X1: 'refuted', X2: 'refuted' }))
+
+  assert.deepEqual(kindsSince(stale.manifest), ['verify-done', 'verify-stale'])
+  assert.deepEqual(kindsSince(touched.manifest), ['verify-done', 'verifier-touched-tree'])
+
+  for (const setup of [stale, touched]) {
+    assert.deepEqual(setup.entry.reviewMemory, { sent: SENT_KEYS, refuted: [] })
+    assert.deepEqual(blobReads(setup.tools), [])
+  }
+})
+
+test('verified: a blob read that fails remembers nothing, and the verdict ends as it would without the read', async () => {
+  const verdicts = { PASS: { X1: 'unverifiable', X2: 'refuted' }, FAIL: { X1: 'confirmed', X2: 'refuted' } }
+
+  for (const [name, external] of Object.entries(verdicts)) {
+    const failing = reviewedDriver()
+    const reading = reviewedDriver()
+
+    answerBlobs(failing, { 'src/orders/refund.ts': { stderr: 'fatal: bad object', code: 128 } })
+    answerBlobs(reading, { 'src/orders/refund.ts': { stdout: `${REFUND_BLOB}\n` } })
+    await rechecked(failing, candidatesVerdict(external))
+    await rechecked(reading, candidatesVerdict(external))
+
+    const outcome = ({ manifest, entry }) => ({
+      place: placeOf(entry),
+      kinds: kindsSince(manifest),
+      verdict: entry.verdict.verdict,
+      blocking: entry.verdict.blocking,
+      external: entry.verdict.external,
+      findings: entry.findings?.items ?? null,
+      fixReason: entry.fixReason,
+      lastError: entry.lastError,
+    })
+
+    assert.deepEqual(outcome(failing), outcome(reading), name)
+    assert.deepEqual(blobReads(failing.tools), [`${SHA}:src/orders/refund.ts`], name)
+    assert.deepEqual(failing.entry.reviewMemory, { sent: SENT_KEYS, refuted: [] }, name)
+    assert.deepEqual(
+      reading.entry.reviewMemory.refuted.map((record) => [record.key, record.blob]),
+      [[SENT_KEYS[1], REFUND_BLOB]],
+      name,
+    )
+  }
 })
 
 const BRANCH_TEST = 'A new branch in the code has a test that fails without it.'

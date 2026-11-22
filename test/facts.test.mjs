@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { collectFacts, setFetch } from '../lib/github.mjs'
+import { blobAt, collectFacts, setFetch } from '../lib/github.mjs'
 import { policyViolations } from '../lib/judge.mjs'
 import { MAINTAINER_TOKEN, prRoute, runsRoute } from './driver-helpers.mjs'
 import { fakeGitHub, withProcessEnv } from './fixtures.mjs'
@@ -352,4 +352,53 @@ test('facts: a patch id comes from the bytes and the full blob ids, whatever the
   const grave = prHead(repo, { 'latin.txt': Buffer.from([0x63, 0x61, 0x66, 0xe8, 0x0a]) })
 
   assert.notEqual(await idAt(acute), await idAt(grave))
+})
+
+test('blobAt: a file gives its blob id, one changed line another one, and the same content at another commit the same one', async (context) => {
+  const { repo } = fixture(context)
+  const manifest = manifestFor(repo)
+  const base = git(repo, 'rev-parse', 'origin/main').trim()
+  const changed = prHead(repo, { 'lib/core.js': lines(CORE.with(0, 'line 1, changed')) })
+  const elsewhere = prHead(repo, { 'docs/guide.md': lines(GUIDE.with(0, 'The guide, another paragraph.')) })
+  const id = await blobAt(manifest, base, 'lib/core.js')
+
+  assert.match(id, /^[0-9a-f]{40}$/)
+  assert.equal(id, git(repo, 'rev-parse', `${base}:lib/core.js`).trim())
+  assert.notEqual(elsewhere, base)
+  assert.equal(await blobAt(manifest, elsewhere, 'lib/core.js'), id)
+
+  const other = await blobAt(manifest, changed, 'lib/core.js')
+
+  assert.match(other, /^[0-9a-f]{40}$/)
+  assert.notEqual(other, id)
+})
+
+test('blobAt: a missing file and an unknown commit give null, and a path that is not plain gives null with no git call', async (context) => {
+  const { dir, repo } = fixture(context)
+  const manifest = manifestFor(repo)
+  const base = git(repo, 'rev-parse', 'origin/main').trim()
+
+  assert.equal(await blobAt(manifest, base, 'lib/missing.js'), null)
+  assert.equal(await blobAt(manifest, 'f0e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d', 'lib/core.js'), null)
+
+  // Any git call in a repo.path that does not exist throws.
+  const nowhere = manifestFor(join(dir, 'nowhere'))
+
+  for (const path of ['', '/abs', 'a//b', './a', '../x', '..', 'lib/', 'lib/core.js\n', 'lib/\u001b[2Jcore.js']) {
+    assert.equal(await blobAt(manifest, base, path), null, JSON.stringify(path))
+    assert.equal(await blobAt(nowhere, base, path), null, JSON.stringify(path))
+  }
+})
+
+test('blobAt: a repo.path that does not exist throws, with a message that names the commit and does not start with git', async (context) => {
+  const { dir } = fixture(context)
+  const sha = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+
+  await assert.rejects(blobAt(manifestFor(join(dir, 'nowhere')), sha, 'lib/core.js'), (error) => {
+    assert.ok(error instanceof Error)
+    assert.ok(error.message.startsWith(`cannot read a blob at ${sha}: `), error.message)
+    assert.match(error.message, /nowhere/)
+
+    return true
+  })
 })

@@ -1,5 +1,5 @@
 import { REVIEW_SEVERITIES } from './state.ts'
-import type { Review, ReviewFinding, ReviewSeverity, SentCandidate } from './state.ts'
+import type { Review, ReviewFinding, ReviewMemory, ReviewSeverity, SentCandidate } from './state.ts'
 
 // The result of an external review: the review.json its workflow uploads as an
 // artifact. This module checks the file against its contract and cuts its
@@ -211,16 +211,24 @@ export function candidates(
 }
 
 // `recheck` holds the keys of the current findings to re-check, which the verifier checks by their F id instead.
+// `held` holds the keys of the refutations that still hold. Both go before the cap, so neither takes one of the places.
 export function selectCandidates(
   review: Pick<Review, 'findings'>,
   minSeverity: ReviewSeverity,
   recheck: string[],
+  held: string[] = [],
 ): { id: string; key: string }[] {
   const keys = candidates(review, minSeverity)
     .candidates.map(matchKey)
-    .filter((key) => !recheck.includes(key))
+    .filter((key) => !recheck.includes(key) && !held.includes(key))
 
   return [...new Set(keys)].slice(0, MAX_CANDIDATES).map((key, i) => ({ id: `X${i + 1}`, key }))
+}
+
+// A refutation holds only while the file it was made on has the same blob id at the head. `blobs` maps a key to the
+// blob read at the head. A file that is gone, or was not there, has no id to match.
+export function heldRefutations(refuted: ReviewMemory['refuted'], blobs: ReadonlyMap<string, string | null>): string[] {
+  return refuted.filter((record) => record.blob !== null && record.blob === blobs.get(record.key)).map((record) => record.key)
 }
 
 // The prompt and the judgment of the verdict both read this, so they never disagree.

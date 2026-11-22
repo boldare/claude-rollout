@@ -1,7 +1,19 @@
 import * as transitions from '../transitions.ts'
 import type { PrEntry } from '../transitions.ts'
-import { sentCandidates } from '../review.ts'
-import type { BudgetRole, CandidateAnswer, Finding, Head, Hold, IsoTime, QuestionKind, Role, RunningCode, SentCandidate } from '../state.ts'
+import { matchKey, sentCandidates } from '../review.ts'
+import type {
+  BudgetRole,
+  CandidateAnswer,
+  Finding,
+  Head,
+  Hold,
+  IsoTime,
+  QuestionKind,
+  ReviewMemory,
+  Role,
+  RunningCode,
+  SentCandidate,
+} from '../state.ts'
 import { applyNote } from './commands.ts'
 import type { CommandsContext } from './commands.ts'
 
@@ -12,6 +24,7 @@ import type { CommandsContext } from './commands.ts'
 // or GitHub itself: the context brings it, as lib/driver.mjs builds it.
 
 export const EVIDENCE_CHARS = 300
+const REFUTATION_EVIDENCE_CHARS = 1000
 const AGENT_RUNS: ReadonlySet<RunningCode> = new Set(['brief-write', 'brief-review', 'implement', 'fix', 'verify'] as const)
 
 type Effort = string
@@ -257,6 +270,8 @@ export type RunEntry = PrEntry & {
   verifyCriteria?: unknown[] | null
   preVerify?: { sha: string; at: IsoTime; results: CommandRecord[] } | null
   preVerifyCleanup?: string | null
+  // A verdict from before the external review has no external.
+  verdicts?: { external?: Pick<CandidateAnswer, 'key' | 'file'>[] }[]
 }
 
 interface RunLedger {
@@ -318,6 +333,7 @@ export interface RunsContext {
     replyAsAgents: (manifest: RunManifest, number: number | null, commentId: number | string, body: string) => Promise<void>
     commentAsAgents: (manifest: RunManifest, number: number | null, body: string) => Promise<void>
     unmergedHeads: (pr: RunPr, ledger: RunLedger) => Head[] | null
+    blobAt: (manifest: RunManifest, sha: string, path: string) => Promise<string | null>
   }
 
   prompts: {
@@ -1359,9 +1375,12 @@ async function verified(context: RunsContext, pr: RunPr, entry: RunEntry, out: V
 
   const fromReview = [...unkeyed.map(() => null), ...external.findings.map((finding) => finding.key)]
   const sentKeys = sent.map((candidate) => candidate.key)
+  // A verifier that changed the tree or read another SHA says nothing about the files at this head.
+  const refuted = !touched && out.sha === sha ? await refutations(context, entry, external.results, out.recheck ?? [], { sha, run }) : []
 
   records.recordVerdict(entry, { ...judged, recheck: records.recheckedFindings(entry, out.recheck ?? []), at: now(), run })
   transitions.candidatesSent(entry, sentKeys)
+  transitions.candidatesRefuted(entry, refuted)
 
   for (const record of criteria.results) {
     context.gateCheck(pr, entry, {
@@ -1405,6 +1424,68 @@ async function verified(context: RunsContext, pr: RunPr, entry: RunEntry, out: V
 
   say(pr.id, 'verified', { sha: sha.slice(0, 7) }, `verified PR #${entry.pr}: ${nextStep(context, pr, entry)}`)
   noteFirst(context, pr, entry)
+}
+
+type Refutation = ReviewMemory['refuted'][number]
+type Refuted = Pick<Refutation, 'key' | 'evidence'> & { file: string }
+
+function refutedCandidates(results: CandidateAnswer[]): Refuted[] {
+  return results.filter((record) => record.result === 'refuted').map(({ key, file, evidence }) => ({ key, file, evidence }))
+}
+
+// The key holds the file in lower case, so the path in its real case comes from the review or an earlier answer.
+function reviewFile(entry: RunEntry, key: string): string | null {
+  const finding = entry.review?.findings.find((item) => matchKey(item) === key)
+
+  if (finding) {
+    return finding.file
+  }
+
+  const answer = (entry.verdicts ?? [])
+    .toReversed()
+    .flatMap((verdict) => verdict.external ?? [])
+    .find((record) => record.key === key)
+
+  return answer?.file ?? null
+}
+
+// The findings that came from a confirmed candidate and that a re-check calls wrong.
+function wrongReviewFindings(entry: RunEntry, recheck: Recheck[]): Refuted[] {
+  const items = entry.findings?.items ?? []
+
+  return recheck.flatMap((item) => {
+    const key = items.find((finding) => finding.id === item.id)?.fromReview
+
+    if (item.status !== 'wrong' || key === undefined) {
+      return []
+    }
+
+    const file = reviewFile(entry, key)
+
+    return file === null ? [] : [{ key, file, evidence: item.evidence ?? '' }]
+  })
+}
+
+// Each blob is read at the head the verifier was launched on. A read that fails leaves its record out, so the
+// candidate goes to the next verifier again. It never throws: endJob would only log it, and the verdict would be lost.
+async function refutations(
+  context: RunsContext,
+  entry: RunEntry,
+  results: CandidateAnswer[],
+  recheck: Recheck[],
+  { sha, run }: { sha: string; run: string },
+): Promise<Refutation[]> {
+  const records: Refutation[] = []
+
+  for (const { key, file, evidence } of [...refutedCandidates(results), ...wrongReviewFindings(entry, recheck)]) {
+    const blob = await context.github.blobAt(context.manifest, sha, file).catch(() => undefined)
+
+    if (blob !== undefined) {
+      records.push({ key, blob, evidence: evidence.slice(0, REFUTATION_EVIDENCE_CHARS), run, at: context.now() })
+    }
+  }
+
+  return records
 }
 
 // The upheld disputes are read before the FAIL's own findings replace them.
