@@ -30,6 +30,7 @@ import {
   at,
   interruptedTranscript,
   jsonLines,
+  laterReview,
   makeRollout,
   sampleEvents,
   samplePrs,
@@ -1897,6 +1898,108 @@ test('prDetail: with 20 candidates, a finding after the 20th is over 20, and one
     [21, 'X20 sent, no answer yet'],
     [22, 'not sent, over 20'],
   ])
+})
+
+// The status of A1's row, with `review` and `entry` in A1's entry.
+function statusWithReview(review, { manifest = REVIEW_MANIFEST, ...entry } = {}) {
+  const loaded = loadManifest(reviewRollout(review, { manifest, ...entry }))
+
+  return prRows(loaded, readLedger(loaded), [], []).find((row) => row.id === 'A1').status
+}
+
+function earlierRefutation(finding, evidence) {
+  return { key: matchKey(finding), blob: '3b18e512dba79e4c8300dd08aeb37f8e728b8dad', evidence, run: 'A1-03-verify', at: at(60) }
+}
+
+test('prRows: a review read after the verification marks the status with the findings at or above minSeverity no verifier got', () => {
+  const [low, high, medium] = sampleReview().findings
+  const lowest = { gates: { verify: { externalFindings: { check: 'agent review', minSeverity: 'low' } } } }
+  const marker = (fields) => statusWithReview(laterReview(), fields).reviewMarker
+
+  assert.deepEqual(statusWithReview(laterReview()), { ...statusWithReview(sampleReview()), reviewMarker: 'review: 2 new' })
+  assert.equal(marker({ reviewMemory: { sent: [matchKey(high)], refuted: [] } }), 'review: 1 new')
+  assert.equal(marker({ reviewMemory: { sent: [], refuted: [earlierRefutation(medium, 'Capped.')] } }), 'review: 1 new')
+  assert.equal(marker({ manifest: lowest }), 'review: 3 new')
+  assert.equal(marker({ manifest: lowest, reviewMemory: { sent: [matchKey(low)], refuted: [] } }), 'review: 2 new')
+})
+
+test('prRows: no review marker without the key, before the verification, for an older head, for a skip, with nothing new or once merged', () => {
+  const [, high, medium] = sampleReview().findings
+  const newHead = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3'
+  const moved = { claimedSha: newHead, verified: { ...samplePrs().A1.verified, sha: newHead } }
+  const cases = {
+    'no manifest key': [laterReview(), { manifest: {} }],
+    'a read before the verification': [sampleReview(), {}],
+    'a review of the head before a same-patch move': [laterReview(), moved],
+    'a review of a head other than the claimed one': [laterReview(), { claimedSha: OLDER_HEAD }],
+    'a skip': [{ ...skippedReview(), at: at(85) }, {}],
+    'every key sent or refuted': [laterReview(), { reviewMemory: { sent: [matchKey(high)], refuted: [earlierRefutation(medium, '')] } }],
+    'a merged PR': [laterReview(), { state: 'merged', mergeSha: 'feedface00' }],
+  }
+
+  for (const [name, [review, fields]] of Object.entries(cases)) {
+    assert.equal(Object.hasOwn(statusWithReview(review, fields), 'reviewMarker'), false, name)
+  }
+
+  assert.equal(statusWithReview(laterReview(), { state: 'merged', mergeSha: 'feedface00' }).stage, 'merged')
+})
+
+test('prDetail: a review read after the verification notes a finding no verifier got as new, and one sent in an earlier round as such', () => {
+  const answered = answeredReview()
+  const [, high, medium] = sampleReview().findings
+  const later = laterReview()
+
+  assert.deepEqual(reviewNotes({ review: later }), [
+    [42, 'new since the verification'],
+    [7, 'new since the verification'],
+    [12, 'shown only, below medium'],
+  ])
+
+  assert.deepEqual(reviewNotes({ review: later, reviewMemory: { sent: [matchKey(high)], refuted: [] } }).slice(0, 2), [
+    [42, 'went to a verifier earlier'],
+    [7, 'new since the verification'],
+  ])
+
+  const refuted = { sent: [matchKey(high), matchKey(medium)], refuted: [earlierRefutation(medium, 'src/orders/load.ts:9 caps\nthem.')] }
+
+  assert.deepEqual(reviewNotes({ review: later, reviewMemory: refuted }).slice(0, 2), [
+    [42, 'went to a verifier earlier'],
+    [7, 'refuted earlier: src/orders/load.ts:9 caps them.'],
+  ])
+
+  assert.deepEqual(reviewNotes({ review: later, reviewMemory: { sent: [], refuted: refuted.refuted } }).slice(0, 2), [
+    [42, 'new since the verification'],
+    [7, 'refuted earlier: src/orders/load.ts:9 caps them.'],
+  ])
+
+  assert.deepEqual(reviewNotes({ ...answered, review: later, reviewMemory: refuted }).slice(0, 2), [
+    [42, 'not sent, already finding F1'],
+    [7, 'refuted earlier: src/orders/load.ts:9 caps them.'],
+  ])
+
+  assert.deepEqual(reviewNotes({ review: sampleReview(), reviewMemory: { sent: [matchKey(high)], refuted: [] } }).slice(0, 2), [
+    [42, ''],
+    [7, ''],
+  ])
+})
+
+test('prDetail: the summary of a review read after the verification ends with how many findings no verifier got', () => {
+  const [, high, medium] = sampleReview().findings
+  const summary = (review, fields) => shownReview(reviewRollout(review, fields)).summary
+
+  assert.equal(summary(laterReview()), '3 findings (1 high, 1 medium, 1 low), 1 fixed, 2 new since the verification')
+  assert.equal(
+    summary({ ...laterReview(), leftOut: 2 }, { reviewMemory: { sent: [matchKey(high)], refuted: [] } }),
+    '3 findings (1 high, 1 medium, 1 low), 2 left out, 1 fixed, 1 new since the verification',
+  )
+
+  assert.equal(
+    summary(laterReview(), { reviewMemory: { sent: [matchKey(high), matchKey(medium)], refuted: [] } }),
+    '3 findings (1 high, 1 medium, 1 low), 1 fixed',
+  )
+
+  assert.equal(summary(sampleReview()), '3 findings (1 high, 1 medium, 1 low), 1 fixed')
+  assert.equal(summary({ ...skippedReview(), at: at(85) }), `skipped: ${SKIP_REASON}`)
 })
 
 test('card: each finding of the external review notes what became of it', () => {

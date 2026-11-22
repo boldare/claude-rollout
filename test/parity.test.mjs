@@ -5,6 +5,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadManifest } from '../lib/manifest.mjs'
+import { matchKey } from '../lib/review.ts'
 import { rolloutPr, rolloutSnapshot } from '../lib/rollouts.mjs'
 import { STAGE_STATUSES } from '../lib/state.ts'
 import { renderBoard } from '../ui/board.js'
@@ -12,7 +13,7 @@ import { dialogFor, prControls } from '../ui/commands.js'
 import { renderDetail } from '../ui/detail.js'
 import { renderHeader } from '../ui/header.js'
 import { installDocument } from './fake-dom.mjs'
-import { REVIEW_MANIFEST, answeredReview, at, makeRollout, samplePrs, sampleReview, sampleStatus } from './fixtures.mjs'
+import { REVIEW_MANIFEST, answeredReview, at, laterReview, makeRollout, samplePrs, sampleReview, sampleStatus } from './fixtures.mjs'
 
 // The CLI and the board print one model. One PR per stage and code of
 // STAGE_STATUSES, a merged one and a held running one: each status line of
@@ -136,6 +137,10 @@ function viewOf(dir) {
 
 function textOf(node, selector) {
   return node.querySelector(selector)?.textContent ?? null
+}
+
+function texts(node, selector) {
+  return node.querySelectorAll(selector).map((item) => item.textContent)
 }
 
 // What a board row shows of its status, in the order the CLI prints it.
@@ -473,5 +478,97 @@ test('parity: with an answered review, rollout card and the verifier tab note th
       assertInOrder(line, cells[i], `row ${i}`)
       assert.ok(line.endsWith(` (${notes[i]})`), line)
     })
+  }
+})
+
+test('parity: a review read after the verification gives the same notes and summary in rollout card and on the verifier tab', () => {
+  const [, high] = sampleReview().findings
+  const counts = '3 findings (1 high, 1 medium, 1 low), 1 fixed'
+  const cases = [
+    [
+      {},
+      ['new since the verification', 'new since the verification', 'shown only, below medium', 'fixed'],
+      `${counts}, 2 new since the verification`,
+    ],
+    [
+      { reviewMemory: { sent: [matchKey(high)], refuted: [] } },
+      ['went to a verifier earlier', 'new since the verification', 'shown only, below medium', 'fixed'],
+      `${counts}, 1 new since the verification`,
+    ],
+  ]
+
+  for (const [fields, notes, summary] of cases) {
+    const dir = makeRollout({ manifest: REVIEW_MANIFEST, prs: { A1: { ...samplePrs().A1, review: laterReview(), ...fields } } })
+    const [heading, ...rest] = cardReview(cli('card', 'A1', '--dir', dir))
+    const lines = rest.filter((line) => line.startsWith('  ['))
+    const section = pageReview(dir)
+    const cells = section.querySelector('tbody').children.map((row) => row.querySelectorAll('td').map((cell) => cell.textContent))
+
+    assert.equal(heading, `external review of a1a1a1a: ${summary}`)
+    assert.equal(`${textOf(section, 'h3')}: ${textOf(section, 'p.text')}`, heading)
+    assert.deepEqual(
+      cells.map((row) => row.at(-1)),
+      notes,
+    )
+
+    assert.equal(lines.length, cells.length)
+    lines.forEach((line, i) => {
+      assertInOrder(line, cells[i], `row ${i}`)
+      assert.ok(line.endsWith(` (${notes[i]})`), line)
+    })
+  }
+})
+
+// The header of a PR's page, from the same model the page fetches.
+function pageHeader(dir, id) {
+  const body = JSON.parse(JSON.stringify(rolloutPr(loadManifest(dir), id)))
+  const ctx = { ...boardContext(viewOf(dir)), route: { r: 'demo', view: 'board', pr: id, tab: 'overview' }, detail: { status: 200, body } }
+
+  return renderDetail(ctx).querySelector('div.detail-header')
+}
+
+test('parity: the review marker reads the same in rollout status, rollout card, on the board and in the PR page header', () => {
+  const [, high] = sampleReview().findings
+  const verified = samplePrs().A1.verified
+  const reviewed = { claimedSha: verified.sha, verified, review: laterReview() }
+  const approve = sampleStatus('needs-you', 'approve')
+  const prs = {
+    A1: written({ stage: 'merge', status: sampleStatus('waiting', 'held'), pr: 101, hold: HOLD, ...reviewed }),
+    A2: written({
+      stage: 'merge',
+      status: approve,
+      pr: 102,
+      hold: HOLD,
+      ...reviewed,
+      reviewMemory: { sent: [matchKey(high)], refuted: [] },
+    }),
+    A3: written({ stage: 'merge', status: approve, pr: 103, ...reviewed, review: sampleReview() }),
+  }
+
+  const dir = rolloutWith(prs, { manifest: { ...REVIEW_MANIFEST, prs: Object.keys(prs).map(manifestPr) } })
+  const view = viewOf(dir)
+  const lines = cliLines(cli('status', '--dir', dir))
+  const board = boardRows(view, null)
+  const statuses = {
+    A1: 'merge · waiting: held [review: 2 new]',
+    A2: 'merge · needs-you: approve [held] [review: 1 new]',
+    A3: 'merge · needs-you: approve',
+  }
+
+  const markers = { A1: ['review: 2 new'], A2: ['review: 1 new'], A3: [] }
+
+  for (const [id, status] of Object.entries(statuses)) {
+    const cell = renderBoard(boardContext(view)).querySelectorAll('tr.clickable')[Number(id.slice(1)) - 1].children[3]
+    const header = pageHeader(dir, id)
+    const card = cli('card', id, '--dir', dir).split('\n')[1]
+
+    assert.ok(lines.get(id).includes(`${status}  `), lines.get(id))
+    assert.ok(card.startsWith(`${status}   PR: `), card)
+    assert.deepEqual(texts(cell, 'span.badge.review-new'), markers[id], id)
+    assert.deepEqual(texts(header, 'span.badge.review-new'), markers[id], id)
+    assert.equal(board.get(id).held, id === 'A2', id)
+    assert.equal(texts(header, 'span.badge.held').length, id === 'A2' ? 1 : 0, id)
+    assertInOrder(lines.get(id), [...board.get(id).parts.slice(0, 2), ...texts(cell, 'span.badge.held'), ...markers[id]], id)
+    assertInOrder(card, [textOf(header, 'span.badge.stage'), textOf(header, 'span.badge.status'), ...markers[id]], id)
   }
 })

@@ -39,6 +39,18 @@ import {
   COMMANDS_GATE,
   commandSeam,
   preVerified,
+  REVIEW_CHECK,
+  EXTERNAL_FINDINGS,
+  ARTIFACTS,
+  HIGH,
+  MEDIUM,
+  LOW,
+  storedFinding,
+  reviewJson,
+  artifactJson,
+  listRoute,
+  zipRoutes,
+  artifactRequests,
 } from './driver-helpers.mjs'
 
 const IMPLEMENTING = { state: 'implementing', sessionId: 'session-1', attempts: { implement: 1, fix: 0, verify: 0, brief: 0 } }
@@ -1191,11 +1203,7 @@ test('checkClaim: every gate-check event is short and names the stage and the le
   assert.match(event.evidence, /^failing: job-0: failure, job-1: failure/)
 })
 
-// The external review: a check run named `agent review` and the artifact review-11 it uploads.
-const REVIEW_CHECK = 'agent review'
-const EXTERNAL_FINDINGS = { check: REVIEW_CHECK, artifact: 'review-{pr}', minSeverity: 'medium' }
 const REVIEW_GATE = gatesWith({ verify: { externalFindings: EXTERNAL_FINDINGS } })
-const ARTIFACTS = 'repos/example/widgets/actions/artifacts'
 const TESTED = { id: 1, name: 'test', status: 'completed', conclusion: 'success' }
 const PASSES = [
   gateCheckEvent('ci', 'pass', GREEN_EVIDENCE),
@@ -1203,85 +1211,12 @@ const PASSES = [
   gateCheckEvent('code-scanning', 'pass', 'no new alerts at or above medium'),
 ]
 
-const HIGH = {
-  severity: 'high',
-  criterion: 'review.correctness',
-  title: 'The total ignores a refunded line',
-  file: 'src/orders/total.ts',
-  line: 42,
-  failure_scenario: 'An order with one refunded line shows the full price.',
-  fix: 'Skip a line whose refund is settled.',
-  status: 'new',
-}
-
-const MEDIUM = {
-  severity: 'medium',
-  criterion: 'review.errors',
-  title: 'A refused refund is dropped',
-  file: 'src/orders/refund.ts',
-  line: 18,
-  failure_scenario: 'A refund the bank refuses leaves the order marked as refunded.',
-  fix: 'Keep the order open until the bank confirms.',
-  status: 'open',
-}
-
-const LOW = {
-  severity: 'low',
-  criterion: 'review.naming',
-  title: 'A flag named tmp',
-  file: 'src/orders/total.ts',
-  line: 12,
-  failure_scenario: 'The next reader cannot tell what it guards.',
-  fix: 'Name it after the condition.',
-  status: 'open',
-}
-
 function minutesAgo(minutes) {
   return new Date(Date.now() - minutes * 60_000).toISOString()
 }
 
 function reviewRun(status, conclusion = null, { id = 2, started = minutesAgo(1) } = {}) {
   return { id, name: REVIEW_CHECK, status, conclusion, started_at: started }
-}
-
-// A finding as the driver stores it.
-function storedFinding({ failure_scenario: failureScenario, ...finding }) {
-  return { ...finding, failureScenario }
-}
-
-function reviewJson(changes = {}) {
-  return JSON.stringify({
-    schema_version: 1,
-    revision: SHA,
-    input_digest: '9b2d',
-    findings: [LOW, HIGH, MEDIUM],
-    fixed: [],
-    dropped: [],
-    ...changes,
-  })
-}
-
-function artifactJson(id, sha) {
-  return {
-    id,
-    name: 'review-11',
-    size_in_bytes: 900,
-    expired: false,
-    created_at: '2026-10-01T10:00:00Z',
-    workflow_run: { id: id * 10, head_sha: sha },
-  }
-}
-
-function listRoute(artifacts) {
-  return { path: ARTIFACTS, query: { name: 'review-11' }, body: { total_count: artifacts.length, artifacts }, items: 'artifacts' }
-}
-
-// The API's 302 for one artifact, and the storage host's answer.
-function zipRoutes(id, storage) {
-  return [
-    { path: `${ARTIFACTS}/${id}/zip`, status: 302, headers: { location: `https://storage.example.com/artifacts/${id}.zip?sig=synthetic` } },
-    { path: `artifacts/${id}.zip`, ...storage },
-  ]
 }
 
 // A1's PR at SHA with `runs` on its head, and the review's artifact for that head.
@@ -1301,10 +1236,6 @@ function reviewDriver(runs, { gates = REVIEW_GATE, routes = {}, ...options } = {
   setup.github.answer(reviewRoutes(runs, routes))
 
   return setup
-}
-
-function artifactRequests(github) {
-  return github.requests().filter((request) => request.path.startsWith(ARTIFACTS))
 }
 
 // A skip goes on to the verifier: one gate-check, a stored reason and no fix.
