@@ -26,6 +26,7 @@ const RECHECK_HEADINGS = ['finding', 'answer', 'status', 'evidence']
 const RECHECK_CLASSES = { resolved: 'check-pass', open: 'check-fail', wrong: 'check-unverifiable' }
 const PRE_VERIFY_HEADINGS = ['command', 'stage', 'level', 'result', 'evidence']
 const CRITERIA_HEADINGS = ['criterion', 'level', 'result', 'evidence']
+const EXTERNAL_REVIEW_HEADINGS = ['severity', 'criterion', 'location', 'title', 'note']
 // The codes the last error belongs to. Under any other, the ledger may still hold an older one.
 const LAST_ERROR_CODES = ['errors', 'attempts-exhausted', 'dispute', 'backoff']
 
@@ -390,12 +391,43 @@ function preVerifyTable(preVerify) {
   return [element('h3', 'commands the driver ran'), table(PRE_VERIFY_HEADINGS, preVerify.results.map(preVerifyRow), 'checklist')]
 }
 
-function renderVerifier(pr, ctx) {
-  if (!pr.verdict) {
-    return wrap('div', element('p', 'No verdict yet.', 'muted'), ...preVerifyTable(pr.preVerify))
+function externalReviewRow(row) {
+  return wrap('tr', cell(row.severity), cell(row.criterion), cell(`${row.file}:${row.line}`), cell(row.title, 'text'), cell(row.note))
+}
+
+// The card prints the same heading, summary and rows, in the same order.
+function externalReviewSection(review) {
+  if (!review) {
+    return []
   }
 
-  const section = wrap('div', element('h3', 'latest verdict'), verdictBody(pr.verdict), ...preVerifyTable(pr.preVerify))
+  const section = wrap('div', element('h3', `external review of ${short(review.sha)}`), element('p', review.summary, 'text'))
+  const rows = [...review.findings, ...review.fixed]
+
+  if (review.reusedFrom) {
+    section.append(element('p', `line numbers refer to ${short(review.reusedFrom)}, the commit the review read`, 'muted'))
+  }
+
+  if (rows.length > 0) {
+    section.append(table(EXTERNAL_REVIEW_HEADINGS, rows.map(externalReviewRow), 'checklist'))
+  }
+
+  return [withClass(section, 'external-review')]
+}
+
+function renderVerifier(pr, ctx) {
+  if (!pr.verdict) {
+    return wrap('div', element('p', 'No verdict yet.', 'muted'), ...preVerifyTable(pr.preVerify), ...externalReviewSection(pr.review))
+  }
+
+  const section = wrap(
+    'div',
+    element('h3', 'latest verdict'),
+    verdictBody(pr.verdict),
+    ...preVerifyTable(pr.preVerify),
+    ...externalReviewSection(pr.review),
+  )
+
   const history = [...(pr.verdicts ?? [])].reverse()
 
   section.append(element('h3', 'history'), ...history.map((verdict) => historyEntry(pr, verdict, ctx)))
