@@ -1129,6 +1129,11 @@ prs:
             The findings are counted in the <code>gate-check</code> event, such as
             <code>2 candidates (1 high, 1 medium), 1 below medium</code>. A candidate is a finding at or above <code>minSeverity</code>.
           </li>
+          <li>
+            The findings at or above <code>minSeverity</code> become the verifier's candidates, at most 20, without one that is already a
+            finding to re-check. The verifier answers each one, and only a confirmed one blocks, as a verifier finding. See
+            <a href="how-it-works.html#stage-verify">the verify stage</a>.
+          </li>
         </ul>
 
         <p>When the claim reaches the review, the review's latest run on the head decides:</p>

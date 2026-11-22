@@ -334,9 +334,9 @@ P3   implement · running: implement  the implementer is working · 34m</code></
           <li>
             The verifier's verdict, checklist, blocking and non-blocking findings. With
             <a href="manifest.html#gates-verify-required">project criteria</a>, each one with its id, level, text and result, and the
-            evidence of one that did not pass. A PASS with a required criterion that did not pass shows as FAIL, with the criterion among
-            the blocking findings. After a FAIL, each previous finding it re-checked, with its status, the implementer's answer and the
-            evidence.
+            evidence of one that did not pass. A PASS with a required criterion that did not pass, or with a confirmed candidate of an
+            external review, shows as FAIL, with the criterion or the candidate among the blocking findings. After a FAIL, each previous
+            finding it re-checked, with its status, the implementer's answer and the evidence.
           </li>
           <li>
             With <a href="manifest.html#gates-ready-required">ready</a> or
@@ -349,8 +349,13 @@ P3   implement · running: implement  the implementer is working · 34m</code></
             review of the claimed head, under <code>external review of &lt;sha&gt;</code>. It shows the findings counted by severity, how
             many it left out and how many the review reports as fixed. Then it shows one line per finding with its severity, criterion, file
             and line and title, highest severity first. A finding below <code>minSeverity</code> is marked <code>shown only</code>, and a
-            fixed one <code>fixed</code>. A reused review names the commit its line numbers refer to. A skip shows its reason. A review of
-            an older head does not show.
+            fixed one <code>fixed</code>. Each other finding notes what became of it. A candidate of the last verifier notes its answer in
+            the latest verdict, <code>X1 confirmed</code>, <code>X1 refuted: &lt;evidence&gt;</code>, <code>X1 unverifiable</code> or
+            <code>X1 unanswered</code>, and <code>X1 sent, no answer yet</code> until then. A finding to re-check notes
+            <code>not sent, already finding F2</code>. Any other one notes <code>not sent, over 20</code> after the 20th candidate, or
+            <code>not sent, re-checked as a finding</code> for one left out as a finding to re-check that a PASS has cleared since. It has
+            no note while no verifier has had the review's candidates. A reused review names the commit its line numbers refer to. A skip
+            shows its reason. A review of an older head does not show.
           </li>
           <li>
             For a verified PR, how to approve it: the GitHub link or the <code>approve</code> command. Under <code>merge: manual</code> and

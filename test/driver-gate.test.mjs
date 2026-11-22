@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { GATE_CODES } from '../lib/judge.mjs'
 import { verifyPrompt } from '../lib/prompts.mjs'
+import { matchKey } from '../lib/review.ts'
 import { stageLabels } from '../lib/stage.mjs'
 import { toMerged, toVerified } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
@@ -1086,6 +1087,181 @@ test('verified: a verdict without recheck is recorded with an empty one', async 
   assert.deepEqual(setup.entry.verdict.recheck, [])
   assert.deepEqual(placeOf(setup.entry), ['implement', 'waiting', 'slot'])
   assert.deepEqual(setup.entry.findings.items, [{ id: 'F1', text: NEW_FINDING, answer: null }])
+})
+
+// Two findings of the external review of SHA, as the driver stores them.
+const REVIEW_HIGH = {
+  severity: 'high',
+  criterion: 'review.correctness',
+  title: 'The total ignores a refunded line',
+  file: 'src/orders/total.ts',
+  line: 42,
+  failureScenario: 'An order with one refunded line shows the full price.',
+  fix: 'Skip a line whose refund is settled.',
+  status: 'new',
+}
+
+const REVIEW_MEDIUM = {
+  severity: 'medium',
+  criterion: 'review.errors',
+  title: 'A refused refund is dropped',
+  file: 'src/orders/refund.ts',
+  line: 18,
+  failureScenario: 'A refund the bank refuses leaves the order marked as refunded.',
+  fix: 'Keep the order open until the bank confirms.',
+  status: 'open',
+}
+
+const SENT_KEYS = [matchKey(REVIEW_HIGH), matchKey(REVIEW_MEDIUM)]
+const CONFIRMED_EVIDENCE = 'src/orders/total.ts:44 adds every line.'
+const CONFIRMED_FINDING = `External review finding (high, review.correctness) at src/orders/total.ts:42: The total ignores a refunded line. Failure scenario: An order with one refunded line shows the full price. Proposed fix: Skip a line whose refund is settled. The verifier confirmed it: ${CONFIRMED_EVIDENCE}`
+
+// A1 under verification of SHA with no findings to re-check, and the review of `sha` whose launch fixed X1 and X2.
+function reviewedDriver(sha = SHA, state = {}) {
+  const setup = recheckDriver({ findings: null, ...state })
+
+  setup.entry.review = {
+    sha,
+    at: at(70),
+    run: 7,
+    reusedFrom: null,
+    skipped: null,
+    findings: [REVIEW_HIGH, REVIEW_MEDIUM],
+    fixed: [],
+    leftOut: 0,
+    candidates: [
+      { id: 'X1', key: SENT_KEYS[0] },
+      { id: 'X2', key: SENT_KEYS[1] },
+    ],
+  }
+
+  return setup
+}
+
+// The verifier's PASS on SHA, with `external` mapping each id to its result.
+function candidatesVerdict(external, overrides = {}) {
+  return agentResult({
+    output: {
+      verdict: 'PASS',
+      sha: SHA,
+      summary: 'Every checklist item holds.',
+      checklist: [{ item: 'docs updated', status: 'pass', evidence: 'README.md:3' }],
+      blocking: [],
+      nonBlocking: [],
+      recheck: [],
+      criteria: [],
+      external: Object.entries(external).map(([id, result]) => ({ id, result, evidence: `${id} is ${result}: ${CONFIRMED_EVIDENCE}` })),
+      ...overrides,
+    },
+  })
+}
+
+test('verified: a PASS that confirms a candidate of the external review is a FAIL, and the candidate is a finding with its key', async () => {
+  const setup = reviewedDriver()
+  const { manifest, entry } = setup
+  const confirmed = { id: 'X1', result: 'confirmed', evidence: CONFIRMED_EVIDENCE }
+
+  await rechecked(setup, candidatesVerdict({}, { external: [confirmed, { id: 'X2', result: 'refuted', evidence: 'refund.ts:20' }] }))
+
+  assert.equal(entry.verdict.verdict, 'FAIL')
+  assert.deepEqual(entry.verdict.blocking, [CONFIRMED_FINDING])
+  assert.deepEqual(entry.findings.items, [{ id: 'F1', text: CONFIRMED_FINDING, answer: null, fromReview: SENT_KEYS[0] }])
+  assert.equal(entry.fixReason, 'verifier findings')
+  assert.deepEqual(placeOf(entry), ['implement', 'waiting', 'slot'])
+  assert.ok(entry.fixNote.includes(`- F1: ${CONFIRMED_FINDING}\n`), entry.fixNote)
+  assert.deepEqual(kindsSince(manifest), ['verify-done', 'needs-fix'])
+  assert.equal(eventsSince(manifest)[0].result, 'PASS', "verify-done keeps the verifier's own verdict")
+  assert.deepEqual(entry.verdict.external, [
+    { ...REVIEW_HIGH, id: 'X1', key: SENT_KEYS[0], result: 'confirmed', evidence: CONFIRMED_EVIDENCE },
+    { ...REVIEW_MEDIUM, id: 'X2', key: SENT_KEYS[1], result: 'refuted', evidence: 'refund.ts:20' },
+  ])
+
+  assert.deepEqual(entry.reviewMemory, { sent: SENT_KEYS, refuted: [] })
+})
+
+test("verified: the verifier's own findings come first, then the criteria's, then the confirmed candidates", async () => {
+  const setup = reviewedDriver(SHA, { verifyCriteria: VERIFY_CRITERIA.slice(0, 1) })
+  const { entry } = setup
+  const criteria = [{ id: 'V1', result: 'fail', evidence: 'lib/a.mjs:12 adds a branch with no test.' }]
+
+  await rechecked(setup, candidatesVerdict({ X1: 'unverifiable', X2: 'confirmed' }, { verdict: 'FAIL', blocking: [NEW_FINDING], criteria }))
+
+  assert.deepEqual(entry.findings.items, [
+    { id: 'F1', text: NEW_FINDING, answer: null },
+    {
+      id: 'F2',
+      text: 'V1 (required criterion): A new branch in the code has a test that fails without it. lib/a.mjs:12 adds a branch with no test.',
+      answer: null,
+    },
+    {
+      id: 'F3',
+      text: `External review finding (medium, review.errors) at src/orders/refund.ts:18: A refused refund is dropped. Failure scenario: A refund the bank refuses leaves the order marked as refunded. Proposed fix: Keep the order open until the bank confirms. The verifier confirmed it: X2 is confirmed: ${CONFIRMED_EVIDENCE}`,
+      answer: null,
+      fromReview: SENT_KEYS[1],
+    },
+  ])
+
+  assert.deepEqual(
+    entry.verdict.external.map((record) => [record.id, record.result]),
+    [
+      ['X1', 'unverifiable'],
+      ['X2', 'confirmed'],
+    ],
+  )
+})
+
+test('verified: a PASS with every candidate refuted, left out or answered with a made-up id ends on the gate', async () => {
+  const cases = {
+    refuted: { external: { X1: 'refuted', X2: 'refuted' }, results: ['refuted', 'refuted'] },
+    unverifiable: { external: { X2: 'unverifiable', X1: 'refuted' }, results: ['refuted', 'unverifiable'] },
+    'left out and made up': { external: { X9: 'confirmed', F1: 'confirmed' }, results: ['unanswered', 'unanswered'] },
+  }
+
+  for (const [name, { external, results }] of Object.entries(cases)) {
+    const setup = reviewedDriver()
+    const { manifest, entry } = setup
+
+    await rechecked(setup, candidatesVerdict(external))
+
+    assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'gate-pending'], name)
+    assert.equal(entry.verdict.verdict, 'PASS', name)
+    assert.deepEqual(entry.verdict.blocking, [], name)
+    assert.equal(entry.findings, null, name)
+    assert.deepEqual(kindsSince(manifest), ['verify-done', 'verified'], name)
+    assert.deepEqual(
+      entry.verdict.external.map((record) => [record.id, record.key, record.title, record.result]),
+      [
+        ['X1', SENT_KEYS[0], REVIEW_HIGH.title, results[0]],
+        ['X2', SENT_KEYS[1], REVIEW_MEDIUM.title, results[1]],
+      ],
+      name,
+    )
+
+    assert.deepEqual(entry.reviewMemory, { sent: SENT_KEYS, refuted: [] }, name)
+  }
+})
+
+test('verified: a verdict without external, or a review of another head, blocks nothing and remembers no key', async () => {
+  const unanswered = reviewedDriver()
+  const { external: _, ...output } = candidatesVerdict({}).output
+
+  await rechecked(unanswered, agentResult({ output }))
+
+  assert.deepEqual(placeOf(unanswered.entry), ['merge', 'waiting', 'gate-pending'])
+  assert.deepEqual(
+    unanswered.entry.verdict.external.map((record) => record.result),
+    ['unanswered', 'unanswered'],
+  )
+
+  assert.deepEqual(unanswered.entry.reviewMemory, { sent: SENT_KEYS, refuted: [] })
+
+  const older = reviewedDriver(NEW_HEAD)
+
+  await rechecked(older, candidatesVerdict({ X1: 'confirmed', X2: 'confirmed' }))
+
+  assert.deepEqual(placeOf(older.entry), ['merge', 'waiting', 'gate-pending'])
+  assert.deepEqual(older.entry.verdict.external, [])
+  assert.equal(Object.hasOwn(older.entry, 'reviewMemory'), false)
 })
 
 const BRANCH_TEST = 'A new branch in the code has a test that fails without it.'

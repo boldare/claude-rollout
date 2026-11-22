@@ -1,14 +1,15 @@
 import { REVIEW_SEVERITIES } from './state.ts'
-import type { Review, ReviewFinding, ReviewSeverity } from './state.ts'
+import type { Review, ReviewFinding, ReviewSeverity, SentCandidate } from './state.ts'
 
 // The result of an external review: the review.json its workflow uploads as an
 // artifact. This module checks the file against its contract and cuts its
-// texts. It also keys a finding and splits the findings at a severity. Pure:
-// no I/O and no clock.
+// texts. It also keys a finding, splits the findings at a severity and picks
+// the candidates a verifier gets. Pure: no I/O and no clock.
 
 export const REVIEW_FILE = 'review.json'
 export const REVIEW_ARTIFACT = 'review-{pr}'
 export const MAX_FINDINGS = 50
+export const MAX_CANDIDATES = 20
 
 export const TEXT_LIMITS = {
   criterion: 100,
@@ -207,4 +208,32 @@ export function candidates(
     candidates: sorted.filter((finding) => rank(finding) <= limit),
     below: sorted.filter((finding) => rank(finding) > limit),
   }
+}
+
+// `recheck` holds the keys of the current findings to re-check, which the verifier checks by their F id instead.
+export function selectCandidates(
+  review: Pick<Review, 'findings'>,
+  minSeverity: ReviewSeverity,
+  recheck: string[],
+): { id: string; key: string }[] {
+  const keys = candidates(review, minSeverity)
+    .candidates.map(matchKey)
+    .filter((key) => !recheck.includes(key))
+
+  return [...new Set(keys)].slice(0, MAX_CANDIDATES).map((key, i) => ({ id: `X${i + 1}`, key }))
+}
+
+// The prompt and the judgment of the verdict both read this, so they never disagree.
+export function sentCandidates(review: Pick<Review, 'findings' | 'candidates'>): SentCandidate[] {
+  return review.candidates.flatMap((candidate) => {
+    const finding = review.findings.find((item) => matchKey(item) === candidate.key)
+
+    return finding ? [{ ...finding, ...candidate }] : []
+  })
+}
+
+// The review's texts come from outside. A line break or a terminal escape in one must not break a card line,
+// a line of the verifier's prompt or a finding of the fix note.
+export function oneLine(text: string): string {
+  return text.replace(/\p{Cc}+/gu, ' ')
 }

@@ -303,6 +303,8 @@ export interface Finding {
   id: string
   text: string
   answer: { outcome: 'fixed' | 'disputed'; action: string } | null
+  // The key of the external review's finding a confirmed candidate came from. Missing on every other finding.
+  fromReview?: string
 }
 
 export const REVIEW_SEVERITIES = ['high', 'medium', 'low'] as const
@@ -336,6 +338,22 @@ export interface Review extends CommitStamp {
   // The candidates fixed at the launch of the last verifier of this head. The prompt and the judgment of the verdict read this list.
   candidates: { id: string; key: string }[]
 }
+
+// What the driver remembers of a PR's reviews. It lives as long as the PR.
+export interface ReviewMemory {
+  // The keys that went to a verifier, whatever it answered. The last 500.
+  sent: string[]
+  // The last 200. `blob` is the file's blob id at the head the verifier read, null when the file was not there.
+  refuted: { key: string; blob: string | null; evidence: string; run: string; at: IsoTime }[]
+}
+
+export const CANDIDATE_RESULTS = ['confirmed', 'refuted', 'unverifiable', 'unanswered'] as const
+export type CandidateResult = (typeof CANDIDATE_RESULTS)[number]
+
+export type SentCandidate = ReviewFinding & { id: string; key: string }
+
+// A candidate the verifier left out is unanswered, with no evidence.
+export type CandidateAnswer = SentCandidate & { result: CandidateResult; evidence: string }
 
 export interface NoteRecord {
   at: IsoTime

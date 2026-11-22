@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { crc32, deflateRawSync } from 'node:zlib'
 import { parse, stringify } from 'yaml'
 import { freshPr, versionTwoPr } from '../lib/ledger.mjs'
+import { matchKey } from '../lib/review.ts'
 import { runRecords } from '../lib/runs.mjs'
 import { fromVersionTwo } from '../lib/transitions.ts'
 
@@ -158,6 +159,32 @@ export function sampleReview() {
     fixed: [reviewFinding('medium', 'review.correctness', 'src/orders/total.ts', 30, 'The discount is applied twice', null)],
     leftOut: 0,
     candidates: [],
+  }
+}
+
+// A1 after a verifier of its head got sampleReview()'s high finding as X1 and its medium one as X2. It confirmed X1, which
+// became finding F1, and refuted X2. The fields go into an entry of samplePrs().
+export function answeredReview() {
+  const review = sampleReview()
+  const [, high, medium] = review.findings
+  const candidates = [
+    { id: 'X1', key: matchKey(high) },
+    { id: 'X2', key: matchKey(medium) },
+  ]
+
+  const external = [
+    { ...high, ...candidates[0], result: 'confirmed', evidence: 'src/orders/total.ts:44 adds every line.' },
+    { ...medium, ...candidates[1], result: 'refuted', evidence: 'src/orders/load.ts:9 caps the retries\nat three.' },
+  ]
+
+  const text = `External review finding (high, review.correctness) at src/orders/total.ts:42: ${high.title}.`
+  const verdict = { ...samplePrs().A1.verdict, verdict: 'FAIL', blocking: [text], external }
+
+  return {
+    review: { ...review, candidates },
+    verdict,
+    verdicts: [verdict],
+    findings: { at: at(80), items: [{ id: 'F1', text, answer: null, fromReview: candidates[0].key }] },
   }
 }
 

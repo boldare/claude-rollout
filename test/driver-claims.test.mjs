@@ -6,6 +6,7 @@ import { createDriver } from '../lib/driver.mjs'
 import { DRIVER_MARKER, setFetch } from '../lib/github.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { verifyPrompt } from '../lib/prompts.mjs'
+import { matchKey } from '../lib/review.ts'
 import { runStarted, verifyAgain } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
@@ -1447,7 +1448,10 @@ test('checkClaim: a review read for the head logs its counts, is stored, and a c
       findings: [HIGH, MEDIUM, LOW].map(storedFinding),
       fixed: [],
       leftOut: 0,
-      candidates: [],
+      candidates: [
+        { id: 'X1', key: matchKey(HIGH) },
+        { id: 'X2', key: matchKey(MEDIUM) },
+      ],
     },
   )
 
@@ -1494,7 +1498,7 @@ test('checkClaim: a stored result of the head and its run is used with no read, 
 
   assert.deepEqual(eventsSince(reused.manifest)[3], gateCheckEvent('external-review', 'pass', '1 candidate (1 high)'))
   assert.deepEqual(artifactRequests(reused.github), [])
-  assert.deepEqual(reused.entry.review, stored)
+  assert.deepEqual(reused.entry.review, { ...stored, candidates: [{ id: 'X1', key: matchKey(HIGH) }] })
   assert.deepEqual(reused.agentCalls, [{ id: 'A1', role: 'verify' }])
 
   const rerun = reviewDriver([TESTED, reviewRun('completed', 'success', { id: 3 })])
@@ -1588,6 +1592,95 @@ test('checkClaim: the pre-verify commands run while the review runs, and the wai
     eventsSince(manifest).filter((event) => event.item === 'external-review'),
     [gateCheckEvent('external-review', 'pass', '2 candidates (1 high, 1 medium), 1 below medium')],
   )
+})
+
+// The candidates section of the verifier's prompt, up to the findings to re-check when it has some.
+function candidatesSection(prompt) {
+  const start = prompt.indexOf('\n## Candidates from an external review\n')
+
+  assert.ok(start > -1, prompt)
+
+  const end = prompt.indexOf('\n## Findings to re-check\n', start)
+
+  return prompt.slice(start, end === -1 ? prompt.length : end)
+}
+
+test('checkClaim: the launch fixes the candidates of the review of the head, and the verifier gets them high first', async () => {
+  const { driver, pr, entry, prompts } = reviewDriver([TESTED, reviewRun('completed', 'success')])
+
+  await driver.advance(pr)
+
+  assert.deepEqual(entry.review.candidates, [
+    { id: 'X1', key: matchKey(HIGH) },
+    { id: 'X2', key: matchKey(MEDIUM) },
+  ])
+
+  assert.equal(prompts.length, 1)
+
+  const section = candidatesSection(prompts[0])
+
+  assert.ok(section.includes('\n### X1 (high)\n\n- Criterion: review.correctness\n- Location: src/orders/total.ts:42\n'), section)
+  assert.ok(section.includes('\n### X2 (medium)\n\n- Criterion: review.errors\n- Location: src/orders/refund.ts:18\n'), section)
+  assert.ok(section.indexOf('### X2') > section.indexOf('### X1'))
+  assert.equal(prompts[0].includes(LOW.title), false, 'a finding below minSeverity reaches no prompt')
+  assert.equal(section.includes('### X3'), false)
+})
+
+test('checkClaim: a review finding that is already a finding to re-check is no candidate', async () => {
+  const { driver, pr, entry, prompts } = reviewDriver([TESTED, reviewRun('completed', 'success')])
+  const confirmed = { id: 'F1', text: 'External review finding (high) of the earlier verifier.', answer: null, fromReview: matchKey(HIGH) }
+
+  entry.findings = { at: at(1), items: [confirmed, { id: 'F2', text: 'README.md:3 still names the old flag.', answer: null }] }
+  await driver.advance(pr)
+
+  assert.deepEqual(entry.review.candidates, [{ id: 'X1', key: matchKey(MEDIUM) }])
+
+  const section = candidatesSection(prompts[0])
+
+  assert.ok(section.includes('\n### X1 (medium)\n\n- Criterion: review.errors\n'), section)
+  assert.equal(section.includes(HIGH.title), false)
+  assert.ok(prompts[0].includes('### F1\n\nFinding:\n\nExternal review finding (high) of the earlier verifier.'))
+})
+
+test('checkClaim: the verifier gets at most 20 candidates, so the 21st finding reaches no prompt', async () => {
+  const findings = Array.from({ length: 21 }, (_, i) => ({ ...HIGH, title: `High finding ${i + 1}`, line: i + 1 }))
+  const { driver, pr, entry, prompts } = reviewDriver([TESTED, reviewRun('completed', 'success')], {
+    routes: { json: reviewJson({ findings }) },
+  })
+
+  await driver.advance(pr)
+
+  assert.equal(entry.review.candidates.length, 20)
+  assert.deepEqual(entry.review.candidates.at(-1), { id: 'X20', key: matchKey(findings[19]) })
+
+  const section = candidatesSection(prompts[0])
+
+  assert.ok(section.includes('\n### X20 (high)\n'), section)
+  assert.ok(section.includes('- Title: High finding 20\n'), section)
+  assert.equal(section.includes('### X21'), false)
+  assert.equal(prompts[0].includes('High finding 21'), false)
+})
+
+test('checkClaim: without the key the launch fixes no candidate, and the prompt lists none', async () => {
+  const { driver, pr, entry, prompts } = verifiableDriver()
+
+  entry.review = {
+    sha: SHA,
+    at: at(1),
+    run: 2,
+    reusedFrom: null,
+    skipped: null,
+    findings: [storedFinding(HIGH)],
+    fixed: [],
+    leftOut: 0,
+    candidates: [{ id: 'X1', key: matchKey(HIGH) }],
+  }
+
+  await driver.advance(pr)
+
+  assert.deepEqual(entry.review.candidates, [])
+  assert.equal(prompts.length, 1)
+  assert.equal(prompts[0].includes('\n## Candidates from an external review\n'), false)
 })
 
 test('mergeCandidate: a new code scanning alert drops the verification and goes back to the implementer', async () => {

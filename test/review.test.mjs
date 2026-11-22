@@ -1,6 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { artifactName, candidates, matchKey, MAX_FINDINGS, parseReview, REVIEW_ARTIFACT, REVIEW_FILE } from '../lib/review.ts'
+import {
+  artifactName,
+  candidates,
+  matchKey,
+  MAX_CANDIDATES,
+  MAX_FINDINGS,
+  oneLine,
+  parseReview,
+  REVIEW_ARTIFACT,
+  REVIEW_FILE,
+  selectCandidates,
+  sentCandidates,
+} from '../lib/review.ts'
 import { REVIEW_SEVERITIES } from '../lib/state.ts'
 
 const REVISION = '4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d'
@@ -297,4 +309,90 @@ test('artifactName puts the PR number in for every {pr}, and the severities are 
   assert.equal(artifactName('agent-review', 3), 'agent-review')
   assert.equal(REVIEW_FILE, 'review.json')
   assert.deepEqual(REVIEW_SEVERITIES, ['high', 'medium', 'low'])
+})
+
+// The key of a finding built with finding().
+function keyOf(severity, title) {
+  return matchKey(mapped(finding(severity, title)))
+}
+
+test('selectCandidates: the findings at or above minSeverity, high first and in the file order, as X1, X2 and on', () => {
+  const findings = [
+    mapped(finding('low', 'low 1')),
+    mapped(finding('medium', 'medium 1')),
+    mapped(finding('high', 'high 1')),
+    mapped(finding('high', 'high 2')),
+  ]
+
+  assert.deepEqual(selectCandidates({ findings }, 'medium', []), [
+    { id: 'X1', key: keyOf('high', 'high 1') },
+    { id: 'X2', key: keyOf('high', 'high 2') },
+    { id: 'X3', key: keyOf('medium', 'medium 1') },
+  ])
+
+  assert.deepEqual(
+    selectCandidates({ findings }, 'high', []).map((candidate) => candidate.key),
+    [keyOf('high', 'high 1'), keyOf('high', 'high 2')],
+  )
+
+  assert.equal(selectCandidates({ findings }, 'low', []).length, 4)
+  assert.deepEqual(selectCandidates({ findings: [] }, 'low', []), [])
+})
+
+test('selectCandidates: one candidate per key, and none for a key to re-check', () => {
+  const findings = [
+    mapped(finding('medium', 'twice', { line: 3 })),
+    mapped(finding('high', 'twice', { line: 9 })),
+    mapped(finding('high', 'kept')),
+    mapped(finding('high', 'already a finding')),
+  ]
+
+  assert.deepEqual(selectCandidates({ findings }, 'medium', [keyOf('high', 'already a finding'), 'a key of no finding']), [
+    { id: 'X1', key: keyOf('high', 'twice') },
+    { id: 'X2', key: keyOf('high', 'kept') },
+  ])
+})
+
+test('selectCandidates: the first 20, so the 21st finding is left out', () => {
+  const findings = Array.from({ length: 21 }, (_, i) => mapped(finding('high', `high ${i + 1}`)))
+  const selected = selectCandidates({ findings }, 'medium', [])
+
+  assert.equal(MAX_CANDIDATES, 20)
+  assert.equal(selected.length, 20)
+  assert.deepEqual(selected.at(-1), { id: 'X20', key: keyOf('high', 'high 20') })
+  assert.equal(
+    selected.some((candidate) => candidate.key === keyOf('high', 'high 21')),
+    false,
+  )
+
+  const recheck = [keyOf('high', 'high 2')]
+
+  assert.deepEqual(selectCandidates({ findings }, 'medium', recheck).at(-1), { id: 'X20', key: keyOf('high', 'high 21') })
+})
+
+test('sentCandidates: each candidate with the fields of the first finding of its key, in the order fixed', () => {
+  const first = mapped(finding('high', 'twice', { line: 3 }))
+  const second = mapped(finding('high', 'twice', { line: 9 }))
+  const other = mapped(finding('medium', 'other'))
+  const review = {
+    findings: [other, first, second],
+    candidates: [
+      { id: 'X1', key: matchKey(first) },
+      { id: 'X2', key: 'a key of no finding' },
+      { id: 'X3', key: matchKey(other) },
+    ],
+  }
+
+  assert.deepEqual(sentCandidates(review), [
+    { ...first, id: 'X1', key: matchKey(first) },
+    { ...other, id: 'X3', key: matchKey(other) },
+  ])
+
+  assert.deepEqual(sentCandidates({ findings: [first], candidates: [] }), [])
+})
+
+test('oneLine: each run of control characters, line breaks included, becomes one space', () => {
+  assert.equal(oneLine('A flag\r\n\tnamed tmp\n\u001b[31mred'), 'A flag named tmp [31mred')
+  assert.equal(oneLine('plain text'), 'plain text')
+  assert.equal(oneLine(''), '')
 })
