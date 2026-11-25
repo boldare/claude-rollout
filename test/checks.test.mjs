@@ -166,6 +166,38 @@ test('reviewRun is the run that speaks for the review check, an uncancelled one 
   assert.equal(summarizeChecks([TESTED, run(4, 'agent review (comment)', 'queued')], ['test'], [], REVIEW_CHECK).reviewRun, null)
 })
 
+test('a skipped review run is silent like a cancelled one, unless every run is silent', () => {
+  const reviewRunAfter = (...reviews) => summarizeChecks([TESTED, ...reviews], ['test'], [], REVIEW_CHECK)
+  const ended = (id, conclusion) => run(id, REVIEW_CHECK, 'completed', conclusion)
+  const reviewed = reviewRunAfter(ended(2, 'success'), ended(3, 'skipped'), ended(4, 'skipped'))
+
+  assert.deepEqual(reviewed.reviewRun, { id: 2, status: 'completed', conclusion: 'success', startedAt: null })
+  assert.equal(reviewed.state, 'green')
+
+  const cases = [
+    [[ended(2, 'success'), ended(3, 'failure'), ended(4, 'skipped')], 3],
+    [[ended(2, 'success'), run(3, REVIEW_CHECK, 'in_progress'), ended(4, 'skipped')], 3],
+    [[ended(2, 'success'), ended(3, 'skipped'), ended(4, 'failure')], 4],
+    [[ended(2, 'skipped'), ended(3, 'skipped')], 3],
+    [[ended(4, 'cancelled'), ended(6, 'skipped')], 6],
+    [[ended(4, 'skipped'), ended(6, 'cancelled')], 6],
+  ]
+
+  for (const [reviews, id] of cases) {
+    const label = reviews.map((review) => `${review.conclusion ?? review.status} ${review.id}`).join(', ')
+
+    assert.equal(reviewRunAfter(...reviews).reviewRun.id, id, label)
+  }
+})
+
+test('with a review check name, a skipped run of another check counts as before', () => {
+  const runs = [TESTED, run(2, 'test', 'completed', 'skipped'), run(3, REVIEW_CHECK, 'completed', 'success')]
+  const summary = summarizeChecks(runs, ['test'], [], REVIEW_CHECK)
+
+  assert.equal(summary.state, 'red')
+  assert.deepEqual(summary.failing, ['required check test did not run (test: skipped)'])
+})
+
 test('with a review check name, a failed run of another check is still red', () => {
   const runs = [TESTED, run(2, 'lint', 'completed', 'failure'), run(3, REVIEW_CHECK, 'completed', 'success')]
   const summary = summarizeChecks(runs, ['test'], [], REVIEW_CHECK)

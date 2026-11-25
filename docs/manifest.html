@@ -1143,7 +1143,11 @@ prs:
           </li>
         </ul>
 
-        <p>When the claim reaches the review, the review's latest run on the head decides:</p>
+        <p>
+          A head can hold several runs of the review's check. A run that ended as <code>skipped</code> or <code>cancelled</code> says
+          nothing about the review. So the newest run that ended any other way, or has not ended, speaks. When every run ended as
+          <code>skipped</code> or <code>cancelled</code>, the newest of them speaks, and the claim skips at once. That run decides:
+        </p>
 
         <div class="scroll">
           <table class="fields">
@@ -1212,6 +1216,15 @@ prs:
         <p>
           Any other error, such as a server error or a rate limit, is no skip. It counts as an error of the PR, like any failed GitHub read,
           and the next tick reads again.
+        </p>
+
+        <p>
+          A review workflow that starts on <code>labeled</code> and reviews for one label only leaves a skipped run of its job for every
+          other label. That includes the driver's own <code>rollout-stage:&lt;stage&gt;</code> and
+          <code>rollout-status:&lt;code&gt;</code> labels. Those runs never hide the run that reviewed. Until the review's label is added,
+          the head has no run that speaks, so a claim that reaches the review skips. A review asked for once the PR is verified is read at
+          <a href="how-it-works.html#gate">the merge gate</a>. It shows as <code>[review: N new]</code> and on the card, and no verifier
+          reads it.
         </p>
 
         <p>The driver checks <code>review.json</code> against this contract. The file:</p>
