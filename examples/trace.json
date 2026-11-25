@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-12-01T10:42:07.000Z",
+  "pr": { "id": "A3", "number": 42, "base": "main", "author": "example-bot" },
+  "policy": { "merge": "human", "approval": "inbox" },
+  "place": { "stage": "merge", "status": "waiting", "code": "merge-delay" },
+  "head": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+  "attempts": { "brief": 1, "implement": 1, "fix": 1, "verify": 2 },
+  "runs": [
+    {
+      "run": "A3-01-brief-write",
+      "role": "brief",
+      "step": "write",
+      "effort": "high",
+      "model": "example-model-1",
+      "sha": null,
+      "started_at": "2026-12-01T08:00:00.000Z",
+      "ended_at": "2026-12-01T08:06:10.000Z",
+      "seconds": 370,
+      "cost_usd": 1.12,
+      "ok": true,
+      "result": null
+    },
+    {
+      "run": "A3-01-implement",
+      "role": "implement",
+      "step": null,
+      "effort": "xhigh",
+      "model": "example-model-1",
+      "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "started_at": "2026-12-01T08:07:00.000Z",
+      "ended_at": "2026-12-01T08:55:00.000Z",
+      "seconds": 2880,
+      "cost_usd": 6.02,
+      "ok": true,
+      "result": "READY"
+    },
+    {
+      "run": "A3-01-verify",
+      "role": "verify",
+      "step": null,
+      "effort": "high",
+      "model": "example-model-1",
+      "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "started_at": "2026-12-01T09:10:00.000Z",
+      "ended_at": "2026-12-01T09:21:30.000Z",
+      "seconds": 690,
+      "cost_usd": 2.4,
+      "ok": true,
+      "result": "FAIL"
+    },
+    {
+      "run": "A3-01-fix",
+      "role": "fix",
+      "step": null,
+      "effort": "xhigh",
+      "model": "example-model-1",
+      "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+      "started_at": "2026-12-01T09:25:00.000Z",
+      "ended_at": "2026-12-01T09:50:00.000Z",
+      "seconds": 1500,
+      "cost_usd": 1.9,
+      "ok": true,
+      "result": "READY"
+    },
+    {
+      "run": "A3-02-verify",
+      "role": "verify",
+      "step": null,
+      "effort": "high",
+      "model": "example-model-1",
+      "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+      "started_at": "2026-12-01T10:18:00.000Z",
+      "ended_at": "2026-12-01T10:30:00.000Z",
+      "seconds": 720,
+      "cost_usd": 0.9,
+      "ok": true,
+      "result": "PASS"
+    }
+  ],
+  "cost": { "total_usd": 12.34, "by_role": { "brief": 1.12, "implement": 6.02, "fix": 1.9, "verify": 3.3 } },
+  "verified": { "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d", "patch_id": "9b2d4e1f", "at": "2026-12-01T10:30:00.000Z" },
+  "verifications": [
+    {
+      "run": "A3-01-verify",
+      "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "at": "2026-12-01T09:21:30.000Z",
+      "verdict": "FAIL",
+      "blocking": 1,
+      "criteria": [{ "id": "tests-cover-the-change", "level": "required", "result": "pass" }],
+      "rechecks": []
+    },
+    {
+      "run": "A3-02-verify",
+      "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+      "at": "2026-12-01T10:30:00.000Z",
+      "verdict": "PASS",
+      "blocking": 0,
+      "criteria": [{ "id": "tests-cover-the-change", "level": "required", "result": "pass" }],
+      "rechecks": [{ "finding": "F1", "result": "resolved", "from_review": true }]
+    }
+  ],
+  "review": {
+    "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+    "run": 9100200300,
+    "skipped": null,
+    "reused_from": null,
+    "findings": 1,
+    "candidates": 1
+  },
+  "review_findings": [
+    {
+      "criterion": "review.correctness",
+      "file": "src/orders/total.ts",
+      "title": "The total ignores a refunded line",
+      "severity": "high",
+      "answers": [{ "run": "A3-01-verify", "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", "id": "X1", "result": "confirmed" }],
+      "rechecks": [{ "run": "A3-02-verify", "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d", "result": "resolved" }]
+    },
+    {
+      "criterion": "review.naming",
+      "file": "src/orders/total.ts",
+      "title": "A flag named tmp",
+      "severity": "medium",
+      "answers": [{ "run": "A3-01-verify", "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", "id": "X2", "result": "refuted" }],
+      "rechecks": []
+    }
+  ],
+  "approval": {
+    "channel": "inbox",
+    "by": "octocat",
+    "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+    "patch_id": "9b2d4e1f",
+    "at": "2026-12-01T10:40:00.000Z",
+    "github_review": 7700112233
+  },
+  "merged": null,
+  "missing": []
+}
