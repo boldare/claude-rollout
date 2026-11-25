@@ -1,0 +1,250 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "updated_at": { "type": "string" },
+    "pr": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "number": { "type": ["integer", "null"], "minimum": 1 },
+        "base": { "type": ["string", "null"] },
+        "author": { "type": ["string", "null"] }
+      },
+      "required": ["id", "number", "base", "author"],
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "merge": { "type": "string", "enum": ["human", "manual", "auto"] },
+        "approval": { "type": "string", "enum": ["inbox", "github"] }
+      },
+      "required": ["merge", "approval"],
+      "additionalProperties": false
+    },
+    "place": {
+      "type": "object",
+      "properties": {
+        "stage": { "type": "string", "enum": ["brief", "implement", "pre-verify", "verify", "merge", "merged"] },
+        "status": { "type": ["string", "null"], "enum": ["running", "waiting", "needs-you", null] },
+        "code": { "type": ["string", "null"] }
+      },
+      "required": ["stage", "status", "code"],
+      "additionalProperties": false
+    },
+    "head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+    "attempts": {
+      "type": "object",
+      "properties": {
+        "brief": { "type": "integer", "minimum": 0 },
+        "implement": { "type": "integer", "minimum": 0 },
+        "fix": { "type": "integer", "minimum": 0 },
+        "verify": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["brief", "implement", "fix", "verify"],
+      "additionalProperties": false
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "run": { "type": "string" },
+          "role": { "type": "string", "enum": ["brief", "implement", "fix", "verify", "delegate"] },
+          "step": { "type": ["string", "null"] },
+          "effort": { "type": ["string", "null"] },
+          "model": { "type": ["string", "null"] },
+          "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+          "started_at": { "type": ["string", "null"] },
+          "ended_at": { "type": ["string", "null"] },
+          "seconds": { "type": ["number", "null"], "minimum": 0 },
+          "cost_usd": { "type": "number", "minimum": 0 },
+          "ok": { "type": ["boolean", "null"] },
+          "result": { "type": ["string", "null"] }
+        },
+        "required": ["run", "role", "step", "effort", "model", "sha", "started_at", "ended_at", "seconds", "cost_usd", "ok", "result"],
+        "additionalProperties": false
+      }
+    },
+    "cost": {
+      "type": "object",
+      "properties": {
+        "total_usd": { "type": "number", "minimum": 0 },
+        "by_role": {
+          "type": "object",
+          "properties": {
+            "brief": { "type": "number", "minimum": 0 },
+            "implement": { "type": "number", "minimum": 0 },
+            "fix": { "type": "number", "minimum": 0 },
+            "verify": { "type": "number", "minimum": 0 },
+            "delegate": { "type": "number", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["total_usd", "by_role"],
+      "additionalProperties": false
+    },
+    "verified": {
+      "type": ["object", "null"],
+      "properties": {
+        "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+        "patch_id": { "type": ["string", "null"] },
+        "at": { "type": "string" }
+      },
+      "required": ["sha", "patch_id", "at"],
+      "additionalProperties": false
+    },
+    "verifications": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "properties": {
+          "run": { "type": ["string", "null"] },
+          "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+          "at": { "type": ["string", "null"] },
+          "verdict": { "type": "string", "enum": ["PASS", "FAIL"] },
+          "blocking": { "type": "integer", "minimum": 0 },
+          "criteria": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "level": { "type": "string", "enum": ["required", "recommended"] },
+                "result": { "type": "string", "enum": ["pass", "fail", "unverifiable"] }
+              },
+              "required": ["id", "level", "result"],
+              "additionalProperties": false
+            }
+          },
+          "rechecks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "finding": { "type": ["string", "null"], "pattern": "^F[0-9]+$" },
+                "result": { "type": "string", "enum": ["resolved", "open", "wrong"] },
+                "from_review": { "type": ["boolean", "null"] }
+              },
+              "required": ["finding", "result", "from_review"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["run", "sha", "at", "verdict", "blocking", "criteria", "rechecks"],
+        "additionalProperties": false
+      }
+    },
+    "review": {
+      "type": ["object", "null"],
+      "properties": {
+        "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+        "run": { "type": ["integer", "null"] },
+        "skipped": { "type": ["string", "null"], "maxLength": 300 },
+        "reused_from": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,64}$" },
+        "findings": { "type": "integer", "minimum": 0 },
+        "candidates": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["sha", "run", "skipped", "reused_from", "findings", "candidates"],
+      "additionalProperties": false
+    },
+    "review_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion": { "type": ["string", "null"], "maxLength": 100 },
+          "file": { "type": ["string", "null"], "maxLength": 300 },
+          "title": { "type": ["string", "null"], "maxLength": 200 },
+          "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "run": { "type": ["string", "null"] },
+                "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+                "id": { "type": "string" },
+                "result": { "type": "string", "enum": ["confirmed", "refuted", "unverifiable", "unanswered"] }
+              },
+              "required": ["run", "sha", "id", "result"],
+              "additionalProperties": false
+            }
+          },
+          "rechecks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "run": { "type": ["string", "null"] },
+                "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+                "result": { "type": "string", "enum": ["resolved", "open", "wrong"] }
+              },
+              "required": ["run", "sha", "result"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["criterion", "file", "title", "severity", "answers", "rechecks"],
+        "additionalProperties": false
+      }
+    },
+    "approval": {
+      "type": ["object", "null"],
+      "properties": {
+        "channel": { "type": ["string", "null"], "enum": ["inbox", "github", null] },
+        "by": { "type": ["string", "null"] },
+        "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+        "patch_id": { "type": ["string", "null"] },
+        "at": { "type": "string" },
+        "github_review": { "type": ["integer", "null"] }
+      },
+      "required": ["channel", "by", "sha", "patch_id", "at", "github_review"],
+      "additionalProperties": false
+    },
+    "merged": {
+      "type": ["object", "null"],
+      "properties": {
+        "sha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+        "at": { "type": "string" },
+        "by": { "type": "string", "enum": ["driver", "github"] }
+      },
+      "required": ["sha", "at", "by"],
+      "additionalProperties": false
+    },
+    "missing": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "field": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": ["field", "reason"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "updated_at",
+    "pr",
+    "policy",
+    "place",
+    "head",
+    "attempts",
+    "runs",
+    "cost",
+    "verified",
+    "verifications",
+    "review",
+    "review_findings",
+    "approval",
+    "merged",
+    "missing"
+  ],
+  "additionalProperties": false
+}

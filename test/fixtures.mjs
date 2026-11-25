@@ -193,6 +193,208 @@ export function answeredReview() {
   }
 }
 
+const TRACE_FIRST = '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b'
+const TRACE_HEAD = '4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d'
+
+// A run record with the keys the ledger gives one, plus the commit a later driver stores on it.
+function traceRun(run, fields) {
+  return {
+    id: 'A3',
+    role: null,
+    step: null,
+    reason: null,
+    startedAt: null,
+    endedAt: null,
+    effort: null,
+    model: 'example-model-1',
+    requestedModel: 'example-model-0',
+    resume: false,
+    log: `logs/${run}.jsonl`,
+    ok: true,
+    result: null,
+    costUsd: null,
+    seconds: null,
+    awakeSeconds: null,
+    denials: null,
+    stopped: false,
+    error: null,
+    ...fields,
+  }
+}
+
+// The records of examples/trace.json, out of time order, and one of another PR.
+function traceRuns() {
+  return {
+    'A3-01-fix': traceRun('A3-01-fix', {
+      role: 'fix',
+      reason: 'verifier-findings',
+      startedAt: '2026-12-01T09:25:00.000Z',
+      endedAt: '2026-12-01T09:50:00.000Z',
+      effort: 'xhigh',
+      resume: true,
+      result: 'READY',
+      costUsd: 1.9,
+      seconds: 1500,
+      awakeSeconds: 1500,
+      sha: TRACE_HEAD,
+    }),
+    'A3-01-implement': traceRun('A3-01-implement', {
+      role: 'implement',
+      startedAt: '2026-12-01T08:07:00.000Z',
+      endedAt: '2026-12-01T08:55:00.000Z',
+      effort: 'xhigh',
+      result: 'READY',
+      costUsd: 6.02,
+      seconds: 2880,
+      awakeSeconds: 2880,
+      sha: TRACE_FIRST,
+    }),
+    'A1-01-implement': traceRun('A1-01-implement', {
+      id: 'A1',
+      role: 'implement',
+      startedAt: '2026-12-01T08:30:00.000Z',
+      endedAt: '2026-12-01T09:00:00.000Z',
+      effort: 'xhigh',
+      result: 'READY',
+      costUsd: 3.5,
+      seconds: 1800,
+      awakeSeconds: 1800,
+      sha: 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+    }),
+    'A3-02-verify': traceRun('A3-02-verify', {
+      role: 'verify',
+      startedAt: '2026-12-01T10:18:00.000Z',
+      endedAt: '2026-12-01T10:30:00.000Z',
+      effort: 'high',
+      result: 'PASS',
+      costUsd: 0.9,
+      seconds: 720,
+      awakeSeconds: 720,
+      sha: TRACE_HEAD,
+    }),
+    // The driver stores BRIEF as the result of a brief run. The example shows a brief run with no result.
+    'A3-01-brief-write': traceRun('A3-01-brief-write', {
+      role: 'brief',
+      step: 'write',
+      startedAt: '2026-12-01T08:00:00.000Z',
+      endedAt: '2026-12-01T08:06:10.000Z',
+      effort: 'high',
+      result: null,
+      costUsd: 1.12,
+      seconds: 370,
+      awakeSeconds: 370,
+      sha: null,
+    }),
+    'A3-01-verify': traceRun('A3-01-verify', {
+      role: 'verify',
+      startedAt: '2026-12-01T09:10:00.000Z',
+      endedAt: '2026-12-01T09:21:30.000Z',
+      effort: 'high',
+      result: 'FAIL',
+      costUsd: 2.4,
+      seconds: 690,
+      awakeSeconds: 690,
+      sha: TRACE_FIRST,
+    }),
+  }
+}
+
+// A3's two verdicts. The first confirmed X1 and refuted X2. The second re-checked X1's finding as F1. The prose in
+// them is there so a test can show none of it reaches the trace.
+function traceVerdicts() {
+  const correctness = reviewFinding('high', 'review.correctness', 'src/orders/total.ts', 42, 'The total ignores a refunded line', 'new')
+  const naming = reviewFinding('medium', 'review.naming', 'src/orders/total.ts', 12, 'A flag named tmp', 'new')
+  const text = `External review finding (high, review.correctness) at src/orders/total.ts:42: ${correctness.title}.`
+  const criterion = { id: 'tests-cover-the-change', level: 'required', text: 'Every changed module has a test that covers the change.' }
+  const first = {
+    verdict: 'FAIL',
+    sha: TRACE_FIRST,
+    summary: 'The order total still counts a line the customer got back.',
+    checklist: [{ item: 'the total sums the lines of an order', status: 'pass', evidence: 'npm test: 48 pass, 0 fail' }],
+    blocking: [text],
+    nonBlocking: ['The helper that sums the lines could take them as a list.'],
+    criteria: [{ ...criterion, result: 'pass', evidence: 'test/orders.test.mjs fails on the base and passes on this head.' }],
+    external: [
+      { ...correctness, id: 'X1', key: matchKey(correctness), result: 'confirmed', evidence: 'src/orders/total.ts:44 adds every line.' },
+      { ...naming, id: 'X2', key: matchKey(naming), result: 'refuted', evidence: 'src/orders/total.ts:12 names the flag isRefund.' },
+    ],
+    recheck: [],
+    at: '2026-12-01T09:21:30.000Z',
+    run: 'A3-01-verify',
+  }
+
+  const second = {
+    verdict: 'PASS',
+    sha: TRACE_HEAD,
+    summary: 'Every checklist item holds, and the total leaves out a line given back.',
+    checklist: [{ item: 'the total sums the lines of an order', status: 'pass', evidence: 'npm test: 52 pass, 0 fail' }],
+    blocking: [],
+    nonBlocking: ['A comment above the sum could name the rule it follows.'],
+    criteria: [{ ...criterion, result: 'pass', evidence: 'test/orders.test.mjs:30 covers a line given back.' }],
+    external: [],
+    recheck: [
+      {
+        id: 'F1',
+        status: 'resolved',
+        evidence: 'src/orders/total.ts:44 skips a line given back.',
+        finding: text,
+        answer: { outcome: 'fixed', action: 'Skipped the lines given back and added a test for them.' },
+        fromReview: matchKey(correctness),
+      },
+    ],
+    at: '2026-12-01T10:30:00.000Z',
+    run: 'A3-02-verify',
+  }
+
+  return [first, second]
+}
+
+// The inputs of examples/trace.json: A3 waits out the merge delay after an approval from the inbox.
+export function traceSample() {
+  const [first, second] = traceVerdicts()
+  const entry = {
+    ...freshPr('merge', '2026-12-01T10:30:00.000Z'),
+    status: { kind: 'waiting', code: 'merge-delay', since: '2026-12-01T10:40:00.000Z', until: '2026-12-01T10:45:00.000Z' },
+    pr: 42,
+    author: 'example-bot',
+    claimedSha: TRACE_HEAD,
+    costUsd: 12.34,
+    attempts: { implement: 1, fix: 1, verify: 2, brief: 1 },
+    verified: { sha: TRACE_HEAD, patchId: '9b2d4e1f', at: '2026-12-01T10:30:00.000Z' },
+    verdicts: [first, second],
+    verdict: second,
+    // The verifier re-checked the finding as F1, so it was not a candidate again.
+    review: {
+      sha: TRACE_HEAD,
+      at: '2026-12-01T10:05:00.000Z',
+      run: 9100200300,
+      reusedFrom: null,
+      skipped: null,
+      findings: [reviewFinding('high', 'review.correctness', 'src/orders/total.ts', 42, 'The total ignores a refunded line', 'open')],
+      fixed: [],
+      leftOut: 0,
+      candidates: [],
+    },
+    approved: {
+      patchId: '9b2d4e1f',
+      sha: TRACE_HEAD,
+      at: '2026-12-01T10:40:00.000Z',
+      channel: 'inbox',
+      by: 'octocat',
+      review: 7700112233,
+      reviewError: null,
+    },
+  }
+
+  const manifest = {
+    repo: { base: 'main', denylist: [] },
+    policy: { merge: 'human', approval: 'inbox' },
+    gates: { verify: { externalFindings: { check: 'agent review', artifact: 'review-{pr}', minSeverity: 'medium' } } },
+  }
+
+  return { manifest, id: 'A3', entry, runs: traceRuns(), now: '2026-12-01T10:42:07.000Z' }
+}
+
 export function sampleEvents() {
   return [
     { at: at(0), id: '-', kind: 'driver-start', prs: ['A1', 'A2', 'A3'], dryRun: false, merge: 'human', pid: 1 },
