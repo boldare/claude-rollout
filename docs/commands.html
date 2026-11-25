@@ -323,6 +323,11 @@ P3   implement · running: implement  the implementer is working · 34m</code></
           <li>Since when and by whom it is held, and the reason.</li>
           <li>The verified head and patch id, the approved head, the author and how approval works for it.</li>
           <li>
+            With an approval, <code>approved by:</code> with the login that approved, or <code>an unknown login</code>, and whether the
+            approval is on GitHub too: a GitHub review, the id of the
+            <a href="how-it-works.html#approval-on-github">approving review</a> the driver submitted, or why it is not on GitHub.
+          </li>
+          <li>
             With <a href="manifest.html#policy-trace"><code>policy.trace: comment</code></a
             >, <code>trace:</code> with when the <a href="how-it-works.html#trace">trace</a> was written last, or why the last write failed.
           </li>
@@ -473,6 +478,13 @@ A2  verify · needs-you: dispute
           An approval that applies moves the PR to <code>merge · waiting: merge-delay</code> until the approval time plus
           <code>policy.mergeDelaySeconds</code>, or to <code>merge · waiting: held</code> under a hold. From the next tick on the gate
           writes its own verdict again.
+        </p>
+
+        <p>
+          Under <code>approval: inbox</code> the gate also submits the approval as an
+          <a href="how-it-works.html#approval-on-github">approving review on GitHub</a>, at the approved commit and as you, when another
+          account opened the PR. A PR you opened gets none. A failed review never holds the merge. The card's <code>approved by:</code> line
+          says whether the approval is on GitHub too.
         </p>
 
         <div class="callout">

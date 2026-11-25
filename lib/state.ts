@@ -285,8 +285,13 @@ export interface Verification extends CommitStamp {
 export interface Approval extends CommitStamp {
   patchId: string
   channel: Channel
-  // The maintainer who approved on GitHub. Null for an approval from the inbox.
+  // The login that approved, a maintainer's on GitHub or the driver's own for
+  // rollout approve. Null while the driver does not know it.
   by: GitHubLogin | null
+  // The id of the approving review the driver submitted on GitHub for rollout approve.
+  review: number | null
+  // Why the last try to submit that review failed.
+  reviewError: string | null
 }
 
 export interface Merged {

@@ -9,6 +9,7 @@ import type {
   CommitStamp,
   Drop,
   Fix,
+  GitHubLogin,
   Hold,
   IsoTime,
   NeedsYouCode,
@@ -85,6 +86,8 @@ export interface CommandsContext {
   inbox: () => unknown[]
   briefWritten: (id: string) => boolean
   approveRefusal: (entry: PrEntry) => string | null
+  // The driver's login once GitHub told it, or null.
+  login: () => GitHubLogin | null
 }
 
 // What commandEffect cannot read itself.
@@ -126,6 +129,7 @@ interface RowInput extends EffectFacts {
   say: Say
   channel: Channel
   record: boolean
+  login: GitHubLogin | null
 }
 
 interface Table {
@@ -392,6 +396,7 @@ function rowInput(context: CommandsContext, id: string, by: Author, { channel = 
     mergeDelaySeconds: manifest.policy.mergeDelaySeconds,
     approveRefusal: context.approveRefusal,
     hold: ledger.data.hold ?? null,
+    login: context.login(),
   }
 }
 
@@ -440,6 +445,8 @@ export function commandEffect(
     say: quiet,
     channel: 'inbox',
     record: true,
+    // The copy is thrown away, so the login it would record does not matter.
+    login: null,
   }
 
   const table = TABLES[command.cmd]
@@ -771,11 +778,11 @@ function approvalRejected({ id, say }: RowInput, { reason }: Refusal): void {
 }
 
 function approve(entry: PrEntry, input: RowInput): void {
-  const { id, say, at, mergeDelaySeconds } = input
+  const { id, say, at, mergeDelaySeconds, login } = input
   const { sha, patchId } = entry.verified as NonNullable<PrEntry['verified']>
   const until = new Date(Date.parse(at) + mergeDelaySeconds * 1000).toISOString()
 
-  transitions.approveInbox(entry, { patchId, sha, at, channel: 'inbox' }, { until, at })
+  transitions.approveInbox(entry, { patchId, sha, at, channel: 'inbox', by: login, review: null, reviewError: null }, { until, at })
   say(
     id,
     'approved',

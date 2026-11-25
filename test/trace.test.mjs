@@ -357,6 +357,37 @@ test('trace: a stored review null and a run not ended add no missing line', () =
   })
 })
 
+test('trace: an approval read on GitHub has no review id, and its missing line says the driver keeps none', () => {
+  const github = traceSample()
+  const older = traceSample()
+  const reviewLines = (trace) => trace.missing.filter((line) => line.field === 'approval.github_review')
+
+  github.entry.approved = { patchId: '9b2d4e1f', sha: HEAD, at: '2026-12-01T10:40:00.000Z', channel: 'github', by: 'octocat' }
+  delete older.entry.approved.review
+
+  const fromGithub = traceFrom(github)
+
+  assert.deepEqual([fromGithub.approval.by, fromGithub.approval.github_review], ['octocat', null])
+  assert.deepEqual(check(SCHEMA, fromGithub), [])
+  assert.deepEqual(reviewLines(fromGithub), [
+    { field: 'approval.github_review', reason: 'the driver keeps no id of a review it read on GitHub' },
+  ])
+
+  assert.deepEqual(reviewLines(traceFrom(older)), [
+    { field: 'approval.github_review', reason: 'the approval was recorded before the driver stored its GitHub review' },
+  ])
+})
+
+test('trace: an inbox approval with its login and review id writes both, with no missing line for them', () => {
+  const trace = traceFrom(traceSample())
+
+  assert.deepEqual([trace.approval.channel, trace.approval.by, trace.approval.github_review], ['inbox', 'octocat', 7700112233])
+  assert.deepEqual(
+    fields(trace).filter((field) => field.startsWith('approval.')),
+    [],
+  )
+})
+
 test('trace: an older merged entry gives a trace that passes the schema', () => {
   const sample = traceSample()
   const entry = {

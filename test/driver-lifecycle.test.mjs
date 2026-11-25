@@ -11,7 +11,7 @@ import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { readEvents } from '../lib/view.mjs'
 import { mirrorPath, worktreePath } from '../lib/worktree.mjs'
-import { fakeGitHubRepo, makeRollout, waitFor } from './fixtures.mjs'
+import { fakeGitHubRepo, makeRollout, REPO_LOGIN, waitFor } from './fixtures.mjs'
 import { MAINTAINER_TOKEN, agentResult, apply, placeOf } from './driver-helpers.mjs'
 
 // One PR through the real driver, on real git: a bare origin, repo.path
@@ -317,6 +317,15 @@ test('lifecycle: one PR goes from pending to merged, squashed into the origin, a
   assert.deepEqual(statuses(openLists), [200])
   assert.deepEqual(setup.github.ghCalls(), [merge])
   assert.ok(setup.notices.includes(`A1: merged PR #${number}`))
+
+  const reviews = setup.github.reviews(number)
+
+  assert.deepEqual(
+    reviews.map((review) => [review.state, review.commit_id]),
+    [['APPROVED', head]],
+  )
+
+  assert.deepEqual([setup.entry.approved.review, setup.entry.approved.by], [reviews[0].id, REPO_LOGIN])
   assertNoTrouble(setup)
 })
 

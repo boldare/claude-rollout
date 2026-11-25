@@ -454,7 +454,9 @@ function approvalLines(approved: StoredApproval, by: Screened): TraceMissing[] {
     lines.push({ field: 'approval.by', reason: 'the approval holds no login' })
   }
 
-  if (approved.review === undefined) {
+  if (approved.review === undefined && approved.channel === 'github') {
+    lines.push({ field: 'approval.github_review', reason: 'the driver keeps no id of a review it read on GitHub' })
+  } else if (approved.review === undefined) {
     lines.push({ field: 'approval.github_review', reason: 'the approval was recorded before the driver stored its GitHub review' })
   }
 

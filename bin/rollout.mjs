@@ -400,6 +400,10 @@ function card(manifest, id) {
 
   console.log(`author: ${entry.author ?? '?'}   approval: ${approvalLine(manifest, entry)}`)
 
+  if (entry.approvedBy !== null) {
+    console.log(`approved by: ${entry.approvedBy}`)
+  }
+
   if (entry.trace !== null) {
     console.log(`trace: ${entry.trace}`)
   }

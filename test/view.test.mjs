@@ -902,6 +902,25 @@ test('prDetail: the trace line says when the trace was written, why the last wri
   assert.equal(line(traced, { trace: { comment: null, digest: null, at: null, error: 'HTTP 502' } }), 'the last write failed: HTTP 502')
 })
 
+test('prDetail: approved by names who approved and whether the approval is on GitHub too', () => {
+  const manifest = loadManifest(makeRollout())
+  const inbox = { ...samplePrs().A1.approved, channel: 'inbox', review: null, reviewError: null }
+  const line = (approved) => prDetail(manifest, { prs: { A1: { ...samplePrs().A1, approved } } }, [], [], 'A1').approvedBy
+  const refusal = 'POST repos/example/widgets/pulls/11/reviews:\nHTTP 422:\tUnprocessable Entity'
+
+  assert.equal(line(null), null)
+  assert.equal(line({ ...inbox, channel: 'github', by: 'octocat' }), 'octocat, with a review on GitHub')
+  assert.equal(line({ ...inbox, by: 'demo-maintainer', review: 7700112233 }), 'demo-maintainer, on GitHub too as review 7700112233')
+  assert.equal(
+    line({ ...inbox, by: 'demo-maintainer', reviewError: refusal }),
+    'demo-maintainer, not on GitHub: POST repos/example/widgets/pulls/11/reviews: HTTP 422: Unprocessable Entity',
+  )
+
+  assert.equal(line({ ...inbox, by: 'demo-maintainer' }), 'demo-maintainer, not on GitHub')
+  assert.equal(line({ ...inbox, by: null }), 'an unknown login, not on GitHub')
+  assert.equal(line(samplePrs().A1.approved), 'an unknown login, not on GitHub')
+})
+
 test('prDetail: approval channel, brief paths, feedback and runs', () => {
   const dir = makeRollout()
   const manifest = loadManifest(dir)
