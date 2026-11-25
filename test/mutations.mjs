@@ -230,6 +230,13 @@ const MUTATIONS = [
     tests: ['test/checks.test.mjs'],
   },
   {
+    id: 'review-skipped-run-speaks',
+    file: 'lib/checks.mjs',
+    find: "const SILENT_REVIEW = new Set(['skipped', 'cancelled'])",
+    replace: "const SILENT_REVIEW = new Set(['cancelled'])",
+    tests: ['test/checks.test.mjs', 'test/driver-claims.test.mjs', 'test/driver-gate.test.mjs'],
+  },
+  {
     id: 'confirmed-candidate-adds-no-finding',
     file: 'lib/checks.mjs',
     find: 'findings: confirmed.map(candidateFinding)',
