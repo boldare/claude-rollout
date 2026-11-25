@@ -1347,6 +1347,9 @@ if (requested) {
 const GREEN_RUN = { id: 1, name: 'test', status: 'completed', conclusion: 'success' }
 const PAGING = ['per_page', 'page']
 
+// The login of the maintainer's token on the GitHub of fakeGitHubRepo.
+export const REPO_LOGIN = 'demo-maintainer'
+
 function originRef(origin, ref) {
   try {
     return execFileSync('git', ['-C', origin, 'rev-parse', '--verify', '--quiet', ref], { encoding: 'utf8' }).trim()
@@ -1414,7 +1417,35 @@ function onePull(state, _, number) {
 }
 
 function reviews(state, _, number) {
-  return pullOf(state, number) ? { status: 200, body: [] } : null
+  const pr = pullOf(state, number)
+
+  return pr ? { status: 200, body: pr.reviews ?? [] } : null
+}
+
+// As GitHub, an approval of one's own PR is refused.
+function submitReview(state, request, number) {
+  const pr = pullOf(state, number)
+
+  if (!pr || request.body?.event !== 'APPROVE') {
+    return null
+  }
+
+  if (pr.author === REPO_LOGIN) {
+    return { status: 422, body: { message: 'Unprocessable Entity' } }
+  }
+
+  const review = {
+    id: 7700112233 + state.prs.flatMap((item) => item.reviews ?? []).length,
+    user: { login: REPO_LOGIN },
+    state: 'APPROVED',
+    commit_id: request.body.commit_id,
+    body: request.body.body,
+    submitted_at: new Date().toISOString(),
+  }
+
+  pr.reviews = [...(pr.reviews ?? []), review]
+
+  return { status: 200, body: review }
 }
 
 function addLabels(state, request, number) {
@@ -1464,6 +1495,7 @@ const REPO_ROUTES = [
   { method: 'GET', path: /^pulls$/, answer: openPulls },
   { method: 'GET', path: /^pulls\/(\d+)$/, answer: onePull },
   { method: 'GET', path: /^pulls\/(\d+)\/reviews$/, answer: reviews },
+  { method: 'POST', path: /^pulls\/(\d+)\/reviews$/, answer: submitReview },
   { method: 'GET', path: /^code-scanning\/alerts$/, answer: () => ({ status: 200, body: [] }) },
   {
     method: 'GET',
@@ -1509,8 +1541,8 @@ export function fakeGitHubRepo(dir, { origin, base = 'main' }) {
   writeState({ repo: manifest.repo.github, origin, base, prs: [] })
 
   // As gh pr create: the number of the branch's open PR, or of a new one. A PR
-  // is { number, branch, title, labels, author, merged }, and merged is null
-  // or { sha, head, at }.
+  // is { number, branch, title, labels, author, merged, reviews }, merged is
+  // null or { sha, head, at }, and reviews is missing until one is submitted.
   function openPr({ branch, title, labels = [] }) {
     const state = readState()
     const open = state.prs.find((pr) => pr.branch === branch && !pr.merged)
@@ -1527,6 +1559,19 @@ export function fakeGitHubRepo(dir, { origin, base = 'main' }) {
     return number
   }
 
+  // The approving reviews submitted on the PR, as GitHub keeps them.
+  function reviewsOf(number) {
+    return pullOf(readState(), number)?.reviews ?? []
+  }
+
+  function answerOf(state, record, path) {
+    if (record.method === 'GET' && path === 'user') {
+      return { status: 200, body: { login: REPO_LOGIN } }
+    }
+
+    return path.startsWith(prefix) ? repoAnswer(state, record, path.slice(prefix.length)) : null
+  }
+
   async function fetch(input, init = {}) {
     const url = new URL(String(input))
     const method = init.method ?? 'GET'
@@ -1535,7 +1580,7 @@ export function fakeGitHubRepo(dir, { origin, base = 'main' }) {
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
     const record = { method, path, query: Object.fromEntries(url.searchParams), body, status: null }
     const state = readState()
-    const answer = path.startsWith(prefix) ? repoAnswer(state, record, path.slice(prefix.length)) : null
+    const answer = answerOf(state, record, path)
 
     log.push(record)
 
@@ -1566,7 +1611,7 @@ export function fakeGitHubRepo(dir, { origin, base = 'main' }) {
     return respond(200, answer.body, { etag })
   }
 
-  return { fetch, openPr, requests: () => log, ghCalls: () => readCalls(bin).map((call) => call.args) }
+  return { fetch, openPr, reviews: reviewsOf, requests: () => log, ghCalls: () => readCalls(bin).map((call) => call.args) }
 }
 
 // A root like ~/.rollouts: demo with a ledger and a brief, fresh without a

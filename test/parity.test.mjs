@@ -573,6 +573,48 @@ test('parity: the trace line reads the same in rollout card and on the PR page, 
   }
 })
 
+test('parity: the approved by line reads the same in rollout card and on the PR page, and neither shows one with no approval', () => {
+  const delay = sampleStatus('waiting', 'merge-delay')
+  const refusal = 'POST repos/example/widgets/pulls/104/reviews:\nHTTP 422: Unprocessable Entity'
+  const approved = {
+    sha: 'a1'.repeat(20),
+    patchId: 'patch-1',
+    at: at(85),
+    channel: 'inbox',
+    by: 'demo-maintainer',
+    review: null,
+    reviewError: null,
+  }
+
+  const prs = {
+    T1: written({ stage: 'merge', status: delay, pr: 101, approved: { ...approved, review: 7700112233 } }),
+    T2: written({ stage: 'merge', status: delay, pr: 102, approved: { ...approved, reviewError: refusal } }),
+    T3: written({ stage: 'merge', status: delay, pr: 103, approved }),
+    T4: written({ stage: 'merge', status: delay, pr: 104, approved: { ...approved, channel: 'github', by: 'octocat', review: undefined } }),
+    T5: written({ stage: 'merge', status: sampleStatus('needs-you', 'approve'), pr: 105, approved: null }),
+  }
+
+  const lines = {
+    T1: 'demo-maintainer, on GitHub too as review 7700112233',
+    T2: 'demo-maintainer, not on GitHub: POST repos/example/widgets/pulls/104/reviews: HTTP 422: Unprocessable Entity',
+    T3: 'demo-maintainer, not on GitHub',
+    T4: 'octocat, with a review on GitHub',
+  }
+
+  const dir = rolloutWith(prs)
+
+  for (const [id, line] of Object.entries(lines)) {
+    const field = fieldOf(pageOverview(dir, id), 'approved by')
+
+    assert.equal(cardLine(dir, id, 'approved by'), line, id)
+    assert.equal(field.textContent, line, id)
+    assert.equal(textOf(field, 'span.text'), line, id)
+  }
+
+  assert.equal(cardLine(dir, 'T5', 'approved by'), null)
+  assert.equal(fieldOf(pageOverview(dir, 'T5'), 'approved by'), null)
+})
+
 // The header of a PR's page, from the same model the page fetches.
 function pageHeader(dir, id) {
   const body = JSON.parse(JSON.stringify(rolloutPr(loadManifest(dir), id)))

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createClient, GitHubError } from '../lib/gh.mjs'
 import {
   alertsFrom,
+  approveOnGithub,
   baseChecks,
   checksFor,
   codeScanningFor,
@@ -14,6 +15,7 @@ import {
   commentAsAgents,
   deleteRemoteBranch,
   DRIVER_MARKER,
+  driverLogin,
   ensureLabel,
   feedbackFor,
   findPr,
@@ -21,6 +23,7 @@ import {
   forgetPr,
   ghError,
   githubUnavailable,
+  knownLogin,
   maintainerFeedback,
   merge,
   mergeCommit,
@@ -408,6 +411,69 @@ async function withAgentToken(use) {
 function sent(github) {
   return github.requests().map((request) => [request.method, request.path, request.headers.authorization])
 }
+
+const USER = { path: 'user', body: { login: 'demo-maintainer' } }
+const PR_7_REVIEWS = 'repos/example/widgets/pulls/7/reviews'
+const APPROVED_SHA = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'
+const APPROVING_BODY = `Approved through \`rollout approve\` at ${APPROVED_SHA}.\n\n${DRIVER_MARKER}`
+
+test('driverLogin: two calls make one GET user as the maintainer, and knownLogin is null before it and the login after', async () => {
+  const github = useGitHub([USER])
+  const manifest = plainManifest()
+
+  assert.equal(knownLogin(manifest), null)
+  assert.equal(await driverLogin(manifest), 'demo-maintainer')
+  assert.equal(await driverLogin(manifest), 'demo-maintainer')
+  assert.equal(knownLogin(manifest), 'demo-maintainer')
+  assert.deepEqual(sent(github), [['GET', 'user', `Bearer ${MAINTAINER_TOKEN}`]])
+})
+
+test('driverLogin: a failed read and an answer without a login are not kept, so the next call reads again', async () => {
+  const github = useGitHub([{ path: 'user', status: 500, body: { message: 'Server Error' } }])
+  const manifest = plainManifest()
+
+  await assert.rejects(driverLogin(manifest), { message: 'GET user: HTTP 500: Server Error' })
+  assert.equal(knownLogin(manifest), null)
+
+  for (const body of [{ id: 1 }, { login: '' }, { login: 7 }]) {
+    github.answer([{ path: 'user', body }])
+    await assert.rejects(driverLogin(manifest), { message: 'GET user: the answer holds no login' }, JSON.stringify(body))
+    assert.equal(knownLogin(manifest), null)
+  }
+
+  github.answer([USER])
+
+  assert.equal(await driverLogin(manifest), 'demo-maintainer')
+  assert.equal(github.requests().length, 5)
+})
+
+test('approveOnGithub: an approving review at the commit, as the maintainer even with an agents token, resolves to its id', async () => {
+  const github = useGitHub([{ method: 'POST', path: PR_7_REVIEWS, body: { id: 7700112233 } }])
+
+  assert.equal(await withAgentToken((manifest) => approveOnGithub(manifest, 7, APPROVED_SHA)), 7700112233)
+  assert.deepEqual(sent(github), [['POST', PR_7_REVIEWS, `Bearer ${MAINTAINER_TOKEN}`]])
+  assert.deepEqual(github.requests()[0].body, { commit_id: APPROVED_SHA, event: 'APPROVE', body: APPROVING_BODY })
+})
+
+test('approveOnGithub: an answer without an integer id rejects', async () => {
+  for (const body of [{}, { id: '7700112233' }, { id: 1.5 }]) {
+    useGitHub([{ method: 'POST', path: PR_7_REVIEWS, body }])
+
+    await assert.rejects(
+      approveOnGithub(plainManifest(), 7, APPROVED_SHA),
+      { message: `POST ${PR_7_REVIEWS}: the answer holds no review id` },
+      JSON.stringify(body),
+    )
+  }
+})
+
+test("maintainerFeedback: the approving review of rollout approve is no feedback under a maintainer's login, as APPROVED or COMMENTED", () => {
+  for (const state of ['APPROVED', 'COMMENTED']) {
+    const reviews = [review(41, 'maint', '2026-01-01T00:00:00Z', state, APPROVING_BODY)]
+
+    assert.deepEqual(maintainerFeedback(maintained, { inline: [], reviews, conversation: [] }), [], state)
+  }
+})
 
 test('writeTraceComment: with an id it edits that comment as the agents, with the body as it is and one driver marker', async () => {
   const body = sampleTraceBody()

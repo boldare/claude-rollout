@@ -264,6 +264,13 @@ const MUTATIONS = [
     replace: 'throw new Error(traceError)',
     tests: ['test/driver-gate.test.mjs'],
   },
+  {
+    id: 'refused-approval-review-holds-merge',
+    file: 'lib/driver/gate.ts',
+    find: 'reviewFailed(context, pr, entry, messageOf(error))',
+    replace: 'throw error',
+    tests: ['test/driver-gate.test.mjs'],
+  },
 ]
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))

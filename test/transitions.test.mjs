@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { versionTwoPr } from '../lib/ledger.mjs'
 import {
   answerBrief,
+  approvalBy,
+  approvalReviewError,
+  approvalReviewed,
   approveInbox,
   briefWaits,
   briefWritten,
@@ -1365,6 +1368,68 @@ test('approveInbox: the approval, and the merge delay from it', () => {
 
   assert.deepEqual(entry.approved, approval)
   assert.deepEqual([entry.stage, entry.status], ['merge', { kind: 'waiting', code: 'merge-delay', until: LATER, since: AT }])
+})
+
+function inboxApproved(fields = {}) {
+  const approved = { sha: SHA, patchId: 'patch-1', at: AT, channel: 'inbox', by: null, review: null, reviewError: null, ...fields }
+
+  return entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification(), approved })
+}
+
+test('approvalBy, approvalReviewed, approvalReviewError: nothing without an approval', () => {
+  const entry = entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification(), approved: null })
+
+  approvalBy(entry, 'demo-maintainer')
+  approvalReviewed(entry, 7700112233)
+  approvalReviewError(entry, 'POST repos/example/widgets/pulls/7/reviews: HTTP 422: Unprocessable Entity')
+
+  assert.equal(entry.approved, null)
+})
+
+test('approvalBy: the login goes on an approval with none, missing or null, and a login already there stays', () => {
+  const missing = inboxApproved()
+
+  delete missing.approved.by
+
+  for (const entry of [inboxApproved(), missing]) {
+    const { by: _, ...before } = entry.approved
+    const kept = entry.approved
+
+    approvalBy(entry, 'demo-maintainer')
+
+    assert.notEqual(entry.approved, kept)
+    assert.deepEqual(entry.approved, { ...before, by: 'demo-maintainer' })
+  }
+
+  const known = inboxApproved({ by: 'octocat' })
+
+  approvalBy(known, 'demo-maintainer')
+  assert.equal(known.approved.by, 'octocat')
+})
+
+test('approvalReviewed: the review id goes on the approval, and an earlier failure goes', () => {
+  const entry = inboxApproved({ by: 'demo-maintainer', reviewError: 'GET user: HTTP 500: Server Error' })
+  const before = entry.approved
+
+  approvalReviewed(entry, 7700112233)
+
+  assert.notEqual(entry.approved, before)
+  assert.deepEqual(entry.approved, { ...before, review: 7700112233, reviewError: null })
+})
+
+test('approvalReviewError: a failure is set, and null clears it', () => {
+  const entry = inboxApproved({ by: 'demo-maintainer' })
+  const before = entry.approved
+  const failure = 'POST repos/example/widgets/pulls/7/reviews: HTTP 422: Unprocessable Entity'
+
+  approvalReviewError(entry, failure)
+
+  assert.notEqual(entry.approved, before)
+  assert.deepEqual(entry.approved, { ...before, reviewError: failure })
+
+  approvalReviewError(entry, null)
+
+  assert.deepEqual(entry.approved, before)
 })
 
 test('toMergeStatus: a PR out of a needs-you status follows the stored rule', () => {

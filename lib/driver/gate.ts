@@ -27,6 +27,8 @@ const FIX_REASONS: ReadonlyMap<string, string> = new Map([
   ['code-scanning', 'code scanning'],
 ])
 
+const REVIEW_ERROR_LENGTH = 300
+
 type Say = (id: string, kind: string, detail?: object, message?: string | null) => void
 type StoredVerdict = NonNullable<PrEntry['gate']>
 
@@ -40,7 +42,7 @@ export interface GateManifest {
   dryRun: boolean
   prs: GatePr[]
   repo: { base: string }
-  policy: { merge: string; mergeDelaySeconds: number }
+  policy: { merge: string; approval: string; mergeDelaySeconds: number }
   gates: { verify: { externalFindings?: ExternalFindings | null } }
 }
 
@@ -120,6 +122,8 @@ export interface GateContext {
     checksFor: (manifest: GateManifest, sha: string, options: { reads: unknown }) => Promise<{ state: string; failing: string[] }>
     reviewFor: (manifest: GateManifest, number: number, sha: string, options: { artifact: string; reads: unknown }) => Promise<ReviewRead>
     githubUnavailable: (error: unknown) => boolean
+    driverLogin: (manifest: GateManifest) => Promise<string>
+    approveOnGithub: (manifest: GateManifest, number: number, sha: string) => Promise<number>
   }
   worktree: {
     rebaseWorktree: (
@@ -221,6 +225,95 @@ function noticeGithubApproval(context: GateContext, pr: GatePr, entry: GateEntry
   )
 }
 
+// The PR and the commit of a rollout approve that still owes its review on
+// GitHub, or null. A held PR waits for its release, as a GitHub approval does.
+// A head that sync has not aligned with the approval yet waits for the next tick.
+function owedReview({ manifest }: GateContext, entry: GateEntry, facts: GateFacts): { number: number; sha: string } | null {
+  const { approved } = entry
+
+  if (manifest.policy.merge !== 'human' || manifest.policy.approval !== 'inbox') {
+    return null
+  }
+
+  if (facts.pr?.state !== 'OPEN' || typeof entry.pr !== 'number' || entry.hold) {
+    return null
+  }
+
+  // A record from before channels has none, and gets no review.
+  if (approved?.channel !== 'inbox' || approved.patchId !== facts.patchId || approved.sha !== facts.pr.headRefOid) {
+    return null
+  }
+
+  if ((approved.by ?? null) !== null && typeof approved.review === 'number') {
+    return null
+  }
+
+  return { number: entry.pr, sha: approved.sha }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+// Logged once per cause. A failure never holds the merge, so it sets no
+// status, sends no notice and never counts as the PR's error.
+function reviewFailed({ say }: GateContext, pr: GatePr, entry: GateEntry, error: string): void {
+  const text = error.slice(0, REVIEW_ERROR_LENGTH)
+
+  if (text !== entry.approved?.reviewError) {
+    say(pr.id, 'github-review-failed', { error: text })
+  }
+
+  transitions.approvalReviewError(entry, text)
+}
+
+// rollout approve as an approving review on GitHub, so a ruleset that asks
+// for one approval is met. It goes out whatever the verdict, and the gate
+// never waits for it.
+async function submitApproval(context: GateContext, pr: GatePr, entry: GateEntry, facts: GateFacts): Promise<void> {
+  const { manifest, ledger, say } = context
+  const owed = owedReview(context, entry, facts)
+
+  if (!owed) {
+    return
+  }
+
+  let login: string
+
+  try {
+    login = await context.github.driverLogin(manifest)
+  } catch (error) {
+    reviewFailed(context, pr, entry, `the driver's login is unknown: ${messageOf(error)}`)
+    return
+  }
+
+  transitions.approvalBy(entry, login)
+
+  if (typeof entry.approved?.review === 'number') {
+    return
+  }
+
+  // GitHub refuses an approval of one's own PR, and an earlier login error no longer applies.
+  if (facts.pr?.author === login) {
+    transitions.approvalReviewError(entry, null)
+    return
+  }
+
+  let review: number
+
+  try {
+    review = await context.github.approveOnGithub(manifest, owed.number, owed.sha)
+  } catch (error) {
+    reviewFailed(context, pr, entry, messageOf(error))
+    return
+  }
+
+  transitions.approvalReviewed(entry, review)
+  say(pr.id, 'github-review-submitted', { review, sha: owed.sha.slice(0, 7) })
+  // A crash right after must not lose the id, or the next driver would submit a second review.
+  ledger.save()
+}
+
 // A review of the verified head that no verifier read: the head moved with the
 // same patch, or the read before the verifier was a skip. Each run is read
 // once and only shown. The verdict runs on the same facts, so the gate never
@@ -296,6 +389,7 @@ export async function mergeCandidate(
   const facts = await context.collectFacts(manifest, pr, entry, ledger, { reads: context.reads() })
   noticeCodeScanning(context, pr, entry, facts)
   noticeGithubApproval(context, pr, entry, facts)
+  await submitApproval(context, pr, entry, facts)
   await reviewAfterVerification(context, pr, entry, facts)
 
   const judged = context.judge(manifest, pr, entry, facts)

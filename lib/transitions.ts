@@ -9,6 +9,7 @@ import type {
   Fix,
   FixReason,
   GateBlockCode,
+  GitHubLogin,
   Head,
   Hold,
   IsoTime,
@@ -65,8 +66,15 @@ interface StoredVerdict {
   after?: number
 }
 
-// Version 2 keeps no channel on an approval from before channels, and no login on one from the inbox.
-type StoredApproval = Pick<Approval, 'sha' | 'at'> & { patchId?: string | null; channel?: Approval['channel']; by?: Approval['by'] }
+// Version 2 keeps no channel on an approval from before channels. Older
+// records lack `by`, `review` and `reviewError`.
+type StoredApproval = Pick<Approval, 'sha' | 'at'> & {
+  patchId?: string | null
+  channel?: Approval['channel']
+  by?: Approval['by']
+  review?: Approval['review']
+  reviewError?: Approval['reviewError']
+}
 
 // A note as version 2 records it: what it answered is the question's kind and text.
 export interface StoredNote {
@@ -957,6 +965,33 @@ export function dropVerification(entry: PrEntry): void {
 export function approveInbox(entry: PrEntry, approval: StoredApproval, { until, at }: { until: IsoTime; at: IsoTime }): void {
   entry.approved = approval
   place(entry, 'merge', { kind: 'waiting', code: 'merge-delay', until }, { since: at })
+}
+
+// The driver may learn its login only after rollout approve. A login already recorded stays.
+export function approvalBy(entry: PrEntry, login: GitHubLogin): void {
+  if (!entry.approved || (entry.approved.by ?? null) !== null) {
+    return
+  }
+
+  entry.approved = { ...entry.approved, by: login }
+}
+
+// The approving review the driver submitted on GitHub. Its id ends any earlier failure.
+export function approvalReviewed(entry: PrEntry, review: number): void {
+  if (!entry.approved) {
+    return
+  }
+
+  entry.approved = { ...entry.approved, review, reviewError: null }
+}
+
+// Why the approving review could not be submitted, or null once that no longer applies.
+export function approvalReviewError(entry: PrEntry, error: string | null): void {
+  if (!entry.approved) {
+    return
+  }
+
+  entry.approved = { ...entry.approved, reviewError: error }
 }
 
 // The status setters below write the stage and the status only, never the fix.

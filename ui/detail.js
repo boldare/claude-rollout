@@ -206,6 +206,7 @@ function renderOverview(pr, ctx) {
   const heldField = pr.hold ? [field('held', `since ${clock(pr.hold.at)}`)] : []
   // pr.trace is null without policy.trace comment.
   const traceField = typeof pr.trace === 'string' ? [field('trace', element('span', pr.trace, 'text'))] : []
+  const approvedByField = typeof pr.approvedBy === 'string' ? [field('approved by', element('span', pr.approvedBy, 'text'))] : []
 
   return fields(
     statusFields(pr),
@@ -215,6 +216,7 @@ function renderOverview(pr, ctx) {
     approvalField(pr),
     field('verified', stamp(pr.verified)),
     field('approved', stamp(pr.approved)),
+    approvedByField,
     traceField,
     depsField(pr, ctx),
     field('out of scope', namedList(pr.outOfScope ?? [])),
