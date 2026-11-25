@@ -698,6 +698,16 @@ prs:
                   approve their own PR. <code>github</code> needs <code>repo.agentToken</code> and <code>repo.maintainers</code>.
                 </td>
               </tr>
+              <tr id="policy-trace">
+                <td>trace</td>
+                <td><code>off</code> or <code>comment</code></td>
+                <td><code>off</code></td>
+                <td>
+                  With <code>comment</code>, the driver keeps one comment on every PR it manages with the PR's trace: what ran, what was
+                  verified, approved and merged, as a few lines and a JSON block. See
+                  <a href="how-it-works.html#trace">the trace on the PR</a>.
+                </td>
+              </tr>
               <tr id="policy-maxBump">
                 <td>maxBump</td>
                 <td><code>patch</code>, <code>minor</code> or <code>major</code></td>

@@ -1070,8 +1070,10 @@ rollout ui: http://127.0.0.1:53817/#t=VGhpcyBpcyBhIHNhbXBsZSB0b2tlbiwgbm90IHJlYW
                   asks one. The fix with its reason code and note while one is owed, and the last error for
                   <code>errors</code>, <code>attempts-exhausted</code>, <code>dispute</code> and <code>backoff</code>. Then the gate's last
                   decision with its code and reasons, GitHub's merge state and the sha it judged, the delegate's runs and answers with their
-                  plan references, the hold, how this PR is approved, the verified and approved stamps, the dependencies with their stage,
-                  files outside the PR's scope and changed workflow files. With the verifier and brief tabs it covers most of
+                  plan references, the hold, how this PR is approved, the verified and approved stamps, the <code>trace</code> field with
+                  <a href="manifest.html#policy-trace"><code>policy.trace: comment</code></a> (when the
+                  <a href="how-it-works.html#trace">trace comment</a> was written last, or why the last write failed), the dependencies with
+                  their stage, files outside the PR's scope and changed workflow files. With the verifier and brief tabs it covers most of
                   <a href="commands.html#cmd-card"><code>rollout card</code></a
                   >. The implementer's summary, deviations and expected results are only on the card.
                 </td>

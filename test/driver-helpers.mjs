@@ -6,6 +6,7 @@ import { createDriver } from '../lib/driver.mjs'
 import { setFetch } from '../lib/github.mjs'
 import { postCommand } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { readTrace } from '../lib/trace.ts'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
 import { at, fakeGitHub, fakeTools, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
@@ -432,4 +433,37 @@ export function zipRoutes(id, storage) {
 
 export function artifactRequests(github) {
   return github.requests().filter((request) => request.path.startsWith(ARTIFACTS))
+}
+
+// The trace comment of PR 11.
+export const TRACE_COMMENTS = 'repos/example/widgets/issues/11/comments'
+
+export function traceCommentPath(id) {
+  return `repos/example/widgets/issues/comments/${id}`
+}
+
+// GitHub listing `comments` on PR 11, taking a new comment as `id` and editing each comment of `edits`.
+export function traceRoutes({ comments = [], id = 901, edits = [id] } = {}) {
+  return [
+    { path: TRACE_COMMENTS, body: comments },
+    { method: 'POST', path: TRACE_COMMENTS, status: 201, body: { id } },
+    ...edits.map((edit) => ({ method: 'PATCH', path: traceCommentPath(edit), body: { id: edit } })),
+  ]
+}
+
+// Every request on a comments path since request `from`, as its method and path.
+export function commentRequests(github, from = 0) {
+  return github
+    .requests()
+    .slice(from)
+    .filter((request) => request.path.includes('/comments'))
+    .map((request) => [request.method, request.path])
+}
+
+// The trace of each comment the driver posted or edited, oldest first.
+export function writtenTraces(github) {
+  return github
+    .requests()
+    .filter((request) => ['POST', 'PATCH'].includes(request.method) && request.path.includes('/comments'))
+    .map((request) => readTrace(request.body.body))
 }

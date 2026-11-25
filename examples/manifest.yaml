@@ -54,6 +54,8 @@ policy:
   concurrency: 3
   merge: manual # the driver says "ready", the maintainer merges on GitHub
   approval: github
+  # One comment on each PR with what ran, what was verified, approved and merged, for people and for a tool that audits merges.
+  # trace: comment
   maxBump: minor
   attempts: { implement: 2, fix: 4, verify: 3 }
   timeouts: { implement: 240, fix: 120, verify: 90 }

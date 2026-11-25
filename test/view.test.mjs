@@ -882,6 +882,26 @@ test('prDetail: verdicts fall back to the latest verdict for old ledgers', () =>
   assert.equal(prDetail(manifest, { prs: {} }, [], [], 'Z9'), null)
 })
 
+test('prDetail: the trace line says when the trace was written, why the last write failed, or that it is not written yet', () => {
+  const traced = loadManifest(makeRollout({ policy: { trace: 'comment' } }))
+  const off = loadManifest(makeRollout())
+  const line = (manifest, fields) => prDetail(manifest, { prs: { A1: { ...samplePrs().A1, ...fields } } }, [], [], 'A1').trace
+  const record = { comment: 901, digest: 'd'.repeat(64), at: at(90), error: null }
+  const failed = { ...record, at: at(91), error: 'POST repos/example/widgets/issues/11/comments:\nHTTP 422:\tValidation Failed' }
+
+  assert.equal(line(off, { trace: record }), null)
+  assert.equal(line(off, {}), null)
+  assert.equal(line(traced, {}), 'not written yet')
+  assert.equal(line(traced, { trace: null }), 'not written yet')
+  assert.equal(line(traced, { trace: record }), `written at ${at(90)}`)
+  assert.equal(
+    line(traced, { trace: failed }),
+    'the last write failed: POST repos/example/widgets/issues/11/comments: HTTP 422: Validation Failed',
+  )
+
+  assert.equal(line(traced, { trace: { comment: null, digest: null, at: null, error: 'HTTP 502' } }), 'the last write failed: HTTP 502')
+})
+
 test('prDetail: approval channel, brief paths, feedback and runs', () => {
   const dir = makeRollout()
   const manifest = loadManifest(dir)

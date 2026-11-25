@@ -204,6 +204,8 @@ function depsField(pr, ctx) {
 
 function renderOverview(pr, ctx) {
   const heldField = pr.hold ? [field('held', `since ${clock(pr.hold.at)}`)] : []
+  // pr.trace is null without policy.trace comment.
+  const traceField = typeof pr.trace === 'string' ? [field('trace', element('span', pr.trace, 'text'))] : []
 
   return fields(
     statusFields(pr),
@@ -213,6 +215,7 @@ function renderOverview(pr, ctx) {
     approvalField(pr),
     field('verified', stamp(pr.verified)),
     field('approved', stamp(pr.approved)),
+    traceField,
     depsField(pr, ctx),
     field('out of scope', namedList(pr.outOfScope ?? [])),
     field('workflow files', namedList(pr.workflowFiles ?? [], 'warning')),
