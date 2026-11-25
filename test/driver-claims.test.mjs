@@ -1341,6 +1341,65 @@ test('checkClaim: a review run that failed, was cancelled or was skipped is a sk
   }
 })
 
+test('checkClaim: newer skipped review runs never hide a successful one, which is read and stored', async () => {
+  const { manifest, driver, pr, entry, agentCalls } = reviewDriver([
+    TESTED,
+    reviewRun('completed', 'success'),
+    reviewRun('completed', 'skipped', { id: 3 }),
+    reviewRun('completed', 'skipped', { id: 4 }),
+  ])
+
+  await driver.advance(pr)
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(events.slice(0, 4), [
+    ...PASSES,
+    gateCheckEvent('external-review', 'pass', '2 candidates (1 high, 1 medium), 1 below medium'),
+  ])
+
+  assert.equal(events[4].kind, 'verify-start')
+  assert.deepEqual([entry.review.run, entry.review.skipped, entry.review.findings.length], [2, null, 3])
+  assert.deepEqual(agentCalls, [{ id: 'A1', role: 'verify' }])
+})
+
+test('checkClaim: a review run still running behind a newer skipped one waits, with no agent and no read', async () => {
+  const { manifest, driver, github, pr, entry, agentCalls } = reviewDriver([
+    TESTED,
+    reviewRun('completed', 'success'),
+    reviewRun('in_progress', null, { id: 3 }),
+    reviewRun('completed', 'skipped', { id: 4 }),
+  ])
+
+  await driver.advance(pr)
+
+  assert.deepEqual(placeOf(entry), ['pre-verify', 'waiting', 'external-review'])
+  assert.equal(entry.review, undefined)
+  assert.deepEqual(agentCalls, [])
+  assert.deepEqual(eventsSince(manifest), PASSES)
+  assert.deepEqual(artifactRequests(github), [])
+})
+
+test('checkClaim: review runs that all ended as skipped are a skip at once, even on a young claim', async () => {
+  const setup = reviewDriver([TESTED, reviewRun('completed', 'skipped'), reviewRun('completed', 'skipped', { id: 3 })])
+
+  setup.entry.claimedAt = minutesAgo(1)
+  await assertSkips(setup, 'the review run ended as skipped', 3)
+  assert.deepEqual(artifactRequests(setup.github), [])
+})
+
+test('checkClaim: a newer failed review run speaks over an older success, and a skipped one after it does not', async () => {
+  const setup = reviewDriver([
+    TESTED,
+    reviewRun('completed', 'success'),
+    reviewRun('completed', 'failure', { id: 3 }),
+    reviewRun('completed', 'skipped', { id: 4 }),
+  ])
+
+  await assertSkips(setup, 'the review run ended as failure', 3)
+  assert.deepEqual(artifactRequests(setup.github), [])
+})
+
 test('checkClaim: a successful review run with no artifact for the head, or a review.json of another revision, is a skip', async () => {
   await assertSkips(
     reviewDriver([TESTED, reviewRun('completed', 'success')], { routes: { artifacts: [artifactJson(7, NEW_HEAD)] } }),

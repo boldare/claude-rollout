@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { summarizeChecks } from '../lib/checks.mjs'
 import { GATE_CODES } from '../lib/judge.mjs'
 import { verifyPrompt } from '../lib/prompts.mjs'
 import { matchKey } from '../lib/review.ts'
@@ -9,7 +10,7 @@ import { stageLabels } from '../lib/stage.mjs'
 import { toMerged, toVerified } from '../lib/transitions.ts'
 import { readEvents } from '../lib/view.mjs'
 import { worktreePath } from '../lib/worktree.mjs'
-import { at, samplePrs, zipArchive } from './fixtures.mjs'
+import { at, laterReview, samplePrs, zipArchive } from './fixtures.mjs'
 import {
   agentResult,
   apply,
@@ -33,6 +34,7 @@ import {
   preVerified,
   FIRST_ROUND,
   UNANSWERED,
+  REVIEW_CHECK,
   EXTERNAL_FINDINGS,
   ARTIFACTS,
   HIGH,
@@ -1067,6 +1069,28 @@ test('merge gate: a second pass on the same run reads nothing and logs nothing',
   assert.equal(artifactRequests(github).length, requests)
   assert.equal(readEvents(manifest).length, events)
   assert.deepEqual(entry.review, stored)
+})
+
+test('merge gate: newer skipped runs of the review check keep a review read after the verification', async () => {
+  const raw = (id, name, conclusion) => ({ id, name, status: 'completed', conclusion, startedAt: at(83) })
+  const checks = summarizeChecks(
+    [raw(1, 'test', 'success'), raw(7, REVIEW_CHECK, 'success'), raw(9, REVIEW_CHECK, 'skipped'), raw(10, REVIEW_CHECK, 'skipped')],
+    ['test'],
+    [],
+    REVIEW_CHECK,
+  )
+
+  const { manifest, github, entry } = await judgedOnce({
+    externalFindings: EXTERNAL_FINDINGS,
+    facts: { checks },
+    fields: { ...HELD, review: laterReview() },
+    routes: reviewArtifact(SHA),
+  })
+
+  assert.deepEqual(artifactRequests(github), [])
+  assert.deepEqual(entry.review, laterReview())
+  assert.deepEqual(mergeChecks(manifest), [])
+  assert.deepEqual(gateOutcome(entry), ['merge', 'waiting', 'held', 'wait', 'held'])
 })
 
 test('merge gate: a skip read before the verification is read again once its run has succeeded, and only once', async () => {
