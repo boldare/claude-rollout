@@ -99,6 +99,8 @@ export interface GateContext {
   // The driver's own steps, which code that stays in lib/driver.mjs uses too.
   guarded: (pr: GatePr, task: () => Promise<boolean>) => Promise<boolean>
   toFix: (pr: GatePr, reason: string, note: string) => void
+  // Resolves to the error of a failed write of the PR's trace, or null.
+  syncTrace: (pr: GatePr) => Promise<string | null>
 
   collectFacts: (
     manifest: GateManifest,
@@ -502,6 +504,13 @@ async function mergeApproved(context: GateContext, pr: GatePr, facts: GateFacts,
   stored.action = 'merge'
   transitions.setStatus(entry, 'merge', { kind: 'running', code: 'merge', sha: head }, now())
   ledger.save()
+
+  // A trace holds nothing, so a failed write never stops the merge.
+  const traceError = await context.syncTrace(pr)
+
+  if (traceError !== null) {
+    say(pr.id, 'trace-failed', { error: traceError })
+  }
 
   let mergeSha
 

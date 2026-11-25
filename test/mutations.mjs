@@ -257,6 +257,13 @@ const MUTATIONS = [
     replace: 'found !== found',
     tests: ['test/sandbox.test.mjs'],
   },
+  {
+    id: 'trace-failure-holds-merge',
+    file: 'lib/driver/gate.ts',
+    find: "say(pr.id, 'trace-failed', { error: traceError })",
+    replace: 'throw new Error(traceError)',
+    tests: ['test/driver-gate.test.mjs'],
+  },
 ]
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))

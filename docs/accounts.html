@@ -119,6 +119,14 @@
                 <td class="nowrap">bot</td>
                 <td class="name">replyAsAgents, commentAsAgents</td>
               </tr>
+              <tr>
+                <td>
+                  The <a href="how-it-works.html#trace">trace comment</a>, with
+                  <a href="manifest.html#policy-trace"><code>policy.trace: comment</code></a>
+                </td>
+                <td class="nowrap">bot</td>
+                <td class="name">writeTraceComment</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -129,9 +137,9 @@
             driver's replies go out under your name. Preflight warns: "agents act on GitHub as you".
           </p>
           <p>
-            The driver's replies and summary comment end with a hidden <code>&lt;!-- rollout-driver --&gt;</code> line, so the driver never
-            reads them back as your feedback. A comment an agent posts under your login has no marker, and it counts as your review
-            feedback. Preflight warns about this when <code>repo.maintainers</code> is set.
+            The driver's replies, summary comment and trace comment end with a hidden <code>&lt;!-- rollout-driver --&gt;</code> line, so
+            the driver never reads them back as your feedback. A comment an agent posts under your login has no marker, and it counts as
+            your review feedback. Preflight warns about this when <code>repo.maintainers</code> is set.
           </p>
         </div>
 

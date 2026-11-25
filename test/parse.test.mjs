@@ -40,11 +40,13 @@ import {
   tickReads,
   unmergedHeads,
   viewPr,
+  writeTraceComment,
 } from '../lib/github.mjs'
 import { githubApproval } from '../lib/judge.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
+import { TRACE_MARKER, traceBody, traceOf } from '../lib/trace.ts'
 import { MAX_ENTRY_BYTES } from '../lib/zip.ts'
-import { fakeGitHub, fakeTools, makeRollout, withProcessEnv, zipArchive } from './fixtures.mjs'
+import { fakeGitHub, fakeTools, makeRollout, traceSample, withProcessEnv, zipArchive } from './fixtures.mjs'
 
 function nulRecords(...records) {
   return records.map((record) => `${record.join('\0')}\0`).join('')
@@ -374,6 +376,154 @@ test('the driver posts as the agents, marks what it posts and never reads it bac
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+const TRACE_COMMENTS = 'repos/example/widgets/issues/7/comments'
+
+function traceComment(id) {
+  return `repos/example/widgets/issues/comments/${id}`
+}
+
+function sampleTraceBody() {
+  const { manifest, id, entry, runs, now } = traceSample()
+
+  return traceBody(traceOf(manifest, id, entry, runs, { now }))
+}
+
+// Runs `use` with a manifest whose agents' token is a file, as repo.agentToken names one.
+async function withAgentToken(use) {
+  const dir = mkdtempSync(join(tmpdir(), 'rollout-gh-'))
+
+  try {
+    const manifest = plainManifest({ agentToken: join(dir, 'agent-token'), maintainers: ['maint'] })
+
+    writeFileSync(manifest.repo.agentToken, `${AGENT_TOKEN}\n`)
+
+    return await use(manifest)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function sent(github) {
+  return github.requests().map((request) => [request.method, request.path, request.headers.authorization])
+}
+
+test('writeTraceComment: with an id it edits that comment as the agents, with the body as it is and one driver marker', async () => {
+  const body = sampleTraceBody()
+  const github = useGitHub([{ method: 'PATCH', path: traceComment(501), body: { id: 501 } }])
+
+  assert.equal(await withAgentToken((manifest) => writeTraceComment(manifest, 7, { comment: 501, body })), 501)
+  assert.deepEqual(sent(github), [['PATCH', traceComment(501), `Bearer ${AGENT_TOKEN}`]])
+  assert.deepEqual(github.requests()[0].body, { body })
+  assert.ok(body.startsWith(`${TRACE_MARKER}\n`))
+  assert.ok(body.endsWith(`\n${DRIVER_MARKER}`))
+  assert.equal(body.split(DRIVER_MARKER).length, 2)
+})
+
+test('writeTraceComment: a deleted comment, or one the agents may not edit, gets a new comment and its id', async () => {
+  const body = sampleTraceBody()
+  const refusals = [
+    { status: 404, body: { message: 'Not Found' } },
+    { status: 403, body: { message: 'Resource not accessible by integration' } },
+  ]
+
+  for (const refusal of refusals) {
+    const github = useGitHub([
+      { method: 'PATCH', path: traceComment(501), ...refusal },
+      { method: 'POST', path: TRACE_COMMENTS, status: 201, body: { id: 502 } },
+    ])
+
+    assert.equal(await withAgentToken((manifest) => writeTraceComment(manifest, 7, { comment: 501, body })), 502, refusal.status)
+    assert.deepEqual(sent(github), [
+      ['PATCH', traceComment(501), `Bearer ${AGENT_TOKEN}`],
+      ['POST', TRACE_COMMENTS, `Bearer ${AGENT_TOKEN}`],
+    ])
+
+    assert.deepEqual(github.requests()[1].body, { body })
+  }
+})
+
+test('writeTraceComment: a server error or a rate-limited 403 rejects, and nothing is posted', async () => {
+  const failures = [
+    { kind: 'http', answer: { status: 500, body: { message: 'Server Error' } } },
+    { kind: 'rate-limit', answer: { status: 403, headers: { 'retry-after': '60' }, body: { message: 'Forbidden' } } },
+  ]
+
+  for (const { kind, answer } of failures) {
+    const github = useGitHub([
+      { method: 'PATCH', path: traceComment(501), ...answer },
+      { method: 'POST', path: TRACE_COMMENTS, status: 201, body: { id: 502 } },
+    ])
+
+    const error = await rejection(withAgentToken((manifest) => writeTraceComment(manifest, 7, { comment: 501, body: sampleTraceBody() })))
+
+    assert.ok(error instanceof GitHubError, String(error))
+    assert.equal(error.status, answer.status)
+    assert.equal(error.kind, kind)
+    assert.deepEqual(sent(github), [['PATCH', traceComment(501), `Bearer ${AGENT_TOKEN}`]])
+  }
+})
+
+test('writeTraceComment: with no id it edits the newest comment that has both markers, and posts when there is none', async () => {
+  const body = sampleTraceBody()
+  const others = [
+    conversationComment(604, 'maint', '2026-01-01T00:03:00Z', `${TRACE_MARKER}\nA trace pasted by hand`),
+    conversationComment(605, 'maint', '2026-01-01T00:04:00Z', `Done\n\n${DRIVER_MARKER}`),
+  ]
+
+  const conversation = [
+    conversationComment(601, 'demo-bot', '2026-01-01T00:00:00Z', body),
+    conversationComment(602, 'maint', '2026-01-01T00:01:00Z', 'Looks good'),
+    conversationComment(603, 'demo-bot', '2026-01-01T00:02:00Z', body.replaceAll('\n', '\r\n')),
+    ...others,
+  ]
+
+  const found = useGitHub([
+    { path: TRACE_COMMENTS, body: conversation },
+    { method: 'PATCH', path: traceComment(603), body: { id: 603 } },
+  ])
+
+  assert.equal(await withAgentToken((manifest) => writeTraceComment(manifest, 7, { comment: null, body })), 603)
+  assert.deepEqual(sent(found), [
+    ['GET', TRACE_COMMENTS, `Bearer ${MAINTAINER_TOKEN}`],
+    ['PATCH', traceComment(603), `Bearer ${AGENT_TOKEN}`],
+  ])
+
+  const none = useGitHub([
+    { path: TRACE_COMMENTS, body: others },
+    { method: 'POST', path: TRACE_COMMENTS, status: 201, body: { id: 700 } },
+  ])
+
+  assert.equal(await withAgentToken((manifest) => writeTraceComment(manifest, 7, { comment: null, body })), 700)
+  assert.deepEqual(sent(none), [
+    ['GET', TRACE_COMMENTS, `Bearer ${MAINTAINER_TOKEN}`],
+    ['POST', TRACE_COMMENTS, `Bearer ${AGENT_TOKEN}`],
+  ])
+})
+
+test('writeTraceComment: an answer to the post without an integer id rejects', async () => {
+  for (const answer of [{}, { id: '700' }, null]) {
+    useGitHub([
+      { path: TRACE_COMMENTS, body: [] },
+      { method: 'POST', path: TRACE_COMMENTS, status: 201, body: answer },
+    ])
+
+    await assert.rejects(
+      withAgentToken((manifest) => writeTraceComment(manifest, 7, { comment: null, body: sampleTraceBody() })),
+      /POST repos\/example\/widgets\/issues\/7\/comments: the answer holds no comment id/,
+    )
+  }
+})
+
+test('maintainer feedback skips a trace comment, also under a maintainer login', () => {
+  const feedback = maintainerFeedback(maintained, {
+    inline: [],
+    reviews: [],
+    conversation: [conversationComment(31, 'maint', '2026-01-01T00:00:00Z', sampleTraceBody())],
+  })
+
+  assert.deepEqual(feedback, [])
 })
 
 // Records its arguments and the GH_REPO and GH_HOST it saw.

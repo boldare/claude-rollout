@@ -287,6 +287,78 @@ test('doneDetail: the model the run reported', () => {
   assert.equal(doneDetail('implement', 'A1-01-implement', agentResult({ model: 'claude-sonnet-5-5' })).model, 'claude-sonnet-5-5')
 })
 
+const TRACE_BLOCK = { kind: 'needs-decision', question: 'Keep the old flag?', evidence: 'cli.mjs:12 reads it.' }
+
+// The record of a run of A1 that ends with `result`. A1 has PR 11, claimed at SHA,
+// and a clean worktree at SHA. A verifier started at `sha`.
+async function endedRecord(role, result, sha = SHA) {
+  const run = `A1-02-${role}`
+  const setup = tickDriver(
+    { A1: { state: role === 'verify' ? 'verifying' : 'implementing', pr: 11, claimedSha: SHA } },
+    {
+      rules: [
+        { tool: 'git', args: 'status --porcelain', stdout: '' },
+        { tool: 'git', args: 'rev-parse HEAD', stdout: SHA },
+      ],
+      routes: [prRoute()],
+    },
+  )
+
+  const pr = setup.manifest.prs.find((item) => item.id === 'A1')
+
+  mkdirSync(worktreePath(setup.manifest, pr), { recursive: true })
+  await setup.driver.onDone(pr, role, result, { sha, run })
+
+  return setup.driver.ledger.data.runs[run]
+}
+
+test('onDone: a run that ends READY records the head of its report, and a verify run the commit its verdict judged', async () => {
+  const ready = { status: 'READY', pr: 11, headSha: NEW_HEAD, summary: 'Done.' }
+  const verdict = { verdict: 'PASS', sha: NEW_HEAD, summary: 'Every item holds.', blocking: [] }
+
+  assert.equal((await endedRecord('implement', agentResult({ output: ready }))).sha, NEW_HEAD)
+  assert.equal((await endedRecord('fix', agentResult({ output: ready }))).sha, NEW_HEAD)
+  assert.equal((await endedRecord('verify', agentResult({ output: verdict }), SHA)).sha, NEW_HEAD)
+})
+
+test('onDone: a failed run, a BLOCKED report and a report without a head record no commit', async () => {
+  const ends = [
+    ['implement', agentResult({ ok: false, error: 'error_during_execution' })],
+    ['verify', agentResult({ ok: false, error: 'error_during_execution' })],
+    ['fix', agentResult({ output: { status: 'BLOCKED', pr: 11, headSha: NEW_HEAD, summary: 'A question.', blocked: TRACE_BLOCK } })],
+    ['implement', agentResult({ output: { status: 'READY', pr: 11, summary: 'Done.' } })],
+  ]
+
+  for (const [role, result] of ends) {
+    const record = await endedRecord(role, result)
+
+    assert.ok(record.endedAt, role)
+    assert.equal(record.sha, null, `${role} ${result.output?.status ?? 'failed'}`)
+  }
+})
+
+test('the end of a brief run and of a delegate run records no commit', async () => {
+  const brief = modelDriver(
+    { A1: { state: 'pending' } },
+    { result: () => Promise.resolve(agentResult({ ok: false, error: 'error_during_execution' })) },
+  )
+
+  rmSync(brief.pr.brief)
+  await launched(brief, 'brief')
+  await waitFor(() => !brief.driver.running.has('A1'), 'the brief to end')
+
+  const delegate = tickDriver({ A1: { state: 'blocked', blocked: TRACE_BLOCK, pr: 11 } }, { policy: { delegate: {} } })
+  const pr = delegate.manifest.prs.find((item) => item.id === 'A1')
+  const result = agentResult({ output: { decision: 'escalate', answer: '', planRefs: [], reasoning: 'The plan is silent.' } })
+
+  await delegate.driver.onDelegateDone(pr, result, { run: 'A1-01-delegate', question: 'q1', blocked: TRACE_BLOCK })
+
+  for (const record of [brief.driver.ledger.data.runs['A1-01-brief-write'], delegate.driver.ledger.data.runs['A1-01-delegate']]) {
+    assert.ok(record.endedAt, record.role)
+    assert.equal(record.sha, null, record.role)
+  }
+})
+
 // A2 depends on A1, which is verified and waits for its merge. Every agent call is
 // recorded and never ends, and git answers everything unless `rules` come first.
 function aheadDriver({ a1 = { ...samplePrs().A1, held: null }, a2 = { state: 'pending' }, rules = [] } = {}) {

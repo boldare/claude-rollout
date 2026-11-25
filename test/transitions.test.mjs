@@ -50,6 +50,8 @@ import {
   toPending,
   toReopened,
   toVerified,
+  traceFailed,
+  traceWritten,
   unheld,
   verifyAgain,
   waitOnStage,
@@ -972,6 +974,59 @@ test('transitions: toMerged records the PR number of a merge outside the run', (
   toMerged(entry, { pr: 12 })
 
   assert.deepEqual(entry, { ...before, pr: 12, stage: 'merged', status: null })
+})
+
+const TRACE_DIGEST = 'd'.repeat(64)
+
+test('transitions: traceWritten records the comment, the digest and the time, with no error', () => {
+  const entry = entryWith({ state: 'verified', pr: 7, verified: verification() })
+
+  traceFailed(entry, 'HTTP 502: Bad Gateway')
+  traceWritten(entry, { comment: 501, digest: TRACE_DIGEST, at: AT })
+
+  assert.deepEqual(entry.trace, { comment: 501, digest: TRACE_DIGEST, at: AT, error: null })
+})
+
+test('transitions: traceFailed keeps the last write that went through, and gives nulls with none', () => {
+  const written = entryWith({ state: 'verified', pr: 7, verified: verification() })
+
+  traceWritten(written, { comment: 501, digest: TRACE_DIGEST, at: AT })
+  traceFailed(written, 'HTTP 502: Bad Gateway')
+
+  assert.deepEqual(written.trace, { comment: 501, digest: TRACE_DIGEST, at: AT, error: 'HTTP 502: Bad Gateway' })
+
+  const fresh = entryWith({ state: 'verified', pr: 7, verified: verification() })
+
+  traceFailed(fresh, 'HTTP 502: Bad Gateway')
+
+  assert.deepEqual(fresh.trace, { comment: null, digest: null, at: null, error: 'HTTP 502: Bad Gateway' })
+})
+
+test('transitions: toClaimed and toMerged drop the trace record of another PR number, and keep the one of the same number', () => {
+  const record = { comment: 501, digest: TRACE_DIGEST, at: AT, error: null }
+  const traced = (state) => ({ ...entryWith({ state, pr: 7, claimedSha: OLD_SHA }), trace: structuredClone(record) })
+
+  const claimedAgain = traced('ready_claimed')
+  const claimedElsewhere = traced('ready_claimed')
+  const mergedAgain = traced('verified')
+  const mergedElsewhere = traced('verified')
+
+  toClaimed(claimedAgain, { pr: 7, sha: SHA, at: AT })
+  toClaimed(claimedElsewhere, { pr: 8, sha: SHA, at: AT })
+  toMerged(mergedAgain, { pr: 7 })
+  toMerged(mergedElsewhere, { pr: 8 })
+
+  assert.deepEqual(claimedAgain.trace, record)
+  assert.equal(claimedElsewhere.trace, null)
+  assert.deepEqual(mergedAgain.trace, record)
+  assert.equal(mergedElsewhere.trace, null)
+
+  const untraced = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: OLD_SHA })
+
+  toClaimed(untraced, { pr: 8, sha: SHA, at: AT })
+  toMerged(untraced, { pr: 9 })
+
+  assert.ok(!Object.hasOwn(untraced, 'trace'))
 })
 
 test('transitions: recoverRun sends a briefing back to pending without a refund', () => {

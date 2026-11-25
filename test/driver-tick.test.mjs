@@ -4,10 +4,11 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createDriver } from '../lib/driver.mjs'
 import { GitHubError } from '../lib/gh.mjs'
-import { baseChecks, setFetch } from '../lib/github.mjs'
-import { postCommand } from '../lib/ledger.mjs'
+import { baseChecks, DRIVER_MARKER, setFetch } from '../lib/github.mjs'
+import { postCommand, readLedger } from '../lib/ledger.mjs'
 import { loadManifest } from '../lib/manifest.mjs'
 import { processStartTime } from '../lib/sandbox.mjs'
+import { TRACE_MARKER, traceDigest, traceOf } from '../lib/trace.ts'
 import { readEvents } from '../lib/view.mjs'
 import { alive, at, fakeDocker, fakeGitHub, fakeTools, gonePid, groupChild, makeRollout, samplePrs, waitFor } from './fixtures.mjs'
 import {
@@ -30,6 +31,11 @@ import {
   eventsSince,
   kindsSince,
   placeOf,
+  TRACE_COMMENTS,
+  traceCommentPath,
+  traceRoutes,
+  commentRequests,
+  writtenTraces,
 } from './driver-helpers.mjs'
 
 const FETCH_FAILS = { tool: 'git', args: 'fetch', code: 128, stderr: 'fatal: unable to access the remote' }
@@ -1082,6 +1088,219 @@ test('tick: a label GitHub refuses is kept on the PR row, counts no error and is
 
   assert.equal(driver.ledger.prs.A1.stageLabelError, null)
   assert.equal(labelWrites(github).length, 2)
+})
+
+const TRACING = { trace: 'comment' }
+
+// The rejected A1 with policy.trace comment, on a GitHub that answers its PR, its labels and its trace comment.
+function traceDriver({ routes = traceRoutes(), prs = { A1: REJECTED }, policy = {} } = {}) {
+  return tickDriver(prs, { rules: [FETCH], policy: { ...TRACING, ...policy }, routes: [prRoute(), ...labelRoutes(), ...routes] })
+}
+
+// What the tick wrote last, against the trace of the entry as it is now, built at the same time.
+function lastTrace(manifest, driver, github) {
+  const written = writtenTraces(github).at(-1)
+  const built = traceOf(manifest, 'A1', driver.ledger.prs.A1, driver.ledger.data.runs ?? {}, { now: written.updated_at })
+
+  return { written, built }
+}
+
+test('trace: the first tick of a PR with a number posts one comment with its trace and records it, and a quiet tick makes no call', async () => {
+  const { manifest, driver, github } = traceDriver()
+  const before = Date.now()
+
+  await driver.tick()
+
+  const { written, built } = lastTrace(manifest, driver, github)
+
+  assert.deepEqual(commentRequests(github), [
+    ['GET', TRACE_COMMENTS],
+    ['POST', TRACE_COMMENTS],
+  ])
+
+  assert.deepEqual(written, built)
+  assert.ok(Date.parse(written.updated_at) >= before, written.updated_at)
+  assert.deepEqual(driver.ledger.prs.A1.trace, { comment: 901, digest: traceDigest(built), at: written.updated_at, error: null })
+  assert.deepEqual(readLedger(manifest).prs.A1.trace, driver.ledger.prs.A1.trace, 'the tick saves it')
+
+  const quiet = github.requests().length
+
+  await driver.tick()
+
+  assert.deepEqual(commentRequests(github, quiet), [])
+  assert.equal(driver.ledger.prs.A1.trace.at, written.updated_at)
+})
+
+test('trace: a new verdict, an approval and a new stage each edit the same comment, with no second post', async () => {
+  const { manifest, driver, github } = traceDriver()
+  const entry = driver.ledger.prs.A1
+  const failed = {
+    verdict: 'FAIL',
+    sha: SHA,
+    summary: 'A finding.',
+    blocking: ['README.md:3 names the old flag.'],
+    at: at(85),
+    run: 'A1-03-verify',
+  }
+
+  await driver.tick()
+
+  const posted = github.requests().length
+
+  entry.verdicts = [...entry.verdicts, failed]
+  entry.verdict = failed
+  await driver.tick()
+
+  assert.deepEqual(
+    lastTrace(manifest, driver, github).written.verifications.map((verification) => verification.verdict),
+    ['PASS', 'FAIL'],
+  )
+
+  entry.approved = { sha: SHA, patchId: 'patch-a1', at: at(86), channel: 'inbox' }
+  await driver.tick()
+
+  assert.equal(lastTrace(manifest, driver, github).written.approval.sha, SHA)
+
+  entry.stage = 'verify'
+  entry.status = { kind: 'running', code: 'verify', sha: SHA, run: 'A1-04-verify', since: at(90) }
+  await driver.tick()
+
+  const { written, built } = lastTrace(manifest, driver, github)
+
+  assert.deepEqual(written.place, { stage: 'verify', status: 'running', code: 'verify' })
+  assert.deepEqual(written, built)
+  assert.deepEqual(commentRequests(github, posted), [
+    ['PATCH', traceCommentPath(901)],
+    ['PATCH', traceCommentPath(901)],
+    ['PATCH', traceCommentPath(901)],
+  ])
+
+  assert.deepEqual(entry.trace, { comment: 901, digest: traceDigest(built), at: written.updated_at, error: null })
+})
+
+test('trace: a failed write stays on the PR, counts no error, lets the rest of the tick run, and the next tick writes it', async () => {
+  const refused = { method: 'POST', path: TRACE_COMMENTS, status: 422, body: { message: 'Validation Failed' } }
+  const { manifest, driver, github } = traceDriver({ routes: [refused, ...traceRoutes()] })
+  const entry = driver.ledger.prs.A1
+
+  entry.tickErrors = 2
+  await driver.runTick()
+
+  const events = eventsSince(manifest)
+
+  assert.match(entry.trace.error, /^POST repos\/example\/widgets\/issues\/11\/comments: HTTP 422: Validation Failed$/)
+  assert.deepEqual([entry.trace.comment, entry.trace.digest, entry.trace.at], [null, null, null])
+  assert.equal(entry.tickErrors, 0)
+  assert.ok(!events.some((event) => ['error', 'tick-error', 'trace-failed'].includes(event.kind)), JSON.stringify(events))
+  assert.deepEqual(entry.stageLabels, REJECTED_LABELS)
+  assert.equal(readLedger(manifest).prs.A1.trace.error, entry.trace.error, 'the tick saves it')
+
+  github.answer([prRoute(), ...labelRoutes(), ...traceRoutes()])
+  await driver.tick()
+
+  const { written, built } = lastTrace(manifest, driver, github)
+
+  assert.deepEqual(written, built)
+  assert.deepEqual(entry.trace, { comment: 901, digest: traceDigest(built), at: written.updated_at, error: null })
+})
+
+test('trace: a deleted comment, or one the agents may not edit, gets a new comment and its id is kept', async () => {
+  const refusals = [
+    { status: 404, body: { message: 'Not Found' } },
+    { status: 403, body: { message: 'Resource not accessible by integration' } },
+  ]
+
+  for (const refusal of refusals) {
+    const gone = { method: 'PATCH', path: traceCommentPath(800), ...refusal }
+    const { driver, github } = traceDriver({ routes: [gone, ...traceRoutes({ id: 902 })] })
+    const entry = driver.ledger.prs.A1
+
+    entry.trace = { comment: 800, digest: 'a written trace with other facts', at: at(80), error: null }
+    await driver.tick()
+
+    assert.deepEqual(commentRequests(github), [
+      ['PATCH', traceCommentPath(800)],
+      ['POST', TRACE_COMMENTS],
+    ])
+
+    assert.deepEqual([entry.trace.comment, entry.trace.error], [902, null], refusal.status)
+  }
+})
+
+test('trace: with no id on record, the trace comment already on the PR is edited, not posted again', async () => {
+  const comment = { id: 777, user: { login: 'demo-bot' }, created_at: at(70), body: `${TRACE_MARKER}\nA trace.\n\n${DRIVER_MARKER}` }
+  const { driver, github } = traceDriver({ routes: traceRoutes({ comments: [comment], edits: [777] }) })
+
+  await driver.tick()
+
+  assert.deepEqual(commentRequests(github), [
+    ['GET', TRACE_COMMENTS],
+    ['PATCH', traceCommentPath(777)],
+  ])
+
+  assert.equal(driver.ledger.prs.A1.trace.comment, 777)
+})
+
+test('trace: during a GitHub outage no comment call is made', async () => {
+  const { driver, github } = tickDriver({ A1: REJECTED }, { rules: [FETCH], policy: TRACING, routes: [VIEW_502, ...traceRoutes()] })
+
+  await driver.tick()
+
+  assert.ok(driver.ledger.data.githubUnavailable)
+  assert.deepEqual(commentRequests(github), [])
+  assert.equal(driver.ledger.prs.A1.trace, undefined)
+})
+
+test('trace: without policy.trace the driver writes no comment', async () => {
+  const { driver, github } = tickDriver({ A1: REJECTED }, { rules: [FETCH], routes: [prRoute(), ...labelRoutes(), ...traceRoutes()] })
+
+  await driver.tick()
+  driver.ledger.prs.A1.stage = 'verify'
+  driver.ledger.prs.A1.status = { kind: 'running', code: 'verify', sha: SHA, run: 'A1-04-verify', since: at(90) }
+  await driver.tick()
+
+  assert.deepEqual(
+    commentRequests(github).filter(([method]) => method !== 'GET'),
+    [],
+  )
+
+  assert.ok(!Object.hasOwn(driver.ledger.prs.A1, 'trace'))
+})
+
+test('trace: in a tick where the gate merges under merge auto, the last write is the merge, and the next tick writes nothing', async () => {
+  const { manifest, driver, github, tools, gate } = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { rules: [FETCH, MERGE_RULE], policy: { merge: 'auto', ...TRACING }, routes: [prRoute(), ...traceRoutes()] },
+  )
+
+  // GitHub shows the PR merged once the gate has read it.
+  gate.pr = () => {
+    github.answer([prRoute(MERGED_PR), ...traceRoutes()])
+
+    return {}
+  }
+
+  await driver.tick()
+
+  const traces = writtenTraces(github)
+
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(
+    traces.map((trace) => trace.place),
+    [
+      { stage: 'merge', status: 'running', code: 'merge' },
+      { stage: 'merged', status: null, code: null },
+    ],
+  )
+
+  assert.deepEqual(traces.at(-1).merged, { sha: MERGE_SHA, at: driver.ledger.prs.A1.merged.at, by: 'driver' })
+  assert.deepEqual(traces.at(-1), lastTrace(manifest, driver, github).built)
+
+  const merged = github.requests().length
+
+  await driver.tick()
+
+  assert.deepEqual(commentRequests(github, merged), [])
 })
 
 // A stop sets a flag in lib/spawn.mjs for the rest of this process, so these

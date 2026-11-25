@@ -46,6 +46,10 @@ import {
   listRoute,
   zipRoutes,
   artifactRequests,
+  TRACE_COMMENTS,
+  traceRoutes,
+  commentRequests,
+  writtenTraces,
 } from './driver-helpers.mjs'
 
 test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sync sees it merged', async () => {
@@ -110,6 +114,56 @@ test('mergeCandidate: a merge GitHub confirms is recorded as merged, with its co
   assert.equal(driver.ledger.data.lastMerge.sha, MERGE_SHA)
   assert.deepEqual(cleaned, ['A1'])
   assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'merged', pr: 11, sha: MERGE_SHA.slice(0, 7) })
+})
+
+// A1 approved and unheld under merge auto with policy.trace comment, on a GitHub that shows the PR merged.
+function tracedMerge(traceRoutesUsed) {
+  const setup = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto', trace: 'comment' }, rules: [MERGE_RULE], routes: [prRoute(MERGED_PR), ...traceRoutesUsed] },
+  )
+
+  return { ...setup, pr: setup.manifest.prs.find((item) => item.id === 'A1'), entry: setup.driver.ledger.prs.A1 }
+}
+
+test('mergeCandidate: a trace that cannot be written is logged before the merge, and the merge still happens', async () => {
+  const failing = [
+    { path: TRACE_COMMENTS, status: 500, body: { message: 'Server Error' } },
+    { method: 'POST', path: TRACE_COMMENTS, status: 500, body: { message: 'Server Error' } },
+  ]
+
+  const { manifest, driver, tools, pr, entry } = tracedMerge(failing)
+
+  assert.equal(await driver.mergeCandidate(pr), true)
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(placeOf(entry), ['merged', null, null])
+  assert.match(entry.trace.error, /^GET repos\/example\/widgets\/issues\/11\/comments: HTTP 500: Server Error$/)
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ['gate-merge', 'trace-failed', 'merged'],
+  )
+
+  assert.deepEqual(events[1], { id: 'A1', kind: 'trace-failed', error: entry.trace.error })
+})
+
+test('mergeCandidate: the trace written right before the merge shows the merge running', async () => {
+  const { driver, github, tools, pr, entry } = tracedMerge(traceRoutes())
+
+  assert.equal(await driver.mergeCandidate(pr), true)
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(commentRequests(github), [
+    ['GET', TRACE_COMMENTS],
+    ['POST', TRACE_COMMENTS],
+  ])
+
+  const [written] = writtenTraces(github)
+
+  assert.deepEqual(written.place, { stage: 'merge', status: 'running', code: 'merge' })
+  assert.equal(written.merged, null)
+  assert.deepEqual([entry.trace.comment, entry.trace.at, entry.trace.error], [901, written.updated_at, null])
 })
 
 test('mergeNext: unread maintainer feedback holds the merge, and the PR merges once it is read', async () => {
@@ -1271,8 +1325,8 @@ test('verified: a disputed finding the next verifier still finds open escalates 
   const [fixed, disputed] = FIRST_ROUND.items
 
   assert.deepEqual(entry.verdict.recheck, [
-    { id: 'F1', status: 'resolved', evidence: 'F1 is resolved at a1a1a1a.', finding: fixed.text, answer: fixed.answer },
-    { id: 'F2', status: 'open', evidence: 'F2 is open at a1a1a1a.', finding: disputed.text, answer: disputed.answer },
+    { id: 'F1', status: 'resolved', evidence: 'F1 is resolved at a1a1a1a.', finding: fixed.text, answer: fixed.answer, fromReview: null },
+    { id: 'F2', status: 'open', evidence: 'F2 is open at a1a1a1a.', finding: disputed.text, answer: disputed.answer, fromReview: null },
   ])
 })
 
