@@ -519,6 +519,102 @@ test('parity: a review read after the verification gives the same notes and summ
   }
 })
 
+// The overview of a PR's page, from the same model the page fetches.
+function pageOverview(dir, id) {
+  const body = JSON.parse(JSON.stringify(rolloutPr(loadManifest(dir), id)))
+  const ctx = { ...boardContext(viewOf(dir)), route: { r: 'demo', view: 'board', pr: id, tab: 'overview' }, detail: { status: 200, body } }
+
+  return renderDetail(ctx).querySelector('dl')
+}
+
+// The value of an overview field, or null when the page shows none.
+function fieldOf(overview, label) {
+  const items = overview.children
+  const index = items.findIndex((item) => item.tagName === 'DT' && item.textContent === label)
+
+  return index === -1 ? null : items[index + 1]
+}
+
+// The line of `rollout card` that starts with `label: `, without the label, or null.
+function cardLine(dir, id, label) {
+  const line = cli('card', id, '--dir', dir)
+    .split('\n')
+    .find((text) => text.startsWith(`${label}: `))
+
+  return line === undefined ? null : line.slice(label.length + 2)
+}
+
+test('parity: the trace line reads the same in rollout card and on the PR page, and neither shows one without policy.trace', () => {
+  const approve = sampleStatus('needs-you', 'approve')
+  const record = { comment: 901, digest: 'd'.repeat(64), at: at(90), error: null }
+  const prs = {
+    T1: written({ stage: 'merge', status: approve, pr: 101 }),
+    T2: written({ stage: 'merge', status: approve, pr: 102, trace: record }),
+    T3: written({ stage: 'merge', status: approve, pr: 103, trace: { ...record, error: 'PATCH repos/example/widgets:\nHTTP 500' } }),
+  }
+
+  const lines = {
+    T1: 'not written yet',
+    T2: `written at ${at(90)}`,
+    T3: 'the last write failed: PATCH repos/example/widgets: HTTP 500',
+  }
+
+  const traced = rolloutWith(prs, { policy: { trace: 'comment' } })
+  const off = rolloutWith(prs)
+
+  for (const [id, line] of Object.entries(lines)) {
+    const field = fieldOf(pageOverview(traced, id), 'trace')
+
+    assert.equal(cardLine(traced, id, 'trace'), line, id)
+    assert.equal(field.textContent, line, id)
+    assert.equal(textOf(field, 'span.text'), line, id)
+    assert.equal(cardLine(off, id, 'trace'), null, id)
+    assert.equal(fieldOf(pageOverview(off, id), 'trace'), null, id)
+  }
+})
+
+test('parity: the approved by line reads the same in rollout card and on the PR page, and neither shows one with no approval', () => {
+  const delay = sampleStatus('waiting', 'merge-delay')
+  const refusal = 'POST repos/example/widgets/pulls/104/reviews:\nHTTP 422: Unprocessable Entity'
+  const approved = {
+    sha: 'a1'.repeat(20),
+    patchId: 'patch-1',
+    at: at(85),
+    channel: 'inbox',
+    by: 'demo-maintainer',
+    review: null,
+    reviewError: null,
+  }
+
+  const prs = {
+    T1: written({ stage: 'merge', status: delay, pr: 101, approved: { ...approved, review: 7700112233 } }),
+    T2: written({ stage: 'merge', status: delay, pr: 102, approved: { ...approved, reviewError: refusal } }),
+    T3: written({ stage: 'merge', status: delay, pr: 103, approved }),
+    T4: written({ stage: 'merge', status: delay, pr: 104, approved: { ...approved, channel: 'github', by: 'octocat', review: undefined } }),
+    T5: written({ stage: 'merge', status: sampleStatus('needs-you', 'approve'), pr: 105, approved: null }),
+  }
+
+  const lines = {
+    T1: 'demo-maintainer, on GitHub too as review 7700112233',
+    T2: 'demo-maintainer, not on GitHub: POST repos/example/widgets/pulls/104/reviews: HTTP 422: Unprocessable Entity',
+    T3: 'demo-maintainer, not on GitHub',
+    T4: 'octocat, with a review on GitHub',
+  }
+
+  const dir = rolloutWith(prs)
+
+  for (const [id, line] of Object.entries(lines)) {
+    const field = fieldOf(pageOverview(dir, id), 'approved by')
+
+    assert.equal(cardLine(dir, id, 'approved by'), line, id)
+    assert.equal(field.textContent, line, id)
+    assert.equal(textOf(field, 'span.text'), line, id)
+  }
+
+  assert.equal(cardLine(dir, 'T5', 'approved by'), null)
+  assert.equal(fieldOf(pageOverview(dir, 'T5'), 'approved by'), null)
+})
+
 // The header of a PR's page, from the same model the page fetches.
 function pageHeader(dir, id) {
   const body = JSON.parse(JSON.stringify(rolloutPr(loadManifest(dir), id)))

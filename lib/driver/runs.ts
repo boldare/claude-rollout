@@ -371,7 +371,7 @@ export interface RunsContext {
   records: {
     reserveRunName: (manifest: RunManifest, base: string) => string
     startRun: (data: RunLedger['data'], start: RunStart) => void
-    endRun: (data: RunLedger['data'], run: { id: string; role: Role; step?: BriefStep }, detail: DoneDetail) => void
+    endRun: (data: RunLedger['data'], run: { id: string; role: Role; step?: BriefStep; sha?: string | null }, detail: DoneDetail) => void
     recordAnswers: (entry: RunEntry, addressed: Addressed[]) => void
     recordVerdict: (entry: RunEntry, verdict: object) => void
     recordFindings: (entry: RunEntry, blocking: string[], at: IsoTime, fromReview?: (string | null)[]) => void
@@ -1151,6 +1151,24 @@ function backOff(context: RunsContext, entry: RunEntry, result: Pick<AgentResult
   }
 }
 
+// The commit a run speaks for: the head of a READY report, or the commit a verdict judged. The commit a verifier
+// started at is not it, because a verdict may judge another one.
+function runCommit(role: Exclude<BudgetRole, 'brief'>, result: AgentResult<ReadyReport | Verdict>): string | null {
+  if (!result.ok || !result.output) {
+    return null
+  }
+
+  if (role === 'verify') {
+    const verdict = result.output as Verdict
+
+    return typeof verdict.sha === 'string' ? verdict.sha : null
+  }
+
+  const report = result.output as ReadyReport
+
+  return report.status === 'READY' && typeof report.headSha === 'string' ? report.headSha : null
+}
+
 export async function onDone(
   context: RunsContext,
   pr: RunPr,
@@ -1176,7 +1194,7 @@ export async function onDone(
 
   const detail = doneDetail(role, run, result)
   say(pr.id, `${role}-done`, detail)
-  context.records.endRun(ledger.data, { id: pr.id, role }, detail)
+  context.records.endRun(ledger.data, { id: pr.id, role, sha: runCommit(role, result) }, detail)
   logFailed(context, pr, run, result)
 
   if (entry.stage === 'merged') {

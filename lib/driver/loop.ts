@@ -1,6 +1,8 @@
 import * as transitions from '../transitions.ts'
 import type { PrEntry, StoredRun } from '../transitions.ts'
 import type { Head, Hold, IsoTime, OpenStage, RunRecord, WaitingOf } from '../state.ts'
+import { traceBody, traceDigest, traceOf } from '../trace.ts'
+import type { TraceEntry, TraceManifest } from '../trace.ts'
 import { checkClaim } from './claims.ts'
 import type { ClaimPr, ClaimsContext } from './claims.ts'
 import { applyCommands } from './commands.ts'
@@ -34,6 +36,7 @@ type AgentOptions = Parameters<AgentRunner>[2]
 type AgentOutcome = Awaited<ReturnType<AgentRunner>>
 type RecordedProcess = NonNullable<RunRecord['process']>
 type LoopRun = StoredRun & { endedAt?: IsoTime | null; process?: RecordedProcess | null }
+type TracePolicy = TraceManifest['policy']
 
 // What endProcess in lib/sandbox.mjs resolves with. It never rejects.
 interface ProcessEnd {
@@ -58,14 +61,25 @@ export interface LoopManifest {
   dryRun: boolean
   all: LoopPr[]
   prs: LoopPr[]
-  policy: { concurrency: number; tickSeconds: number; merge: string; delegate: DelegatePolicy | null }
+  repo: TraceManifest['repo']
+  gates: TraceManifest['gates']
+  policy: {
+    concurrency: number
+    tickSeconds: number
+    merge: TracePolicy['merge']
+    approval: TracePolicy['approval']
+    trace: 'off' | 'comment'
+    delegate: DelegatePolicy | null
+  }
 }
 
 // The fields of an entry this module reads beside the ones runs.ts types.
-type LoopEntry = RunEntry & {
-  stageLabels?: string[]
-  stageLabelError?: string | null
-}
+// The trace reads every member of a verdict, where runs.ts types only its external.
+type LoopEntry = RunEntry &
+  Pick<TraceEntry, 'verdicts'> & {
+    stageLabels?: string[]
+    stageLabelError?: string | null
+  }
 
 // The start of an outage, kept in the ledger so its clock survives a restart.
 interface Outage {
@@ -167,6 +181,8 @@ export interface LoopContext {
     clientFor: (manifest: LoopManifest) => { stats: () => Omit<TickStats, 'ms'>; resetStats: () => void }
     tickReads: () => unknown
     setStageLabels: (manifest: LoopManifest, number: number, changes: { add: string[]; remove: string[] }) => Promise<void>
+    // Resolves to the id of the comment that now carries the body.
+    writeTraceComment: (manifest: LoopManifest, number: number, options: { comment: number | null; body: string }) => Promise<number>
     depsPending: (manifest: LoopManifest, pr: LoopPr, ledger: LoopLedger) => string[]
     unmergedHeads: (pr: LoopPr, ledger: LoopLedger) => Head[] | null
     findReleasePr: (manifest: LoopManifest) => Promise<{ url: string; number: number } | null>
@@ -749,6 +765,50 @@ async function syncStageLabels(context: LoopContext, pr: LoopPr): Promise<void> 
   }
 }
 
+// The trace on the PR is a view, as the labels are. Only a change of its facts
+// is written. A failure is kept on the entry and tried again, and it is never
+// the PR's error. Resolves to the error of a failed write, never rejects.
+export async function syncTrace(context: LoopContext, pr: { id: string }): Promise<string | null> {
+  const { manifest, ledger } = context
+  const entry = ledger.prs[pr.id]
+  const number = entry.pr
+
+  if (manifest.policy.trace !== 'comment' || !number) {
+    return null
+  }
+
+  const at = context.now()
+
+  try {
+    const trace = traceOf(manifest, pr.id, entry, ledger.data.runs ?? {}, { now: at })
+    const digest = traceDigest(trace)
+
+    if (digest === entry.trace?.digest) {
+      return null
+    }
+
+    const comment = await context.github.writeTraceComment(manifest, number, {
+      comment: entry.trace?.comment ?? null,
+      body: traceBody(trace),
+    })
+
+    // A run that ended during the request moved the PR, and the comment is the old PR's.
+    if (entry.pr !== number) {
+      return null
+    }
+
+    transitions.traceWritten(entry, { comment, digest, at })
+
+    return null
+  } catch (error) {
+    const message = messageOf(error).slice(0, 300)
+
+    transitions.traceFailed(entry, message)
+
+    return message
+  }
+}
+
 // At the end of a tick only: a status a step passes through leaves no
 // event, and one that a job's end or start wrote waits for the next tick.
 function logStatusChanges({ manifest, ledger, state, say }: LoopContext): void {
@@ -829,10 +889,15 @@ export async function tick(context: LoopContext): Promise<void> {
       }
     }
 
-    // During an outage every label call would wait for its timeout.
+    // During an outage every label or trace call would wait for its timeout.
+    // A merged or closed PR still gets the trace of its last change, once.
     if (!state.outageThisTick) {
       for (const pr of manifest.prs) {
         await syncStageLabels(context, pr)
+      }
+
+      for (const pr of manifest.prs) {
+        await syncTrace(context, pr)
       }
     }
 

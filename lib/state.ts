@@ -285,8 +285,13 @@ export interface Verification extends CommitStamp {
 export interface Approval extends CommitStamp {
   patchId: string
   channel: Channel
-  // The maintainer who approved on GitHub. Null for an approval from the inbox.
+  // The login that approved, a maintainer's on GitHub or the driver's own for
+  // rollout approve. Null while the driver does not know it.
   by: GitHubLogin | null
+  // The id of the approving review the driver submitted on GitHub for rollout approve.
+  review: number | null
+  // Why the last try to submit that review failed.
+  reviewError: string | null
 }
 
 export interface Merged {
@@ -354,6 +359,175 @@ export type SentCandidate = ReviewFinding & { id: string; key: string }
 
 // A candidate the verifier left out is unanswered, with no evidence.
 export type CandidateAnswer = SentCandidate & { result: CandidateResult; evidence: string }
+
+export const VERDICTS = ['PASS', 'FAIL'] as const
+export type VerdictValue = (typeof VERDICTS)[number]
+
+export const RECHECK_RESULTS = ['resolved', 'open', 'wrong'] as const
+export type RecheckResult = (typeof RECHECK_RESULTS)[number]
+
+export const CRITERION_LEVELS = ['required', 'recommended'] as const
+export type CriterionLevel = (typeof CRITERION_LEVELS)[number]
+
+export const CRITERION_RESULTS = ['pass', 'fail', 'unverifiable'] as const
+export type CriterionResult = (typeof CRITERION_RESULTS)[number]
+
+export const MERGE_POLICIES = ['human', 'manual', 'auto'] as const
+export type MergePolicy = (typeof MERGE_POLICIES)[number]
+
+// The trace of a PR, as schemas/trace.json spells it for a tool that audits merges. Its members are snake_case
+// because the contract is read outside this repo. A fact the ledger does not hold is still written, as null, 0 or [].
+export interface TracePr {
+  id: string
+  number: number | null
+  base: string | null
+  author: GitHubLogin | null
+}
+
+export interface TracePolicy {
+  merge: MergePolicy
+  approval: Channel
+}
+
+export interface TracePlace {
+  stage: Stage
+  status: StatusKind | null
+  code: string | null
+}
+
+export interface TraceRun {
+  run: string
+  role: Role
+  step: string | null
+  effort: string | null
+  // The model that ran, null until the run ends.
+  model: string | null
+  sha: string | null
+  started_at: IsoTime | null
+  ended_at: IsoTime | null
+  seconds: number | null
+  cost_usd: number
+  ok: boolean | null
+  result: string | null
+}
+
+export interface TraceCost {
+  total_usd: number
+  // Only the roles that have a run.
+  by_role: Partial<Record<Role, number>>
+}
+
+export interface TraceVerified {
+  sha: string | null
+  patch_id: string | null
+  at: IsoTime
+}
+
+export interface TraceCriterion {
+  id: string
+  level: CriterionLevel
+  result: CriterionResult
+}
+
+export interface TraceRecheck {
+  // The F id the verifier answered, null when it is not one.
+  finding: string | null
+  result: RecheckResult
+  // Whether the finding came from the external review. Null when the record does not say.
+  from_review: boolean | null
+}
+
+export interface TraceVerification {
+  run: string | null
+  sha: string | null
+  at: IsoTime | null
+  verdict: VerdictValue
+  blocking: number
+  criteria: TraceCriterion[]
+  rechecks: TraceRecheck[]
+}
+
+export interface TraceReview {
+  sha: string | null
+  run: number | null
+  skipped: string | null
+  reused_from: string | null
+  findings: number
+  candidates: number
+}
+
+export interface TraceAnswer {
+  run: string | null
+  sha: string | null
+  id: string
+  result: CandidateResult
+}
+
+export interface TraceFindingRecheck {
+  run: string | null
+  sha: string | null
+  result: RecheckResult
+}
+
+export interface TraceReviewFinding {
+  criterion: string | null
+  file: string | null
+  title: string | null
+  severity: ReviewSeverity
+  answers: TraceAnswer[]
+  rechecks: TraceFindingRecheck[]
+}
+
+export interface TraceApproval {
+  channel: Channel | null
+  by: GitHubLogin | null
+  sha: string | null
+  patch_id: string | null
+  at: IsoTime
+  github_review: number | null
+}
+
+export interface TraceMerged {
+  sha: string | null
+  at: IsoTime
+  by: Merged['by']
+}
+
+// A fact the trace leaves out, once per field. A reader matches on the field.
+export interface TraceMissing {
+  field: string
+  reason: string
+}
+
+export interface Trace {
+  schema_version: 1
+  updated_at: IsoTime
+  pr: TracePr
+  policy: TracePolicy
+  place: TracePlace
+  head: string | null
+  attempts: Record<BudgetRole, number>
+  runs: TraceRun[]
+  cost: TraceCost
+  verified: TraceVerified | null
+  verifications: TraceVerification[]
+  review: TraceReview | null
+  review_findings: TraceReviewFinding[]
+  approval: TraceApproval | null
+  merged: TraceMerged | null
+  missing: TraceMissing[]
+}
+
+// The comment that carries a PR's trace, as an entry is to record it.
+export interface TraceRecord {
+  // The id of the comment that carries the trace, or null before the first write.
+  comment: number | null
+  // The digest of the trace written last.
+  digest: string | null
+  at: IsoTime | null
+  // The last write's error, or null once a write went through.
+  error: string | null
+}
 
 export interface NoteRecord {
   at: IsoTime

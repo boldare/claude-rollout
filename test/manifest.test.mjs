@@ -197,6 +197,25 @@ test('validateManifest: policy.delegate errors', () => {
   }
 })
 
+test('loadManifest: policy.trace is off by default, and comment loads', () => {
+  assert.equal(loadManifest(makeRollout()).policy.trace, 'off')
+  assert.equal(loadManifest(makeRollout({ policy: { trace: 'comment' } })).policy.trace, 'comment')
+})
+
+test('validateManifest: policy.trace is off or comment', () => {
+  const errors = (trace) => validateManifest({ ...structuredClone(base), policy: { trace } })
+
+  for (const trace of ['on', true, false, 'Comment']) {
+    assert.deepEqual(errors(trace), ['policy.trace must be off or comment'], JSON.stringify(trace))
+  }
+
+  for (const trace of [undefined, 'off', 'comment']) {
+    assert.deepEqual(errors(trace), [], JSON.stringify(trace))
+  }
+
+  assert.throws(() => loadManifest(makeRollout({ policy: { trace: 'on' } })), /policy\.trace must be off or comment/)
+})
+
 test('loadManifest: policy.notify turns the desktop on by default and merges key by key', () => {
   assert.deepEqual(loadManifest(makeRollout()).policy.notify, { desktop: true, command: null, webhook: null })
   assert.deepEqual(loadManifest(makeRollout({ policy: { notify: { command: 'x' } } })).policy.notify, {

@@ -693,9 +693,21 @@ prs:
                 <td><code>inbox</code></td>
                 <td>
                   How your approval reaches the gate under <code>merge: human</code>. <code>inbox</code> means
-                  <a href="commands.html#cmd-approve">rollout approve</a>. <code>github</code> means a maintainer's review on GitHub for PRs
-                  the bot opened. PRs a maintainer authored still use <code>rollout approve</code>, because GitHub does not let authors
-                  approve their own PR. <code>github</code> needs <code>repo.agentToken</code> and <code>repo.maintainers</code>.
+                  <a href="commands.html#cmd-approve">rollout approve</a>, which also leaves an
+                  <a href="how-it-works.html#approval-on-github">approving review</a> on GitHub for a PR another account opened.
+                  <code>github</code> means a maintainer's review on GitHub for PRs the bot opened. PRs a maintainer authored still use
+                  <code>rollout approve</code>, because GitHub does not let authors approve their own PR. <code>github</code> needs
+                  <code>repo.agentToken</code> and <code>repo.maintainers</code>.
+                </td>
+              </tr>
+              <tr id="policy-trace">
+                <td>trace</td>
+                <td><code>off</code> or <code>comment</code></td>
+                <td><code>off</code></td>
+                <td>
+                  With <code>comment</code>, the driver keeps one comment on every PR it manages with the PR's trace: what ran, what was
+                  verified, approved and merged, as a few lines and a JSON block. See
+                  <a href="how-it-works.html#trace">the trace on the PR</a>.
                 </td>
               </tr>
               <tr id="policy-maxBump">

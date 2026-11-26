@@ -46,6 +46,11 @@ import {
   listRoute,
   zipRoutes,
   artifactRequests,
+  TRACE_COMMENTS,
+  traceRoutes,
+  commentRequests,
+  writtenTraces,
+  MAINTAINER_TOKEN,
 } from './driver-helpers.mjs'
 
 test('mergeCandidate: a merge GitHub has not confirmed stays verified until a sync sees it merged', async () => {
@@ -110,6 +115,56 @@ test('mergeCandidate: a merge GitHub confirms is recorded as merged, with its co
   assert.equal(driver.ledger.data.lastMerge.sha, MERGE_SHA)
   assert.deepEqual(cleaned, ['A1'])
   assert.deepEqual(eventsSince(manifest).at(-1), { id: 'A1', kind: 'merged', pr: 11, sha: MERGE_SHA.slice(0, 7) })
+})
+
+// A1 approved and unheld under merge auto with policy.trace comment, on a GitHub that shows the PR merged.
+function tracedMerge(traceRoutesUsed) {
+  const setup = tickDriver(
+    { A1: { ...samplePrs().A1, held: null } },
+    { policy: { merge: 'auto', trace: 'comment' }, rules: [MERGE_RULE], routes: [prRoute(MERGED_PR), ...traceRoutesUsed] },
+  )
+
+  return { ...setup, pr: setup.manifest.prs.find((item) => item.id === 'A1'), entry: setup.driver.ledger.prs.A1 }
+}
+
+test('mergeCandidate: a trace that cannot be written is logged before the merge, and the merge still happens', async () => {
+  const failing = [
+    { path: TRACE_COMMENTS, status: 500, body: { message: 'Server Error' } },
+    { method: 'POST', path: TRACE_COMMENTS, status: 500, body: { message: 'Server Error' } },
+  ]
+
+  const { manifest, driver, tools, pr, entry } = tracedMerge(failing)
+
+  assert.equal(await driver.mergeCandidate(pr), true)
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(placeOf(entry), ['merged', null, null])
+  assert.match(entry.trace.error, /^GET repos\/example\/widgets\/issues\/11\/comments: HTTP 500: Server Error$/)
+
+  const events = eventsSince(manifest)
+
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ['gate-merge', 'trace-failed', 'merged'],
+  )
+
+  assert.deepEqual(events[1], { id: 'A1', kind: 'trace-failed', error: entry.trace.error })
+})
+
+test('mergeCandidate: the trace written right before the merge shows the merge running', async () => {
+  const { driver, github, tools, pr, entry } = tracedMerge(traceRoutes())
+
+  assert.equal(await driver.mergeCandidate(pr), true)
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(commentRequests(github), [
+    ['GET', TRACE_COMMENTS],
+    ['POST', TRACE_COMMENTS],
+  ])
+
+  const [written] = writtenTraces(github)
+
+  assert.deepEqual(written.place, { stage: 'merge', status: 'running', code: 'merge' })
+  assert.equal(written.merged, null)
+  assert.deepEqual([entry.trace.comment, entry.trace.at, entry.trace.error], [901, written.updated_at, null])
 })
 
 test('mergeNext: unread maintainer feedback holds the merge, and the PR merges once it is read', async () => {
@@ -620,6 +675,189 @@ test('merge gate: awaiting-inbox-approval', async () => {
   const { entry } = await judgedOnce({ policy: { merge: 'human' }, fields: { approved: null } })
 
   assert.deepEqual(placeOf(entry), ['merge', 'needs-you', 'approve'])
+})
+
+const LOGIN = 'demo-maintainer'
+const REVIEW_ID = 7700112233
+const REVIEWS = 'repos/example/widgets/pulls/11/reviews'
+const USER_ROUTE = { path: 'user', body: { login: LOGIN } }
+const REVIEW_ROUTE = { method: 'POST', path: REVIEWS, body: { id: REVIEW_ID } }
+const REFUSED_REVIEW = { method: 'POST', path: REVIEWS, status: 422, body: { message: 'Unprocessable Entity' } }
+const REFUSAL_TEXT = 'POST repos/example/widgets/pulls/11/reviews: HTTP 422: Unprocessable Entity'
+const REVIEW_BODY = `Approved through \`rollout approve\` at ${SHA}.\n\n<!-- rollout-driver -->`
+
+// A rollout approve of A1 at `approvedAt`, with `fields` on top.
+function inboxApproval(approvedAt, fields = {}) {
+  return { sha: SHA, patchId: 'patch-a1', at: approvedAt, channel: 'inbox', ...fields }
+}
+
+// A1 under merge: human with an inbox approval, judged once. An old approval
+// merges in that call, a fresh one waits for an hour of merge delay.
+function approvedOnce({ fresh = false, routes = [], fields = {}, pr = {} } = {}) {
+  const approved = inboxApproval(fresh ? new Date().toISOString() : at(81), fields)
+  const policy = fresh ? { merge: 'human', mergeDelaySeconds: 3600 } : { merge: 'human' }
+  const githubRoutes = fresh ? routes : [prRoute(MERGED_PR), ...routes]
+
+  return judgedOnce({ policy, fields: { approved }, rules: [MERGE_RULE], routes: githubRoutes, pr })
+}
+
+// The requests for the driver's login and for the PR's reviews, as [method, path].
+function reviewRequests(github) {
+  return github
+    .requests()
+    .filter((request) => request.path === 'user' || request.path === REVIEWS)
+    .map((request) => [request.method, request.path])
+}
+
+function reviewKinds(manifest) {
+  return kindsSince(manifest).filter((kind) => kind.startsWith('github-review-') || kind === 'error')
+}
+
+function reviewState(approved) {
+  return { by: approved.by, review: approved.review, reviewError: approved.reviewError }
+}
+
+test('merge gate: rollout approve becomes one approving review as the maintainer, at the approved commit, and the PR merges in the same call', async () => {
+  const { manifest, entry, github, tools, acted } = await approvedOnce({ routes: [USER_ROUTE, REVIEW_ROUTE] })
+  const posts = github.requests().filter((request) => request.method === 'POST' && request.path === REVIEWS)
+
+  assert.equal(posts.length, 1)
+  assert.deepEqual(posts[0].body, { commit_id: SHA, event: 'APPROVE', body: REVIEW_BODY })
+  assert.equal(posts[0].headers.authorization, `Bearer ${MAINTAINER_TOKEN}`)
+  assert.deepEqual(reviewState(entry.approved), { by: LOGIN, review: REVIEW_ID, reviewError: null })
+  assert.deepEqual(
+    eventsSince(manifest).filter((event) => event.kind.startsWith('github-review-')),
+    [{ id: 'A1', kind: 'github-review-submitted', review: REVIEW_ID, sha: SHA.slice(0, 7) }],
+  )
+
+  assert.equal(acted, true)
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(placeOf(entry), ['merged', null, null])
+})
+
+test('merge gate: inside the merge delay the review goes out once, and a second pass asks GitHub for neither the login nor a review', async () => {
+  const { manifest, driver, pr, entry, github } = await approvedOnce({ fresh: true, routes: [USER_ROUTE, REVIEW_ROUTE] })
+
+  await driver.mergeCandidate(pr)
+
+  assert.deepEqual(reviewRequests(github), [
+    ['GET', 'user'],
+    ['POST', REVIEWS],
+  ])
+
+  assert.deepEqual(reviewState(entry.approved), { by: LOGIN, review: REVIEW_ID, reviewError: null })
+  assert.deepEqual(reviewKinds(manifest), ['github-review-submitted'])
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'merge-delay'])
+})
+
+test('merge gate: a refused review is kept on the approval and logged once, holds nothing, and a later pass that GitHub accepts clears it', async () => {
+  const { manifest, driver, pr, entry, github } = await approvedOnce({ fresh: true, routes: [USER_ROUTE, REFUSED_REVIEW] })
+  const lastError = entry.lastError
+
+  await driver.mergeCandidate(pr)
+
+  assert.deepEqual(reviewState(entry.approved), { by: LOGIN, review: undefined, reviewError: REFUSAL_TEXT })
+  assert.deepEqual(reviewKinds(manifest), ['github-review-failed'])
+  assert.deepEqual(eventsSince(manifest).find((event) => event.kind === 'github-review-failed').error, REFUSAL_TEXT)
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'merge-delay'])
+  assert.equal(entry.lastError, lastError)
+  assert.deepEqual(reviewRequests(github), [
+    ['GET', 'user'],
+    ['POST', REVIEWS],
+    ['POST', REVIEWS],
+  ])
+
+  github.answer([USER_ROUTE, REVIEW_ROUTE])
+  await driver.mergeCandidate(pr)
+
+  assert.deepEqual(reviewState(entry.approved), { by: LOGIN, review: REVIEW_ID, reviewError: null })
+  assert.deepEqual(reviewKinds(manifest), ['github-review-failed', 'github-review-submitted'])
+})
+
+test('merge gate: a refused review does not stop the merge once the delay passed', async () => {
+  const { manifest, entry, tools, acted } = await approvedOnce({ routes: [USER_ROUTE, REFUSED_REVIEW] })
+
+  assert.equal(acted, true)
+  assert.equal(mergeCalls(tools).length, 1)
+  assert.deepEqual(placeOf(entry), ['merged', null, null])
+  assert.deepEqual(reviewState(entry.approved), { by: LOGIN, review: undefined, reviewError: REFUSAL_TEXT })
+  assert.deepEqual(reviewKinds(manifest), ['github-review-failed'])
+})
+
+test("merge gate: the driver's own PR gets no review, its login is recorded and an earlier login error is cleared", async () => {
+  const earlier = { reviewError: "the driver's login is unknown: GET user: HTTP 500: Server Error" }
+  const { manifest, entry, github } = await approvedOnce({
+    fresh: true,
+    fields: earlier,
+    routes: [{ path: 'user', body: { login: 'demo-bot' } }],
+  })
+
+  assert.deepEqual(reviewRequests(github), [['GET', 'user']])
+  assert.deepEqual(reviewState(entry.approved), { by: 'demo-bot', review: undefined, reviewError: null })
+  assert.deepEqual(reviewKinds(manifest), [])
+})
+
+test('merge gate: a login GitHub does not give holds nothing, and the next pass reads it again and submits the review', async () => {
+  const failing = { path: 'user', status: 500, body: { message: 'Server Error' } }
+  const { manifest, driver, pr, entry, github } = await approvedOnce({ fresh: true, routes: [failing, REVIEW_ROUTE] })
+
+  assert.deepEqual(reviewRequests(github), [['GET', 'user']])
+  assert.ok(entry.approved.reviewError.startsWith("the driver's login is unknown: "), entry.approved.reviewError)
+  assert.equal(entry.approved.by, undefined)
+  assert.deepEqual(placeOf(entry), ['merge', 'waiting', 'merge-delay'])
+
+  github.answer([USER_ROUTE, REVIEW_ROUTE])
+  await driver.mergeCandidate(pr)
+
+  assert.deepEqual(reviewRequests(github), [
+    ['GET', 'user'],
+    ['GET', 'user'],
+    ['POST', REVIEWS],
+  ])
+
+  assert.deepEqual(reviewState(entry.approved), { by: LOGIN, review: REVIEW_ID, reviewError: null })
+  assert.deepEqual(reviewKinds(manifest), ['github-review-failed', 'github-review-submitted'])
+})
+
+test('merge gate: a held PR, and an approval that already has its login and review, ask GitHub for neither', async () => {
+  const done = { by: LOGIN, review: REVIEW_ID, reviewError: null }
+  const held = await judgedOnce({
+    policy: { merge: 'human' },
+    fields: { held: samplePrs().A1.held, approved: inboxApproval(at(81)) },
+    routes: [USER_ROUTE, REVIEW_ROUTE],
+  })
+
+  const reviewed = await approvedOnce({ fresh: true, fields: done, routes: [USER_ROUTE, REVIEW_ROUTE] })
+  const moved = await approvedOnce({
+    fresh: true,
+    fields: { ...done, sha: NEW_HEAD },
+    pr: { headRefOid: NEW_HEAD },
+    routes: [USER_ROUTE, REVIEW_ROUTE],
+  })
+
+  for (const [name, setup] of Object.entries({ held, reviewed, moved })) {
+    assert.deepEqual(reviewRequests(setup.github), [], name)
+    assert.deepEqual(reviewKinds(setup.manifest), [], name)
+  }
+
+  assert.deepEqual(reviewState(moved.entry.approved), done)
+  assert.deepEqual(placeOf(held.entry), ['merge', 'waiting', 'held'])
+})
+
+test('merge gate: merge manual, merge auto and approval github submit no review for an inbox approval', async () => {
+  for (const policy of [{ merge: 'manual' }, { merge: 'auto' }, { merge: 'human', approval: 'github' }]) {
+    const { manifest, driver, github } = tickDriver(
+      { A1: { ...samplePrs().A1, held: null, approved: inboxApproval(at(81)) } },
+      { policy: { merge: policy.merge }, rules: [MERGE_RULE], routes: [prRoute(MERGED_PR), USER_ROUTE, REVIEW_ROUTE] },
+    )
+
+    // Without a token the manifest refuses approval: github, so the test sets it here.
+    Object.assign(manifest.policy, policy)
+    await driver.mergeCandidate(manifest.prs.find((item) => item.id === 'A1'))
+
+    assert.deepEqual(reviewRequests(github), [], JSON.stringify(policy))
+    assert.deepEqual(reviewKinds(manifest), [], JSON.stringify(policy))
+  }
 })
 
 test('merge gate: awaiting-github-review, stale-github-review', async () => {
@@ -1271,8 +1509,8 @@ test('verified: a disputed finding the next verifier still finds open escalates 
   const [fixed, disputed] = FIRST_ROUND.items
 
   assert.deepEqual(entry.verdict.recheck, [
-    { id: 'F1', status: 'resolved', evidence: 'F1 is resolved at a1a1a1a.', finding: fixed.text, answer: fixed.answer },
-    { id: 'F2', status: 'open', evidence: 'F2 is open at a1a1a1a.', finding: disputed.text, answer: disputed.answer },
+    { id: 'F1', status: 'resolved', evidence: 'F1 is resolved at a1a1a1a.', finding: fixed.text, answer: fixed.answer, fromReview: null },
+    { id: 'F2', status: 'open', evidence: 'F2 is open at a1a1a1a.', finding: disputed.text, answer: disputed.answer, fromReview: null },
   ])
 })
 

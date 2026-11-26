@@ -284,7 +284,9 @@
                 <td class="nowrap">your token, from <code>gh auth token</code></td>
                 <td>
                   Reads PRs, reviews, comments and check runs, creates the rollout label and deletes merged branches, through its REST
-                  client, <code>lib/gh.mjs</code>. Merges with <code>gh pr merge</code>, its one gh call.
+                  client, <code>lib/gh.mjs</code>. Under <code>merge: human</code> and <code>approval: inbox</code>, also reads your login
+                  and submits the <a href="#approval-on-github">approving review</a> of <code>rollout approve</code>. Merges with
+                  <code>gh pr merge</code>, its one gh call.
                 </td>
               </tr>
               <tr>
@@ -292,7 +294,9 @@
                 <td class="nowrap">the bot's token</td>
                 <td>
                   The <code>--force-with-lease</code> push after a rebase. Under the Docker runtime, also the fetches in a PR's clone once
-                  the clone is set up. Through <code>lib/gh.mjs</code>, replies in review threads and the summary comment after a fix.
+                  the clone is set up. Through <code>lib/gh.mjs</code>, replies in review threads, the summary comment after a fix and, with
+                  <a href="manifest.html#policy-trace"><code>policy.trace: comment</code></a
+                  >, the <a href="#trace">trace comment</a>.
                 </td>
               </tr>
               <tr>
@@ -374,6 +378,12 @@
           <li>
             <strong>Advance every PR</strong> in priority order, unless the rollout is held. Briefs, implementers, fixers, verifiers and
             delegates start while slots are free, and READY claims are checked.
+          </li>
+          <li>
+            <strong>Labels and trace.</strong> Each PR with a number gets the labels of its stage and status. With
+            <a href="manifest.html#policy-trace"><code>policy.trace: comment</code></a
+            >, its <a href="#trace">trace comment</a> is written too. Each is written only when it changed. Both are skipped during an
+            <a href="#outage">outage</a>. A failed write is kept on the PR and tried again on the next tick. It is never the PR's error.
           </li>
           <li><strong>Save</strong> the ledger.</li>
           <li>
@@ -1808,6 +1818,21 @@
           <code>merged-on-github</code> lasts until the next sync records the merge.
         </p>
 
+        <p id="approval-on-github">
+          <strong>An approval GitHub sees too.</strong> Under <code>merge: human</code> and
+          <a href="manifest.html#policy-approval"><code>approval: inbox</code></a
+          >, after <a href="commands.html#cmd-approve"><code>rollout approve</code></a> the gate submits an approving review at the approved
+          commit, as you, when another account opened the PR. The driver reads your login with <code>GET /user</code> and keeps it while it
+          runs. It logs <code>github-review-submitted</code> with the review's id. Your own PR gets none, because GitHub refuses an approval
+          of one's own PR. So does every PR without <a href="manifest.html#repo-agentToken"><code>repo.agentToken</code></a
+          >, because the agents then open PRs as you. A held PR gets its review once released. A failure is kept on the approval, logged
+          once per cause as <code>github-review-failed</code> and tried again on later ticks. It never holds the merge, and the gate never
+          waits for the review. A head that moves with the same patch keeps the approval and its review, and gets no second one. A timeout
+          or a crash right after GitHub took the review can leave a second one. A dry run submits the review too, because it fakes only the
+          merge. Under a ruleset that asks for an approval, the tick that submits the review read GitHub before it, so it can send one
+          <code>github-blocked</code> notice. The PR then merges on a later tick.
+        </p>
+
         <p>
           With <code>merge: human</code> the driver then waits
           <a href="manifest.html#policy-mergeDelaySeconds"><code>policy.mergeDelaySeconds</code></a> (120 s), counted from when it first
@@ -2074,6 +2099,381 @@
           </li>
         </ul>
 
+        <h2 id="trace">The trace on the PR <a class="anchor" href="#trace" aria-label="Link to this section">#</a></h2>
+
+        <p>
+          With <a href="manifest.html#policy-trace"><code>policy.trace: comment</code></a
+          >, the driver keeps one comment on every PR it manages that has a number. The comment holds the PR's trace: what ran, what was
+          verified, approved and merged, built from the ledger alone. It is meant for you and for a tool that audits merges, such as a
+          report. A trace is only a view. The driver never reads its facts back, and nothing decides from it. Without the key, the default
+          <code>off</code>, the driver writes no comment.
+        </p>
+
+        <p>The comment has these parts:</p>
+
+        <ul>
+          <li>
+            Its first line is <code>&lt;!-- rollout-trace --&gt;</code> and its last line is the driver's
+            <code>&lt;!-- rollout-driver --&gt;</code>. GitHub hides both.
+          </li>
+          <li>
+            A few lines for people: the stage, the status and the head, then a short table of the runs, the cost, the verification, the
+            external review, the approval and the merge.
+          </li>
+          <li>A folded block, <em>Machine-readable trace</em>, with the trace as JSON in a fenced block tagged <code>json</code>.</li>
+        </ul>
+
+        <p>
+          A reader takes the newest comment whose body starts with <code>&lt;!-- rollout-trace --&gt;</code>, then its first fenced block
+          tagged <code>json</code>. GitHub can give a body back with CRLF line ends.
+        </p>
+
+        <ul>
+          <li>
+            <strong>When it is written.</strong> At the end of a tick when the trace's digest changed, right before a merge, and after a
+            merge or a close. The digest leaves out <code>updated_at</code>, so a tick with no change makes no call. Under
+            <code>merge: manual</code> you merge, so the trace is as current as the last tick. A tick that met an
+            <a href="#outage">outage</a> writes none at its end.
+          </li>
+          <li>
+            <strong>Who writes it.</strong> The agents' account, or you without
+            <a href="manifest.html#repo-agentToken"><code>repo.agentToken</code></a
+            >. The driver's marker keeps the comment out of your <a href="#feedback">feedback</a>, also under your login.
+          </li>
+          <li>
+            <strong>How.</strong> The first write posts the comment, and every later one edits it in place. A deleted comment (404) is
+            posted again. One the account may not edit (403) gets a new comment, and the newest one speaks. After a crash the driver finds
+            its comment again by the two markers, so it posts no second one. A PR replaced by a new PR gets a comment of its own.
+          </li>
+          <li>
+            <strong>A failure.</strong> The error is kept on the PR, and the write is tried again on the next tick. It is never the PR's
+            error and never holds a merge. Before a merge the driver logs <code>trace-failed</code> with the error.
+            <a href="commands.html#cmd-card"><code>rollout card</code></a> and the PR page show when the trace was written last, or why the
+            last write failed.
+          </li>
+        </ul>
+
+        <p>
+          The contract's source is
+          <a href="https://github.com/boldare/claude-rollout/blob/main/schemas/trace.json"><code>schemas/trace.json</code></a
+          >, a JSON Schema, with
+          <a href="https://github.com/boldare/claude-rollout/blob/main/examples/trace.json"><code>examples/trace.json</code></a> as its
+          example. <code>schema_version</code> is 1. Every field is present in every trace. A value the driver lacks is <code>null</code> or
+          an empty list, and <code>missing</code> names it once per kind.
+        </p>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>schema_version</code></td>
+                <td><code>1</code></td>
+              </tr>
+              <tr>
+                <td><code>updated_at</code></td>
+                <td>When the driver built the trace, an ISO time</td>
+              </tr>
+              <tr>
+                <td><code>pr</code></td>
+                <td>
+                  <code>id</code> (the manifest id), <code>number</code>, <code>base</code>, <code>author</code> (a login or
+                  <code>null</code>)
+                </td>
+              </tr>
+              <tr>
+                <td><code>policy</code></td>
+                <td>
+                  <code>merge</code> (<code>human</code>, <code>manual</code>, <code>auto</code>) and
+                  <code>approval</code> (<code>inbox</code>, <code>github</code>), so a reader knows whether an approval was asked for
+                </td>
+              </tr>
+              <tr>
+                <td><code>place</code></td>
+                <td>
+                  <code>stage</code>, <code>status</code> (<code>running</code>, <code>waiting</code>, <code>needs-you</code>, or
+                  <code>null</code> once merged), <code>code</code> (or <code>null</code>)
+                </td>
+              </tr>
+              <tr>
+                <td><code>head</code></td>
+                <td>The commit the driver last checked, 40 hex characters, or <code>null</code></td>
+              </tr>
+              <tr>
+                <td><code>attempts</code></td>
+                <td><code>brief</code>, <code>implement</code>, <code>fix</code>, <code>verify</code></td>
+              </tr>
+              <tr>
+                <td><code>runs</code></td>
+                <td>One per agent run of the PR, oldest first</td>
+              </tr>
+              <tr>
+                <td><code>cost</code></td>
+                <td><code>total_usd</code> (the entry's total) and <code>by_role</code> (the runs' costs summed per role)</td>
+              </tr>
+              <tr>
+                <td><code>verified</code></td>
+                <td><code>sha</code>, <code>patch_id</code> and <code>at</code> of the verification that holds, or <code>null</code></td>
+              </tr>
+              <tr>
+                <td><code>verifications</code></td>
+                <td>One per verdict the entry keeps, oldest first, 10 at most</td>
+              </tr>
+              <tr>
+                <td><code>review</code></td>
+                <td>
+                  The external review read for <code>head</code>, or <code>null</code> without
+                  <a href="manifest.html#gates-verify-externalFindings"><code>gates.verify.externalFindings</code></a> or a read
+                </td>
+              </tr>
+              <tr>
+                <td><code>review_findings</code></td>
+                <td>One per finding of an external review that went to a verifier</td>
+              </tr>
+              <tr>
+                <td><code>approval</code></td>
+                <td>The approval that holds, or <code>null</code></td>
+              </tr>
+              <tr>
+                <td><code>merged</code></td>
+                <td>
+                  <code>sha</code> (or <code>null</code>), <code>at</code>, <code>by</code> (<code>driver</code> or <code>github</code>), or
+                  <code>null</code>
+                </td>
+              </tr>
+              <tr>
+                <td><code>missing</code></td>
+                <td>A list of <code>{ field, reason }</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>One of</th>
+                <th>Members</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="nowrap">A run</td>
+                <td>
+                  <code>run</code>, <code>role</code>, <code>step</code>, <code>effort</code>, <code>model</code> (null until the run ends),
+                  <code>sha</code> (the commit of the READY report or of the verdict, null for a brief, a delegate, a run that reported none
+                  and a run recorded before the field existed), <code>started_at</code>, <code>ended_at</code>, <code>seconds</code>,
+                  <code>cost_usd</code> (0 until the run ends), <code>ok</code> (null until the run ends), <code>result</code> (such as
+                  <code>READY</code>, <code>PASS</code>, <code>FAIL</code>, or null)
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">A verification</td>
+                <td>
+                  <code>run</code>, <code>sha</code>, <code>at</code>, <code>verdict</code> (<code>PASS</code> or <code>FAIL</code> as
+                  recorded, where a PASS with a failed required criterion or a confirmed candidate is <code>FAIL</code>),
+                  <code>blocking</code> (a count), <code>criteria</code> (each <code>id</code>, <code>level</code> required or recommended,
+                  <code>result</code> pass, fail or unverifiable), <code>rechecks</code> (each <code>finding</code> such as <code>F2</code>,
+                  <code>result</code> resolved, open or wrong, and <code>from_review</code>: true when the finding came from a confirmed
+                  candidate, false when not, null on an older record)
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">The review</td>
+                <td>
+                  <code>sha</code>, <code>run</code> (the check run's id or null), <code>skipped</code> (the reason there is no result, or
+                  null), <code>reused_from</code> (the commit the line numbers refer to, or null), <code>findings</code> (the number kept),
+                  <code>candidates</code> (the number at or above <code>minSeverity</code>)
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">A review finding</td>
+                <td>
+                  One per key (criterion, file and normalised title): <code>criterion</code>, <code>file</code>, <code>title</code> (each on
+                  one line and cut), <code>severity</code>, <code>answers</code> (oldest first, each <code>run</code>, <code>sha</code>,
+                  <code>id</code> such as <code>X1</code>, <code>result</code> confirmed, refuted, unverifiable or unanswered),
+                  <code>rechecks</code> (each <code>run</code>, <code>sha</code>, <code>result</code>)
+                </td>
+              </tr>
+              <tr>
+                <td class="nowrap">The approval</td>
+                <td>
+                  <code>channel</code> (<code>inbox</code> or <code>github</code>), <code>by</code> (the maintainer's login for a GitHub
+                  approval, the driver's own login for an inbox approval, or null while the driver does not know it), <code>sha</code>,
+                  <code>patch_id</code>, <code>at</code>, <code>github_review</code> (the id of the
+                  <a href="#approval-on-github">approving review</a> the driver submitted for an inbox approval, or null while there is
+                  none)
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <ul>
+          <li>
+            The body is 60,000 characters at most. The oldest runs go first, then the oldest verifications, then the oldest review findings,
+            and <code>missing</code> says how many went.
+          </li>
+          <li>
+            In the JSON text, <code>&lt;</code>, <code>&gt;</code>, <code>&amp;</code> and the backtick are written as <code>\u003c</code>,
+            <code>\u003e</code>, <code>\u0026</code> and <code>\u0060</code>, so no value can close the block around it.
+          </li>
+          <li>
+            A text that holds a word of <a href="manifest.html#repo-denylist"><code>repo.denylist</code></a> is <code>null</code>, and its
+            <code>missing</code> line does not repeat it.
+          </li>
+          <li>The trace holds no agent prose. Its only texts are a review finding's criterion, file and title.</li>
+          <li>A change a reader of version 1 cannot ignore raises <code>schema_version</code>.</li>
+        </ul>
+
+        <p>The example, <code>examples/trace.json</code>:</p>
+
+        <pre><code>{
+  "schema_version": 1,
+  "updated_at": "2026-12-01T10:42:07.000Z",
+  "pr": { "id": "A3", "number": 42, "base": "main", "author": "example-bot" },
+  "policy": { "merge": "human", "approval": "inbox" },
+  "place": { "stage": "merge", "status": "waiting", "code": "merge-delay" },
+  "head": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+  "attempts": { "brief": 1, "implement": 1, "fix": 1, "verify": 2 },
+  "runs": [
+    {
+      "run": "A3-01-brief-write",
+      "role": "brief",
+      "step": "write",
+      "effort": "high",
+      "model": "example-model-1",
+      "sha": null,
+      "started_at": "2026-12-01T08:00:00.000Z",
+      "ended_at": "2026-12-01T08:06:10.000Z",
+      "seconds": 370,
+      "cost_usd": 1.12,
+      "ok": true,
+      "result": null
+    },
+    {
+      "run": "A3-01-implement",
+      "role": "implement",
+      "step": null,
+      "effort": "xhigh",
+      "model": "example-model-1",
+      "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "started_at": "2026-12-01T08:07:00.000Z",
+      "ended_at": "2026-12-01T08:55:00.000Z",
+      "seconds": 2880,
+      "cost_usd": 6.02,
+      "ok": true,
+      "result": "READY"
+    },
+    {
+      "run": "A3-01-verify",
+      "role": "verify",
+      "step": null,
+      "effort": "high",
+      "model": "example-model-1",
+      "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "started_at": "2026-12-01T09:10:00.000Z",
+      "ended_at": "2026-12-01T09:21:30.000Z",
+      "seconds": 690,
+      "cost_usd": 2.4,
+      "ok": true,
+      "result": "FAIL"
+    },
+    {
+      "run": "A3-01-fix",
+      "role": "fix",
+      "step": null,
+      "effort": "xhigh",
+      "model": "example-model-1",
+      "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+      "started_at": "2026-12-01T09:25:00.000Z",
+      "ended_at": "2026-12-01T09:50:00.000Z",
+      "seconds": 1500,
+      "cost_usd": 1.9,
+      "ok": true,
+      "result": "READY"
+    },
+    {
+      "run": "A3-02-verify",
+      "role": "verify",
+      "step": null,
+      "effort": "high",
+      "model": "example-model-1",
+      "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+      "started_at": "2026-12-01T10:18:00.000Z",
+      "ended_at": "2026-12-01T10:30:00.000Z",
+      "seconds": 720,
+      "cost_usd": 0.9,
+      "ok": true,
+      "result": "PASS"
+    }
+  ],
+  "cost": { "total_usd": 12.34, "by_role": { "brief": 1.12, "implement": 6.02, "fix": 1.9, "verify": 3.3 } },
+  "verified": { "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d", "patch_id": "9b2d4e1f", "at": "2026-12-01T10:30:00.000Z" },
+  "verifications": [
+    {
+      "run": "A3-01-verify",
+      "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+      "at": "2026-12-01T09:21:30.000Z",
+      "verdict": "FAIL",
+      "blocking": 1,
+      "criteria": [{ "id": "tests-cover-the-change", "level": "required", "result": "pass" }],
+      "rechecks": []
+    },
+    {
+      "run": "A3-02-verify",
+      "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+      "at": "2026-12-01T10:30:00.000Z",
+      "verdict": "PASS",
+      "blocking": 0,
+      "criteria": [{ "id": "tests-cover-the-change", "level": "required", "result": "pass" }],
+      "rechecks": [{ "finding": "F1", "result": "resolved", "from_review": true }]
+    }
+  ],
+  "review": {
+    "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+    "run": 9100200300,
+    "skipped": null,
+    "reused_from": null,
+    "findings": 1,
+    "candidates": 1
+  },
+  "review_findings": [
+    {
+      "criterion": "review.correctness",
+      "file": "src/orders/total.ts",
+      "title": "The total ignores a refunded line",
+      "severity": "high",
+      "answers": [{ "run": "A3-01-verify", "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", "id": "X1", "result": "confirmed" }],
+      "rechecks": [{ "run": "A3-02-verify", "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d", "result": "resolved" }]
+    },
+    {
+      "criterion": "review.naming",
+      "file": "src/orders/total.ts",
+      "title": "A flag named tmp",
+      "severity": "medium",
+      "answers": [{ "run": "A3-01-verify", "sha": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", "id": "X2", "result": "refuted" }],
+      "rechecks": []
+    }
+  ],
+  "approval": {
+    "channel": "inbox",
+    "by": "octocat",
+    "sha": "4f1c2d3e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+    "patch_id": "9b2d4e1f",
+    "at": "2026-12-01T10:40:00.000Z",
+    "github_review": 7700112233
+  },
+  "merged": null,
+  "missing": []
+}</code></pre>
+
         <h2 id="notifications">Notifications <a class="anchor" href="#notifications" aria-label="Link to this section">#</a></h2>
 
         <p>
@@ -2130,6 +2530,7 @@
           <li><a href="#gate">The merge gate</a></li>
           <li><a href="#failures">Failures and recovery</a></li>
           <li><a href="#feedback">Maintainer feedback</a></li>
+          <li><a href="#trace">The trace on the PR</a></li>
           <li><a href="#notifications">Notifications</a></li>
         </ul>
       </aside>

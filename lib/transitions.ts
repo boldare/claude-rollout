@@ -9,6 +9,7 @@ import type {
   Fix,
   FixReason,
   GateBlockCode,
+  GitHubLogin,
   Head,
   Hold,
   IsoTime,
@@ -29,6 +30,7 @@ import type {
   Stage,
   Status,
   StatusAt,
+  TraceRecord,
   Verification,
   WaitingDetails,
   WaitingOf,
@@ -64,8 +66,15 @@ interface StoredVerdict {
   after?: number
 }
 
-// Version 2 keeps no channel on an approval from before channels, and no login on one from the inbox.
-type StoredApproval = Pick<Approval, 'sha' | 'at'> & { patchId?: string | null; channel?: Approval['channel']; by?: Approval['by'] }
+// Version 2 keeps no channel on an approval from before channels. Older
+// records lack `by`, `review` and `reviewError`.
+type StoredApproval = Pick<Approval, 'sha' | 'at'> & {
+  patchId?: string | null
+  channel?: Approval['channel']
+  by?: Approval['by']
+  review?: Approval['review']
+  reviewError?: Approval['reviewError']
+}
 
 // A note as version 2 records it: what it answered is the question's kind and text.
 export interface StoredNote {
@@ -136,6 +145,8 @@ interface StoredFields {
   review?: Review | null
   // Missing on an entry no candidate ever went to a verifier for.
   reviewMemory?: ReviewMemory | null
+  // Missing on an entry whose trace was never written.
+  trace?: TraceRecord | null
 }
 
 type Placement<Member> = Member extends Entry ? Pick<Member, 'stage' | 'status'> : never
@@ -488,7 +499,15 @@ function dropOtherReview(entry: PrEntry, sha: string): void {
   }
 }
 
+// A trace record names a comment on one PR. Without it, the next write posts on the new PR and leaves the old one's comment alone.
+function dropOtherTrace(entry: PrEntry, pr: number): void {
+  if (entry.trace && entry.pr !== pr) {
+    entry.trace = null
+  }
+}
+
 export function toClaimed(entry: PrEntry, { pr, sha, at }: CommitStamp & { pr: number }): void {
+  dropOtherTrace(entry, pr)
   entry.pr = pr
   entry.claimedSha = sha
   entry.claimedAt = at
@@ -731,6 +750,7 @@ export function toMerged(entry: PrEntry, { mergeSha, pr, merged }: { mergeSha?: 
   }
 
   if (pr !== undefined) {
+    dropOtherTrace(entry, pr)
     entry.pr = pr
   }
 
@@ -947,6 +967,33 @@ export function approveInbox(entry: PrEntry, approval: StoredApproval, { until, 
   place(entry, 'merge', { kind: 'waiting', code: 'merge-delay', until }, { since: at })
 }
 
+// The driver may learn its login only after rollout approve. A login already recorded stays.
+export function approvalBy(entry: PrEntry, login: GitHubLogin): void {
+  if (!entry.approved || (entry.approved.by ?? null) !== null) {
+    return
+  }
+
+  entry.approved = { ...entry.approved, by: login }
+}
+
+// The approving review the driver submitted on GitHub. Its id ends any earlier failure.
+export function approvalReviewed(entry: PrEntry, review: number): void {
+  if (!entry.approved) {
+    return
+  }
+
+  entry.approved = { ...entry.approved, review, reviewError: null }
+}
+
+// Why the approving review could not be submitted, or null once that no longer applies.
+export function approvalReviewError(entry: PrEntry, error: string | null): void {
+  if (!entry.approved) {
+    return
+  }
+
+  entry.approved = { ...entry.approved, reviewError: error }
+}
+
 // The status setters below write the stage and the status only, never the fix.
 
 export function setStatus<At extends OpenStage>(entry: PrEntry, stage: At, status: Unstamped<StatusAt<At>>, at: IsoTime): void {
@@ -1048,6 +1095,17 @@ export function unheld(entry: PrEntry, at: IsoTime): void {
   } else {
     write(entry, openStage(entry), SLOT, at)
   }
+}
+
+export function traceWritten(entry: PrEntry, { comment, digest, at }: { comment: number; digest: string; at: IsoTime }): void {
+  entry.trace = { comment, digest, at, error: null }
+}
+
+// The record keeps the last write that went through, so the next write edits its comment.
+export function traceFailed(entry: PrEntry, error: string): void {
+  const last = entry.trace
+
+  entry.trace = { comment: last?.comment ?? null, digest: last?.digest ?? null, at: last?.at ?? null, error }
 }
 
 // The migration from version 2. Only the code below reads the fields that version 3 removed.

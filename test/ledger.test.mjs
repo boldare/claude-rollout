@@ -217,15 +217,41 @@ test('recheckedFindings: each re-checked id with the text and the answer it was 
       { id: 'F7', status: 'wrong', evidence: 'There is no F7.' },
     ]),
     [
-      { id: 'F1', status: 'resolved', evidence: 'a.mjs:3', finding: 'first', answer: null },
-      { id: 'F2', status: 'open', evidence: 'b.mjs:9', finding: 'second', answer: { outcome: 'disputed', action: 'Not a defect.' } },
-      { id: 'F7', status: 'wrong', evidence: 'There is no F7.', finding: null, answer: null },
+      { id: 'F1', status: 'resolved', evidence: 'a.mjs:3', finding: 'first', answer: null, fromReview: null },
+      {
+        id: 'F2',
+        status: 'open',
+        evidence: 'b.mjs:9',
+        finding: 'second',
+        answer: { outcome: 'disputed', action: 'Not a defect.' },
+        fromReview: null,
+      },
+      { id: 'F7', status: 'wrong', evidence: 'There is no F7.', finding: null, answer: null, fromReview: null },
     ],
   )
 
   assert.deepEqual(recheckedFindings(freshPr(), [{ id: 'F1', status: 'open', evidence: 'x' }]), [
-    { id: 'F1', status: 'open', evidence: 'x', finding: null, answer: null },
+    { id: 'F1', status: 'open', evidence: 'x', finding: null, answer: null, fromReview: null },
   ])
+})
+
+test('recheckedFindings: each record carries the review key of its finding, or null', () => {
+  const entry = freshPr()
+
+  recordFindings(entry, ['own', 'from the review'], FAILED_AT, [null, 'review.correctness|src/orders/total.ts|total ignores refunds'])
+
+  assert.deepEqual(
+    recheckedFindings(entry, [
+      { id: 'F1', status: 'resolved', evidence: 'a.mjs:3' },
+      { id: 'F2', status: 'open', evidence: 'total.ts:42' },
+      { id: 'F9', status: 'wrong', evidence: 'There is no F9.' },
+    ]).map((record) => [record.id, record.fromReview]),
+    [
+      ['F1', null],
+      ['F2', 'review.correctness|src/orders/total.ts|total ignores refunds'],
+      ['F9', null],
+    ],
+  )
 })
 
 test('watchInbox wakes soon after a command is posted', async () => {
@@ -583,6 +609,7 @@ test('startRun and endRun write the record of one run, and endRun without a star
     denials: 1,
     stopped: false,
     error: null,
+    sha: null,
   })
 
   const stopped = { ok: false, costUsd: 0, seconds: 3, stopped: true, error: 'driver stopping' }
@@ -613,9 +640,25 @@ test('startRun and endRun write the record of one run, and endRun without a star
     denials: 0,
     stopped: true,
     error: 'driver stopping',
+    sha: null,
   })
 
   assert.deepEqual(Object.keys(data.runs), ['A1-01-implement', 'A2-01-brief-review'])
+})
+
+test('endRun writes the commit it is given, and null without one', () => {
+  const data = {}
+  const head = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3'
+  const result = { ok: true, output: { status: 'READY' }, costUsd: 1 }
+
+  startRun(data, { run: 'A1-01-implement', id: 'A1', role: 'implement' }, at(0))
+  endRun(data, { id: 'A1', role: 'implement', sha: head }, doneDetail('implement', 'A1-01-implement', result), at(1))
+  endRun(data, { id: 'A1', role: 'verify' }, doneDetail('verify', 'A1-02-verify', { ok: true, costUsd: 1 }), at(2))
+  endRun(data, { id: 'A1', role: 'fix', sha: null }, doneDetail('fix', 'A1-03-fix', { ok: false, costUsd: 0 }), at(3))
+
+  assert.equal(data.runs['A1-01-implement'].sha, head)
+  assert.equal(data.runs['A1-02-verify'].sha, null)
+  assert.equal(data.runs['A1-03-fix'].sha, null)
 })
 
 test('recordProcess sets the process of an open run, and leaves an ended run and a missing one alone', () => {

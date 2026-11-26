@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { applyNote, commandEffect } from '../lib/driver/commands.ts'
+import { driverLogin } from '../lib/github.mjs'
 import { approveRefusal } from '../lib/judge.mjs'
 import { implementPrompt } from '../lib/prompts.mjs'
 import { codeScanningQuestion, DISPUTE, toBlocked } from '../lib/transitions.ts'
@@ -1031,6 +1032,7 @@ function noteContext(manifest, driver) {
     inbox: () => [],
     briefWritten: () => false,
     approveRefusal: () => null,
+    login: () => null,
   }
 
   return { context, events }
@@ -1447,9 +1449,32 @@ test('approve: On merge, names the verified head and patch, posted after the ver
 
   assert.deepEqual(events, [{ id: 'A1', kind: 'approved', sha: SHA.slice(0, 7), channel: 'inbox' }])
   assert.deepEqual(notices, ['A1: approved PR #11; merging in 120s unless you hold it (rollout hold A1)'])
-  assert.deepEqual({ ...entry.approved, at: null }, { sha: SHA, patchId: 'patch-a1', at: null, channel: 'inbox' })
+  assert.deepEqual(
+    { ...entry.approved, at: null },
+    { sha: SHA, patchId: 'patch-a1', at: null, channel: 'inbox', by: null, review: null, reviewError: null },
+  )
+
   assert.deepEqual(entry.status, { kind: 'waiting', code: 'merge-delay', until, since: entry.approved.at })
   assert.deepEqual([effect.stage, effect.status.code], ['merge', 'merge-delay'])
+})
+
+test('approve: records the login GitHub gave the driver, or null before it gave one, and no review yet', async () => {
+  const reviewOf = (approved) => [approved.by, approved.review, approved.reviewError]
+  const unknown = approvedWith(onMerge('needs-you', 'approve'))
+
+  assert.deepEqual(reviewOf(unknown.entry.approved), [null, null, null])
+
+  const { manifest, driver } = driverFor(
+    { A1: onMerge('needs-you', 'approve') },
+    { routes: [{ path: 'user', body: { login: 'demo-maintainer' } }] },
+  )
+
+  assert.equal(await driverLogin(manifest), 'demo-maintainer')
+
+  const { events, entry } = applied(manifest, driver, APPROVE)
+
+  assert.deepEqual(events, [{ id: 'A1', kind: 'approved', sha: SHA.slice(0, 7), channel: 'inbox' }])
+  assert.deepEqual(reviewOf(entry.approved), ['demo-maintainer', null, null])
 })
 
 test('approve: a second approve is refused, and neither the approval time nor the end of the merge delay moves', () => {

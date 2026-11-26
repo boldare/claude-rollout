@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { versionTwoPr } from '../lib/ledger.mjs'
 import {
   answerBrief,
+  approvalBy,
+  approvalReviewError,
+  approvalReviewed,
   approveInbox,
   briefWaits,
   briefWritten,
@@ -50,6 +53,8 @@ import {
   toPending,
   toReopened,
   toVerified,
+  traceFailed,
+  traceWritten,
   unheld,
   verifyAgain,
   waitOnStage,
@@ -974,6 +979,59 @@ test('transitions: toMerged records the PR number of a merge outside the run', (
   assert.deepEqual(entry, { ...before, pr: 12, stage: 'merged', status: null })
 })
 
+const TRACE_DIGEST = 'd'.repeat(64)
+
+test('transitions: traceWritten records the comment, the digest and the time, with no error', () => {
+  const entry = entryWith({ state: 'verified', pr: 7, verified: verification() })
+
+  traceFailed(entry, 'HTTP 502: Bad Gateway')
+  traceWritten(entry, { comment: 501, digest: TRACE_DIGEST, at: AT })
+
+  assert.deepEqual(entry.trace, { comment: 501, digest: TRACE_DIGEST, at: AT, error: null })
+})
+
+test('transitions: traceFailed keeps the last write that went through, and gives nulls with none', () => {
+  const written = entryWith({ state: 'verified', pr: 7, verified: verification() })
+
+  traceWritten(written, { comment: 501, digest: TRACE_DIGEST, at: AT })
+  traceFailed(written, 'HTTP 502: Bad Gateway')
+
+  assert.deepEqual(written.trace, { comment: 501, digest: TRACE_DIGEST, at: AT, error: 'HTTP 502: Bad Gateway' })
+
+  const fresh = entryWith({ state: 'verified', pr: 7, verified: verification() })
+
+  traceFailed(fresh, 'HTTP 502: Bad Gateway')
+
+  assert.deepEqual(fresh.trace, { comment: null, digest: null, at: null, error: 'HTTP 502: Bad Gateway' })
+})
+
+test('transitions: toClaimed and toMerged drop the trace record of another PR number, and keep the one of the same number', () => {
+  const record = { comment: 501, digest: TRACE_DIGEST, at: AT, error: null }
+  const traced = (state) => ({ ...entryWith({ state, pr: 7, claimedSha: OLD_SHA }), trace: structuredClone(record) })
+
+  const claimedAgain = traced('ready_claimed')
+  const claimedElsewhere = traced('ready_claimed')
+  const mergedAgain = traced('verified')
+  const mergedElsewhere = traced('verified')
+
+  toClaimed(claimedAgain, { pr: 7, sha: SHA, at: AT })
+  toClaimed(claimedElsewhere, { pr: 8, sha: SHA, at: AT })
+  toMerged(mergedAgain, { pr: 7 })
+  toMerged(mergedElsewhere, { pr: 8 })
+
+  assert.deepEqual(claimedAgain.trace, record)
+  assert.equal(claimedElsewhere.trace, null)
+  assert.deepEqual(mergedAgain.trace, record)
+  assert.equal(mergedElsewhere.trace, null)
+
+  const untraced = entryWith({ state: 'ready_claimed', pr: 7, claimedSha: OLD_SHA })
+
+  toClaimed(untraced, { pr: 8, sha: SHA, at: AT })
+  toMerged(untraced, { pr: 9 })
+
+  assert.ok(!Object.hasOwn(untraced, 'trace'))
+})
+
 test('transitions: recoverRun sends a briefing back to pending without a refund', () => {
   const entry = entryWith({ state: 'briefing', attempts: { implement: 0, fix: 0, verify: 0, brief: 1 } })
   const before = structuredClone(entry)
@@ -1310,6 +1368,68 @@ test('approveInbox: the approval, and the merge delay from it', () => {
 
   assert.deepEqual(entry.approved, approval)
   assert.deepEqual([entry.stage, entry.status], ['merge', { kind: 'waiting', code: 'merge-delay', until: LATER, since: AT }])
+})
+
+function inboxApproved(fields = {}) {
+  const approved = { sha: SHA, patchId: 'patch-1', at: AT, channel: 'inbox', by: null, review: null, reviewError: null, ...fields }
+
+  return entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification(), approved })
+}
+
+test('approvalBy, approvalReviewed, approvalReviewError: nothing without an approval', () => {
+  const entry = entryWith({ state: 'verified', pr: 7, claimedSha: SHA, verified: verification(), approved: null })
+
+  approvalBy(entry, 'demo-maintainer')
+  approvalReviewed(entry, 7700112233)
+  approvalReviewError(entry, 'POST repos/example/widgets/pulls/7/reviews: HTTP 422: Unprocessable Entity')
+
+  assert.equal(entry.approved, null)
+})
+
+test('approvalBy: the login goes on an approval with none, missing or null, and a login already there stays', () => {
+  const missing = inboxApproved()
+
+  delete missing.approved.by
+
+  for (const entry of [inboxApproved(), missing]) {
+    const { by: _, ...before } = entry.approved
+    const kept = entry.approved
+
+    approvalBy(entry, 'demo-maintainer')
+
+    assert.notEqual(entry.approved, kept)
+    assert.deepEqual(entry.approved, { ...before, by: 'demo-maintainer' })
+  }
+
+  const known = inboxApproved({ by: 'octocat' })
+
+  approvalBy(known, 'demo-maintainer')
+  assert.equal(known.approved.by, 'octocat')
+})
+
+test('approvalReviewed: the review id goes on the approval, and an earlier failure goes', () => {
+  const entry = inboxApproved({ by: 'demo-maintainer', reviewError: 'GET user: HTTP 500: Server Error' })
+  const before = entry.approved
+
+  approvalReviewed(entry, 7700112233)
+
+  assert.notEqual(entry.approved, before)
+  assert.deepEqual(entry.approved, { ...before, review: 7700112233, reviewError: null })
+})
+
+test('approvalReviewError: a failure is set, and null clears it', () => {
+  const entry = inboxApproved({ by: 'demo-maintainer' })
+  const before = entry.approved
+  const failure = 'POST repos/example/widgets/pulls/7/reviews: HTTP 422: Unprocessable Entity'
+
+  approvalReviewError(entry, failure)
+
+  assert.notEqual(entry.approved, before)
+  assert.deepEqual(entry.approved, { ...before, reviewError: failure })
+
+  approvalReviewError(entry, null)
+
+  assert.deepEqual(entry.approved, before)
 })
 
 test('toMergeStatus: a PR out of a needs-you status follows the stored rule', () => {

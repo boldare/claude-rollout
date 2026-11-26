@@ -100,6 +100,19 @@
                 <td class="name">merge, deleteRemoteBranch</td>
               </tr>
               <tr>
+                <td>Read your login, for the approving review</td>
+                <td class="nowrap">you</td>
+                <td class="name">driverLogin</td>
+              </tr>
+              <tr>
+                <td>
+                  The <a href="how-it-works.html#approval-on-github">approving review</a> of <code>rollout approve</code>, under
+                  <code>approval: inbox</code>
+                </td>
+                <td class="nowrap">you</td>
+                <td class="name">approveOnGithub</td>
+              </tr>
+              <tr>
                 <td>Fetch</td>
                 <td class="nowrap">your remote</td>
                 <td class="name">fetchOrigin</td>
@@ -119,6 +132,14 @@
                 <td class="nowrap">bot</td>
                 <td class="name">replyAsAgents, commentAsAgents</td>
               </tr>
+              <tr>
+                <td>
+                  The <a href="how-it-works.html#trace">trace comment</a>, with
+                  <a href="manifest.html#policy-trace"><code>policy.trace: comment</code></a>
+                </td>
+                <td class="nowrap">bot</td>
+                <td class="name">writeTraceComment</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -129,9 +150,9 @@
             driver's replies go out under your name. Preflight warns: "agents act on GitHub as you".
           </p>
           <p>
-            The driver's replies and summary comment end with a hidden <code>&lt;!-- rollout-driver --&gt;</code> line, so the driver never
-            reads them back as your feedback. A comment an agent posts under your login has no marker, and it counts as your review
-            feedback. Preflight warns about this when <code>repo.maintainers</code> is set.
+            The driver's replies, summary comment and trace comment end with a hidden <code>&lt;!-- rollout-driver --&gt;</code> line, so
+            the driver never reads them back as your feedback. A comment an agent posts under your login has no marker, and it counts as
+            your review feedback. Preflight warns about this when <code>repo.maintainers</code> is set.
           </p>
         </div>
 
@@ -235,7 +256,11 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
         </p>
 
         <ul>
-          <li>Require a pull request. Require one approval when <code>policy.approval</code> is <code>github</code>.</li>
+          <li>
+            Require a pull request. Require one approval when <code>policy.approval</code> is <code>github</code>, and under
+            <code>approval: inbox</code> too, because the driver's <a href="how-it-works.html#approval-on-github">approving review</a>
+            meets it for a PR the bot opened.
+          </li>
           <li>
             Require the status checks that <a href="manifest.html#repo-requiredChecks"><code>repo.requiredChecks</code></a> matches.
           </li>
@@ -343,7 +368,10 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
             <tbody>
               <tr>
                 <td class="name">human (default)</td>
-                <td>You read the card and run <code>rollout approve &lt;id&gt;</code>. The driver merges after the delay.</td>
+                <td>
+                  You read the card and run <code>rollout approve &lt;id&gt;</code>. For a PR the bot opened, the driver also leaves an
+                  <a href="how-it-works.html#approval-on-github">approving review</a> on GitHub. The driver merges after the delay.
+                </td>
                 <td>
                   A bot PR is approved by a maintainer's review on GitHub. A PR you authored still takes <code>rollout approve</code>. The
                   driver merges after the delay.
@@ -396,13 +424,18 @@ chmod 600 ~/.config/rollout/agent-gh-token</code></pre>
           instead. The driver refuses the same command if it reaches the inbox another way.
         </p>
 
-        <p>A new head with the same patch id, such as the driver's own rebase, keeps both the verification and the approval.</p>
+        <p>
+          A new head with the same patch id, such as the driver's own rebase, keeps both the verification and the approval. The approval
+          keeps its review on GitHub and gets no second one.
+        </p>
 
         <div class="callout warn">
           <p>
-            <strong>Bot PRs and <code>approval: inbox</code>.</strong> When the ruleset requires a review and the bot opened the PR,
-            <code>rollout approve</code> satisfies the driver but not GitHub. The gate then waits with "GitHub still blocks the merge". Use
-            <code>approval: github</code>, or <code>merge.admin: true</code>.
+            <strong>Bot PRs and <code>approval: inbox</code>.</strong> When the ruleset requires a review and the bot opened the PR, the
+            driver's <a href="how-it-works.html#approval-on-github">approving review</a> after <code>rollout approve</code> meets it, with
+            no bypass. A PR you authored shows no approval on GitHub and passes the ruleset only with <code>--admin</code> (see
+            <a href="#admin">merge.admin</a>). A ruleset that dismisses stale approvals drops the review on a rebase. The driver submits no
+            second one, so approve the new head on GitHub yourself.
           </p>
         </div>
 
